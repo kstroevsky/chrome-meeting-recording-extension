@@ -5,8 +5,8 @@
  * 
  * This script runs in a hidden HTML page managed by the background service worker.
  * Its primary purpose is to provide a DOM-capable environment for:
- * 1. Web Audio API (mixing multiple audio streams).
- * 2. MediaRecorder (encoding video and audio into a WebM container).
+ * 1. MediaRecorder (encoding video and audio into WebM containers).
+ * 2. Optional mic capture for a separate audio-only recording.
  */
 
 // Flip this on to include your local mic in the recording mix.
@@ -121,49 +121,6 @@ async function maybeGetMicStream(): Promise<MediaStream | null> {
 }
 
 /**
- * CORE LOGIC: Uses AudioContext to mix Tab Audio with Mic Audio.
- * Without this, you would only record what you hear, or only what you say,
- * but not both in a single file.
- */
-function mixAudio(tabStream: MediaStream, micStream: MediaStream | null): MediaStream {
-  const tabAudio = tabStream.getAudioTracks()[0]
-  if (!micStream || !tabAudio) return tabStream
-
-  const AC = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext
-  const ctx = new AC()
-  void ctx.resume().catch(() => {})
-  const dst = ctx.createMediaStreamDestination()
-
-  try {
-    // Connect tab audio to the destination
-    const tabSource = ctx.createMediaStreamSource(new MediaStream([tabAudio]))
-    tabSource.connect(dst)
-  } catch (err) {
-    log('tab source connect failed for mixing; using tab audio only', err)
-    return tabStream
-  }
-
-  try {
-    // Connect mic audio to the destination
-    const micTrack = micStream.getAudioTracks()[0]
-    if (micTrack) {
-      const micSource = ctx.createMediaStreamSource(new MediaStream([micTrack]))
-      micSource.connect(dst)
-    }
-  } catch (e) {
-    log('mic source connect failed; continuing with tab audio only', e)
-  }
-
-  // Construct a new MediaStream containing the original video track + the mixed audio track
-  const final = new MediaStream([
-    ...tabStream.getVideoTracks(),
-    ...dst.stream.getAudioTracks()
-  ])
-
-  return final
-}
-
-/**
  * Constraints helper for getUserMedia when using a streamId.
  */
 function makeConstraints(streamId: string, source: 'tab' | 'desktop'): MediaStreamConstraints {
@@ -200,9 +157,53 @@ async function captureWithStreamId(streamId: string): Promise<MediaStream> {
   return await navigator.mediaDevices.getUserMedia(makeConstraints(streamId, 'desktop'))
 }
 
-let mediaRecorder: MediaRecorder | null = null
-let chunks: BlobPart[] = []
+let tabRecorder: MediaRecorder | null = null
+let micRecorder: MediaRecorder | null = null
+let tabChunks: BlobPart[] = []
+let micChunks: BlobPart[] = []
 let capturing = false
+let activeRecorders = 0
+let tabStreamRef: MediaStream | null = null
+let micStreamRef: MediaStream | null = null
+let activeSuffix = 'google-meet'
+let tabRecorderStarted = false
+let micRecorderStarted = false
+
+function getVideoMime(): string {
+  return MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+    ? 'video/webm;codecs=vp8,opus'
+    : 'video/webm'
+}
+
+function getAudioMime(): string {
+  return MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : 'audio/webm'
+}
+
+function markRecorderStarted() {
+  if (activeRecorders === 0) pushState(true)
+  activeRecorders += 1
+}
+
+function markRecorderStopped() {
+  activeRecorders = Math.max(0, activeRecorders - 1)
+  if (activeRecorders === 0) {
+    capturing = false
+    pushState(false)
+    try { tabStreamRef?.getTracks().forEach(t => t.stop()) } catch {}
+    try { micStreamRef?.getTracks().forEach(t => t.stop()) } catch {}
+    tabStreamRef = null
+    micStreamRef = null
+  }
+}
+
+function saveChunksToFile(chunksToSave: BlobPart[], mime: string, filename: string) {
+  const blob = new Blob(chunksToSave, { type: mime })
+  log('Finalizing', filename, 'chunks =', chunksToSave.length, 'blob.size =', blob.size)
+  const blobUrl = URL.createObjectURL(blob)
+  getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl })
+}
 
 /**
  * Sets up the MediaRecorder lifecycle and starts the recording.
@@ -227,92 +228,142 @@ async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
   const rawAudio = baseStream.getAudioTracks()[0]
   if (rawAudio) attachRmsMeter(rawAudio, 'RAW')
 
-  // Step 1: Get Mic and Mix it with Tab Audio
-  const micStream = await maybeGetMicStream()
-  const mixedStream = mixAudio(baseStream, micStream)
+  if (!rawAudio) log('WARNING: tab stream has NO audio track — tab recording will be silent')
 
-  const finalAudio = mixedStream.getAudioTracks()[0]
-  if (finalAudio) attachRmsMeter(finalAudio, 'FINAL')
-  if (!finalAudio) log('WARNING: final stream has NO audio track — recording will be silent')
+  let suffix = 'google-meet'
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+    suffix = inferSuffixFromActiveTabUrl(tabs[0]?.url || null)
+  } catch {}
+  activeSuffix = suffix
 
-  log('final stream tracks -> video:', mixedStream.getVideoTracks().length, 'audio:', mixedStream.getAudioTracks().length)
+  tabStreamRef = baseStream
+  activeRecorders = 0
+  tabRecorderStarted = false
+  micRecorderStarted = false
 
-  chunks = []
-  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
-    ? 'video/webm;codecs=vp8,opus'
-    : 'video/webm'
-
-  // Step 2: Initialize MediaRecorder
-  mediaRecorder = new MediaRecorder(mixedStream, {
-    mimeType: mime,
+  tabChunks = []
+  const tabMime = getVideoMime()
+  tabRecorder = new MediaRecorder(baseStream, {
+    mimeType: tabMime,
     videoBitsPerSecond: 3_000_000,
     audioBitsPerSecond: 128_000
   })
 
-  const started = new Promise<void>((resolve, reject) => {
-    const startTimeout = setTimeout(() => reject(new Error('MediaRecorder did not start (timeout)')), 4000)
+  const tabStarted = new Promise<void>((resolve, reject) => {
+    const startTimeout = setTimeout(() => reject(new Error('Tab MediaRecorder did not start (timeout)')), 4000)
 
-    mediaRecorder!.onstart = () => {
+    tabRecorder!.onstart = () => {
       clearTimeout(startTimeout)
+      tabRecorderStarted = true
       capturing = true
-      pushState(true)
-      log('MediaRecorder started')
+      markRecorderStarted()
+      log('Tab MediaRecorder started')
       resolve()
     }
 
-    mediaRecorder!.onerror = (e: any) => {
+    tabRecorder!.onerror = (e: any) => {
       clearTimeout(startTimeout)
-      log('MediaRecorder error', e)
-      try { mixedStream.getTracks().forEach(t => t.stop()) } catch {}
-      mediaRecorder = null
+      log('Tab MediaRecorder error', e)
+      try { baseStream.getTracks().forEach(t => t.stop()) } catch {}
+      if (micRecorder && micRecorder.state !== 'inactive') {
+        try { micRecorder.stop() } catch {}
+      }
+      if (tabRecorderStarted) markRecorderStopped()
+      tabRecorder = null
+      tabRecorderStarted = false
       capturing = false
       pushState(false)
-      reject(new Error(e?.name || 'MediaRecorder error'))
+      reject(new Error(e?.name || 'Tab MediaRecorder error'))
     }
 
-    // Collect chunks of video data as they arrive
-    mediaRecorder!.ondataavailable = (e: BlobEvent) => {
-      if (e.data && e.data.size) chunks.push(e.data)
+    tabRecorder!.ondataavailable = (e: BlobEvent) => {
+      if (e.data && e.data.size) tabChunks.push(e.data)
     }
 
-    // Finalize recording: create Blob -> Object URL -> ask background to save
-    mediaRecorder!.onstop = async () => {
+    tabRecorder!.onstop = () => {
       try {
-        const blob = new Blob(chunks, { type: mime })
-        log('Finalizing; chunks =', chunks.length, 'blob.size =', blob.size)
-
-        let suffix = 'google-meet'
-        try {
-          const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-          suffix = inferSuffixFromActiveTabUrl(tabs[0]?.url || null)
-        } catch {}
-
-        const filename = `google-meet-recording-${suffix}-${Date.now()}.webm`
-        const blobUrl = URL.createObjectURL(blob)
-        // Background handles the downloads.download call
-        getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl })
+        const filename = `google-meet-recording-${activeSuffix}-${Date.now()}.webm`
+        saveChunksToFile(tabChunks, tabMime, filename)
       } catch (e) {
-        log('Finalize/Save failed', e)
+        log('Tab finalize/save failed', e)
       } finally {
-        try { mixedStream.getTracks().forEach(t => t.stop()) } catch {}
-        mediaRecorder = null
-        chunks = []
-        capturing = false
-        pushState(false)
+        tabRecorder = null
+        tabRecorderStarted = false
+        tabChunks = []
+        markRecorderStopped()
       }
     }
   })
 
-  // Start recording in 1-second chunks
-  mediaRecorder.start(1000)
+  tabRecorder.start(1000)
 
-  // Auto-stop if the tab is closed or navigation happens (causing track to end)
-  mixedStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+  baseStream.getVideoTracks()[0]?.addEventListener('ended', () => {
     log('Video track ended')
-    if (mediaRecorder && capturing) { try { mediaRecorder.stop() } catch {} }
+    if (tabRecorder && capturing) { try { tabRecorder.stop() } catch {} }
+    if (micRecorder && capturing) { try { micRecorder.stop() } catch {} }
   })
 
-  await started
+  let micStarted: Promise<void> | null = null
+  const micStream = await maybeGetMicStream()
+  if (micStream?.getAudioTracks().length) {
+    micStreamRef = micStream
+    micChunks = []
+    const micMime = getAudioMime()
+    micRecorder = new MediaRecorder(micStream, { mimeType: micMime, audioBitsPerSecond: 128_000 })
+
+    micStarted = new Promise<void>((resolve, reject) => {
+      const startTimeout = setTimeout(() => reject(new Error('Mic MediaRecorder did not start (timeout)')), 4000)
+
+      micRecorder!.onstart = () => {
+        clearTimeout(startTimeout)
+        micRecorderStarted = true
+        markRecorderStarted()
+        log('Mic MediaRecorder started')
+        resolve()
+      }
+
+      micRecorder!.onerror = (e: any) => {
+        clearTimeout(startTimeout)
+        log('Mic MediaRecorder error', e)
+        try { micStream.getTracks().forEach(t => t.stop()) } catch {}
+        micRecorder = null
+        micStreamRef = null
+        if (micRecorderStarted) markRecorderStopped()
+        micRecorderStarted = false
+        reject(new Error(e?.name || 'Mic MediaRecorder error'))
+      }
+
+      micRecorder!.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size) micChunks.push(e.data)
+      }
+
+      micRecorder!.onstop = () => {
+        try {
+          const filename = `google-meet-mic-${activeSuffix}-${Date.now()}.webm`
+          saveChunksToFile(micChunks, micMime, filename)
+        } catch (e) {
+          log('Mic finalize/save failed', e)
+        } finally {
+          micRecorder = null
+          micRecorderStarted = false
+          micChunks = []
+          markRecorderStopped()
+        }
+      }
+    })
+
+    micRecorder.start(1000)
+  } else {
+    micStream?.getTracks().forEach(t => t.stop())
+    micStreamRef = null
+    log('Mic stream unavailable; continuing with tab-only recording')
+  }
+
+  if (micStarted) {
+    micStarted.catch((e) => log('Mic recorder start failed', e))
+  }
+  await tabStarted
 }
 
 async function startRecordingFromStreamId(streamId: string): Promise<void> {
@@ -322,11 +373,12 @@ async function startRecordingFromStreamId(streamId: string): Promise<void> {
 }
 
 function stopRecording() {
-  if (!mediaRecorder || !capturing) {
+  if (!tabRecorder || !capturing) {
     console.warn('[offscreen] Stop called but not recording')
     throw new Error('Not currently recording')
   }
-  try { mediaRecorder.stop() } catch (e) { console.error('[offscreen] Stop error', e); throw e }
+  try { tabRecorder.stop() } catch (e) { console.error('[offscreen] Stop error', e); throw e }
+  try { micRecorder?.stop() } catch (e) { console.error('[offscreen] Mic stop error', e) }
 }
 
 /**

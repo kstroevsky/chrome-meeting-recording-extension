@@ -20,8 +20,8 @@ The extension follows the modern MV3 architecture handling specific constraints 
     - Exists to provide a DOM environment for `MediaRecorder` and `AudioContext`.
     - Captures the tab stream using the `streamId` provided by the background.
     - Captures the Microphone stream (`navigator.mediaDevices.getUserMedia`).
-    - **Mixes Audio**: Merges Tab Audio + Mic Audio into a single stream using Web Audio API.
-    - Encodes the video/audio into a `.webm` file.
+    - **Keeps Audio Separate**: Records tab audio+video and mic audio into separate files.
+    - Encodes the video/audio into `.webm` files.
     - Handles the file download process.
 
 ### 3. **Content Script** (`scrapingScript.ts`)
@@ -55,8 +55,8 @@ The extension follows the modern MV3 architecture handling specific constraints 
     - Receives `streamId`.
     - Calls `navigator.mediaDevices.getUserMedia` (using `chromeMediaSource: 'tab'`).
     - Calls `navigator.mediaDevices.getUserMedia` (for Microphone).
-    - Mixes streams.
-    - Starts `MediaRecorder`.
+    - Starts tab `MediaRecorder` (video + tab audio).
+    - Starts mic `MediaRecorder` (audio-only) when permitted.
 5. **Stop**:
     - User clicks Stop.
     - **Offscreen** stops recorder -> produces `Blob`.
@@ -86,12 +86,10 @@ The extension follows the modern MV3 architecture handling specific constraints 
 ### The "Offscreen" Pattern
 In Manifest V3, background scripts are Service Workers and cannot access DOM APIs like `MediaRecorder` or `AudioContext`. To record audio/video, extensions must create an "Offscreen Document" (`chrome.offscreen.createDocument`). This document is invisible but has full DOM access.
 
-### Audio Mixing
-To record *both* the meeting audio (what others say) and the user's mic (what you say), the extension creates an `AudioContext`.
-- **Source 1**: Tab Audio (from `tabCapture`).
-- **Source 2**: Mic Audio (from `getUserMedia`).
-- **Destination**: A `MediaStreamDestination` node.
-These are connected `Source -> Destination`. The `MediaRecorder` then records the *Destination* stream.
+### Separate Audio Outputs
+To keep meeting audio (tab) and mic audio separate, the extension records:
+- **Tab stream**: Video + tab audio into a `.webm` file.
+- **Mic stream**: Audio-only into a separate `.webm` file.
 
 ### Obfuscated Selectors
 `scrapingScript.ts` relies on specific class names (`.ygicle`, `.NWpY1d`) used by Google Meet. These are likely generated classes and **may break** if Google updates their frontend code. The script attempts to find these elements via `aria-label="Captions"` regions to be somewhat robust.
