@@ -1,5 +1,14 @@
 // src/offscreen.ts
 
+/**
+ * OFFSCREEN DOCUMENT ENGINE
+ * 
+ * This script runs in a hidden HTML page managed by the background service worker.
+ * Its primary purpose is to provide a DOM-capable environment for:
+ * 1. Web Audio API (mixing multiple audio streams).
+ * 2. MediaRecorder (encoding video and audio into a WebM container).
+ */
+
 // Flip this on to include your local mic in the recording mix.
 // NOTE: Offscreen cannot show the initial mic permission prompt.
 // You must "prime" mic permission once from a visible page (popup/options/extension tab)
@@ -14,10 +23,14 @@ window.addEventListener('unhandledrejection', (e: any) => {
 })
 console.log('[offscreen] script loaded')
 
-// port plumbing
+// port plumbing for communication with background
 let portRef: chrome.runtime.Port | null = null
 function log(...a: any[]) { console.log('[offscreen]', ...a) }
 
+/**
+ * Establishes a persistent port connection to the background script.
+ * We signal 'OFFSCREEN_READY' so the background knows it can start passing stream IDs.
+ */
 function connectPort(): chrome.runtime.Port {
   try { portRef?.disconnect() } catch {}
   const p: chrome.runtime.Port = chrome.runtime.connect({ name: 'offscreen' })
@@ -31,7 +44,10 @@ function connectPort(): chrome.runtime.Port {
 function getPort(): chrome.runtime.Port { return portRef ?? connectPort() }
 function respond(req: any, payload: any) { getPort().postMessage({ __respFor: req?.__id, payload }) }
 
-// popup uses this to flip buttons
+/**
+ * Updates a shared state (storage) and notifies the background/popup about 
+ * the current recording status.
+ */
 function pushState(recording: boolean, extra?: Record<string, any>) {
   try { (chrome.storage as any)?.session?.set?.({ recording }).catch?.(() => {}) } catch {}
   getPort().postMessage({ type: 'RECORDING_STATE', recording, ...extra })
@@ -39,6 +55,9 @@ function pushState(recording: boolean, extra?: Record<string, any>) {
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
 
+/**
+ * Heuristic to create a useful filename based on the Meet URL suffix.
+ */
 function inferSuffixFromActiveTabUrl(url?: string | null): string {
   try {
     if (!url) return 'google-meet'
@@ -48,7 +67,10 @@ function inferSuffixFromActiveTabUrl(url?: string | null): string {
   } catch { return 'google-meet' }
 }
 
-// simple 1-channel RMS meter for debugging
+/**
+ * Debug utility to measure audio energy (RMS).
+ * Useful for diagnosing "silent recording" issues.
+ */
 function attachRmsMeter(track: MediaStreamTrack, label: 'RAW' | 'FINAL') {
   try {
     const AC = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext
@@ -75,11 +97,13 @@ function attachRmsMeter(track: MediaStreamTrack, label: 'RAW' | 'FINAL') {
   }
 }
 
-// record & mix
+/**
+ * Attempts to capture the local microphone.
+ * Requires that permission was previously granted via micsetup.html.
+ */
 async function maybeGetMicStream(): Promise<MediaStream | null> {
   if (!WANT_MIC_MIX) return null
   try {
-    // only succeeds if mic permission was previously granted to the extension origin
     const mic = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -96,6 +120,11 @@ async function maybeGetMicStream(): Promise<MediaStream | null> {
   }
 }
 
+/**
+ * CORE LOGIC: Uses AudioContext to mix Tab Audio with Mic Audio.
+ * Without this, you would only record what you hear, or only what you say,
+ * but not both in a single file.
+ */
 function mixAudio(tabStream: MediaStream, micStream: MediaStream | null): MediaStream {
   const tabAudio = tabStream.getAudioTracks()[0]
   if (!micStream || !tabAudio) return tabStream
@@ -106,6 +135,7 @@ function mixAudio(tabStream: MediaStream, micStream: MediaStream | null): MediaS
   const dst = ctx.createMediaStreamDestination()
 
   try {
+    // Connect tab audio to the destination
     const tabSource = ctx.createMediaStreamSource(new MediaStream([tabAudio]))
     tabSource.connect(dst)
   } catch (err) {
@@ -114,6 +144,7 @@ function mixAudio(tabStream: MediaStream, micStream: MediaStream | null): MediaS
   }
 
   try {
+    // Connect mic audio to the destination
     const micTrack = micStream.getAudioTracks()[0]
     if (micTrack) {
       const micSource = ctx.createMediaStreamSource(new MediaStream([micTrack]))
@@ -123,16 +154,18 @@ function mixAudio(tabStream: MediaStream, micStream: MediaStream | null): MediaS
     log('mic source connect failed; continuing with tab audio only', e)
   }
 
+  // Construct a new MediaStream containing the original video track + the mixed audio track
   const final = new MediaStream([
     ...tabStream.getVideoTracks(),
     ...dst.stream.getAudioTracks()
   ])
 
-  // DO NOT stop tabAudio here!!! stopping will kill the upstream source
   return final
 }
 
-// build constraints using a streamId. try 'tab' first, then 'desktop'
+/**
+ * Constraints helper for getUserMedia when using a streamId.
+ */
 function makeConstraints(streamId: string, source: 'tab' | 'desktop'): MediaStreamConstraints {
   const mandatory = { chromeMediaSource: source, chromeMediaSourceId: streamId } as any
   return {
@@ -151,7 +184,10 @@ function makeConstraints(streamId: string, source: 'tab' | 'desktop'): MediaStre
   }
 }
 
-// try to record using streamId
+/**
+ * Capture logic. Chrome requires source='tab' for chrome.tabCapture.getMediaStreamId.
+ * We fall back to 'desktop' if needed.
+ */
 async function captureWithStreamId(streamId: string): Promise<MediaStream> {
   try {
     log(`Attempting getUserMedia with streamId ${streamId} source= tab`)
@@ -168,6 +204,9 @@ let mediaRecorder: MediaRecorder | null = null
 let chunks: BlobPart[] = []
 let capturing = false
 
+/**
+ * Sets up the MediaRecorder lifecycle and starts the recording.
+ */
 async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
   const a = baseStream.getAudioTracks()
   const v = baseStream.getVideoTracks()
@@ -181,19 +220,14 @@ async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
 
   if (!a.length) {
     pushState(false, { warning: 'NO_TAB_AUDIO' })
-  } else {
-    const T = a[0]
-    console.log('[offscreen] audio track settings:', T?.getSettings?.())
-    console.log('[offscreen] audio track muted/enabled:', T?.muted, T?.enabled)
-    T?.addEventListener('mute', () => console.log('[offscreen] track MUTED'))
-    T?.addEventListener('unmute', () => console.log('[offscreen] track UNMUTED'))
   }
   if (!v.length) throw new Error('No video track in captured stream')
 
-  // debug meters
+  // Debug: show input levels
   const rawAudio = baseStream.getAudioTracks()[0]
   if (rawAudio) attachRmsMeter(rawAudio, 'RAW')
 
+  // Step 1: Get Mic and Mix it with Tab Audio
   const micStream = await maybeGetMicStream()
   const mixedStream = mixAudio(baseStream, micStream)
 
@@ -203,34 +237,12 @@ async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
 
   log('final stream tracks -> video:', mixedStream.getVideoTracks().length, 'audio:', mixedStream.getAudioTracks().length)
 
-  // safety check, not fatal
-  if (rawAudio) {
-    try {
-      const AC = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext
-      const ctx = new AC()
-      await ctx.resume().catch(() => {})
-      const src = ctx.createMediaStreamSource(new MediaStream([rawAudio]))
-      const analyser = ctx.createAnalyser()
-      analyser.fftSize = 256
-      const buf = new Uint8Array(analyser.frequencyBinCount)
-      src.connect(analyser)
-      await sleep(1000)
-      analyser.getByteTimeDomainData(buf)
-      let sum = 0
-      for (let i = 0; i < buf.length; i++) {
-        const x = (buf[i] - 128) / 128
-        sum += x * x
-      }
-      const rms = Math.sqrt(sum / buf.length)
-      if (rms < 0.005) log('no audio energy detected before start')
-    } catch {}
-  }
-
   chunks = []
   const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
     ? 'video/webm;codecs=vp8,opus'
     : 'video/webm'
 
+  // Step 2: Initialize MediaRecorder
   mediaRecorder = new MediaRecorder(mixedStream, {
     mimeType: mime,
     videoBitsPerSecond: 3_000_000,
@@ -258,16 +270,17 @@ async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
       reject(new Error(e?.name || 'MediaRecorder error'))
     }
 
+    // Collect chunks of video data as they arrive
     mediaRecorder!.ondataavailable = (e: BlobEvent) => {
       if (e.data && e.data.size) chunks.push(e.data)
     }
 
+    // Finalize recording: create Blob -> Object URL -> ask background to save
     mediaRecorder!.onstop = async () => {
       try {
         const blob = new Blob(chunks, { type: mime })
         log('Finalizing; chunks =', chunks.length, 'blob.size =', blob.size)
 
-        // filename suffix
         let suffix = 'google-meet'
         try {
           const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
@@ -276,6 +289,7 @@ async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
 
         const filename = `google-meet-recording-${suffix}-${Date.now()}.webm`
         const blobUrl = URL.createObjectURL(blob)
+        // Background handles the downloads.download call
         getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl })
       } catch (e) {
         log('Finalize/Save failed', e)
@@ -289,9 +303,10 @@ async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
     }
   })
 
+  // Start recording in 1-second chunks
   mediaRecorder.start(1000)
 
-  // if tab navigates or video track ends, auto-stop
+  // Auto-stop if the tab is closed or navigation happens (causing track to end)
   mixedStream.getVideoTracks()[0]?.addEventListener('ended', () => {
     log('Video track ended')
     if (mediaRecorder && capturing) { try { mediaRecorder.stop() } catch {} }
@@ -314,7 +329,9 @@ function stopRecording() {
   try { mediaRecorder.stop() } catch (e) { console.error('[offscreen] Stop error', e); throw e }
 }
 
-// port rpc
+/**
+ * Message routing for calls from Background.
+ */
 const rpcPort = getPort()
 rpcPort.onMessage.addListener(async (msg: any) => {
   try {
@@ -322,17 +339,11 @@ rpcPort.onMessage.addListener(async (msg: any) => {
       const streamId = msg.streamId as string | undefined
       if (!streamId) return respond(msg, { ok: false, error: 'Missing streamId' })
       try {
-        // wait until actually starts
         await startRecordingFromStreamId(streamId)
         return respond(msg, { ok: true })
       } catch (e: any) {
         return respond(msg, { ok: false, error: `${e?.name || 'Error'}: ${e?.message || e}` })
       }
-    }
-
-    if (msg?.type === 'OFFSCREEN_START_TAB') {
-      // background must provide streamId
-      return respond(msg, { ok: false, error: 'Use OFFSCREEN_START with streamId from background' })
     }
 
     if (msg?.type === 'OFFSCREEN_STOP') {
@@ -349,10 +360,6 @@ rpcPort.onMessage.addListener(async (msg: any) => {
       return respond(msg, { recording })
     }
 
-    if (msg?.type === 'DIAG_ECHO') {
-      return respond(msg, { ok: true, pong: 'offscreen-alive' })
-    }
-
     if (msg?.type === 'REVOKE_BLOB_URL' && typeof msg.blobUrl === 'string') {
       try { URL.revokeObjectURL(msg.blobUrl) } catch {}
       return
@@ -363,7 +370,9 @@ rpcPort.onMessage.addListener(async (msg: any) => {
   }
 })
 
-// allow background to check before port is ready
+/**
+ * Fallback listeners for when the Port isn't fully initialized yet.
+ */
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === 'OFFSCREEN_PING') { sendResponse({ ok: true, via: 'onMessage' }); return true }

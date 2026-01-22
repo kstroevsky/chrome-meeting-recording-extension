@@ -1,5 +1,14 @@
 // src/popup.ts
 
+/**
+ * POPUP CONTROL PANEL
+ * 
+ * Handles user interactions for:
+ * 1. Starting/Stopping the recording engine.
+ * 2. Downloading the transcript collected by the content script.
+ * 3. Managing "primed" microphone permissions.
+ */
+
 const saveBtn = document.getElementById('save') as HTMLButtonElement | null;
 const micBtn = document.getElementById('enable-mic') as HTMLButtonElement | null;
 const startBtn = document.getElementById('start-rec') as HTMLButtonElement | null;
@@ -15,12 +24,20 @@ function toast(msg: string) {
   console.log('[popup]', msg);
 }
 
-// open a full tab to prompt for mic permission
+/**
+ * MICROPHONE PERMISSION "PRIMING"
+ * 
+ * Chrome Extensions cannot always prompt for mic permission via a standard popup 
+ * or an offscreen document. To solve this, we open a full-page tab (micsetup.html)
+ * which allows the user to grant permission to the extension's origin permanently.
+ */
 async function openMicSetupTab() {
   await chrome.tabs.create({ url: chrome.runtime.getURL('micsetup.html') });
 }
 
-// reflect mic permission state in the button label
+/**
+ * Checks the current permission state and updates the UI button accordingly.
+ */
 async function refreshMicButton() {
   if (!micBtn || !('permissions' in navigator)) return;
   try {
@@ -46,7 +63,7 @@ async function refreshMicButton() {
   }
 }
 
-// init: read current recording state & update UI
+// Initialization: Check if a recording is currently in progress
 void (async () => {
   try {
     const st = await chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATUS' });
@@ -57,7 +74,9 @@ void (async () => {
   refreshMicButton().catch(() => {});
 })();
 
-// react to background/offscreen state pings
+/**
+ * Listen for recording state updates from the background/offscreen engine.
+ */
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.type === 'RECORDING_STATE') setUI(!!msg.recording);
   if (msg?.type === 'RECORDING_SAVED') {
@@ -66,7 +85,9 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
-// mic permission priming
+/**
+ * Handle Microphone Enable button clicks.
+ */
 micBtn?.addEventListener('click', async () => {
   try {
     if ('permissions' in navigator) {
@@ -82,7 +103,7 @@ micBtn?.addEventListener('click', async () => {
         return;
       }
     }
-    // try inline
+    // Attempt inline permission request
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       s.getTracks().forEach(t => t.stop());
@@ -97,7 +118,12 @@ micBtn?.addEventListener('click', async () => {
   }
 });
 
-// manual transcript download
+/**
+ * TRANSCRIPT DOWNLOADING
+ * 
+ * The transcript is stored in the memory of the CONTENT SCRIPT (on the Meet page).
+ * We must message the active tab to retrieve the data.
+ */
 saveBtn?.addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
@@ -115,6 +141,7 @@ saveBtn?.addEventListener('click', async () => {
     return;
   }
 
+  // Generate a Blob and trigger a download from the popup context
   const blob = new Blob([transcript], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const suffix =
@@ -128,14 +155,19 @@ saveBtn?.addEventListener('click', async () => {
 
 let inFlight = false;
 
-// start recording. also resets transcript buffer for a fresh session
+/**
+ * START RECORDING
+ * 
+ * 1. Resets the transcript buffer in the content script.
+ * 2. Asks the background orchestrator to start the engine.
+ */
 startBtn?.addEventListener('click', async () => {
   if (!startBtn || !stopBtn || inFlight) return;
   inFlight = true;
   startBtn.disabled = true;
 
   try {
-    // auto-prime mic if not granted
+    // Auto-prime mic if not granted (silent fail)
     if ('permissions' in navigator) {
       try {
         // @ts-ignore
@@ -144,23 +176,20 @@ startBtn?.addEventListener('click', async () => {
           try {
             const s = await navigator.mediaDevices.getUserMedia({ audio: true });
             s.getTracks().forEach(t => t.stop());
-          } catch { 
-            // continue with tab-only audio
-            }
+          } catch { /* proceed without mic */ }
         }
-      } catch { 
-        // do nothing
-        }
+      } catch { /* proceed without mic */ }
     }
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('No active tab');
 
-    // reset transcript buffer so a new meeting starts clean
+    // Step 1: Tell the Meet page to clear its local transcript array
     await chrome.tabs.sendMessage(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {
-      // if not on a Google Meet page yet, the transcript will just be empty later.
+      // Possible if user isn't on a Meet page or the extension isn't injected yet
     });
 
+    // Step 2: Signal the background to initialize Offscreen and start MediaRecorder
     const resp = await chrome.runtime.sendMessage({ type: 'START_RECORDING', tabId: tab.id });
     if (!resp) throw new Error('No response from background');
     if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
@@ -176,7 +205,11 @@ startBtn?.addEventListener('click', async () => {
   }
 });
 
-// stop recording
+/**
+ * STOP RECORDING
+ * 
+ * Contacts the background orchestrator to finalize the recording.
+ */
 stopBtn?.addEventListener('click', async () => {
   if (!startBtn || !stopBtn || inFlight) return;
   inFlight = true;
