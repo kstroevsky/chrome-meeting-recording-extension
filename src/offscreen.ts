@@ -54,6 +54,18 @@ function pushState(recording: boolean, extra?: Record<string, any>) {
 }
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
+const withTimeout = async <T>(p: Promise<T>, ms: number, label: string): Promise<T> => {
+  let t: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<never>((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  try {
+    return await Promise.race([p, timeout])
+  } finally {
+    if (t) clearTimeout(t)
+  }
+}
+
 
 /**
  * Heuristic to create a useful filename based on the Meet URL suffix.
@@ -104,18 +116,21 @@ function attachRmsMeter(track: MediaStreamTrack, label: 'RAW' | 'FINAL') {
 async function maybeGetMicStream(): Promise<MediaStream | null> {
   if (!WANT_MIC_MIX) return null
   try {
-    const mic = await navigator.mediaDevices.getUserMedia({
+    const mic = await withTimeout(navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true
       }
-    })
+    }), 8000, 'mic getUserMedia')
+
     const t = mic.getAudioTracks()[0]
     log('mic stream acquired:', !!t, 'muted:', t?.muted, 'enabled:', t?.enabled)
+
     return mic
   } catch (e) {
     log('mic getUserMedia failed (continuing without mic):', e)
+
     return null
   }
 }
@@ -148,13 +163,15 @@ function makeConstraints(streamId: string, source: 'tab' | 'desktop'): MediaStre
 async function captureWithStreamId(streamId: string): Promise<MediaStream> {
   try {
     log(`Attempting getUserMedia with streamId ${streamId} source= tab`)
-    const s = await navigator.mediaDevices.getUserMedia(makeConstraints(streamId, 'tab'))
+    const s = await withTimeout(navigator.mediaDevices.getUserMedia(makeConstraints(streamId, 'tab')), 8000, 'tab getUserMedia')
+    
     return s
   } catch (e1: any) {
     log('[gUM] failed for chromeMediaSource=tab:', e1?.name || e1, e1?.message || e1)
   }
+
   log(`Attempting getUserMedia with streamId ${streamId} source= desktop`)
-  return await navigator.mediaDevices.getUserMedia(makeConstraints(streamId, 'desktop'))
+  return await withTimeout(navigator.mediaDevices.getUserMedia(makeConstraints(streamId, 'desktop')), 8000, 'desktop getUserMedia')
 }
 
 let tabRecorder: MediaRecorder | null = null
