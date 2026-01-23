@@ -14,6 +14,8 @@
 // You must "prime" mic permission once from a visible page (popup/options/extension tab)
 // via navigator.mediaDevices.getUserMedia({ audio: true }) before this will succeed.
 const WANT_MIC_MIX = true
+let playbackCtx: AudioContext | null = null
+let playbackSource: MediaStreamAudioSourceNode | null = null
 
 window.addEventListener('error', (e) => {
   console.error('[offscreen] window.onerror', e?.message, e?.error)
@@ -228,6 +230,7 @@ function saveChunksToFile(chunksToSave: BlobPart[], mime: string, filename: stri
 async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
   const a = baseStream.getAudioTracks()
   const v = baseStream.getVideoTracks()
+
   log('getUserMedia() tracks:', {
     audioCount: a.length,
     videoCount: v.length,
@@ -243,7 +246,22 @@ async function prepareAndRecord(baseStream: MediaStream): Promise<void> {
 
   // Debug: show input levels
   const rawAudio = baseStream.getAudioTracks()[0]
-  if (rawAudio) attachRmsMeter(rawAudio, 'RAW')
+  if (rawAudio) {
+    // Only do this if Chrome is suppressing local playback
+    const settings = rawAudio.getSettings?.()
+    const suppress = (settings as any)?.suppressLocalAudioPlayback
+
+    if (suppress ?? true) { // if unknown, assume true for tabCapture
+      const AC = window.AudioContext || (window as any).webkitAudioContext
+      playbackCtx = new AC()
+
+      await playbackCtx.resume().catch(() => {}) // may need a user gesture chain
+
+      playbackSource = playbackCtx.createMediaStreamSource(new MediaStream([rawAudio]))
+      playbackSource.connect(playbackCtx.destination)
+      log('Re-routed captured tab audio back to speakers')
+    }
+  }
 
   if (!rawAudio) log('WARNING: tab stream has NO audio track — tab recording will be silent')
 
@@ -396,6 +414,12 @@ function stopRecording() {
   }
   try { tabRecorder.stop() } catch (e) { console.error('[offscreen] Stop error', e); throw e }
   try { micRecorder?.stop() } catch (e) { console.error('[offscreen] Mic stop error', e) }
+
+  try { playbackSource?.disconnect() } catch {}
+  playbackSource = null
+  
+  try { playbackCtx?.close() } catch {}
+  playbackCtx = null
 }
 
 /**
