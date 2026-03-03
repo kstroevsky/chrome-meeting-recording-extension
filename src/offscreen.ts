@@ -22,12 +22,16 @@ let portRef: chrome.runtime.Port | null = null;
 function connectPort(): chrome.runtime.Port {
   try { portRef?.disconnect(); } catch {}
   const p = chrome.runtime.connect({ name: 'offscreen' });
+
+  // IMPORTANT: re-wire RPC handlers on EVERY new port instance
+  wirePortHandlers(p);
+
   p.onDisconnect.addListener(() => {
     L.warn('Port disconnected');
     portRef = null;
   });
 
-  // Tell background we're alive
+  // tell background alive
   p.postMessage({ type: 'OFFSCREEN_READY' });
   L.log('READY signaled via Port');
 
@@ -94,8 +98,6 @@ function wirePortHandlers(port: chrome.runtime.Port) {
       },
 
       OFFSCREEN_STATUS: async () => {
-        // Preserve original behavior: prefer session storage (survives some reload paths),
-        // but also reflect in-memory engine state if available.
         let recording = engine.isRecording();
         try {
           const res = await (chrome.storage as any)?.session?.get?.(['recording']);
@@ -104,7 +106,6 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         return { recording };
       },
 
-      // One-way can still be accepted through same map (no __id)
       REVOKE_BLOB_URL: async (msg: BgToOffscreenOneWay) => {
         if (typeof (msg as any).blobUrl === 'string') engine.revokeBlobUrl((msg as any).blobUrl);
       },
@@ -114,8 +115,8 @@ function wirePortHandlers(port: chrome.runtime.Port) {
   );
 }
 
-// Ensure we have a port and handlers wired
-wirePortHandlers(getPort());
+// Ensure a port exists at startup
+getPort();
 
 // --------------------
 // Runtime (non-port) fallback handlers

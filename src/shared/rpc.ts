@@ -18,32 +18,33 @@ export function createPortRpcClient(
       const id = makeId();
       msg.__id = id;
 
+      let done = false;
+      const finish = (fn: () => void) => {
+        if (done) return;
+        done = true;
+        try { port.onMessage.removeListener(onMessage); } catch {}
+        clearTimeout(timer);
+        fn();
+      };
+
       const onMessage = (m: any) => {
         const resp = m as RpcResponse;
         if (resp && resp.__respFor === id) {
-          try { port.onMessage.removeListener(onMessage); } catch {}
-          resolve(resp.payload as TRes);
+          finish(() => resolve(resp.payload as TRes));
         }
       };
 
       port.onMessage.addListener(onMessage);
 
+      let timer = setTimeout(() => {
+        finish(() => reject(new Error('Offscreen response timeout')));
+      }, timeoutMs);
+
       try {
         port.postMessage(msg);
       } catch (e) {
-        try { port.onMessage.removeListener(onMessage); } catch {}
-        return reject(e as any);
+        finish(() => reject(e as any));
       }
-
-      const t = setTimeout(() => {
-        try { port.onMessage.removeListener(onMessage); } catch {}
-        reject(new Error('Offscreen response timeout'));
-      }, timeoutMs);
-
-      // Ensure timer cleared when resolved/rejected
-      const cleanup = () => clearTimeout(t);
-      // noinspection JSIgnoredPromiseFromCall
-      Promise.resolve().then(() => {}).finally(cleanup);
     });
   };
 }
@@ -61,7 +62,7 @@ export function createPortRpcServer(
 
       if (!type) return;
 
-      // Only RPC requests have __id; one-way messages are handled elsewhere.
+      // Non-RPC (one-way) message
       if (!reqId) {
         const h = handlers[type];
         if (h) await h(msg);
