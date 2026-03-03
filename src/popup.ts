@@ -1,3 +1,21 @@
+/**
+ * @context  Extension Popup (browser_action page)
+ * @role     Control Panel — start/stop recording, save transcript, manage mic permission.
+ * @lifetime Created each time the user opens the popup; destroyed when it closes.
+ *           Do NOT rely on state persisting here between opens.
+ *
+ * This file is intentionally thin: it reads DOM elements and hands them to
+ * PopupController, which owns all interaction logic.
+ *
+ * Message flow:
+ *   popup → background (runtime.sendMessage):  START_RECORDING, STOP_RECORDING, GET_RECORDING_STATUS
+ *   popup → content script (tabs.sendMessage):  GET_TRANSCRIPT, RESET_TRANSCRIPT
+ *   background → popup (runtime.sendMessage):   RECORDING_STATE, RECORDING_SAVED
+ *
+ * @see src/popup/PopupController.ts   — all interaction logic
+ * @see src/popup/MicPermissionService.ts — permission query + priming flow
+ * @see src/shared/protocol.ts         — all message type definitions
+ */
 import { PopupController } from './popup/PopupController';
 
 const controller = new PopupController({

@@ -1,3 +1,20 @@
+/**
+ * @context  Background Service Worker (MV3)
+ * @role     Orchestrator — the only context that can call tabCapture and
+ *           chrome.downloads. Never handles media (MediaRecorder/AudioContext)
+ *           directly; those live in the Offscreen document.
+ * @lifetime Event-driven. Chrome will terminate and restart this worker at will.
+ *           Do NOT store recording state here that must survive suspension — use
+ *           chrome.storage.session (via OffscreenManager) for that.
+ *
+ * Message flow this file handles:
+ *   Popup  →  background  (runtime.sendMessage):  START_RECORDING, STOP_RECORDING, GET_RECORDING_STATUS
+ *   Offscreen → background (Port):                OFFSCREEN_READY, RECORDING_STATE, OFFSCREEN_SAVE
+ *
+ * @see src/background/OffscreenManager.ts  — offscreen lifecycle + Port RPC client
+ * @see src/shared/protocol.ts              — all message type definitions
+ * @see src/shared/rpc.ts                  — Port-based bidirectional RPC helpers
+ */
 import { makeLogger } from './shared/logger';
 import { OffscreenManager } from './background/OffscreenManager';
 

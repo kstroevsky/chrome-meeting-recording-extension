@@ -1,3 +1,24 @@
+/**
+ * @context  Offscreen Document (MV3)
+ * @role     Recording Studio — the only context that can run MediaRecorder and
+ *           AudioContext. Chrome creates this as a hidden, DOM-capable page.
+ * @lifetime Created on-demand by OffscreenManager when recording starts.
+ *           Chrome may have at most ONE offscreen document at a time per extension.
+ *
+ * Communication:
+ *   All recording commands arrive via a persistent chrome.runtime.Port ('offscreen').
+ *   Using a Port (vs sendMessage) avoids re-opening a channel per message and allows
+ *   bidirectional streaming. The offscreen document proactively connects on load.
+ *
+ *   A secondary chrome.runtime.onMessage handler exists ONLY for the startup handshake:
+ *     OFFSCREEN_PING  — lets Background verify the script has loaded
+ *     OFFSCREEN_CONNECT — lets Background trigger a Port reconnect after a crash
+ *   Normal recording RPC always flows through the Port.
+ *
+ * @see src/offscreen/RecorderEngine.ts  — media capture, mixing, and saving
+ * @see src/shared/protocol.ts           — all message type definitions
+ * @see src/shared/rpc.ts               — Port-based bidirectional RPC helpers
+ */
 import { makeLogger } from './shared/logger';
 import { createPortRpcServer } from './shared/rpc';
 import type { BgToOffscreenOneWay, BgToOffscreenRpc, BgToOffscreenRuntime, RpcResponse } from './shared/protocol';
@@ -17,6 +38,10 @@ L.log('script loaded');
 // --------------------
 // Port plumbing
 // --------------------
+// All recording commands flow through a persistent chrome.runtime.Port named
+// 'offscreen'. The Background attaches to this port via chrome.runtime.onConnect.
+// The offscreen side proactively calls connectPort() on load and re-wires the RPC
+// server handlers each time the port is (re)created.
 let portRef: chrome.runtime.Port | null = null;
 
 function connectPort(): chrome.runtime.Port {
@@ -67,6 +92,7 @@ const engine = new RecorderEngine({
   error: L.error,
   notifyState: pushState,
   requestSave,
+  enableMicMix: true, // record local microphone alongside tab audio
 });
 
 // --------------------
@@ -119,8 +145,12 @@ function wirePortHandlers(port: chrome.runtime.Port) {
 getPort();
 
 // --------------------
-// Runtime (non-port) fallback handlers
+// Runtime (non-port) fallback handlers — startup handshake ONLY
 // --------------------
+// These handlers use chrome.runtime.onMessage (not a Port) so they work even
+// before the Port is established. Background calls OFFSCREEN_PING to verify
+// the script loaded, then OFFSCREEN_CONNECT if the Port handshake timed out.
+// Once the Port is live, ALL further communication goes through wirePortHandlers().
 chrome.runtime.onMessage.addListener((msg: BgToOffscreenRuntime, _sender, sendResponse) => {
   try {
     if ((msg as any)?.type === 'OFFSCREEN_PING') { sendResponse({ ok: true, via: 'onMessage' }); return true; }

@@ -1,6 +1,25 @@
-import { withTimeout } from '../shared/async';
+/**
+ * @file offscreen/RecorderEngine.ts
+ *
+ * Core recording logic. Captures tab audio+video and microphone audio
+ * using the MediaRecorder API, then hands finished blobs back to the
+ * Offscreen layer for download via Background.
+ *
+ * This class is intentionally decoupled from Chrome extension APIs:
+ * all extension I/O (port messages, storage) is injected via `deps`.
+ * This makes the engine independently testable with mock callbacks.
+ *
+ * AudioPlaybackBridge (private inner class):
+ *   When Chrome captures a tab stream, it can suppress local playback so
+ *   the user goes deaf during recording. The bridge re-routes captured tab
+ *   audio back to speakers via an AudioContext to prevent this.
+ *
+ * @see src/offscreen.ts        — wires the deps and handles Port RPC
+ * @see src/shared/timeouts.ts — GUM_MS, RECORDER_START_MS constants
+ */
 
-const WANT_MIC_MIX = true;
+import { withTimeout } from '../shared/async';
+import { TIMEOUTS } from '../shared/timeouts';
 
 type RecordingStateExtra = Record<string, any> | undefined;
 
@@ -9,15 +28,30 @@ export type RecorderEngineDeps = {
   warn: (...a: any[]) => void;
   error: (...a: any[]) => void;
 
-  // Send state updates to background/popup
+  /** Send state updates to background/popup */
   notifyState: (recording: boolean, extra?: RecordingStateExtra) => void;
 
-  // Ask background to download a blob via blob URL
+  /** Ask background to download a blob via blob URL */
   requestSave: (filename: string, blobUrl: string) => void;
+
+  /**
+   * Whether to capture and record the local microphone alongside tab audio.
+   * Defaults to true. Set to false to record tab-only (no mic track).
+   */
+  enableMicMix?: boolean;
 };
 
 type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
 
+/**
+ * State machine:
+ *
+ *   idle ──startFromStreamId()──▶ starting ──onstart event──▶ recording
+ *    ▲                                                              │
+ *    └───────onRecorderStopped() (activeRecorders === 0)──◀──stop()──▶ stopping
+ *
+ * isRecording() returns true for: starting, recording, stopping
+ */
 export class RecorderEngine {
   private deps: RecorderEngineDeps;
 
@@ -121,7 +155,7 @@ export class RecorderEngine {
     try {
       return await withTimeout(
         navigator.mediaDevices.getUserMedia(this.makeConstraints(streamId, 'tab')),
-        8000,
+        TIMEOUTS.GUM_MS,
         'tab getUserMedia'
       );
     } catch (e1: any) {
@@ -131,7 +165,7 @@ export class RecorderEngine {
     this.deps.log(`Attempting getUserMedia with streamId ${streamId} source=desktop`);
     return await withTimeout(
       navigator.mediaDevices.getUserMedia(this.makeConstraints(streamId, 'desktop')),
-      8000,
+      TIMEOUTS.GUM_MS,
       'desktop getUserMedia'
     );
   }
@@ -234,7 +268,7 @@ export class RecorderEngine {
     return new Promise<void>((resolve, reject) => {
       const startTimeout = setTimeout(
         () => reject(new Error('Tab MediaRecorder did not start (timeout)')),
-        4000
+        TIMEOUTS.RECORDER_START_MS
       );
 
       recorder.onstart = () => {
@@ -293,7 +327,7 @@ export class RecorderEngine {
     await new Promise<void>((resolve, reject) => {
       const startTimeout = setTimeout(
         () => reject(new Error('Mic MediaRecorder did not start (timeout)')),
-        4000
+        TIMEOUTS.RECORDER_START_MS
       );
 
       recorder.onstart = () => {
@@ -308,7 +342,7 @@ export class RecorderEngine {
   }
 
   private async maybeGetMicStream(): Promise<MediaStream | null> {
-    if (!WANT_MIC_MIX) return null;
+    if (!this.deps.enableMicMix) return null;
 
     try {
       const mic = await withTimeout(
@@ -319,7 +353,7 @@ export class RecorderEngine {
             autoGainControl: true,
           },
         }),
-        8000,
+        TIMEOUTS.GUM_MS,
         'mic getUserMedia'
       );
 

@@ -40,9 +40,32 @@ The extension follows the modern MV3 architecture handling specific constraints 
     - Allows user to Save Transcript.
     - Handles Microphone Permissions "Priming" (opening `micsetup.html`).
 
----
-
 ## Data Flow
+
+### Message Flow Diagram
+
+```mermaid
+sequenceDiagram
+  participant P as Popup
+  participant B as Background (SW)
+  participant O as Offscreen
+  participant C as Content Script (Meet)
+
+  P->>C: RESET_TRANSCRIPT
+  P->>B: START_RECORDING(tabId)
+  B->>B: ensureOffscreen()
+  B->>B: getMediaStreamId(tabId)
+  B->>O: OFFSCREEN_START(streamId) [Port RPC]
+  O->>O: getUserMedia(streamId) + MediaRecorder.start
+  O-->>B: RECORDING_STATE(recording=true) [Port event]
+  B-->>P: RECORDING_STATE(recording=true) [runtime.sendMessage]
+
+  P->>B: STOP_RECORDING
+  B->>O: OFFSCREEN_STOP [Port RPC]
+  O-->>B: OFFSCREEN_SAVE(blobUrl, filename) [Port event]
+  B->>B: downloads.download(blobUrl)
+  B-->>P: RECORDING_SAVED
+```
 
 ### Recording Flow
 1. **User** clicks "Start Recording" in Popup.
@@ -72,14 +95,23 @@ The extension follows the modern MV3 architecture handling specific constraints 
 
 ## File Breakdown
 
-| File | Type | Description |
+| File | Context | Description |
 | :--- | :--- | :--- |
-| `background.ts` | Service Worker | MV3 background controller. Manages ports and offscreen creation. |
-| `offscreen.ts` | Valid DOM Script | Runs in hidden HTML. Handles heavy media processing (Recording, Mixing). |
-| `popup.ts` | UI Logic | Click handlers for the extension popup. |
-| `scrapingScript.ts` | Content Script | Scrapes the DOM for captions. Reverse-engineered selectors for Meet. |
-| `micsetup.ts` | Helper Page | A full-page tab used to prompt the user for Mic permissions (since popups/offscreen often can't prompt). |
-| `manifest.json` | Config | Defines permissions (`tabCapture`, `offscreen`, `activeTab`) and entry points. |
+| `src/background.ts` | Service Worker | Entry point. Wires `OffscreenManager` and message handlers. |
+| `src/background/OffscreenManager.ts` | Service Worker | Offscreen lifecycle, Port connection, RPC client, badge, downloads. |
+| `src/offscreen.ts` | Offscreen Document | Entry point. Wires `RecorderEngine` and Port RPC server. |
+| `src/offscreen/RecorderEngine.ts` | Offscreen Document | MediaRecorder capture, mixing, saving. State machine for recording lifecycle. |
+| `src/popup.ts` | Popup Page | Entry point. Passes DOM elements to `PopupController`. |
+| `src/popup/PopupController.ts` | Popup Page | Start/stop, transcript download, recording state UI. |
+| `src/popup/MicPermissionService.ts` | Popup Page | Permission query, inline priming, opens micsetup tab when needed. |
+| `src/scrapingScript.ts` | Content Script | Watches Google Meet DOM for captions. `TranscriptCollector` class. |
+| `src/micsetup.ts` | Browser Tab | Full-page permission primer for microphone. |
+| `src/shared/protocol.ts` | All contexts | **Source of truth** for all inter-context message types. |
+| `src/shared/rpc.ts` | All contexts | Port-based bidirectional RPC helpers (client + server). |
+| `src/shared/timeouts.ts` | All contexts | Named constants for all timeout and poll values. |
+| `src/shared/logger.ts` | All contexts | Prefixed logger factory (`makeLogger`). |
+| `src/shared/async.ts` | All contexts | `sleep` and `withTimeout` utilities. |
+| `manifest.json` | Chrome | Permissions (`tabCapture`, `offscreen`, `activeTab`) and entry points. |
 
 ## Key Concepts & logic
 

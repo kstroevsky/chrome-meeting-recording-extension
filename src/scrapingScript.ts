@@ -1,11 +1,28 @@
 /**
- * CONTENT SCRIPT: GOOGLE MEET CAPTION SCRAPER
+ * @context  Content Script (injected into https://meet.google.com/*)
+ * @role     Transcriber — watches the Google Meet DOM for live captions and
+ *           buffers them into a coherent, time-stamped transcript.
+ * @lifetime Injected once per page load (run_at: document_idle).
+ *           State lives in this module's closures for the lifetime of the tab.
  *
- * Refactor goals:
- * - isolate state + timers per speaker
- * - keep the same public API + message types
- * - reduce nesting and “spaghetti” around MutationObservers
+ * Logic overview:
+ *   1. A top-level MutationObserver waits for the Captions region to appear
+ *      (it only exists when captions are enabled by the user in Meet).
+ *   2. A second observer watches that region for new speaker blocks.
+ *   3. A third observer (per block) watches for text refinements — Meet
+ *      continuously updates caption text as the speech engine refines its guess.
+ *   4. A per-speaker timer (CAPTION_GRACE_MS) fires after silence to "commit"
+ *      the buffered utterance to the final transcript array.
+ *
+ * Public API exposed to the Popup:
+ *   chrome.runtime.onMessage: GET_TRANSCRIPT, RESET_TRANSCRIPT
+ *   window.getTranscript(), window.resetTranscript() (dev convenience only)
+ *
+ * @see src/shared/protocol.ts  — GET_TRANSCRIPT / RESET_TRANSCRIPT types
+ * @see src/shared/timeouts.ts  — CAPTION_GRACE_MS constant
  */
+
+import { TIMEOUTS } from './shared/timeouts';
 
 type Chunk = {
   startTime: number;
@@ -16,12 +33,30 @@ type Chunk = {
 
 type OpenChunk = Chunk & { timer: number };
 
-const CHUNK_GRACE_MS = 2000;
 
-// Reverse-engineered selectors (same as original)
-const captionSelector = '.ygicle';
-const speakerSelector = '.NWpY1d';
-const captionParent = '.nMcdL';
+/**
+ * ⚠️  FRAGILE SELECTORS — Reverse-engineered from Google Meet's obfuscated CSS.
+ *
+ * These WILL break if Google updates their frontend. When captions stop working:
+ *   1. Open meet.google.com and start a meeting with captions ON.
+ *   2. Open DevTools → Elements and inspect an active caption bubble.
+ *   3. Find the element containing the spoken text and update captionText.
+ *   4. Find the element containing the speaker's name and update speakerName.
+ *   5. Find the parent container (one per active speaker) and update captionBlock.
+ *
+ * Also check: the aria-label of the region element in observeCaptionsRegionAppearance()
+ * in case Google renames the "Captions" region.
+ *
+ * Last verified: 2026-03
+ */
+const MEET_SELECTORS = {
+  /** The element containing the text of what is currently being said. */
+  captionText:  '.ygicle',
+  /** The element containing the speaker's display name. */
+  speakerName:  '.NWpY1d',
+  /** The parent container for one speaker's caption block (one per active speaker). */
+  captionBlock: '.nMcdL',
+} as const;
 
 function normalize(pre: string) {
   return pre
@@ -69,7 +104,7 @@ class TranscriptCollector {
     this.captionObserver = new MutationObserver((mutations) => {
       for (const m of mutations) {
         for (const node of Array.from(m.addedNodes)) {
-          if (node instanceof HTMLElement && node.matches(captionParent)) {
+          if (node instanceof HTMLElement && node.matches(MEET_SELECTORS.captionBlock)) {
             this.scanSpeakerBlock(node);
           }
         }
@@ -79,15 +114,15 @@ class TranscriptCollector {
     this.captionObserver.observe(region, { childList: true, subtree: true });
     console.log('Caption observer attached');
 
-    region.querySelectorAll<HTMLElement>(captionParent).forEach((el) => this.scanSpeakerBlock(el));
+    region.querySelectorAll<HTMLElement>(MEET_SELECTORS.captionBlock).forEach((el) => this.scanSpeakerBlock(el));
   }
 
   private scanSpeakerBlock(block: HTMLElement) {
-    const txtNode = block.querySelector<HTMLDivElement>(captionSelector);
+    const txtNode = block.querySelector<HTMLDivElement>(MEET_SELECTORS.captionText);
     if (!txtNode) return;
 
     const speakerName =
-      block.querySelector<HTMLElement>(speakerSelector)?.textContent?.trim() ?? ' ';
+      block.querySelector<HTMLElement>(MEET_SELECTORS.speakerName)?.textContent?.trim() ?? ' ';
     const key = block.getAttribute('data-participant-id') || speakerName;
 
     const push = () => {
@@ -119,7 +154,7 @@ class TranscriptCollector {
     const existing = this.prior.get(speakerKey);
 
     if (!existing) {
-      const timer = window.setTimeout(() => this.commit(speakerKey), CHUNK_GRACE_MS);
+      const timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
       this.prior.set(speakerKey, {
         startTime: now,
         endTime: now,
@@ -135,7 +170,7 @@ class TranscriptCollector {
     existing.speaker = speakerName;
 
     clearTimeout(existing.timer);
-    existing.timer = window.setTimeout(() => this.commit(speakerKey), CHUNK_GRACE_MS);
+    existing.timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
   }
 
   private commit(key: string) {

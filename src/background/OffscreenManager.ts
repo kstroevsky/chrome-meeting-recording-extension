@@ -1,7 +1,30 @@
+/**
+ * @file background/OffscreenManager.ts
+ *
+ * Owns the full lifecycle of the Offscreen document and the Port connection to it.
+ *
+ * Responsibilities:
+ *   - Create the offscreen document when needed (ensureReady)
+ *   - Wait for the offscreen script to signal readiness via Port
+ *   - Proxy recording RPC calls (start/stop/status) over the Port
+ *   - React to state events from offscreen (badge, downloads, popup forwarding)
+ *
+ * The "ready" handshake sequence:
+ *   1. ensureReady() creates the offscreen HTML page if it doesn't exist
+ *   2. The offscreen script loads and calls connectPort() automatically
+ *   3. connectPort() sends OFFSCREEN_READY via the Port
+ *   4. attachPort() receives OFFSCREEN_READY and sets this.ready = true
+ *   5. ensureReady() polls until this.port && this.ready
+ *
+ * @see src/offscreen.ts        — the other end of the Port
+ * @see src/shared/rpc.ts      — createPortRpcClient used by this.rpc()
+ * @see src/shared/timeouts.ts — all polling/timeout constants
+ */
 import { sleep } from '../shared/async';
 import { makeLogger } from '../shared/logger';
 import { createPortRpcClient } from '../shared/rpc';
 import type { BgToOffscreenRpc, OffscreenToBg } from '../shared/protocol';
+import { TIMEOUTS } from '../shared/timeouts';
 
 const L = makeLogger('background');
 
@@ -46,28 +69,28 @@ export class OffscreenManager {
     }
 
     // Wait for the offscreen script to signal it is ready
-    for (let i = 0; i < 10 && !(this.port && this.ready); i++) {
+    for (let i = 0; i < TIMEOUTS.READY_POLL_PING_MAX && !(this.port && this.ready); i++) {
       try {
         const res = await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PING' });
         if (res?.ok) { L.log('Offscreen responded to PING'); break; }
       } catch {}
-      await sleep(100);
+      await sleep(TIMEOUTS.READY_POLL_INTERVAL_MS);
     }
 
     if (!(this.port && this.ready)) {
       try { await chrome.runtime.sendMessage({ type: 'OFFSCREEN_CONNECT' }); } catch {}
     }
 
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < TIMEOUTS.READY_POLL_CONNECT_MAX; i++) {
       if (this.port && this.ready) return;
-      await sleep(100);
+      await sleep(TIMEOUTS.READY_POLL_INTERVAL_MS);
     }
 
     throw new Error('Offscreen did not become ready');
   }
 
   async rpc<TRes = any>(msg: BgToOffscreenRpc): Promise<TRes> {
-    const client = createPortRpcClient(() => this.port, { timeoutMs: 15_000 });
+    const client = createPortRpcClient(() => this.port, { timeoutMs: TIMEOUTS.RPC_MS });
     return await client<BgToOffscreenRpc, TRes>(msg);
   }
 
