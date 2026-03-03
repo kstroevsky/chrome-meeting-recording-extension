@@ -11,8 +11,8 @@
  *   bidirectional streaming. The offscreen document proactively connects on load.
  *
  *   A secondary chrome.runtime.onMessage handler exists ONLY for the startup handshake:
- *     OFFSCREEN_PING  — lets Background verify the script has loaded
- *     OFFSCREEN_CONNECT — lets Background trigger a Port reconnect after a crash
+ *     OFFSCREEN_CONNECT — lets Background trigger a Port reconnect when the offscreen
+ *                         is already running but its Port has disconnected
  *   Normal recording RPC always flows through the Port.
  *
  * @see src/offscreen/RecorderEngine.ts  — media capture, mixing, and saving
@@ -70,12 +70,20 @@ function getPort(): chrome.runtime.Port {
 
 function respond(reqId: string, payload: any) {
   const p = getPort();
-  const msg: RpcResponse = { __respFor: reqId, payload };
+  // RpcResponse<unknown> at the transport layer — the client cast it to the correct TRes
+  const msg: RpcResponse<unknown> = { __respFor: reqId, payload };
   p.postMessage(msg);
 }
 
 function pushState(recording: boolean, extra?: Record<string, any>) {
-  try { (chrome.storage as any)?.session?.set?.({ recording }).catch?.(() => {}); } catch {}
+  // Persist recording state to session storage so it survives a popup re-open.
+  // storage.session is MV3-only and may be unavailable in some configurations;
+  // we warn once so it's visible in DevTools instead of silently failing.
+  try {
+    (chrome.storage as any)?.session?.set?.({ recording }).catch?.((e: any) => {
+      L.warn('storage.session.set failed — recording state will not persist across SW restarts:', e);
+    });
+  } catch {}
   getPort().postMessage({ type: 'RECORDING_STATE', recording, ...(extra ?? {}) });
 }
 
@@ -128,7 +136,9 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         try {
           const res = await (chrome.storage as any)?.session?.get?.(['recording']);
           if (typeof res?.recording === 'boolean') recording = !!res.recording;
-        } catch {}
+        } catch (e) {
+          L.warn('storage.session.get failed — status may be stale:', e);
+        }
         return { recording };
       },
 

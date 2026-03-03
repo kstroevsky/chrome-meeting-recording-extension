@@ -10,17 +10,19 @@
  *   - React to state events from offscreen (badge, downloads, popup forwarding)
  *
  * The "ready" handshake sequence:
- *   1. ensureReady() creates the offscreen HTML page if it doesn't exist
- *   2. The offscreen script loads and calls connectPort() automatically
- *   3. connectPort() sends OFFSCREEN_READY via the Port
- *   4. attachPort() receives OFFSCREEN_READY and sets this.ready = true
- *   5. ensureReady() polls until this.port && this.ready
+ *   1. ensureReady() creates the offscreen HTML page if it doesn't exist,
+ *      then arms a promise that will resolve when OFFSCREEN_READY arrives.
+ *   2. The offscreen script loads and calls connectPort() automatically.
+ *   3. connectPort() sends OFFSCREEN_READY via the Port.
+ *   4. attachPort() receives OFFSCREEN_READY → calls signalReady() → resolves promise.
+ *   5. ensureReady() races the promise against TIMEOUTS.READY_TIMEOUT_MS.
+ *      No polling loops — resolves as soon as ready, fails fast if not.
  *
  * @see src/offscreen.ts        — the other end of the Port
- * @see src/shared/rpc.ts      — createPortRpcClient used by this.rpc()
- * @see src/shared/timeouts.ts — all polling/timeout constants
+ * @see src/shared/rpc.ts      — createPortRpcClient used by this.rpcClient
+ * @see src/shared/timeouts.ts — timeout constants
  */
-import { sleep } from '../shared/async';
+import { withTimeout } from '../shared/async';
 import { makeLogger } from '../shared/logger';
 import { createPortRpcClient } from '../shared/rpc';
 import type { BgToOffscreenRpc, OffscreenToBg } from '../shared/protocol';
@@ -33,6 +35,23 @@ export class OffscreenManager {
   private ready = false;
 
   private lastKnownRecording = false;
+
+  // --------------------
+  // Ready signal (promise-based, replaces sleep-poll loops)
+  // --------------------
+  // A single deferred promise is armed in ensureReady() and resolved by
+  // signalReady() when OFFSCREEN_READY arrives over the Port.
+  // The promise is nulled after resolution so the next call to ensureReady()
+  // creates a fresh deferred.
+  private readyPromise: Promise<void> | null = null;
+  private resolveReady: (() => void) | null = null;
+
+  // --------------------
+  // RPC client (created once; closure captures `this.port`)
+  // --------------------
+  // The closure `() => this.port` is re-evaluated on every call, so the client
+  // always uses the current live port even after reconnects.
+  private readonly rpcClient = createPortRpcClient(() => this.port, { timeoutMs: TIMEOUTS.RPC_MS });
 
   constructor() {
     // Keep badge in sync even if popup isn't open
@@ -49,6 +68,9 @@ export class OffscreenManager {
       L.warn('Offscreen disconnected');
       this.port = null;
       this.ready = false;
+      // Discard any pending ready-promise so ensureReady() creates a new one
+      this.readyPromise = null;
+      this.resolveReady = null;
       this.setBadge(false);
     });
   }
@@ -58,6 +80,15 @@ export class OffscreenManager {
   }
 
   async ensureReady(): Promise<void> {
+    // Already live — nothing to do
+    if (this.port && this.ready) return;
+
+    // Arm the ready-promise before creating the document so we don't miss
+    // a very fast OFFSCREEN_READY signal that arrives before the await below.
+    if (!this.readyPromise) {
+      this.readyPromise = new Promise<void>(resolve => { this.resolveReady = resolve; });
+    }
+
     const have = await this.hasOffscreenContext();
     if (!have) {
       L.log('Creating offscreen document…');
@@ -66,32 +97,19 @@ export class OffscreenManager {
         reasons: ['BLOBS', 'AUDIO_PLAYBACK', 'USER_MEDIA'] as any,
         justification: 'Record tab audio+video in offscreen using MediaRecorder',
       });
-    }
-
-    // Wait for the offscreen script to signal it is ready
-    for (let i = 0; i < TIMEOUTS.READY_POLL_PING_MAX && !(this.port && this.ready); i++) {
-      try {
-        const res = await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PING' });
-        if (res?.ok) { L.log('Offscreen responded to PING'); break; }
-      } catch {}
-      await sleep(TIMEOUTS.READY_POLL_INTERVAL_MS);
-    }
-
-    if (!(this.port && this.ready)) {
+    } else {
+      // Already running but Port may have dropped — ask it to reconnect
       try { await chrome.runtime.sendMessage({ type: 'OFFSCREEN_CONNECT' }); } catch {}
     }
 
-    for (let i = 0; i < TIMEOUTS.READY_POLL_CONNECT_MAX; i++) {
-      if (this.port && this.ready) return;
-      await sleep(TIMEOUTS.READY_POLL_INTERVAL_MS);
-    }
-
-    throw new Error('Offscreen did not become ready');
+    // Wait for the offscreen script to complete startup and signal OFFSCREEN_READY.
+    // withTimeout ensures we never wait more than READY_TIMEOUT_MS, regardless of
+    // how fast (or slow) the offscreen doc loads.
+    await withTimeout(this.readyPromise, TIMEOUTS.READY_TIMEOUT_MS, 'Offscreen ready');
   }
 
   async rpc<TRes = any>(msg: BgToOffscreenRpc): Promise<TRes> {
-    const client = createPortRpcClient(() => this.port, { timeoutMs: TIMEOUTS.RPC_MS });
-    return await client<BgToOffscreenRpc, TRes>(msg);
+    return await this.rpcClient<BgToOffscreenRpc, TRes>(msg);
   }
 
   async stopIfPossibleOnSuspend(): Promise<void> {
@@ -105,9 +123,16 @@ export class OffscreenManager {
   // Offscreen events
   // --------------------
 
+  private signalReady() {
+    this.resolveReady?.();
+    this.resolveReady = null;
+    this.readyPromise = null;
+  }
+
   private onOffscreenMessage(msg: any) {
     if (msg?.type === 'OFFSCREEN_READY') {
       this.ready = true;
+      this.signalReady();
       L.log('Offscreen is READY (Port)');
       return;
     }

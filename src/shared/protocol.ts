@@ -27,7 +27,16 @@
 export type RpcId = string;
 
 export type RpcRequest<T extends { type: string }> = T & { __id?: RpcId };
-export type RpcResponse = { __respFor: RpcId; payload: any };
+
+/**
+ * Generic so that the client-side resolve() can be typed as `TRes` rather than
+ * `any`. The server always produces `payload: unknown` at the transport layer —
+ * the generic is only meaningful on the receiving (client) end.
+ *
+ * Default is `unknown` (not `any`) so that callers must explicitly handle the
+ * type rather than silently acting on an unchecked value.
+ */
+export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
 
 /**
  * Background → Offscreen via Port (RPC — expects a response).

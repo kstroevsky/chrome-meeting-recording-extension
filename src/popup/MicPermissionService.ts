@@ -7,8 +7,7 @@ export class MicPermissionService {
     if (!('permissions' in navigator)) return 'unknown';
 
     try {
-      // @ts-ignore
-      const status = await (navigator as any).permissions.query({ name: 'microphone' });
+      const status = await navigator.permissions.query({ name: 'microphone' as PermissionName });
       return (status?.state as any) ?? 'unknown';
     } catch {
       return 'unknown';

@@ -28,9 +28,10 @@ export function createPortRpcClient(
       };
 
       const onMessage = (m: any) => {
-        const resp = m as RpcResponse;
+        // Cast to the typed generic; payload is TRes at this call-site
+        const resp = m as RpcResponse<TRes>;
         if (resp && resp.__respFor === id) {
-          finish(() => resolve(resp.payload as TRes));
+          finish(() => resolve(resp.payload));
         }
       };
 

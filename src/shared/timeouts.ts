@@ -4,7 +4,7 @@
  * Centralised timeout and timing constants.
  *
  * Why a separate file?
- * Scattered magic numbers (4000, 8000, 15_000, 100) are hard to audit and
+ * Scattered magic numbers (4000, 8000, 15_000, 5_000) are hard to audit and
  * impossible to tune without grepping the whole codebase. Keeping them here means:
  *  - every timeout has a name that explains *why* it exists;
  *  - changing a value is a single-place edit;
@@ -42,20 +42,10 @@ export const TIMEOUTS = {
   CAPTION_GRACE_MS: 2_000,
 
   /**
-   * Sleep between individual polls while waiting for the offscreen document
-   * to become ready. Kept short so UI doesn't feel sluggish on fast machines.
+   * Maximum time ensureReady() will wait for the offscreen document to
+   * connect its Port and signal OFFSCREEN_READY before giving up.
+   * Uses a Promise-based signal (not polling) so the wait resolves
+   * immediately when ready — this is just the outer safety net.
    */
-  READY_POLL_INTERVAL_MS: 100,
-
-  /**
-   * Maximum number of poll iterations in each offscreen-ready waiting loop.
-   * 10 iterations × 100 ms = 1 s ceiling for the first (PING) loop.
-   */
-  READY_POLL_PING_MAX: 10,
-
-  /**
-   * Maximum number of poll iterations after sending OFFSCREEN_CONNECT.
-   * 50 iterations × 100 ms = 5 s ceiling — enough for slow cold-starts.
-   */
-  READY_POLL_CONNECT_MAX: 50,
+  READY_TIMEOUT_MS: 5_000,
 } as const;
