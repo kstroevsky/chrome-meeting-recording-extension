@@ -25,7 +25,7 @@ Object.assign(global, {
     },
     tabs: {
       query: jest.fn().mockResolvedValue([{ url: 'https://meet.google.com/abc-defg-hij' }]),
-      sendMessage: jest.fn(),
+      sendMessage: jest.fn().mockResolvedValue(undefined),
     },
     downloads: {
       download: jest.fn(),
