@@ -1,3 +1,25 @@
+/**
+ * @file offscreen/DriveTarget.ts
+ *
+ * StorageTarget implementation that streams MediaRecorder chunks directly into
+ * Google Drive using the Google Drive REST API's "resumable upload" protocol.
+ *
+ * This completely eliminates unbounded RAM accumulation because chunks are buffered
+ * temporarily in memory up to a fixed limit (`FLUSH_THRESHOLD_BYTES` - 5 MB) and
+ * then immediately `PUT` streamed over the network to Google Drive.
+ *
+ * The `getToken` callback allows this class to query the background Service Worker
+ * for a fresh OAuth token on every flush. This token rotation logic is critical
+ * because standard Google OAuth tokens expire after 1 hour, which would break
+ * recordings longer than 60 minutes if we only fetched the token once at the start.
+ *
+ * Resume Logic & Network Drops:
+ *   If a flush fails (due to a transient network drop), the target checks the
+ *   currently committed offset via a special PUT request before retrying the chunk.
+ *
+ * @see src/offscreen.ts                 — Target instantiation and storage selection
+ * @see src/offscreen/RecorderEngine.ts  — StorageTarget interface
+ */
 import type { StorageTarget } from './RecorderEngine';
 
 const FLUSH_THRESHOLD_BYTES = 5 * 1024 * 1024; // 5 MB

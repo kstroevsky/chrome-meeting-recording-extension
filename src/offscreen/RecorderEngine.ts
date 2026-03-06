@@ -2,11 +2,11 @@
  * @file offscreen/RecorderEngine.ts
  *
  * Core recording logic. Captures tab audio+video and microphone audio
- * using the MediaRecorder API, then hands finished blobs back to the
- * Offscreen layer for download via Background.
+ * using the MediaRecorder API, and streams the finished blobs to a specified
+ * `StorageTarget` (e.g. OPFS local disk or Google Drive cloud).
  *
  * This class is intentionally decoupled from Chrome extension APIs:
- * all extension I/O (port messages, storage) is injected via `deps`.
+ * all extension I/O (port messages, storage targets) is injected via `deps`.
  * This makes the engine independently testable with mock callbacks.
  *
  * AudioPlaybackBridge (private inner class):

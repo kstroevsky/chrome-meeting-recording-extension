@@ -15,9 +15,11 @@ If you'd rather use a bot or desktop recording form factor, check out [Recall.ai
 
 **Tab recorder** – captures Google Meet tab video + audio into a .webm via MediaRecorder.
 
+**Direct-to-Disk / Cloud Streaming** — stream recording chunks directly to Origin Private File System (OPFS) or Google Drive to prevent memory crashes on 2-hour+ meetings. Memory is strictly bounded to a 5MB buffer!
+
 **Optional mic mix** – include your microphone in the recording (once you grant permission).
 
-**MV3/Offscreen architecture** – recording runs in a hidden offscreen document.
+**MV3/Offscreen architecture** – recording runs in a hidden offscreen document. Resilient to Service Worker suspension with keep-alive routines and event-driven backoff reconnects!
 
 ## How it works (high level)
 
@@ -25,9 +27,9 @@ If you'd rather use a bot or desktop recording form factor, check out [Recall.ai
 
 2. Popup lets you download the transcript or control recording.
 
-3. Background service worker creates/coordinates an offscreen document and requests the correct capture streamId for the active tab.
+3. Background service worker creates/coordinates an offscreen document and requests the correct capture streamId for the active tab. It also maintains a keep-alive interval and session-storage to prevent state loss if Chrome suspends the worker.
 
-4. Offscreen page captures the tab, optionally mixes microphone audio, records, and hands the blob back for download.
+4. Offscreen page captures the tab, optionally mixes microphone audio, and streams the recording buffer via a 5MB chunking strategy to either your Local Disk (OPFS) or directly to Google Drive via resumable upload.
 
 ## Requirements
 
@@ -62,7 +64,8 @@ npm run build   # outputs to `./dist`
 Open a Google Meet, click the extension icon:
  - **Download Transcript** – saves a `.txt` of the live captions (turn captions ON in Google Meet).
  - **Enable Microphone** – grants mic permission so your voice can be mixed into recordings.
- - **Start Recording (tab) / Stop & Download** – creates a `.webm` file via the Downloads API.
+ - **Storage Mode Dropdown** — Choose whether to save the final recording directly on Local Disk (OPFS) or straight to Google Drive (Cloud).
+ - **Start Recording (tab) / Stop & Download** – creates a `.webm` file streamed continuously to your chosen storage mode.
 
 ## Install & build (detailed)
 
@@ -138,6 +141,15 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
 ```
 
 ## Configuration knobs
+
+### Google Drive Setup (Important)
+If you want to use the **Google Drive** storage target, you must provision an OAuth App in the Google Cloud Console:
+1. Enable the Google Drive API.
+2. Setup an OAuth Consent Screen and add the `https://www.googleapis.com/auth/drive.file` scope.
+3. Create a **Chrome extension** OAuth Client ID using your 32-letter Chrome Extension ID.
+4. Replace `"placeholder_client_id_for_google_drive_api"` in `manifest.json` with your real Client ID.
+
+### Source Code Adjustments
 - Mix microphone into recording: 
   - In src/offscreen.ts:
 ```
@@ -176,10 +188,11 @@ These are already declared in `package.json`:
 ```
 ## Permissions explained
 - `activeTab`, `tabs` – query the active tab (needed to target/label the recording).
-- `downloads` – save transcript/recording files locally.
+- `downloads` – save transcript/recording files locally via blob streams.
 - `tabCapture` / `desktopCapture` – capture video/audio from the current tab.
 - `offscreen` – create an offscreen document for safe/background recording logic.
-- `storage` – store ephemeral recording-state hints (for UI sync).
+- `storage` – store ephemeral recording-state hints (for UI sync + SW keep-alive recovery).
+- `identity` – authenticate the user behind-the-scenes to write to Google Drive.
 - `host_permissions: ["https://meet.google.com/*"]` – limit content script to Google Meet.
 
 ## Troubleshooting / FAQ
