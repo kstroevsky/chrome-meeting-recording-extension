@@ -46,6 +46,8 @@ export class OffscreenManager {
   private readyPromise: Promise<void> | null = null;
   private resolveReady: (() => void) | null = null;
 
+  public onRecordingChanged?: (recording: boolean) => void;
+
   // --------------------
   // RPC client (created once; closure captures `this.port`)
   // --------------------
@@ -141,6 +143,7 @@ export class OffscreenManager {
       this.lastKnownRecording = !!msg.recording;
       this.setBadge(this.lastKnownRecording);
       chrome.runtime.sendMessage({ type: 'RECORDING_STATE', recording: this.lastKnownRecording }).catch(() => {});
+      this.onRecordingChanged?.(this.lastKnownRecording);
       return;
     }
 

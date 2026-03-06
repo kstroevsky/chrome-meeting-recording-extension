@@ -44,8 +44,9 @@ L.log('script loaded');
 // The offscreen side proactively calls connectPort() on load and re-wires the RPC
 // server handlers each time the port is (re)created.
 let portRef: chrome.runtime.Port | null = null;
+let reconnectEnabled = true;
 
-function connectPort(): chrome.runtime.Port {
+function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   try { portRef?.disconnect(); } catch {}
   const p = chrome.runtime.connect({ name: 'offscreen' });
 
@@ -55,6 +56,10 @@ function connectPort(): chrome.runtime.Port {
   p.onDisconnect.addListener(() => {
     L.warn('Port disconnected');
     portRef = null;
+    if (reconnectEnabled) {
+      L.log(`Scheduling port reconnect in ${retryDelay} ms`);
+      setTimeout(() => connectPort(Math.min(retryDelay * 2, 30_000)), retryDelay);
+    }
   });
 
   // tell background alive
@@ -132,10 +137,12 @@ function wirePortHandlers(port: chrome.runtime.Port) {
       },
 
       OFFSCREEN_STOP: async () => {
+        reconnectEnabled = false; // Intentionally stopping
         try {
           engine.stop();
           return { ok: true };
         } catch (e) {
+          reconnectEnabled = true; // Stop failed, allow reconnect
           return { ok: false, error: String(e) };
         }
       },

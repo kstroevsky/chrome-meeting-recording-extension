@@ -22,6 +22,44 @@ const L = makeLogger('background');
 
 const offscreen = new OffscreenManager();
 
+// ── Keepalive ──────────────────────────────────────────────────────────────
+// Prevents SW from being suspended while recording is active.
+// chrome.runtime.getPlatformInfo is a zero-cost API call that resets the
+// 30 s idle timer. Not a permanent guarantee (Chrome may enforce a hard cap
+// in future), but combined with session-storage re-hydration provides
+// defence-in-depth for long recordings.
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function startKeepAlive() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20_000);
+}
+function stopKeepAlive() {
+  if (!keepAliveTimer) return;
+  clearInterval(keepAliveTimer);
+  keepAliveTimer = null;
+}
+
+offscreen.onRecordingChanged = (recording) => {
+  recording ? startKeepAlive() : stopKeepAlive();
+};
+
+// ── Session-storage re-hydration ───────────────────────────────────────────
+// If the SW is restarted while recording is active, re-attach the offscreen
+// port so the badge and popup state are restored.
+(async () => {
+  try {
+    const res = await chrome.storage.session.get(['recording']);
+    if (res?.recording === true) {
+      L.log('SW restarted during recording — re-attaching offscreen');
+      await offscreen.ensureReady();
+      startKeepAlive();
+    }
+  } catch (e) {
+    L.warn('Session re-hydration failed (non-fatal):', e);
+  }
+})();
+
 // Port connection from offscreen.html
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'offscreen') return;
