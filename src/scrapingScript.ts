@@ -1,184 +1,212 @@
 /**
- * CONTENT SCRIPT: GOOGLE MEET CAPTION SCRAPER
- * 
- * This script is injected into Google Meet pages. It monitors the DOM for live 
- * captions and packages them into a coherent transcript.
- * 
- * Logic Overview:
- * 1. Locates the caption region via aria-labels.
- * 2. Uses MutationObserver to detect new caption blocks.
- * 3. Handles "live" updates where Google Meet replaces text as the speaker continues.
- * 4. Buffers logic ensuring we don't commit a line until the speaker has finished.
+ * @context  Content Script (injected into https://meet.google.com/*)
+ * @role     Transcriber — watches the Google Meet DOM for live captions and
+ *           buffers them into a coherent, time-stamped transcript.
+ * @lifetime Injected once per page load (run_at: document_idle).
+ *           State lives in this module's closures for the lifetime of the tab.
+ *
+ * Logic overview:
+ *   1. A top-level MutationObserver waits for the Captions region to appear
+ *      (it only exists when captions are enabled by the user in Meet).
+ *   2. A second observer watches that region for new speaker blocks.
+ *   3. A third observer (per block) watches for text refinements — Meet
+ *      continuously updates caption text as the speech engine refines its guess.
+ *   4. A per-speaker timer (CAPTION_GRACE_MS) fires after silence to "commit"
+ *      the buffered utterance to the final transcript array.
+ *
+ * Public API exposed to the Popup:
+ *   chrome.runtime.onMessage: GET_TRANSCRIPT, RESET_TRANSCRIPT
+ *   window.getTranscript(), window.resetTranscript() (dev convenience only)
+ *
+ * @see src/shared/protocol.ts  — GET_TRANSCRIPT / RESET_TRANSCRIPT types
+ * @see src/shared/timeouts.ts  — CAPTION_GRACE_MS constant
  */
 
-let transcript: string[] = []
+import { TIMEOUTS } from './shared/timeouts';
 
-interface Chunk {
-  startTime: number
-  endTime: number
-  speaker: string
-  text: string
+type Chunk = {
+  startTime: number;
+  endTime: number;
+  speaker: string;
+  text: string;
+};
+
+type OpenChunk = Chunk & { timer: number };
+
+
+/**
+ * ⚠️  FRAGILE SELECTORS — Reverse-engineered from Google Meet's obfuscated CSS.
+ *
+ * These WILL break if Google updates their frontend. When captions stop working:
+ *   1. Open meet.google.com and start a meeting with captions ON.
+ *   2. Open DevTools → Elements and inspect an active caption bubble.
+ *   3. Find the element containing the spoken text and update captionText.
+ *   4. Find the element containing the speaker's name and update speakerName.
+ *   5. Find the parent container (one per active speaker) and update captionBlock.
+ *
+ * Also check: the aria-label of the region element in observeCaptionsRegionAppearance()
+ * in case Google renames the "Captions" region.
+ *
+ * Last verified: 2026-03
+ */
+const MEET_SELECTORS = {
+  /** The element containing the text of what is currently being said. */
+  captionText:  '.ygicle',
+  /** The element containing the speaker's display name. */
+  speakerName:  '.NWpY1d',
+  /** The parent container for one speaker's caption block (one per active speaker). */
+  captionBlock: '.nMcdL',
+} as const;
+
+function normalize(pre: string) {
+  return pre
+    .toLowerCase()
+    .replace(/[.,?!'"\u2019]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
-type OpenChunk = Chunk & { timer: number }
 
-// Wait 2 seconds of silence before finalizing a caption block
-const CHUNK_GRACE_MS = 2000
+class TranscriptCollector {
+  private transcript: string[] = [];
+  private prior = new Map<string, OpenChunk>();
+  private lastSeen = new Map<string, string>();
+  private captionObserver: MutationObserver | null = null;
 
-// In-memory buffer for active speakers
-const prior = new Map<string, OpenChunk>()
-const lastSeen = new Map<string, string>()
-
-/**
- * Normalizes text for comparison to detect if a mutation actually changed the content.
- */
-const normalize = (pre: string) =>
-  pre.toLowerCase().replace(/[.,?!'"\u2019]/g, "").replace(/\s+/g, " ").trim()
-
-/**
- * Core Logic: Processes a caption fragment.
- * Google Meet captions are fragile; they update frequently as the speech-to-text 
- * engine refines its guess. We update the 'prior' entry and reset a timer.
- */
-function handleCaption(speakerKey: string, speakerName: string, rawText: string){
-  const text = rawText.trim()
-  if(!text) return
-
-  const norm = normalize(text)
-  const prev = lastSeen.get(speakerKey)
-  if (prev === norm) return // Ignore if nothing meaningful changed
-  lastSeen.set(speakerKey, norm)
-
-  const now = Date.now()
-  const existing = prior.get(speakerKey)
-
-  if (!existing){
-    // New speaker or new thought: Start a commit timer
-    const timer = window.setTimeout(() => commit(speakerKey), CHUNK_GRACE_MS)
-    prior.set(speakerKey, {
-      startTime: now,
-      endTime: now,
-      speaker: speakerName,
-      text,
-      timer
-    })
-    return
+  start() {
+    this.observeCaptionsRegionAppearance();
+    this.exposeWindowApi();
+    this.exposeMessageApi();
+    console.log('Transcript collector ready');
   }
 
-  // Update existing thought
-  existing.endTime = now
-  existing.text = text
-  existing.speaker = speakerName
-
-  // Reset the "grace period" timer
-  clearTimeout(existing.timer)
-  existing.timer = window.setTimeout(() => commit(speakerKey), CHUNK_GRACE_MS)
-}
-
-/**
- * Moves a buffered thought into the final transcript array.
- */
-function commit(key: string){
-  const entry = prior.get(key)
-  if(!entry) return
-
-  const startTS = new Date(entry.startTime).toISOString()
-  const endTS = new Date(entry.endTime).toISOString()
-  transcript.push(`[${startTS}] [${endTS}] ${entry.speaker} : ${entry.text}`.trim())
-  clearTimeout(entry.timer)
-  prior.delete(key)
-}
-
-/**
- * SELECTORS: Reverse-engineered classes from Google Meet.
- * WARNING: These are likely to change if Google updates their UI.
- * .ygicle -> The actual text of the caption.
- * .NWpY1d -> The speaker's name element.
- * .nMcdL  -> The parent container for a single speaker's caption block.
- */
-let captionSelector = '.ygicle'
-let speakerSelector = '.NWpY1d'
-let captionParent  = '.nMcdL'
-
-let captionObserver: MutationObserver | null = null
-
-/**
- * Attaches an observer to a specific caption block to catch refinement 
- * (characterData/childList changes).
- */
-function scanClasses(cl: HTMLElement){
-  const txtNode = cl.querySelector<HTMLDivElement>(captionSelector)
-  if(!txtNode) return
-
-  const speakerName = cl.querySelector<HTMLElement>(speakerSelector)?.textContent?.trim() ?? ' '
-  const key = cl.getAttribute('data-participant-id') || speakerName
-
-  const push = () => {
-    const trimmed = txtNode.textContent?.trim() ?? ''
-    if(trimmed) handleCaption(key, speakerName, trimmed)
+  getTranscriptText(): string {
+    this.flushOpenChunks();
+    return this.transcript.join('\n');
   }
 
-  push()
+  reset() {
+    this.prior.forEach((v) => clearTimeout(v.timer));
+    this.prior.clear();
+    this.lastSeen.clear();
+    this.transcript.length = 0;
+  }
 
-  // Google Meet updates the text inside the div; we must observe characterData
-  new MutationObserver(push).observe(txtNode, { childList: true, subtree: true, characterData: true })
-}
+  private observeCaptionsRegionAppearance() {
+    new MutationObserver(() => {
+      const region = document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]');
+      if (region) this.attachRegion(region);
+    }).observe(document.body, { childList: true, subtree: true });
+  }
 
-/**
- * Attaches an observer to the parent region that contains all caption blocks.
- */
-function launchAttachObserver(region: HTMLElement) {
-  captionObserver?.disconnect()
+  private attachRegion(region: HTMLElement) {
+    this.captionObserver?.disconnect();
 
-  captionObserver = new MutationObserver((mutations) => {
-    mutations.forEach(mutation => {
-      mutation.addedNodes.forEach(node => {
-        // When a new speaker block (.nMcdL) appears, start scanning it
-        if (node instanceof HTMLElement && node.matches(captionParent)) {
-          scanClasses(node)
+    this.captionObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of Array.from(m.addedNodes)) {
+          if (node instanceof HTMLElement && node.matches(MEET_SELECTORS.captionBlock)) {
+            this.scanSpeakerBlock(node);
+          }
         }
-      })
-    })
-  })
+      }
+    });
 
-  captionObserver.observe(region, { childList: true, subtree: true })
-  console.log(`Caption observer attached`)
-  region.querySelectorAll<HTMLElement>(captionParent).forEach(scanClasses)
+    this.captionObserver.observe(region, { childList: true, subtree: true });
+    console.log('Caption observer attached');
+
+    region.querySelectorAll<HTMLElement>(MEET_SELECTORS.captionBlock).forEach((el) => this.scanSpeakerBlock(el));
+  }
+
+  private scanSpeakerBlock(block: HTMLElement) {
+    const txtNode = block.querySelector<HTMLDivElement>(MEET_SELECTORS.captionText);
+    if (!txtNode) return;
+
+    const speakerName =
+      block.querySelector<HTMLElement>(MEET_SELECTORS.speakerName)?.textContent?.trim() ?? ' ';
+    const key = block.getAttribute('data-participant-id') || speakerName;
+
+    const push = () => {
+      const trimmed = txtNode.textContent?.trim() ?? '';
+      if (trimmed) this.handleCaption(key, speakerName, trimmed);
+    };
+
+    push();
+
+    // Observe refinement updates
+    new MutationObserver(push).observe(txtNode, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  }
+
+  private handleCaption(speakerKey: string, speakerName: string, rawText: string) {
+    const text = rawText.trim();
+    if (!text) return;
+
+    const norm = normalize(text);
+    const prev = this.lastSeen.get(speakerKey);
+    if (prev === norm) return;
+
+    this.lastSeen.set(speakerKey, norm);
+
+    const now = Date.now();
+    const existing = this.prior.get(speakerKey);
+
+    if (!existing) {
+      const timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
+      this.prior.set(speakerKey, {
+        startTime: now,
+        endTime: now,
+        speaker: speakerName,
+        text,
+        timer,
+      });
+      return;
+    }
+
+    existing.endTime = now;
+    existing.text = text;
+    existing.speaker = speakerName;
+
+    clearTimeout(existing.timer);
+    existing.timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
+  }
+
+  private commit(key: string) {
+    const entry = this.prior.get(key);
+    if (!entry) return;
+
+    const startTS = new Date(entry.startTime).toISOString();
+    const endTS = new Date(entry.endTime).toISOString();
+    this.transcript.push(`[${startTS}] [${endTS}] ${entry.speaker} : ${entry.text}`.trim());
+
+    clearTimeout(entry.timer);
+    this.prior.delete(key);
+  }
+
+  private flushOpenChunks() {
+    for (const k of Array.from(this.prior.keys())) this.commit(k);
+  }
+
+  private exposeWindowApi() {
+    (window as any).getTranscript = () => this.getTranscriptText();
+    (window as any).resetTranscript = () => this.reset();
+  }
+
+  private exposeMessageApi() {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (msg?.type === 'GET_TRANSCRIPT') {
+        sendResponse({ transcript: this.getTranscriptText() });
+        return true;
+      }
+      if (msg?.type === 'RESET_TRANSCRIPT') {
+        this.reset();
+        sendResponse({ ok: true });
+        return true;
+      }
+    });
+  }
 }
 
-/**
- * TOP LEVEL OBSERVER: Watches for the appearance of the "Captions" region.
- * Google Meet only mounts this region when captions are turned ON.
- */
-new MutationObserver(() => {
-  const region = document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]')
-  if(region){
-    launchAttachObserver(region)
-  }
-}).observe(document.body, { childList: true, subtree: true })
-
-// Public API for the extension (Background/Popup)
-;(window as any).getTranscript = () => {
-    [...prior.keys()].forEach(commit)
-    return transcript.join("\n")
-  }
-  
-  ;(window as any).resetTranscript = () => {
-    prior.clear()
-    transcript.length = 0
-  }
-  
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg?.type === 'GET_TRANSCRIPT') {
-      ;[...prior.keys()].forEach(commit)
-      sendResponse({ transcript: transcript.join('\n') })
-      return true
-    }
-    if (msg?.type === 'RESET_TRANSCRIPT') {
-      prior.clear()
-      transcript.length = 0
-      sendResponse({ ok: true })
-      return true
-    }
-  })
-
-console.log('Transcript collector ready')
+new TranscriptCollector().start();

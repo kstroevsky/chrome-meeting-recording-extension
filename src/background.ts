@@ -1,256 +1,109 @@
-// src/background.ts
-
 /**
- * BACKGROUND SERVICE WORKER (Manifest V3)
- * 
- * In MV3, the background script is a Service Worker. It has no access to the DOM
- * or specialized media APIs like MediaRecorder. 
- * 
- * This file acts as the "Orchestrator":
- * 1. It manages the lifecycle of the "Offscreen Document" where recording actually happens.
- * 2. It captures the MediaStream ID from the active tab and passes it to the Offscreen.
- * 3. It handles communication between the Popup (UI) and the Offscreen (Engine).
+ * @context  Background Service Worker (MV3)
+ * @role     Orchestrator — the only context that can call tabCapture and
+ *           chrome.downloads. Never handles media (MediaRecorder/AudioContext)
+ *           directly; those live in the Offscreen document.
+ * @lifetime Event-driven. Chrome will terminate and restart this worker at will.
+ *           Do NOT store recording state here that must survive suspension — use
+ *           chrome.storage.session (via OffscreenManager) for that.
+ *
+ * Message flow this file handles:
+ *   Popup  →  background  (runtime.sendMessage):  START_RECORDING, STOP_RECORDING, GET_RECORDING_STATUS
+ *   Offscreen → background (Port):                OFFSCREEN_READY, RECORDING_STATE, OFFSCREEN_SAVE
+ *
+ * @see src/background/OffscreenManager.ts  — offscreen lifecycle + Port RPC client
+ * @see src/shared/protocol.ts              — all message type definitions
+ * @see src/shared/rpc.ts                  — Port-based bidirectional RPC helpers
  */
+import { makeLogger } from './shared/logger';
+import { OffscreenManager } from './background/OffscreenManager';
 
-let offscreenPort: chrome.runtime.Port | null = null
-let offscreenReady = false
-let lastKnownRecording = false
+const L = makeLogger('background');
 
-const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
-function bglog(...a: any[]) { console.log('[background]', ...a) }
-function setBadge(recording: boolean) {
-  chrome.action.setBadgeText({ text: recording ? 'REC' : '' }).catch?.(() => {})
-}
+const offscreen = new OffscreenManager();
 
-/**
- * Checks if an offscreen document already exists.
- * We use this to avoid trying to create multiple offscreen documents,
- * which would cause an error in Chrome.
- */
-async function hasOffscreenContext(): Promise<boolean> {
-  try {
-    const getContexts = (chrome.runtime as any).getContexts as
-      | ((q: { contextTypes: ('OFFSCREEN_DOCUMENT' | string)[] }) => Promise<any[]>)
-      | undefined
-    if (getContexts) {
-      const ctx = await getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] }).catch(() => [])
-      return Array.isArray(ctx) && ctx.length > 0
-    }
-  } catch {}
-  try { return !!(await (chrome.offscreen as any).hasDocument?.()) } catch { return false }
-}
-
-/**
- * Ensures the Offscreen Document is created and ready to receive messages.
- * Offscreen Documents are required in MV3 for tasks that need DOM APIs
- * (like MediaRecorder or Web Audio API parsing).
- */
-async function ensureOffscreen(): Promise<void> {
-  const have = await hasOffscreenContext()
-  if (!have) {
-    bglog('Creating offscreen document…')
-    await chrome.offscreen.createDocument({
-      url: chrome.runtime.getURL('offscreen.html'),
-      reasons: ['BLOBS', 'AUDIO_PLAYBACK', 'USER_MEDIA'] as any,
-      justification: 'Record tab audio+video in offscreen using MediaRecorder'
-    })
-  }
-
-  // Wait for the offscreen script to signal it is ready via a Ping or Port connection
-  for (let i = 0; i < 10 && !(offscreenPort && offscreenReady); i++) {
-    try {
-      const res = await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PING' })
-      if (res?.ok) { bglog('Offscreen responded to PING'); break }
-    } catch {}
-    await wait(100)
-  }
-
-  if (!(offscreenPort && offscreenReady)) {
-    try { await chrome.runtime.sendMessage({ type: 'OFFSCREEN_CONNECT' }) } catch {}
-  }
-
-  for (let i = 0; i < 50; i++) {
-    if (offscreenPort && offscreenReady) return
-    await wait(100)
-  }
-  throw new Error('Offscreen did not become ready')
-}
-
-/**
- * We use a persistent Port for communication between Background and Offscreen.
- * Standard chrome.runtime.sendMessage can sometimes timeout or fail if the 
- * document is busy processing heavy media buffers.
- */
+// Port connection from offscreen.html
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'offscreen') return
-  bglog('Offscreen connected')
-  offscreenPort = port
-  offscreenReady = false
+  if (port.name !== 'offscreen') return;
+  offscreen.attachPort(port);
+});
 
-  port.onMessage.addListener((msg: any) => {
-    if (msg?.type === 'OFFSCREEN_READY') {
-      offscreenReady = true
-      bglog('Offscreen is READY (Port)')
-    }
-
-    // Sync recording state back to the UI (Popup) and update the Badge
-    if (msg?.type === 'RECORDING_STATE') {
-      lastKnownRecording = !!msg.recording
-      setBadge(lastKnownRecording)
-      chrome.runtime.sendMessage({ type: 'RECORDING_STATE', recording: lastKnownRecording }).catch(() => {})
-    }
-
-    // When offscreen finishes recording, it creates a Blob URL and asks background to trigger a download
-    if (msg?.type === 'OFFSCREEN_SAVE') {
-      const filename =
-        (typeof msg.filename === 'string' && msg.filename.trim())
-          ? msg.filename
-          : `google-meet-recording-${Date.now()}.webm`
-
-      if (msg.blobUrl) {
-        bglog('Saving OFFSCREEN_SAVE via blobUrl', filename)
-        chrome.downloads.download({ url: msg.blobUrl, filename, saveAs: true }, () => {
-          if (chrome.runtime.lastError) {
-            bglog('downloads.download error:', chrome.runtime.lastError.message)
-          } else {
-            chrome.runtime.sendMessage({ type: 'RECORDING_SAVED', filename }).catch(() => {})
-          }
-          // Revoke the blob URL after a delay to free up memory
-          setTimeout(() => {
-            try { offscreenPort?.postMessage({ type: 'REVOKE_BLOB_URL', blobUrl: msg.blobUrl }) } catch {}
-          }, 10_000)
-        })
-        return
-      }
-    }
-  })
-
-  port.onDisconnect.addListener(() => {
-    bglog('Offscreen disconnected')
-    offscreenPort = null
-    offscreenReady = false
-    setBadge(false)
-  })
-})
-
-/**
- * RPC helper to send a message to Offscreen and wait for a specific response.
- */
-function postToOffscreen(msg: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    if (!offscreenPort) return reject(new Error('Offscreen port not connected'))
-    const id = Math.random().toString(36).slice(2)
-    msg.__id = id
-
-    const listener = (m: any) => {
-      if (m && m.__respFor === id) {
-        offscreenPort!.onMessage.removeListener(listener)
-        resolve(m.payload)
-      }
-    }
-
-    offscreenPort.onMessage.addListener(listener)
-    offscreenPort.postMessage(msg)
-
-    setTimeout(() => {
-      try { offscreenPort!.onMessage.removeListener(listener) } catch {}
-      reject(new Error('Offscreen response timeout'))
-    }, 15000)
-  })
-}
-
-/**
- * Obtains a streamId for the target tab.
- * This ID is a token that gives the Offscreen document permission to 
- * capture the audio/video of that specific tab.
- */
+// Stream ID helper (unchanged behavior)
 function getStreamIdForTab(tabId: number): Promise<string> {
   return new Promise((resolve, reject) => {
     try {
       chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id?: string) => {
-        const err = chrome.runtime.lastError
-        if (err) return reject(new Error(err.message))
-        if (!id) return reject(new Error('Empty streamId'))
-        resolve(id)
-      })
+        const err = chrome.runtime.lastError;
+        if (err) return reject(new Error(err.message));
+        if (!id) return reject(new Error('Empty streamId'));
+        resolve(id);
+      });
     } catch (e) {
-      reject(e as any)
+      reject(e as any);
     }
-  })
+  });
 }
 
-/**
- * Main Message Listener for the Extension.
- * Handles START/STOP commands from the Popup.
- */
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+// Main message listener
+chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
   (async () => {
     if (msg?.type === 'START_RECORDING') {
-      const tabId: number | undefined = msg.tabId
-      if (typeof tabId !== 'number') { sendResponse({ ok: false, error: 'Missing tabId' }); return }
-      bglog('Popup requested START_RECORDING for tabId', tabId)
+      const tabId: number | undefined = msg.tabId;
+      if (typeof tabId !== 'number') { sendResponse({ ok: false, error: 'Missing tabId' }); return; }
+
+      L.log('Popup requested START_RECORDING for tabId', tabId);
 
       try {
-        await ensureOffscreen()
-        bglog('ensureOffscreen() completed')
+        await offscreen.ensureReady();
+        L.log('ensureReady() completed');
       } catch (e: any) {
-        sendResponse({ ok: false, error: `Offscreen not ready: ${e?.message || e}` })
-        return
+        sendResponse({ ok: false, error: `Offscreen not ready: ${e?.message || e}` });
+        return;
       }
 
       try {
-        // Step 1: Get the secure token for the tab capture
-        const streamId = await getStreamIdForTab(tabId)
-        // Step 2: Pass the token to Offscreen to initiate getUserMedia and MediaRecorder
-        const r = await postToOffscreen({ type: 'OFFSCREEN_START', streamId })
-        bglog('postToOffscreen(OFFSCREEN_START) response', r)
+        const streamId = await getStreamIdForTab(tabId);
+        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_START', streamId } as any);
+
+        L.log('rpc(OFFSCREEN_START) response', r);
 
         if (r?.ok) {
-          lastKnownRecording = true
-          setBadge(true)
-          chrome.runtime.sendMessage({ type: 'RECORDING_STATE', recording: true }).catch(() => {})
-          sendResponse({ ok: true })
+          sendResponse({ ok: true });
         } else {
-          sendResponse({ ok: false, error: r?.error || 'Failed to start' })
+          sendResponse({ ok: false, error: r?.error || 'Failed to start' });
         }
       } catch (e: any) {
-        bglog('OFFSCREEN_START failed', e)
-        sendResponse({ ok: false, error: `OFFSCREEN_START failed: ${e?.message || e}` })
+        L.error('OFFSCREEN_START failed', e);
+        sendResponse({ ok: false, error: `OFFSCREEN_START failed: ${e?.message || e}` });
       }
-      return
+
+      return;
     }
 
     if (msg?.type === 'STOP_RECORDING') {
       try {
-        await ensureOffscreen()
-        if (offscreenPort) {
-          // Tell Offscreen to stop the MediaRecorder and finalize the file
-          const r = await postToOffscreen({ type: 'OFFSCREEN_STOP' })
-          bglog('postToOffscreen(OFFSCREEN_STOP) response', r)
-        }
-        sendResponse({ ok: true })
+        await offscreen.ensureReady();
+        await offscreen.rpc({ type: 'OFFSCREEN_STOP' } as any);
+        sendResponse({ ok: true });
       } catch (e: any) {
-        sendResponse({ ok: false, error: `STOP failed: ${e?.message || e}` })
+        sendResponse({ ok: false, error: `STOP failed: ${e?.message || e}` });
       }
-      return
+      return;
     }
 
     if (msg?.type === 'GET_RECORDING_STATUS') {
-      sendResponse({ recording: lastKnownRecording })
-      return
+      sendResponse({ recording: offscreen.getRecordingStatus() });
+      return;
     }
   })().catch((err) => {
-    console.error('[background] top-level error', err)
-    sendResponse({ ok: false, error: String(err) })
-  })
+    console.error('[background] top-level error', err);
+    sendResponse({ ok: false, error: String(err) });
+  });
 
-  return true // Keep the channel open for async sendResponse
-})
+  return true; // Keep channel open for async sendResponse
+});
 
-/**
- * Cleanup if the Service Worker is about to be suspended by Chrome.
- */
+// Cleanup on suspend
 chrome.runtime.onSuspend?.addListener(async () => {
-  try { if (offscreenPort) await postToOffscreen({ type: 'OFFSCREEN_STOP' }) } catch {}
-  setBadge(false)
-})
+  await offscreen.stopIfPossibleOnSuspend();
+});
