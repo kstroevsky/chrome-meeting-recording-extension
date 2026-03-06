@@ -44,7 +44,7 @@ export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
  * Each message gets a `__id` added by createPortRpcClient() before sending.
  */
 export type BgToOffscreenRpc =
-  | RpcRequest<{ type: 'OFFSCREEN_START'; streamId: string }> // Begin capturing + recording
+  | RpcRequest<{ type: 'OFFSCREEN_START'; streamId: string; storageMode?: 'local' | 'drive' }> // Begin capturing + recording
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>                   // Finalize and save the recording
   | RpcRequest<{ type: 'OFFSCREEN_STATUS' }>;                // Query whether recording is active
 
@@ -73,9 +73,10 @@ export type OffscreenToBg =
  * tabCapture.getMediaStreamId (not the popup itself).
  */
 export type PopupToBg =
-  | { type: 'START_RECORDING'; tabId: number } // User pressed Record; tabId identifies the Meet tab
+  | { type: 'START_RECORDING'; tabId: number; storageMode?: 'local' | 'drive' } // User pressed Record; tabId identifies the Meet tab
   | { type: 'STOP_RECORDING' }                 // User pressed Stop
-  | { type: 'GET_RECORDING_STATUS' };          // Popup opened; check if already recording
+  | { type: 'GET_RECORDING_STATUS' }          // Popup opened; check if already recording
+  | { type: 'GET_DRIVE_TOKEN' };               // Get token internally
 
 /**
  * Background → Popup via runtime.sendMessage (broadcast — popup may be closed).

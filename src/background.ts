@@ -84,6 +84,14 @@ function getStreamIdForTab(tabId: number): Promise<string> {
 
 // Main message listener
 chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
+  if (msg?.type === 'GET_DRIVE_TOKEN') {
+    chrome.identity.getAuthToken({ interactive: false }, (token) => {
+      const err = chrome.runtime.lastError;
+      sendResponse(err ? { ok: false, error: err.message } : { ok: true, token });
+    });
+    return true; // Keep channel open for async sendResponse
+  }
+
   (async () => {
     if (msg?.type === 'START_RECORDING') {
       const tabId: number | undefined = msg.tabId;
@@ -101,7 +109,8 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
 
       try {
         const streamId = await getStreamIdForTab(tabId);
-        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_START', streamId } as any);
+        const storageMode = msg.storageMode;
+        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_START', streamId, storageMode } as any);
 
         L.log('rpc(OFFSCREEN_START) response', r);
 

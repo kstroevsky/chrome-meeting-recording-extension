@@ -24,6 +24,7 @@ import { createPortRpcServer } from './shared/rpc';
 import type { BgToOffscreenOneWay, BgToOffscreenRpc, BgToOffscreenRuntime, RpcResponse } from './shared/protocol';
 import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
+import { DriveTarget } from './offscreen/DriveTarget';
 
 const L = makeLogger('offscreen');
 
@@ -100,6 +101,18 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
 // --------------------
 // Engine
 // --------------------
+let currentStorageMode: 'local' | 'drive' = 'local';
+
+async function getDriveToken(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN' }, (res) => {
+      if (!res) return reject(new Error('No response to GET_DRIVE_TOKEN'));
+      if (!res.ok) return reject(new Error(`Token fetch failed: ${res.error}`));
+      resolve(res.token);
+    });
+  });
+}
+
 const engine = new RecorderEngine({
   log: L.log,
   warn: L.warn,
@@ -108,6 +121,12 @@ const engine = new RecorderEngine({
   requestSave,
   enableMicMix: true, // record local microphone alongside tab audio
   openTarget: async (filename: string) => {
+    if (currentStorageMode === 'drive') {
+      return new DriveTarget(filename, getDriveToken, (driveFilename) => {
+        L.log('Drive target complete:', driveFilename);
+      });
+    }
+
     if (await LocalFileTarget.isAvailable()) {
       return LocalFileTarget.create(filename, (blobUrl, opfsFilename) => {
         requestSave(filename, blobUrl, opfsFilename);
@@ -127,6 +146,8 @@ function wirePortHandlers(port: chrome.runtime.Port) {
       OFFSCREEN_START: async (msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_START' }>) => {
         const streamId = msg.streamId as string | undefined;
         if (!streamId) return { ok: false, error: 'Missing streamId' };
+        
+        currentStorageMode = msg.storageMode === 'drive' ? 'drive' : 'local';
 
         try {
           await engine.startFromStreamId(streamId);
