@@ -23,6 +23,7 @@ import { makeLogger } from './shared/logger';
 import { createPortRpcServer } from './shared/rpc';
 import type { BgToOffscreenOneWay, BgToOffscreenRpc, BgToOffscreenRuntime, RpcResponse } from './shared/protocol';
 import { RecorderEngine } from './offscreen/RecorderEngine';
+import { LocalFileTarget } from './offscreen/LocalFileTarget';
 
 const L = makeLogger('offscreen');
 
@@ -87,8 +88,8 @@ function pushState(recording: boolean, extra?: Record<string, any>) {
   getPort().postMessage({ type: 'RECORDING_STATE', recording, ...(extra ?? {}) });
 }
 
-function requestSave(filename: string, blobUrl: string) {
-  getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl });
+function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
+  getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl, opfsFilename });
 }
 
 // --------------------
@@ -101,6 +102,14 @@ const engine = new RecorderEngine({
   notifyState: pushState,
   requestSave,
   enableMicMix: true, // record local microphone alongside tab audio
+  openTarget: async (filename: string) => {
+    if (await LocalFileTarget.isAvailable()) {
+      return LocalFileTarget.create(filename, (blobUrl, opfsFilename) => {
+        requestSave(filename, blobUrl, opfsFilename);
+      });
+    }
+    throw new Error('OPFS unavailable');
+  }
 });
 
 // --------------------
@@ -142,8 +151,19 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         return { recording };
       },
 
-      REVOKE_BLOB_URL: async (msg: BgToOffscreenOneWay) => {
-        if (typeof (msg as any).blobUrl === 'string') engine.revokeBlobUrl((msg as any).blobUrl);
+      REVOKE_BLOB_URL: async (msg: Extract<BgToOffscreenOneWay, { type: 'REVOKE_BLOB_URL' }>) => {
+        const { blobUrl, opfsFilename } = msg;
+        if (typeof blobUrl === 'string') engine.revokeBlobUrl(blobUrl);
+
+        if (typeof opfsFilename === 'string') {
+          try {
+            const root = await navigator.storage.getDirectory();
+            await root.removeEntry(opfsFilename);
+            L.log('Cleaned up OPFS file', opfsFilename);
+          } catch (e) {
+            L.warn('Failed to cleanup OPFS file', e);
+          }
+        }
       },
     },
     (reqId, payload) => respond(reqId, payload),

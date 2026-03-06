@@ -151,6 +151,7 @@ export class OffscreenManager {
           : `google-meet-recording-${Date.now()}.webm`;
 
       const blobUrl = msg.blobUrl as string | undefined;
+      const opfsFilename = msg.opfsFilename as string | undefined;
       if (!blobUrl) return;
 
       L.log('Saving OFFSCREEN_SAVE via blobUrl', filename);
@@ -163,7 +164,7 @@ export class OffscreenManager {
 
         // Revoke later
         setTimeout(() => {
-          try { this.port?.postMessage({ type: 'REVOKE_BLOB_URL', blobUrl }); } catch {}
+          try { this.port?.postMessage({ type: 'REVOKE_BLOB_URL', blobUrl, opfsFilename }); } catch {}
         }, 10_000);
       });
 

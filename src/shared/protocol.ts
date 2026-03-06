@@ -54,7 +54,7 @@ export type BgToOffscreenRpc =
  * can safely call URL.revokeObjectURL() without a race condition.
  */
 export type BgToOffscreenOneWay =
-  | { type: 'REVOKE_BLOB_URL'; blobUrl: string };
+  | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string };
 
 /**
  * Offscreen → Background via Port (one-way events).
@@ -64,7 +64,7 @@ export type BgToOffscreenOneWay =
 export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY' }                                         // Script loaded, Port connected
   | { type: 'RECORDING_STATE'; recording: boolean; warning?: string }  // State changed (start/stop/error)
-  | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string };      // Recording ready to download
+  | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string };      // Recording ready to download
 
 /**
  * Popup → Background via runtime.sendMessage.
