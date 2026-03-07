@@ -15,8 +15,10 @@ describe('PopupController', () => {
       micBtn: document.createElement('button'),
       startBtn: document.createElement('button'),
       stopBtn: document.createElement('button'),
-      storageModeSelect: document.createElement('select')
+      storageModeSelect: document.createElement('select'),
+      recordSelfVideoCheckbox: document.createElement('input')
     };
+    elements.recordSelfVideoCheckbox.type = 'checkbox';
     
     const optLocal = document.createElement('option');
     optLocal.value = 'local';
@@ -53,6 +55,7 @@ describe('PopupController', () => {
     expect(elements.startBtn.disabled).toBe(true);
     expect(elements.stopBtn.disabled).toBe(false);
     expect(elements.storageModeSelect.disabled).toBe(true);
+    expect(elements.recordSelfVideoCheckbox.disabled).toBe(true);
   });
 
   it('handles START_RECORDING click', async () => {
@@ -60,6 +63,7 @@ describe('PopupController', () => {
     await new Promise(process.nextTick); // let init settle
 
     elements.storageModeSelect.selectedIndex = 1;
+    elements.recordSelfVideoCheckbox.checked = true;
 
     // Simulate click
     elements.startBtn.click();
@@ -73,7 +77,8 @@ describe('PopupController', () => {
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
       type: 'START_RECORDING',
       tabId: 101,
-      storageMode: 'drive'
+      storageMode: 'drive',
+      recordSelfVideo: true
     });
 
     expect(elements.startBtn.disabled).toBe(true);

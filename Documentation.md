@@ -36,7 +36,7 @@ Responsibilities:
 - Owns `RecorderEngine` lifecycle.
 - Maintains persistent `chrome.runtime.Port` to background and reconnect logic.
 - Chooses storage target per run (`LocalFileTarget` or `DriveTarget`) based on `storageMode`.
-- In Drive mode, derives one per-recording folder name and reuses it for both tab and mic files.
+- In Drive mode, derives one per-recording folder name and reuses it for tab, mic, and optional self-video files.
 
 ### 3. Recorder Engine (`src/offscreen/RecorderEngine.ts`)
 Role:
@@ -46,6 +46,7 @@ Responsibilities:
 - Captures tab stream from background-provided `streamId`.
 - Captures microphone stream best-effort.
 - Starts independent tab and mic `MediaRecorder` instances.
+- Optionally starts a third self-video `MediaRecorder` (camera-only stream) when enabled from popup.
 - Streams chunks to selected `StorageTarget`.
 - Tracks recording state machine (`idle`, `starting`, `recording`, `stopping`).
 
@@ -73,7 +74,7 @@ Responsibilities by file:
 Current folder model:
 - Root folder: `Google Meet Records` (created if missing).
 - Per-recording folder: `<google-meet-id>-<timestamp>` (created per run).
-- Both tab and mic files from one run go into the same per-recording folder.
+- Tab, mic, and optional self-video files from one run go into the same per-recording folder.
 
 ### 5. Popup UI (`src/popup.ts`, `src/popup/*`)
 Role:
