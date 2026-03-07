@@ -243,6 +243,13 @@ Answer:
  - Verify your OAuth consent screen includes `https://www.googleapis.com/auth/drive.file` and your account is added as a test user if the app is in Testing mode.
  - Reload the extension after changing `manifest.json` and retry recording in Drive mode.
 
+Question: I see `Drive session init failed: 403`.
+Answer:
+ - Open extension logs and read the full error detail (the extension now includes Google API message text).
+ - If detail mentions `insufficientPermissions`/`scope`, re-consent and verify `https://www.googleapis.com/auth/drive.file` is configured.
+ - If detail mentions `accessNotConfigured` or `Drive API has not been used`, enable Drive API in the same project as your OAuth client.
+ - If detail mentions test users / consent restrictions, add your account to OAuth test users or publish the consent screen.
+
 ## Development tips
 
  - Use `npm run watch` during iteration.
