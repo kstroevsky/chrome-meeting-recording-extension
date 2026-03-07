@@ -17,6 +17,8 @@ If you'd rather use a bot or desktop recording form factor, check out [Recall.ai
 
 **Direct-to-Disk / Cloud Streaming** — stream recording chunks directly to Origin Private File System (OPFS) or Google Drive to prevent memory crashes on 2-hour+ meetings. Memory is strictly bounded to a 5MB buffer!
 
+**Drive folder organization** — in Drive mode, recordings are saved under `Google Meet Records/<google-meet-id>-<timestamp>/`.
+
 **Optional mic mix** – include your microphone in the recording (once you grant permission).
 
 **MV3/Offscreen architecture** – recording runs in a hidden offscreen document. Resilient to Service Worker suspension with keep-alive routines and event-driven backoff reconnects!
@@ -134,6 +136,8 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
 ├─ src/
 │  ├─ background.ts     # MV3 service worker (creates offscreen, coordinates streams)
 │  ├─ offscreen.ts      # runs recorder; mixes mic + tab; saves blob via downloads
+│  ├─ offscreen/
+│  │  └─ drive/         # Drive upload helpers: constants, errors, retry, folder resolution, naming
 │  ├─ popup.ts          # popup UI handlers: transcript, mic, start/stop
 │  ├─ scrapingScript.ts # parses Google Meet captions from the DOM
 │  └─ micsetup.ts       # dedicated visible page to request mic permission
@@ -146,8 +150,17 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
 If you want to use the **Google Drive** storage target, you must provision an OAuth App in the Google Cloud Console:
 1. Enable the Google Drive API.
 2. Setup an OAuth Consent Screen and add the `https://www.googleapis.com/auth/drive.file` scope.
-3. Create a **Chrome extension** OAuth Client ID using your 32-letter Chrome Extension ID.
-4. Replace `"placeholder_client_id_for_google_drive_api"` in `manifest.json` with your real Client ID.
+3. In `chrome://extensions`, confirm your extension ID after loading `dist/`.
+4. Create an OAuth client with **Application type: Chrome Extension** and that exact extension ID.
+5. Replace `manifest.json -> oauth2.client_id` with that OAuth client ID.
+6. Keep a stable extension ID:
+   - Keep `manifest.json -> key` checked into your repo (already present in this project).
+   - If the key changes, the extension ID changes and OAuth will fail until you recreate the Chrome Extension OAuth client for the new ID.
+7. Drive mode will auto-create:
+   - top-level folder: `Google Meet Records`
+   - per-recording folder: `<google-meet-id>-<timestamp>`
+
+Important: a Google credential JSON with `"installed"` is usually a Desktop client and will not work with `chrome.identity.getAuthToken` in an extension. Use a **Chrome Extension** OAuth client.
 
 ### Source Code Adjustments
 - Mix microphone into recording: 
@@ -228,6 +241,21 @@ Answer:
 Question: Why are the popup buttons not enabling/disabling correctly?
 Answer:
  - The popup reflects state broadcast from `background`/`offscreen`. If it gets out of sync, stop the recording (if any), then click `Reload` on the extension in `chrome://extensions`.
+
+Question: I see `Token fetch failed ... bad client id` when saving to Google Drive.
+Answer:
+ - This means Google rejected `manifest.oauth2.client_id` for extension auth.
+ - Verify the OAuth credential type is **Chrome Extension** (not Web/Desktop/Installed).
+ - Verify the OAuth client was created for the exact ID shown in `chrome://extensions`.
+ - Verify your OAuth consent screen includes `https://www.googleapis.com/auth/drive.file` and your account is added as a test user if the app is in Testing mode.
+ - Reload the extension after changing `manifest.json` and retry recording in Drive mode.
+
+Question: I see `Drive session init failed: 403`.
+Answer:
+ - Open extension logs and read the full error detail (the extension now includes Google API message text).
+ - If detail mentions `insufficientPermissions`/`scope`, re-consent and verify `https://www.googleapis.com/auth/drive.file` is configured.
+ - If detail mentions `accessNotConfigured` or `Drive API has not been used`, enable Drive API in the same project as your OAuth client.
+ - If detail mentions test users / consent restrictions, add your account to OAuth test users or publish the consent screen.
 
 ## Development tips
 

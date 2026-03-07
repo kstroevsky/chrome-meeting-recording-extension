@@ -17,6 +17,7 @@
  */
 import { makeLogger } from './shared/logger';
 import { OffscreenManager } from './background/OffscreenManager';
+import { fetchDriveTokenWithFallback } from './background/driveAuth';
 
 const L = makeLogger('background');
 
@@ -85,10 +86,16 @@ function getStreamIdForTab(tabId: number): Promise<string> {
 // Main message listener
 chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
   if (msg?.type === 'GET_DRIVE_TOKEN') {
-    chrome.identity.getAuthToken({ interactive: false }, (token) => {
-      const err = chrome.runtime.lastError;
-      sendResponse(err ? { ok: false, error: err.message } : { ok: true, token });
-    });
+    fetchDriveTokenWithFallback()
+      .then((res) => {
+        if (!res.ok) L.warn('GET_DRIVE_TOKEN failed:', res.error);
+        sendResponse(res);
+      })
+      .catch((e: any) => {
+        const error = e?.message || String(e);
+        L.error('GET_DRIVE_TOKEN unexpected failure:', error);
+        sendResponse({ ok: false, error });
+      });
     return true; // Keep channel open for async sendResponse
   }
 

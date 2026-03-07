@@ -1,309 +1,350 @@
-# Chrome Extension Analysis & Documentation
+# Chrome Extension Analysis and Documentation
 
 ## Project Overview
-This extension is designed to **record Google Meet sessions** (audio + video) and **transcribe live captions**. It solves the limitation of Chrome Extensions not being able to access `MediaRecorder` or raw audio streams directly in service workers (Manifest V3) by utilizing an **Offscreen Document**.
+This extension records Google Meet sessions (tab video/audio plus optional microphone) and exports caption transcripts.
+
+It is built on Manifest V3 and uses an Offscreen Document for media APIs that are unavailable in service workers.
+
+It supports two recording storage modes:
+- Local mode: stream chunks to OPFS, then trigger a download via background.
+- Drive mode: stream chunks directly to Google Drive via resumable upload.
 
 ## Architecture (Manifest V3)
-The extension follows the modern MV3 architecture handling specific constraints around persistent background scripts and DOM access.
 
-### 1. **Background Service Worker** (`background.ts`)
-- **Role**: Orchestrator.
-- **Responsibility**:
-    - Runs as an event-driven service worker (terminates when idle).
-    - Manages the lifecycle of the **Offscreen Document**.
-    - Generates the `tabCapture` stream ID (`chrome.tabCapture.getMediaStreamId`).
-    - Acts as a bridge between the **Popup** (UI) and the **Offscreen** (Recording Logic).
+### 1. Background Service Worker (`src/background.ts`)
+Role:
+- Orchestrator and policy boundary.
 
-### 2. **Offscreen Document** (`offscreen.ts` / `offscreen.html`)
-- **Role**: The Recording Studio.
-- **Responsibility**:
-    - Exists to provide a DOM environment for `MediaRecorder` and `AudioContext`.
-    - Captures the tab stream using the `streamId` provided by the background.
-    - Captures the Microphone stream (`navigator.mediaDevices.getUserMedia`).
-    - **Keeps Audio Separate**: Records tab audio+video and mic audio into separate files.
-    - Encodes the video/audio into `.webm` files.
-    - Handles the file download process.
+Responsibilities:
+- Receives popup commands (`START_RECORDING`, `STOP_RECORDING`, `GET_RECORDING_STATUS`).
+- Ensures Offscreen is alive and connected through `OffscreenManager`.
+- Acquires tab capture stream ID (`chrome.tabCapture.getMediaStreamId`).
+- Handles Drive token requests (`GET_DRIVE_TOKEN`) through `fetchDriveTokenWithFallback`.
+- Maintains recording keepalive and badge state.
+- Handles local-file save requests (`OFFSCREEN_SAVE`) through `chrome.downloads.download`.
 
-### 3. **Content Script** (`scrapingScript.ts`)
-- **Role**: The Transcriber.
-- **Responsibility**:
-    - Injected into `https://meet.google.com/*` at `document_idle`.
-    - Runs entirely locally — no data leaves the browser.
-    - Uses nested `MutationObserver`s to watch for Google Meet caption elements (obfuscated classes like `.ygicle`).
-    - Debounces caption fragments with a 2 s grace timer before "committing" a line to the transcript.
-    - Returns the transcript to the Popup on request via `chrome.runtime.onMessage`.
+Drive auth behavior:
+- Silent auth first: `chrome.identity.getAuthToken({ interactive: false })`.
+- If silent fails, interactive fallback: `{ interactive: true }`.
+- `bad client id` is converted into explicit misconfiguration guidance including current extension ID and manifest client ID.
 
-### 4. **Popup & UI** (`popup.ts`)
-- **Role**: Control Panel.
-- **Responsibility**:
-    - Allows user to Start/Stop recording.
-    - Allows user to Save Transcript.
-    - Handles Microphone Permissions "Priming" (opening `micsetup.html`).
+### 2. Offscreen Document (`src/offscreen.ts`, `offscreen.html`)
+Role:
+- Recording runtime (DOM-capable context).
+
+Responsibilities:
+- Owns `RecorderEngine` lifecycle.
+- Maintains persistent `chrome.runtime.Port` to background and reconnect logic.
+- Chooses storage target per run (`LocalFileTarget` or `DriveTarget`) based on `storageMode`.
+- In Drive mode, derives one per-recording folder name and reuses it for both tab and mic files.
+
+### 3. Recorder Engine (`src/offscreen/RecorderEngine.ts`)
+Role:
+- Capture and encode media.
+
+Responsibilities:
+- Captures tab stream from background-provided `streamId`.
+- Captures microphone stream best-effort.
+- Starts independent tab and mic `MediaRecorder` instances.
+- Streams chunks to selected `StorageTarget`.
+- Tracks recording state machine (`idle`, `starting`, `recording`, `stopping`).
+
+### 4. Drive Upload Subsystem (`src/offscreen/DriveTarget.ts`, `src/offscreen/drive/*`)
+Role:
+- Direct cloud streaming and folder organization.
+
+Responsibilities by file:
+- `DriveTarget.ts`:
+  - Opens resumable upload session.
+  - Buffers chunks up to 5 MB and flushes with `Content-Range`.
+  - Handles finalization and transient retry logic.
+- `drive/DriveFolderResolver.ts`:
+  - Finds or creates target folder hierarchy.
+  - Caches per-recording folder creation promises to avoid duplicate creates.
+- `drive/constants.ts`:
+  - Drive endpoint constants and root folder name (`Google Meet Records`).
+- `drive/request.ts`:
+  - Auth-aware request helper with one retry for `401/403`.
+- `drive/errors.ts`:
+  - Normalizes Drive error details and hint text.
+- `drive/folderNaming.ts`:
+  - Derives `<google-meet-id>-<timestamp>` from recorder filenames.
+
+Current folder model:
+- Root folder: `Google Meet Records` (created if missing).
+- Per-recording folder: `<google-meet-id>-<timestamp>` (created per run).
+- Both tab and mic files from one run go into the same per-recording folder.
+
+### 5. Popup UI (`src/popup.ts`, `src/popup/*`)
+Role:
+- User control surface.
+
+Responsibilities:
+- Starts/stops recording.
+- Selects storage mode (`local` or `drive`).
+- Downloads transcript from content script data.
+- Handles microphone priming flow.
+
+### 6. Content Script (`src/scrapingScript.ts`)
+Role:
+- Caption collector.
+
+Responsibilities:
+- Observes Meet caption DOM.
+- Aggregates/debounces speaker text.
+- Serves transcript via message API.
 
 ## Architecture Diagrams
 
----
-
-### 1. Context Map — Four Isolated JavaScript Worlds
-
-Each box is a separate OS process with no shared memory. Everything flows through Chrome message APIs.
-
+### 1. Context Map
 ```mermaid
 graph TB
-    User(["👤 User"])
+    U[User]
 
-    subgraph Extension["Chrome Extension"]
-        direction TB
-        P["🖥️ Popup — popup.ts / PopupController"]
-        B["⚙️ Background SW — background.ts / OffscreenManager"]
-        O["🎙️ Offscreen Doc — offscreen.ts / RecorderEngine"]
-        C["📝 Content Script — scrapingScript.ts / TranscriptCollector"]
+    subgraph EXT[Chrome Extension]
+      P[Popup]
+      B[Background SW]
+      O[Offscreen Document]
+      C[Content Script]
     end
 
-    MeetTab["🌐 Google Meet Tab"]
-    Downloads["💾 Downloaded Files"]
+    M[Google Meet Tab]
+    D[Local Downloads]
+    G[Google Drive API]
 
-    User -- clicks --> P
-    P -- "runtime.sendMessage: START / STOP / GET_STATUS" --> B
-    B -- "runtime.sendMessage: RECORDING_STATE / RECORDING_SAVED" --> P
-    B -- "Port 'offscreen' — typed RPC" --> O
-    O -- "Port 'offscreen' — events" --> B
-    P -- "tabs.sendMessage: GET_TRANSCRIPT / RESET_TRANSCRIPT" --> C
-    C -- "sendResponse: transcript text" --> P
-    O -- "getUserMedia(streamId)" --> MeetTab
-    B -- "downloads.download(blobUrl)" --> Downloads
+    U --> P
+    P -->|START/STOP/STATUS| B
+    P -->|GET_TRANSCRIPT/RESET| C
+    B <-->|Port: RPC + events| O
+    O -->|getUserMedia(streamId)| M
+    O -->|Drive REST upload + folder APIs| G
+    O -->|OFFSCREEN_SAVE (local mode only)| B
+    B -->|downloads.download (local mode only)| D
 ```
 
----
-
-### 2. Recording Flow — Full Sequence
-
-Shows every message and internal step from "Start" click to files saved on disk.
-
+### 2. Recording Flow (Local and Drive)
 ```mermaid
 sequenceDiagram
     actor User
     participant P as Popup
-    participant B as Background (SW)
+    participant B as Background
     participant O as Offscreen
     participant C as Content Script
+    participant G as Google Drive API
 
-    User->>P: click Start Recording
-    P->>C: RESET_TRANSCRIPT (clears buffer)
-    P->>B: START_RECORDING(tabId)
+    User->>P: Start Recording (storageMode)
+    P->>C: RESET_TRANSCRIPT
+    P->>B: START_RECORDING(tabId, storageMode)
+    B->>B: ensureReady + getMediaStreamId
+    B->>O: OFFSCREEN_START(streamId, storageMode)
 
-    rect rgb(30, 50, 70)
-        Note over B,O: ensureReady() — arm promise, create offscreen doc
-        B->>O: offscreen.createDocument('offscreen.html')
-        O->>B: Port.connect('offscreen')
-        O->>B: OFFSCREEN_READY [Port]
-        B->>B: readyPromise resolves instantly
+    O->>O: RecorderEngine.startFromStreamId()
+    O->>O: start tab recorder
+    O->>O: try start mic recorder
+
+    alt storageMode = local
+        O->>O: open LocalFileTarget for tab/mic
+        O-->>B: RECORDING_STATE(recording=true)
+        User->>P: Stop Recording
+        P->>B: STOP_RECORDING
+        B->>O: OFFSCREEN_STOP
+        O->>O: finalize OPFS files
+        O-->>B: OFFSCREEN_SAVE(tab)
+        O-->>B: OFFSCREEN_SAVE(mic)
+        B->>B: downloads.download for each blob
+    else storageMode = drive
+        O->>B: GET_DRIVE_TOKEN
+        B->>B: silent auth then interactive fallback if needed
+        B-->>O: token or error
+        O->>G: find/create Google Meet Records
+        O->>G: find/create meet-id-timestamp folder
+        O->>G: create resumable session with parents
+        O->>G: PUT chunk stream for tab/mic
+        O-->>B: RECORDING_STATE(recording=true)
+        User->>P: Stop Recording
+        P->>B: STOP_RECORDING
+        B->>O: OFFSCREEN_STOP
+        O->>G: finalize uploads (close targets)
     end
 
-    B->>B: tabCapture.getMediaStreamId(tabId)
-    B->>O: OFFSCREEN_START(streamId) [Port RPC]
-
-    rect rgb(30, 50, 70)
-        Note over O: RecorderEngine.startFromStreamId()
-        O->>O: getUserMedia(streamId, source=tab) → baseStream
-        O->>O: AudioPlaybackBridge — re-route tab audio to speakers
-        O->>O: tabRecorder.start() — records video + tab audio
-        O->>O: getUserMedia(mic) — separate mic stream
-        O->>O: micRecorder.start() — records mic audio only
-    end
-
-    O-->>B: RECORDING_STATE(recording=true) [Port]
-    B->>B: badge → "REC"
-    B-->>P: RECORDING_STATE(recording=true)
-    P->>User: Stop button enabled
-
-    User->>P: click Stop Recording
-    P->>B: STOP_RECORDING
-    B->>O: OFFSCREEN_STOP [Port RPC]
-    O->>O: tabRecorder.stop() + micRecorder.stop()
-
-    O-->>B: OFFSCREEN_SAVE(tab-file.webm, blobUrl) [Port]
-    B->>B: downloads.download(blobUrl) → tab recording saved
-    O-->>B: OFFSCREEN_SAVE(mic-file.webm, blobUrl) [Port]
-    B->>B: downloads.download(blobUrl) → mic recording saved
-    O-->>B: RECORDING_STATE(recording=false) [Port]
-    B->>B: badge → ""
-    B-->>P: RECORDING_SAVED
-
-    User->>P: click Save Transcript
-    P->>C: GET_TRANSCRIPT
-    C->>C: flushOpenChunks() — commit any buffered speech
-    C-->>P: { transcript: "[ts] Speaker: text\n..." }
-    P->>B: downloads.download(transcript.txt)
+    O-->>B: RECORDING_STATE(recording=false)
+    B-->>P: RECORDING_STATE(recording=false)
 ```
 
----
+### 3. Drive OAuth Token Fallback
+```mermaid
+flowchart TD
+    A[Offscreen requests GET_DRIVE_TOKEN] --> B[Background fetchDriveTokenWithFallback]
+    B --> C[identity.getAuthToken interactive=false]
 
-### 3. Offscreen Ready Handshake — Promise-Based Startup
+    C -->|success| D[Return token]
+    C -->|fails| E{Error contains bad client id}
 
-Illustrates how `OffscreenManager.ensureReady()` works without polling loops.
+    E -->|yes| F[Return actionable misconfiguration error]
+    E -->|no| G[identity.getAuthToken interactive=true]
 
+    G -->|success| D
+    G -->|fails with bad client id| F
+    G -->|other failure| H[Return combined silent and interactive error]
+```
+
+### 4. Offscreen Ready Handshake
 ```mermaid
 sequenceDiagram
-    participant B as Background (ensureReady)
-    participant Ext as Chrome Extension API
+    participant B as Background OffscreenManager
+    participant API as Chrome APIs
     participant O as Offscreen Script
 
-    B->>B: already ready? → return immediately
-    B->>B: arm readyPromise (deferred Promise)
+    B->>B: ensureReady arms readyPromise
+    B->>API: getContexts OFFSCREEN_DOCUMENT
 
-    B->>Ext: getContexts(['OFFSCREEN_DOCUMENT'])
-    Ext-->>B: [] or [existing]
-
-    alt Offscreen does NOT exist
-        B->>Ext: offscreen.createDocument('offscreen.html')
-        Ext->>O: load and execute offscreen.ts
-        O->>O: getPort() → connectPort()
-    else Offscreen already running, Port dropped
-        B->>O: OFFSCREEN_CONNECT (runtime.sendMessage)
-        O->>O: connectPort() — reconnect Port
+    alt no offscreen context
+        B->>API: offscreen.createDocument(offscreen.html)
+        API->>O: load script
+    else context exists but port is gone
+        B->>O: runtime message OFFSCREEN_CONNECT
     end
 
-    O->>B: Port.connect(name='offscreen')
-    B->>B: onConnect → attachPort(port)
-    O->>B: OFFSCREEN_READY [Port message]
-    B->>B: onOffscreenMessage → signalReady()
-    B->>B: resolveReady() — readyPromise resolves
-
-    Note over B: withTimeout(readyPromise, 5 s)<br/>resolves instantly — no polling
-
-    B->>O: OFFSCREEN_START(streamId) [Port RPC]
+    O->>B: runtime.connect name=offscreen
+    O->>B: Port message OFFSCREEN_READY
+    B->>B: signalReady resolves promise
+    B->>O: OFFSCREEN_START via Port RPC
 ```
 
----
-
-### 4. RecorderEngine State Machine
-
-All state transitions in `RecorderEngine`. `isRecording()` returns `true` for `starting`, `recording`, and `stopping`.
-
+### 5. RecorderEngine State Machine
 ```mermaid
 stateDiagram-v2
     [*] --> idle
 
-    idle --> starting : startFromStreamId()
+    idle --> starting : startFromStreamId
+    starting --> recording : tab recorder onstart
+    starting --> idle : startup error or timeout
 
-    starting --> recording : tab MediaRecorder onstart fires
-    starting --> idle : getUserMedia timeout / recorder start timeout
+    recording --> stopping : stop called
+    recording --> stopping : video track ended
 
-    recording --> stopping : stop() called by user
-    recording --> stopping : video track ended (tab closed or navigated)
-
-    stopping --> idle : onRecorderStopped() — activeRecorders drops to 0
+    stopping --> idle : activeRecorders reaches zero
 
     note right of starting
-        Mic recorder also starts concurrently.
-        Tab-only recording is valid
-        if mic permission is denied.
+        openTarget is selected per file:
+        LocalFileTarget in local mode
+        DriveTarget in drive mode
     end note
 
     note right of stopping
-        Streams released.
-        Blobs serialized and sent
-        for download via Background.
-        Badge cleared to empty.
+        Local mode sends OFFSCREEN_SAVE
+        Drive mode finalizes cloud uploads
     end note
 ```
 
----
-
-### 5. Caption Scraping Pipeline
-
-How `TranscriptCollector` turns raw Google Meet DOM mutations into a clean transcript.
-
+### 6. Caption Collection Pipeline
 ```mermaid
 flowchart TD
-    A(["Content Script loaded — TranscriptCollector.start()"])
-    A --> B["MutationObserver on document.body — childList changes"]
+    A[Content script starts] --> B[Observe document body]
+    B --> C{Captions region appears}
+    C -->|no| B
+    C -->|yes| D[Attach region observer]
 
-    B --> C{"div aria-label='Captions' appeared?"}
-    C -- No --> B
-    C -- Yes --> D["attachRegion() — MutationObserver on region for .nMcdL"]
+    D --> E{Speaker block added}
+    E -->|no| D
+    E -->|yes| F[Read speaker and text nodes]
 
-    D --> E{".nMcdL speaker block added?"}
-    E -- No --> E
-    E -- Yes --> F["scanSpeakerBlock() — read .NWpY1d speaker, .ygicle text"]
+    F --> G[Observe caption text mutations]
+    G --> H{Text changed}
+    H -->|no| G
+    H -->|yes| I[Update open chunk and reset timer]
 
-    F --> G["MutationObserver on .ygicle — characterData + childList"]
-
-    G --> H{"Normalized text same as lastSeen?"}
-    H -- Yes, no change --> G
-    H -- No --> I["handleCaption() — lastSeen updated"]
-
-    I --> J{"Existing OpenChunk for this speaker?"}
-    J -- No --> K["Create OpenChunk — start 2 s timer to commit()"]
-    J -- Yes --> L["Update text + endTime — reset 2 s timer to commit()"]
-
-    K --> M{{"2 s silence passes"}}
-    L --> M
-
-    M --> N["commit() — push timestamped line to transcript array"]
-    N --> O(["GET_TRANSCRIPT: flushOpenChunks() then transcript.join"])
+    I --> J{2 seconds silence}
+    J -->|yes| K[Commit transcript line]
+    K --> L[GET_TRANSCRIPT flushes open chunks and returns joined text]
 ```
 
----
-
-
-### 6. Microphone Permission Flow
-
-`MicPermissionService` decides whether inline priming, a full setup tab, or no action is needed.
-
+### 7. Microphone Permission Flow
 ```mermaid
 flowchart TD
-    A(["User clicks Enable Microphone button"])
-    B(["ensurePrimedBestEffort() — called before Start Recording"])
+    A[User clicks Enable Microphone] --> B[Query permission state]
+    B --> C{State}
 
-    A --> C["queryMicPermissionState() — navigator.permissions.query"]
-    B --> C
+    C -->|granted| D[No prompt needed]
+    C -->|denied| E[Open micsetup.html tab]
+    C -->|prompt or unknown| F[Try inline getUserMedia]
 
-    C --> D{"Permission state?"}
+    F --> G{Inline grant succeeded}
+    G -->|yes| H[Stop tracks and refresh button state]
+    G -->|no| E
 
-    D -- granted --> E["Nothing to do — button shows alert and refreshes"]
-    D -- denied --> F["openMicSetupTab() — opens micsetup.html in new tab"]
-    D -- prompt / unknown --> G["tryPrimeInline() — getUserMedia audio"]
-
-    G --> H{"getUserMedia succeeded?"}
-    H -- Yes --> I["Tracks stopped — permission now granted — refresh button"]
-    H -- No --> F
-
-    F --> J["micsetup.html: user clicks Enable — permission granted to extension origin permanently"]
-    J --> K["Offscreen can call getUserMedia audio without another prompt"]
+    E --> I[User clicks Enable in setup tab]
+    I --> J[Offscreen mic capture can proceed next run]
 ```
 
+### 8. Drive Folder Resolution and Session Init
+```mermaid
+flowchart TD
+    A[DriveTarget initSession] --> B[Resolve upload parent folder]
+    B --> C[Find or create root folder Google Meet Records]
+    C --> D[Find or create recording folder meet-id-timestamp]
+    D --> E[Build file metadata with parents folderId]
+    E --> F[POST resumable session]
+    F --> G{Session response ok}
+    G -->|yes| H[Store session URI]
+    G -->|no| I[Parse error detail and throw formatted error]
+```
 
 ## File Breakdown
 
 | File | Context | Description |
 | :--- | :--- | :--- |
-| `src/background.ts` | Service Worker | Entry point. Wires `OffscreenManager` and message handlers. |
-| `src/background/OffscreenManager.ts` | Service Worker | Offscreen lifecycle, Port connection, RPC client, badge, downloads. |
-| `src/offscreen.ts` | Offscreen Document | Entry point. Wires `RecorderEngine` and Port RPC server. |
-| `src/offscreen/RecorderEngine.ts` | Offscreen Document | MediaRecorder capture, mixing, saving. State machine for recording lifecycle. |
-| `src/popup.ts` | Popup Page | Entry point. Passes DOM elements to `PopupController`. |
-| `src/popup/PopupController.ts` | Popup Page | Start/stop, transcript download, recording state UI. |
-| `src/popup/MicPermissionService.ts` | Popup Page | Permission query, inline priming, opens micsetup tab when needed. |
-| `src/scrapingScript.ts` | Content Script | Watches Google Meet DOM for captions. `TranscriptCollector` class. |
-| `src/micsetup.ts` | Browser Tab | Full-page permission primer for microphone. |
-| `src/shared/protocol.ts` | All contexts | **Source of truth** for all inter-context message types. |
-| `src/shared/rpc.ts` | All contexts | Port-based bidirectional RPC helpers (client + server). |
-| `src/shared/timeouts.ts` | All contexts | Named constants for all timeout and poll values. |
-| `src/shared/logger.ts` | All contexts | Prefixed logger factory (`makeLogger`). |
-| `src/shared/async.ts` | All contexts | `sleep` and `withTimeout` utilities. |
-| `manifest.json` | Chrome | Permissions (`tabCapture`, `offscreen`, `activeTab`) and entry points. |
+| `src/background.ts` | Service Worker | Message entry point, recording orchestration, Drive token endpoint. |
+| `src/background/OffscreenManager.ts` | Service Worker | Offscreen lifecycle, Port wiring, badge state, local downloads from OFFSCREEN_SAVE. |
+| `src/background/driveAuth.ts` | Service Worker | Silent-plus-interactive OAuth fallback and bad-client-id diagnostics. |
+| `src/offscreen.ts` | Offscreen Document | Offscreen bootstrap, Port RPC server, storage-target selection. |
+| `src/offscreen/RecorderEngine.ts` | Offscreen Document | Tab/mic capture and recorder state machine. |
+| `src/offscreen/LocalFileTarget.ts` | Offscreen Document | OPFS streaming target used in local mode. |
+| `src/offscreen/DriveTarget.ts` | Offscreen Document | Drive resumable upload target used in Drive mode. |
+| `src/offscreen/drive/constants.ts` | Offscreen Document | Drive URLs, MIME constants, root folder name. |
+| `src/offscreen/drive/request.ts` | Offscreen Document | Auth-aware Drive request retry helper. |
+| `src/offscreen/drive/errors.ts` | Offscreen Document | Drive response detail extraction and hint formatting. |
+| `src/offscreen/drive/folderNaming.ts` | Offscreen Document | Per-recording folder naming from generated filenames. |
+| `src/offscreen/drive/DriveFolderResolver.ts` | Offscreen Document | Root/per-recording folder lookup and creation. |
+| `src/popup.ts` | Popup | Popup entrypoint. |
+| `src/popup/PopupController.ts` | Popup | UI wiring for start/stop, transcript save, storage mode. |
+| `src/popup/MicPermissionService.ts` | Popup | Microphone permission query and setup-tab fallback. |
+| `src/scrapingScript.ts` | Content Script | Meet caption observation and transcript aggregation. |
+| `src/micsetup.ts` | Extension Tab | Dedicated microphone permission primer page. |
+| `src/shared/protocol.ts` | Shared | Typed message and RPC protocol definitions. |
+| `src/shared/rpc.ts` | Shared | Port-based RPC client/server transport. |
+| `src/shared/timeouts.ts` | Shared | Timeout constants for capture and startup paths. |
+| `src/shared/logger.ts` | Shared | Prefixed logging helper. |
+| `src/shared/async.ts` | Shared | Timeout and async helpers. |
+| `manifest.json` | Extension Manifest | MV3 entrypoints, permissions, OAuth config. |
 
-## Key Concepts & logic
+## Key Concepts and Logic
 
-### The "Offscreen" Pattern
-In Manifest V3, background scripts are Service Workers and cannot access DOM APIs like `MediaRecorder` or `AudioContext`. To record audio/video, extensions must create an "Offscreen Document" (`chrome.offscreen.createDocument`). This document is invisible but has full DOM access.
+### Offscreen Pattern
+MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hidden DOM context for media capture and encoding.
 
-### Separate Audio Outputs
-To keep meeting audio (tab) and mic audio separate, the extension records:
-- **Tab stream**: Video + tab audio into a `.webm` file.
-- **Mic stream**: Audio-only into a separate `.webm` file.
+### Storage Mode Split
+- Local mode:
+  - Stream chunks to OPFS (`LocalFileTarget`).
+  - On completion, offscreen sends blob URLs to background (`OFFSCREEN_SAVE`) and background triggers downloads.
+- Drive mode:
+  - Stream chunks directly to Drive (`DriveTarget`).
+  - No background download step for recording files.
 
-### Obfuscated Selectors
-`scrapingScript.ts` relies on specific class names (`.ygicle`, `.NWpY1d`) used by Google Meet. These are likely generated classes and **may break** if Google updates their frontend code. The script attempts to find these elements via `aria-label="Captions"` regions to be somewhat robust.
+### Drive Folder Determinism per Run
+`offscreen.ts` sets one `currentDriveRecordingFolderName` on first target open after `OFFSCREEN_START`. The same value is reused by both tab and mic targets, keeping both files together.
+
+### Resumable Upload Behavior
+`DriveTarget` uses bounded buffering and resumable PUT uploads:
+- Flush threshold: 5 MB.
+- Non-final chunk success: HTTP `308`.
+- Final chunk success: HTTP `200` or `201`.
+- `500/503` triggers commit-offset probe and retry.
+
+### OAuth and Misconfiguration Diagnostics
+`driveAuth.ts` increases reliability and clarity:
+- Uses silent auth first, interactive fallback second.
+- Detects `bad client id` and returns explicit remediation including extension ID and manifest client ID.
+
+### Caption Selector Fragility
+Caption scraping depends on Meet DOM selectors (for example `.ygicle`, `.NWpY1d`). These may change when Meet frontend updates.

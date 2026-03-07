@@ -25,6 +25,8 @@ import type { BgToOffscreenOneWay, BgToOffscreenRpc, BgToOffscreenRuntime, RpcRe
 import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { DriveTarget } from './offscreen/DriveTarget';
+import { DRIVE_ROOT_FOLDER_NAME } from './offscreen/drive/constants';
+import { inferDriveRecordingFolderName } from './offscreen/drive/folderNaming';
 
 const L = makeLogger('offscreen');
 
@@ -102,6 +104,7 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
 // Engine
 // --------------------
 let currentStorageMode: 'local' | 'drive' = 'local';
+let currentDriveRecordingFolderName: string | null = null;
 
 async function getDriveToken(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -122,8 +125,14 @@ const engine = new RecorderEngine({
   enableMicMix: true, // record local microphone alongside tab audio
   openTarget: async (filename: string) => {
     if (currentStorageMode === 'drive') {
+      if (!currentDriveRecordingFolderName) {
+        currentDriveRecordingFolderName = inferDriveRecordingFolderName(filename);
+      }
       return new DriveTarget(filename, getDriveToken, (driveFilename) => {
         L.log('Drive target complete:', driveFilename);
+      }, {
+        rootFolderName: DRIVE_ROOT_FOLDER_NAME,
+        recordingFolderName: currentDriveRecordingFolderName!,
       });
     }
 
@@ -148,6 +157,7 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         if (!streamId) return { ok: false, error: 'Missing streamId' };
         
         currentStorageMode = msg.storageMode === 'drive' ? 'drive' : 'local';
+        currentDriveRecordingFolderName = null;
 
         try {
           await engine.startFromStreamId(streamId);
