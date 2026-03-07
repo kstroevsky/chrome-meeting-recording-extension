@@ -2,6 +2,7 @@
 Object.assign(global, {
   chrome: {
     runtime: {
+      id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       sendMessage: jest.fn().mockResolvedValue(undefined),
       onMessage: {
         addListener: jest.fn(),
@@ -10,6 +11,11 @@ Object.assign(global, {
       onConnect: {
         addListener: jest.fn()
       },
+      getManifest: jest.fn(() => ({
+        oauth2: {
+          client_id: 'manifest-client-id.apps.googleusercontent.com',
+        },
+      })),
       getURL: (path: string) => `chrome-extension://mock-id/${path}`,
     },
     offscreen: {
