@@ -116,4 +116,22 @@ describe('DriveTarget', () => {
     expect(mockFetch).toHaveBeenCalledTimes(4); // Init + Fail + Query + Retry
     expect(mockOnDone).toHaveBeenCalled();
   });
+
+  it('includes Drive error details when session init fails', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      text: async () => JSON.stringify({ error: { message: 'insufficientPermissions' } }),
+      headers: new Headers(),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      text: async () => JSON.stringify({ error: { message: 'insufficientPermissions' } }),
+      headers: new Headers(),
+    });
+
+    await expect(target.write(new Blob(['x']))).rejects.toThrow('insufficientPermissions');
+    expect(mockFetch).toHaveBeenCalledTimes(2); // retried once for auth-related failure
+  });
 });
