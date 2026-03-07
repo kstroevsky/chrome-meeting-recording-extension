@@ -17,6 +17,8 @@ If you'd rather use a bot or desktop recording form factor, check out [Recall.ai
 
 **Direct-to-Disk / Cloud Streaming** — stream recording chunks directly to Origin Private File System (OPFS) or Google Drive to prevent memory crashes on 2-hour+ meetings. Memory is strictly bounded to a 5MB buffer!
 
+**Drive folder organization** — in Drive mode, recordings are saved under `Google Meet Records/<google-meet-id>-<timestamp>/`.
+
 **Optional mic mix** – include your microphone in the recording (once you grant permission).
 
 **MV3/Offscreen architecture** – recording runs in a hidden offscreen document. Resilient to Service Worker suspension with keep-alive routines and event-driven backoff reconnects!
@@ -152,6 +154,9 @@ If you want to use the **Google Drive** storage target, you must provision an OA
 6. Keep a stable extension ID:
    - Keep `manifest.json -> key` checked into your repo (already present in this project).
    - If the key changes, the extension ID changes and OAuth will fail until you recreate the Chrome Extension OAuth client for the new ID.
+7. Drive mode will auto-create:
+   - top-level folder: `Google Meet Records`
+   - per-recording folder: `<google-meet-id>-<timestamp>`
 
 Important: a Google credential JSON with `"installed"` is usually a Desktop client and will not work with `chrome.identity.getAuthToken` in an extension. Use a **Chrome Extension** OAuth client.
 

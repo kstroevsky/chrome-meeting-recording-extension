@@ -34,7 +34,7 @@ describe('DriveTarget', () => {
     
     // Verify the HTTP request structure
     const fetchCall = mockFetch.mock.calls[0];
-    expect(fetchCall[0]).toBe('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable');
+    expect(fetchCall[0]).toBe('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true');
     expect(fetchCall[1].method).toBe('POST');
     expect(fetchCall[1].headers.Authorization).toBe('Bearer fake-token');
     expect(JSON.parse(fetchCall[1].body)).toEqual({ name: 'test.webm', mimeType: 'video/webm' });
@@ -133,5 +133,48 @@ describe('DriveTarget', () => {
 
     await expect(target.write(new Blob(['x']))).rejects.toThrow('insufficientPermissions');
     expect(mockFetch).toHaveBeenCalledTimes(2); // retried once for auth-related failure
+  });
+
+  it('creates missing root + recording folders and uploads into recording folder', async () => {
+    const targetWithFolders = new DriveTarget('test.webm', mockGetToken, mockOnDone, {
+      rootFolderName: 'Google Meet Records',
+      recordingFolderName: 'abc-defg-hij-1712088000000',
+    });
+
+    // root lookup -> not found
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ files: [] }),
+    });
+    // root create
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'root-folder-id' }),
+    });
+    // recording lookup -> not found
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ files: [] }),
+    });
+    // recording create
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'recording-folder-id' }),
+    });
+    // upload session init
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ Location: 'https://googleapis.com/upload/session-uri' }),
+    });
+
+    await targetWithFolders.write(new Blob(['1']));
+
+    const uploadCall = mockFetch.mock.calls[4];
+    expect(uploadCall[0]).toBe('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true');
+    expect(JSON.parse(uploadCall[1].body)).toEqual({
+      name: 'test.webm',
+      mimeType: 'video/webm',
+      parents: ['recording-folder-id'],
+    });
   });
 });

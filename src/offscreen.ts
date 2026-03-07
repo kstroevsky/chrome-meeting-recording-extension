@@ -27,6 +27,7 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { DriveTarget } from './offscreen/DriveTarget';
 
 const L = makeLogger('offscreen');
+const DRIVE_ROOT_FOLDER_NAME = 'Google Meet Records';
 
 // Global safety nets
 window.addEventListener('error', (e) => {
@@ -102,6 +103,13 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
 // Engine
 // --------------------
 let currentStorageMode: 'local' | 'drive' = 'local';
+let currentDriveRecordingFolderName: string | null = null;
+
+function inferDriveRecordingFolderName(filename: string): string {
+  const m = filename.match(/^google-meet-(?:recording|mic)-(.+)-(\d+)\.webm$/);
+  if (m) return `${m[1]}-${m[2]}`;
+  return `google-meet-${Date.now()}`;
+}
 
 async function getDriveToken(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -122,8 +130,14 @@ const engine = new RecorderEngine({
   enableMicMix: true, // record local microphone alongside tab audio
   openTarget: async (filename: string) => {
     if (currentStorageMode === 'drive') {
+      if (!currentDriveRecordingFolderName) {
+        currentDriveRecordingFolderName = inferDriveRecordingFolderName(filename);
+      }
       return new DriveTarget(filename, getDriveToken, (driveFilename) => {
         L.log('Drive target complete:', driveFilename);
+      }, {
+        rootFolderName: DRIVE_ROOT_FOLDER_NAME,
+        recordingFolderName: currentDriveRecordingFolderName!,
       });
     }
 
@@ -148,6 +162,7 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         if (!streamId) return { ok: false, error: 'Missing streamId' };
         
         currentStorageMode = msg.storageMode === 'drive' ? 'drive' : 'local';
+        currentDriveRecordingFolderName = null;
 
         try {
           await engine.startFromStreamId(streamId);
