@@ -46,6 +46,8 @@ export class OffscreenManager {
   private readyPromise: Promise<void> | null = null;
   private resolveReady: (() => void) | null = null;
 
+  public onRecordingChanged?: (recording: boolean) => void;
+
   // --------------------
   // RPC client (created once; closure captures `this.port`)
   // --------------------
@@ -141,6 +143,7 @@ export class OffscreenManager {
       this.lastKnownRecording = !!msg.recording;
       this.setBadge(this.lastKnownRecording);
       chrome.runtime.sendMessage({ type: 'RECORDING_STATE', recording: this.lastKnownRecording }).catch(() => {});
+      this.onRecordingChanged?.(this.lastKnownRecording);
       return;
     }
 
@@ -151,6 +154,7 @@ export class OffscreenManager {
           : `google-meet-recording-${Date.now()}.webm`;
 
       const blobUrl = msg.blobUrl as string | undefined;
+      const opfsFilename = msg.opfsFilename as string | undefined;
       if (!blobUrl) return;
 
       L.log('Saving OFFSCREEN_SAVE via blobUrl', filename);
@@ -163,7 +167,7 @@ export class OffscreenManager {
 
         // Revoke later
         setTimeout(() => {
-          try { this.port?.postMessage({ type: 'REVOKE_BLOB_URL', blobUrl }); } catch {}
+          try { this.port?.postMessage({ type: 'REVOKE_BLOB_URL', blobUrl, opfsFilename }); } catch {}
         }, 10_000);
       });
 

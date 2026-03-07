@@ -44,7 +44,7 @@ export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
  * Each message gets a `__id` added by createPortRpcClient() before sending.
  */
 export type BgToOffscreenRpc =
-  | RpcRequest<{ type: 'OFFSCREEN_START'; streamId: string }> // Begin capturing + recording
+  | RpcRequest<{ type: 'OFFSCREEN_START'; streamId: string; storageMode?: 'local' | 'drive' }> // Begin capturing + recording
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>                   // Finalize and save the recording
   | RpcRequest<{ type: 'OFFSCREEN_STATUS' }>;                // Query whether recording is active
 
@@ -54,7 +54,7 @@ export type BgToOffscreenRpc =
  * can safely call URL.revokeObjectURL() without a race condition.
  */
 export type BgToOffscreenOneWay =
-  | { type: 'REVOKE_BLOB_URL'; blobUrl: string };
+  | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string };
 
 /**
  * Offscreen → Background via Port (one-way events).
@@ -64,7 +64,7 @@ export type BgToOffscreenOneWay =
 export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY' }                                         // Script loaded, Port connected
   | { type: 'RECORDING_STATE'; recording: boolean; warning?: string }  // State changed (start/stop/error)
-  | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string };      // Recording ready to download
+  | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string };      // Recording ready to download
 
 /**
  * Popup → Background via runtime.sendMessage.
@@ -73,9 +73,10 @@ export type OffscreenToBg =
  * tabCapture.getMediaStreamId (not the popup itself).
  */
 export type PopupToBg =
-  | { type: 'START_RECORDING'; tabId: number } // User pressed Record; tabId identifies the Meet tab
+  | { type: 'START_RECORDING'; tabId: number; storageMode?: 'local' | 'drive' } // User pressed Record; tabId identifies the Meet tab
   | { type: 'STOP_RECORDING' }                 // User pressed Stop
-  | { type: 'GET_RECORDING_STATUS' };          // Popup opened; check if already recording
+  | { type: 'GET_RECORDING_STATUS' }          // Popup opened; check if already recording
+  | { type: 'GET_DRIVE_TOKEN' };               // Get token internally
 
 /**
  * Background → Popup via runtime.sendMessage (broadcast — popup may be closed).

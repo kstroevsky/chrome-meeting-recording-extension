@@ -2,11 +2,11 @@
  * @file offscreen/RecorderEngine.ts
  *
  * Core recording logic. Captures tab audio+video and microphone audio
- * using the MediaRecorder API, then hands finished blobs back to the
- * Offscreen layer for download via Background.
+ * using the MediaRecorder API, and streams the finished blobs to a specified
+ * `StorageTarget` (e.g. OPFS local disk or Google Drive cloud).
  *
  * This class is intentionally decoupled from Chrome extension APIs:
- * all extension I/O (port messages, storage) is injected via `deps`.
+ * all extension I/O (port messages, storage targets) is injected via `deps`.
  * This makes the engine independently testable with mock callbacks.
  *
  * AudioPlaybackBridge (private inner class):
@@ -23,6 +23,13 @@ import { TIMEOUTS } from '../shared/timeouts';
 
 type RecordingStateExtra = Record<string, any> | undefined;
 
+export interface StorageTarget {
+  /** Called for each MediaRecorder ondataavailable chunk. May be called concurrently. */
+  write(chunk: Blob): Promise<void>;
+  /** Called once after MediaRecorder.onstop fires. Must finalise/flush any buffered data. */
+  close(): Promise<void>;
+}
+
 export type RecorderEngineDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
@@ -31,7 +38,7 @@ export type RecorderEngineDeps = {
   /** Send state updates to background/popup */
   notifyState: (recording: boolean, extra?: RecordingStateExtra) => void;
 
-  /** Ask background to download a blob via blob URL */
+  /** Ask background to download a blob via blob URL (used only for legacy memory fallback) */
   requestSave: (filename: string, blobUrl: string) => void;
 
   /**
@@ -39,6 +46,13 @@ export type RecorderEngineDeps = {
    * Defaults to true. Set to false to record tab-only (no mic track).
    */
   enableMicMix?: boolean;
+
+  /**
+   * Optional streaming storage backend (e.g., OPFS or Google Drive).
+   * When provided: chunks are streamed directly by the target instead of buffering in RAM.
+   * When absent: legacy in-memory blob path is used (for dev/testing).
+   */
+  openTarget?: (filename: string) => Promise<StorageTarget>;
 };
 
 type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
@@ -208,6 +222,8 @@ export class RecorderEngine {
   // -------------------------
 
   private getVideoMime(): string {
+    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus'))
+      return 'video/webm;codecs=vp9,opus';
     return MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
       ? 'video/webm;codecs=vp8,opus'
       : 'video/webm';
@@ -219,16 +235,26 @@ export class RecorderEngine {
       : 'audio/webm';
   }
 
-  private startTabRecorder(baseStream: MediaStream): Promise<void> {
+  private async startTabRecorder(baseStream: MediaStream): Promise<void> {
     this.tabChunks = [];
     const mime = this.getVideoMime();
 
     const recorder = new MediaRecorder(baseStream, {
       mimeType: mime,
-      videoBitsPerSecond: 3_000_000,
-      audioBitsPerSecond: 128_000,
+      videoBitsPerSecond: 1_500_000,
+      audioBitsPerSecond: 96_000,
     });
     this.tabRecorder = recorder;
+    
+    const filename = `google-meet-recording-${this.suffix}-${Date.now()}.webm`;
+    let target: StorageTarget | null = null;
+    if (this.deps.openTarget) {
+      try {
+        target = await this.deps.openTarget(filename);
+      } catch (e) {
+        this.deps.warn('Failed to open storage target, falling back to RAM buffer', e);
+      }
+    }
 
     // Stop if captured video track ends (tab closed / navigation / capture ended)
     baseStream.getVideoTracks()[0]?.addEventListener('ended', () => {
@@ -237,8 +263,13 @@ export class RecorderEngine {
       if (this.micRecorder && this.isRecording()) { try { this.micRecorder.stop(); } catch {} }
     });
 
-    recorder.ondataavailable = (e: BlobEvent) => {
-      if (e.data && e.data.size) this.tabChunks.push(e.data);
+    recorder.ondataavailable = async (e: BlobEvent) => {
+      if (!e.data?.size) return;
+      if (target) {
+        await target.write(e.data).catch(err => this.deps.error('Target write error', err));
+      } else {
+        this.tabChunks.push(e.data);
+      }
     };
 
     recorder.onerror = (e: any) => {
@@ -249,13 +280,19 @@ export class RecorderEngine {
       }
       this.onRecorderStopped(); // was started? we handle via started flag below
       this.tabRecorder = null;
+      if (target) {
+        target.close().catch(err => this.deps.error('Target finalisation failed on error', err));
+      }
       this.deps.notifyState(false);
     };
 
-    recorder.onstop = () => {
+    recorder.onstop = async () => {
       try {
-        const filename = `google-meet-recording-${this.suffix}-${Date.now()}.webm`;
-        this.saveChunksToFile(this.tabChunks, mime, filename);
+        if (target) {
+          await target.close(); // Target handles its own file finalisation
+        } else {
+          this.saveChunksToFileLegacy(this.tabChunks, mime, filename);
+        }
       } catch (e) {
         this.deps.error('Tab finalize/save failed', e);
       } finally {
@@ -278,7 +315,7 @@ export class RecorderEngine {
         resolve();
       };
 
-      // Start with timeslice (kept from original behavior)
+      // Start with timeslice to ensure continuous chunking
       recorder.start(1000);
     });
   }
@@ -296,11 +333,26 @@ export class RecorderEngine {
     this.micChunks = [];
 
     const mime = this.getAudioMime();
-    const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 128_000 });
+    const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
     this.micRecorder = recorder;
+    
+    const filename = `google-meet-mic-${this.suffix}-${Date.now()}.webm`;
+    let target: StorageTarget | null = null;
+    if (this.deps.openTarget) {
+      try {
+        target = await this.deps.openTarget(filename);
+      } catch (e) {
+        this.deps.warn('Failed to open mic storage target, falling back to RAM buffer', e);
+      }
+    }
 
-    recorder.ondataavailable = (e: BlobEvent) => {
-      if (e.data && e.data.size) this.micChunks.push(e.data);
+    recorder.ondataavailable = async (e: BlobEvent) => {
+      if (!e.data?.size) return;
+      if (target) {
+        await target.write(e.data).catch(err => this.deps.error('Mic Target write error', err));
+      } else {
+        this.micChunks.push(e.data);
+      }
     };
 
     recorder.onerror = (e: any) => {
@@ -308,13 +360,19 @@ export class RecorderEngine {
       this.safeStopStream(this.micStream);
       this.micRecorder = null;
       this.micStream = null;
+      if (target) {
+        target.close().catch(err => this.deps.error('Mic Target finalisation failed on error', err));
+      }
       this.onRecorderStopped();
     };
 
-    recorder.onstop = () => {
+    recorder.onstop = async () => {
       try {
-        const filename = `google-meet-mic-${this.suffix}-${Date.now()}.webm`;
-        this.saveChunksToFile(this.micChunks, mime, filename);
+        if (target) {
+          await target.close(); // Target handles its own file finalisation
+        } else {
+          this.saveChunksToFileLegacy(this.micChunks, mime, filename);
+        }
       } catch (e) {
         this.deps.error('Mic finalize/save failed', e);
       } finally {
@@ -367,9 +425,9 @@ export class RecorderEngine {
     }
   }
 
-  private saveChunksToFile(chunks: BlobPart[], mime: string, filename: string) {
+  private saveChunksToFileLegacy(chunks: BlobPart[], mime: string, filename: string) {
     const blob = new Blob(chunks, { type: mime });
-    this.deps.log('Finalizing', filename, 'chunks =', chunks.length, 'blob.size =', blob.size);
+    this.deps.log('Finalizing (legacy RAM Buffer)', filename, 'chunks =', chunks.length, 'blob.size =', blob.size);
 
     const blobUrl = URL.createObjectURL(blob);
     this.deps.requestSave(filename, blobUrl);

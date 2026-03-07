@@ -5,6 +5,7 @@ type Elements = {
   micBtn: HTMLButtonElement | null;
   startBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
+  storageModeSelect: HTMLSelectElement | null;
 };
 
 export class PopupController {
@@ -25,10 +26,11 @@ export class PopupController {
   }
 
   private setUI(recording: boolean) {
-    const { startBtn, stopBtn } = this.el;
+    const { startBtn, stopBtn, storageModeSelect } = this.el;
     if (!startBtn || !stopBtn) return;
     startBtn.disabled = recording;
     stopBtn.disabled = !recording;
+    if (storageModeSelect) storageModeSelect.disabled = recording;
   }
 
   private toast(msg: string) {
@@ -111,8 +113,10 @@ export class PopupController {
         // Clear transcript buffer (silent fail if not injected)
         await chrome.tabs.sendMessage(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
+        const storageMode = (this.el.storageModeSelect?.value === 'drive') ? 'drive' : 'local';
+
         // Start recording
-        const resp = await chrome.runtime.sendMessage({ type: 'START_RECORDING', tabId: tab.id });
+        const resp = await chrome.runtime.sendMessage({ type: 'START_RECORDING', tabId: tab.id, storageMode });
         if (!resp) throw new Error('No response from background');
         if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
 

@@ -23,6 +23,8 @@ import { makeLogger } from './shared/logger';
 import { createPortRpcServer } from './shared/rpc';
 import type { BgToOffscreenOneWay, BgToOffscreenRpc, BgToOffscreenRuntime, RpcResponse } from './shared/protocol';
 import { RecorderEngine } from './offscreen/RecorderEngine';
+import { LocalFileTarget } from './offscreen/LocalFileTarget';
+import { DriveTarget } from './offscreen/DriveTarget';
 
 const L = makeLogger('offscreen');
 
@@ -43,8 +45,9 @@ L.log('script loaded');
 // The offscreen side proactively calls connectPort() on load and re-wires the RPC
 // server handlers each time the port is (re)created.
 let portRef: chrome.runtime.Port | null = null;
+let reconnectEnabled = true;
 
-function connectPort(): chrome.runtime.Port {
+function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   try { portRef?.disconnect(); } catch {}
   const p = chrome.runtime.connect({ name: 'offscreen' });
 
@@ -54,6 +57,10 @@ function connectPort(): chrome.runtime.Port {
   p.onDisconnect.addListener(() => {
     L.warn('Port disconnected');
     portRef = null;
+    if (reconnectEnabled) {
+      L.log(`Scheduling port reconnect in ${retryDelay} ms`);
+      setTimeout(() => connectPort(Math.min(retryDelay * 2, 30_000)), retryDelay);
+    }
   });
 
   // tell background alive
@@ -87,13 +94,25 @@ function pushState(recording: boolean, extra?: Record<string, any>) {
   getPort().postMessage({ type: 'RECORDING_STATE', recording, ...(extra ?? {}) });
 }
 
-function requestSave(filename: string, blobUrl: string) {
-  getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl });
+function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
+  getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl, opfsFilename });
 }
 
 // --------------------
 // Engine
 // --------------------
+let currentStorageMode: 'local' | 'drive' = 'local';
+
+async function getDriveToken(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN' }, (res) => {
+      if (!res) return reject(new Error('No response to GET_DRIVE_TOKEN'));
+      if (!res.ok) return reject(new Error(`Token fetch failed: ${res.error}`));
+      resolve(res.token);
+    });
+  });
+}
+
 const engine = new RecorderEngine({
   log: L.log,
   warn: L.warn,
@@ -101,6 +120,20 @@ const engine = new RecorderEngine({
   notifyState: pushState,
   requestSave,
   enableMicMix: true, // record local microphone alongside tab audio
+  openTarget: async (filename: string) => {
+    if (currentStorageMode === 'drive') {
+      return new DriveTarget(filename, getDriveToken, (driveFilename) => {
+        L.log('Drive target complete:', driveFilename);
+      });
+    }
+
+    if (await LocalFileTarget.isAvailable()) {
+      return LocalFileTarget.create(filename, (blobUrl, opfsFilename) => {
+        requestSave(filename, blobUrl, opfsFilename);
+      });
+    }
+    throw new Error('OPFS unavailable');
+  }
 });
 
 // --------------------
@@ -113,6 +146,8 @@ function wirePortHandlers(port: chrome.runtime.Port) {
       OFFSCREEN_START: async (msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_START' }>) => {
         const streamId = msg.streamId as string | undefined;
         if (!streamId) return { ok: false, error: 'Missing streamId' };
+        
+        currentStorageMode = msg.storageMode === 'drive' ? 'drive' : 'local';
 
         try {
           await engine.startFromStreamId(streamId);
@@ -123,10 +158,12 @@ function wirePortHandlers(port: chrome.runtime.Port) {
       },
 
       OFFSCREEN_STOP: async () => {
+        reconnectEnabled = false; // Intentionally stopping
         try {
           engine.stop();
           return { ok: true };
         } catch (e) {
+          reconnectEnabled = true; // Stop failed, allow reconnect
           return { ok: false, error: String(e) };
         }
       },
@@ -142,8 +179,19 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         return { recording };
       },
 
-      REVOKE_BLOB_URL: async (msg: BgToOffscreenOneWay) => {
-        if (typeof (msg as any).blobUrl === 'string') engine.revokeBlobUrl((msg as any).blobUrl);
+      REVOKE_BLOB_URL: async (msg: Extract<BgToOffscreenOneWay, { type: 'REVOKE_BLOB_URL' }>) => {
+        const { blobUrl, opfsFilename } = msg;
+        if (typeof blobUrl === 'string') engine.revokeBlobUrl(blobUrl);
+
+        if (typeof opfsFilename === 'string') {
+          try {
+            const root = await navigator.storage.getDirectory();
+            await root.removeEntry(opfsFilename);
+            L.log('Cleaned up OPFS file', opfsFilename);
+          } catch (e) {
+            L.warn('Failed to cleanup OPFS file', e);
+          }
+        }
       },
     },
     (reqId, payload) => respond(reqId, payload),
