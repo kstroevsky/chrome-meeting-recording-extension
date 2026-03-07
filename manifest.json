@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Google Meet Transcript + Recorder",
   "version": "1.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApSJJDa0caQB3VybPqN+z0UsN4UQ4tBi2wQFpVpt30Rn7QtVmLNDsKVUb9KsJ4T5pFCCB7nRXLVwfiWZVqRo/rNcDH3fELAGWBCzPS3QoYyb/yk0itE5ZjGx2V/fNqjB+v1GWOP+S+U3kSQx2ltQa7sKmrSEi5/WF4Kv46a/Ja+w+y8WgzFpuTgZoycm6kb2rHmlhFA6L9mtsIad0saUbMBDM1qSm6Rlr2sYcMxz7pzmkdy6DeP55+N2uX/CJq2OVTluthAxRv3ui2CmLeu2hjqg1H0tEvtm0DJbteWTM9nqt6WbsEt/CA2kGorA0g4iJQ2TpzOVMCat5pIdV42p+uwIDAQAB",
   "permissions": [
     "activeTab",
     "downloads",

@@ -146,8 +146,14 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
 If you want to use the **Google Drive** storage target, you must provision an OAuth App in the Google Cloud Console:
 1. Enable the Google Drive API.
 2. Setup an OAuth Consent Screen and add the `https://www.googleapis.com/auth/drive.file` scope.
-3. Create a **Chrome extension** OAuth Client ID using your 32-letter Chrome Extension ID.
-4. Replace `"placeholder_client_id_for_google_drive_api"` in `manifest.json` with your real Client ID.
+3. In `chrome://extensions`, confirm your extension ID after loading `dist/`.
+4. Create an OAuth client with **Application type: Chrome Extension** and that exact extension ID.
+5. Replace `manifest.json -> oauth2.client_id` with that OAuth client ID.
+6. Keep a stable extension ID:
+   - Keep `manifest.json -> key` checked into your repo (already present in this project).
+   - If the key changes, the extension ID changes and OAuth will fail until you recreate the Chrome Extension OAuth client for the new ID.
+
+Important: a Google credential JSON with `"installed"` is usually a Desktop client and will not work with `chrome.identity.getAuthToken` in an extension. Use a **Chrome Extension** OAuth client.
 
 ### Source Code Adjustments
 - Mix microphone into recording: 
@@ -228,6 +234,14 @@ Answer:
 Question: Why are the popup buttons not enabling/disabling correctly?
 Answer:
  - The popup reflects state broadcast from `background`/`offscreen`. If it gets out of sync, stop the recording (if any), then click `Reload` on the extension in `chrome://extensions`.
+
+Question: I see `Token fetch failed ... bad client id` when saving to Google Drive.
+Answer:
+ - This means Google rejected `manifest.oauth2.client_id` for extension auth.
+ - Verify the OAuth credential type is **Chrome Extension** (not Web/Desktop/Installed).
+ - Verify the OAuth client was created for the exact ID shown in `chrome://extensions`.
+ - Verify your OAuth consent screen includes `https://www.googleapis.com/auth/drive.file` and your account is added as a test user if the app is in Testing mode.
+ - Reload the extension after changing `manifest.json` and retry recording in Drive mode.
 
 ## Development tips
 
