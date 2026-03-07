@@ -11,6 +11,7 @@ module.exports = {
     background: './src/background.ts',
     offscreen: './src/offscreen.ts',
     micsetup: './src/micsetup.ts',
+    camsetup: './src/camsetup.ts',
   },
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -34,6 +35,7 @@ module.exports = {
         { from: 'popup.html',     to: 'popup.html' },
         { from: 'offscreen.html', to: 'offscreen.html', noErrorOnMissing: true },
         { from: 'micsetup.html', to: 'micsetup.html' },
+        { from: 'camsetup.html', to: 'camsetup.html' },
       ]
     })
   ]
