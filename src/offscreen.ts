@@ -25,9 +25,10 @@ import type { BgToOffscreenOneWay, BgToOffscreenRpc, BgToOffscreenRuntime, RpcRe
 import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { DriveTarget } from './offscreen/DriveTarget';
+import { DRIVE_ROOT_FOLDER_NAME } from './offscreen/drive/constants';
+import { inferDriveRecordingFolderName } from './offscreen/drive/folderNaming';
 
 const L = makeLogger('offscreen');
-const DRIVE_ROOT_FOLDER_NAME = 'Google Meet Records';
 
 // Global safety nets
 window.addEventListener('error', (e) => {
@@ -104,12 +105,6 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
 // --------------------
 let currentStorageMode: 'local' | 'drive' = 'local';
 let currentDriveRecordingFolderName: string | null = null;
-
-function inferDriveRecordingFolderName(filename: string): string {
-  const m = filename.match(/^google-meet-(?:recording|mic)-(.+)-(\d+)\.webm$/);
-  if (m) return `${m[1]}-${m[2]}`;
-  return `google-meet-${Date.now()}`;
-}
 
 async function getDriveToken(): Promise<string> {
   return new Promise((resolve, reject) => {

@@ -136,6 +136,8 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
 ├─ src/
 │  ├─ background.ts     # MV3 service worker (creates offscreen, coordinates streams)
 │  ├─ offscreen.ts      # runs recorder; mixes mic + tab; saves blob via downloads
+│  ├─ offscreen/
+│  │  └─ drive/         # Drive upload helpers: constants, errors, retry, folder resolution, naming
 │  ├─ popup.ts          # popup UI handlers: transcript, mic, start/stop
 │  ├─ scrapingScript.ts # parses Google Meet captions from the DOM
 │  └─ micsetup.ts       # dedicated visible page to request mic permission
