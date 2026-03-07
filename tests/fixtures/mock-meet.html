@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mock Google Meet</title>
+</head>
+<body>
+    <h1>Fake Google Meet</h1>
+    <!-- Fake Caption Container -->
+    <div class="a4cQT">
+        <div class="TBMuR bj4p3b">
+            <div class="KcIKk">John Doe</div>
+            <div class="iTTPs">Hello testing 123</div>
+        </div>
+    </div>
+    
+    <!-- Video Element (Needed for Tab Capture testing) -->
+    <video autoplay muted loop id="mock-video"></video>
+
+    <script>
+        // Generate a test video stream
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        
+        setInterval(() => {
+            ctx.fillStyle = `hsl(${Math.random() * 360}, 100%, 50%)`;
+            ctx.fillRect(0,0,640,480);
+            ctx.fillStyle = 'white';
+            ctx.font = '30px Arial';
+            ctx.fillText(Date.now().toString(), 10, 50);
+        }, 1000);
+
+        const video = document.getElementById('mock-video');
+        video.srcObject = canvas.captureStream(30);
+    </script>
+</body>
+</html>

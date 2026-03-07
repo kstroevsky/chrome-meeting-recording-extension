@@ -91,7 +91,10 @@ export class LocalFileTarget implements StorageTarget {
     // continues even if an individual chunk fails.
     this.writeChain = this.writeChain
       .catch(() => {})                             // recover from prior error
-      .then(() => this.writable!.write(chunk));
+      .then(() => this.writable!.write(chunk))
+      .catch((e) => {
+        console.error('[LocalFileTarget] chunk write failed', e);
+      });
     return this.writeChain;
   }
 

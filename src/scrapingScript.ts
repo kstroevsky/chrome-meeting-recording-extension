@@ -71,6 +71,7 @@ class TranscriptCollector {
   private prior = new Map<string, OpenChunk>();
   private lastSeen = new Map<string, string>();
   private captionObserver: MutationObserver | null = null;
+  private regionObserver: MutationObserver | null = null;
 
   start() {
     this.observeCaptionsRegionAppearance();
@@ -92,10 +93,17 @@ class TranscriptCollector {
   }
 
   private observeCaptionsRegionAppearance() {
-    new MutationObserver(() => {
+    const existing = document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]');
+    if (existing) {
+      this.attachRegion(existing);
+      return;
+    }
+
+    this.regionObserver = new MutationObserver(() => {
       const region = document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]');
       if (region) this.attachRegion(region);
-    }).observe(document.body, { childList: true, subtree: true });
+    });
+    this.regionObserver.observe(document.body, { childList: true, subtree: true });
   }
 
   private attachRegion(region: HTMLElement) {
@@ -207,6 +215,17 @@ class TranscriptCollector {
       }
     });
   }
+
+  stop() {
+    this.reset();
+    this.captionObserver?.disconnect();
+    this.regionObserver?.disconnect();
+  }
 }
 
-new TranscriptCollector().start();
+const collector = new TranscriptCollector();
+if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+  (window as any).collector = collector;
+} else {
+  collector.start();
+}
