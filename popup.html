@@ -8,7 +8,7 @@
     <hr/>
     <select id="storage-mode">
       <option value="local">Save to Local Disk (OPFS)</option>
-      <option value="drive">Save to Google Drive (Cloud)</option>
+      <option value="drive">Save to Google Drive (after stop)</option>
     </select>
     <br/><br/>
     <label>
@@ -21,8 +21,9 @@
       High quality webcam (720p)
     </label>
     <br/><br/>
+    <div id="recording-status" style="min-height: 1.5em; font-size: 12px; color: #a15c00;"></div>
     <button id="start-rec">Start Recording</button>
-    <button id="stop-rec" disabled>Stop & Download</button>
+    <button id="stop-rec" disabled>Stop Recording</button>
     <script src="popup.js"></script>
   </body>
 </html>
