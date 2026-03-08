@@ -6,6 +6,7 @@
         "moduleResolution": "node",
         "strict": true,
         "esModuleInterop": true,
+        "types": ["chrome", "jest", "node"],
         "outDir": "dist",
 
     },

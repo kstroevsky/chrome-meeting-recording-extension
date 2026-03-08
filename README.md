@@ -1,6 +1,6 @@
 # Meeting Recording Extension (Chrome Extension)
 
-Scrape live captions from a Google Meet and save them as a `.txt` transcript, or record the current Google Meet tab (video + audio) to a `.webm` file. Optionally, mix in your microphone so your own voice is included in the recording.
+Scrape live captions from a Google Meet and save them as a `.txt` transcript, or record the current Google Meet tab (video + audio) to a `.webm` file. Microphone capture is explicit per run: off, mixed into the main recording, or saved as a separate audio file.
 
 Everything happens locally in your browser.
 
@@ -19,7 +19,7 @@ If you'd rather use a bot or desktop recording form factor, check out [Recall.ai
 
 **Drive folder organization** — in Drive mode, recordings are saved under `Google Meet Records/<google-meet-id>-<timestamp>/`.
 
-**Optional mic mix** – include your microphone in the recording (once you grant permission).
+**Explicit microphone modes** – disable mic capture, mix microphone into the tab recording, or save the mic as a separate `.webm` audio file.
 
 **Optional self video capture** – record your camera feed as a separate `.webm` file via popup checkbox.
 
@@ -33,7 +33,7 @@ If you'd rather use a bot or desktop recording form factor, check out [Recall.ai
 
 3. Background service worker creates/coordinates an offscreen document and requests the correct capture streamId for the active tab. It also maintains a keep-alive interval and session-storage to prevent state loss if Chrome suspends the worker.
 
-4. Offscreen page captures the tab, optionally mixes microphone audio, and streams the recording buffer via a 5MB chunking strategy to either your Local Disk (OPFS) or directly to Google Drive via resumable upload.
+4. Offscreen page captures the tab, applies the selected microphone mode, and streams the recording buffer via OPFS-backed chunking before saving locally or uploading to Google Drive after stop.
 
 ## Requirements
 
@@ -67,7 +67,8 @@ npm run build   # outputs to `./dist`
 
 Open a Google Meet, click the extension icon:
  - **Download Transcript** – saves a `.txt` of the live captions (turn captions ON in Google Meet).
- - **Enable Microphone** – grants mic permission so your voice can be mixed into recordings.
+ - **Enable Microphone** – grants mic permission so microphone modes can be used reliably.
+ - **Microphone Mode** — choose `Off`, `Mix into tab recording`, or `Save separately`.
  - **Storage Mode Dropdown** — Choose whether to save the final recording directly on Local Disk (OPFS) or straight to Google Drive (Cloud).
  - **Record my camera separately** — optional checkbox to save your camera stream as a separate recording file.
  - **High quality webcam (720p)** — optional quality toggle for the separate camera recording.
@@ -119,10 +120,11 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
  
   - **Download Transcript**: Turn closed captions on then hit Download Transcript after the meeting. This saves **google-meet-transcript-<meeting-id>-<timestamp>.txt**
   - ** Recording **
-      - **Enable Microphone** - Turn on before you hit "Start Recording" to capture your audio in addition to the audio of the other participants
+      - **Enable Microphone** - Turn on before you hit "Start Recording" so microphone modes can be used without a startup error
         - The mic prompt may not appear reliably in a popup. If so, the button opens a dedicated `Enable Microphone` page (`micsetup.html`) where you can click `Enable` and allow mic access.
         - Once granted, the label changes to `Microphone Enabled`.
-      - **Start Recording**: Starts a recording of the current tab (video + system audio). If mic is enabled and mixing is on (default), your mic is mixed in.
+      - **Microphone Mode**: `Off` skips microphone capture, `Mix into tab recording` blends your mic into the main tab file, and `Save separately` creates an additional `google-meet-mic-<meeting-id>-<timestamp>.webm`.
+      - **Start Recording**: Starts a recording of the current tab (video + system audio) using the selected storage, microphone, and optional self-video settings.
       - **Record my camera separately**: If checked, starts an additional camera-only recorder and saves `google-meet-self-video-<meeting-id>-<timestamp>.webm`. If camera permission is missing, a camera setup tab opens.
       - **High quality webcam (720p)**: Uses a higher camera profile and bitrate for the separate webcam file.
       - **Stop & Download**: Finalizes and downloads `google-meet-recording-<meeting-id>-<timestamp>.webm.`
@@ -141,7 +143,7 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
 ├─ micsetup.html
 ├─ src/
 │  ├─ background.ts     # MV3 service worker (creates offscreen, coordinates streams)
-│  ├─ offscreen.ts      # runs recorder; mixes mic + tab; saves blob via downloads
+│  ├─ offscreen.ts      # runs recorder; applies mic mode; saves artifacts via background/downloads
 │  ├─ offscreen/
 │  │  └─ drive/         # Drive upload helpers: constants, errors, retry, folder resolution, naming
 │  ├─ popup.ts          # popup UI handlers: transcript, mic, start/stop
@@ -169,15 +171,9 @@ If you want to use the **Google Drive** storage target, you must provision an OA
 Important: a Google credential JSON with `"installed"` is usually a Desktop client and will not work with `chrome.identity.getAuthToken` in an extension. Use a **Chrome Extension** OAuth client.
 
 ### Source Code Adjustments
-- Mix microphone into recording: 
-  - In src/offscreen.ts:
-```
-const WANT_MIC_MIX = true
-```
-  - Set to false to disable mic mixing entirely (tab audio only).
-
 - Output filenames
   - Recordings: `google-meet-recording-<meet-suffix>-<timestamp>.webm`
+  - Separate microphone: `google-meet-mic-<meet-suffix>-<timestamp>.webm`
   - Self video (optional): `google-meet-self-video-<meet-suffix>-<timestamp>.webm`
   - Transcripts: `google-meet-transcript-<meet-suffix>-<timestamp>.txt`
 
@@ -185,6 +181,9 @@ const WANT_MIC_MIX = true
 
 `npm run build` – single production build to `dist/`
 `npm run watch` – rebuild on change (remember to reload the extension in Chrome)
+`npm run typecheck` – strict TS check across `src/`
+`npm test` / `npm run test:unit` – unit suite without the browser-dependent E2E test
+`npm run test:e2e` – browser-dependent E2E flow
 
 ## Dependencies & toolchain
 
@@ -237,7 +236,7 @@ Question: Why is my recording silent or very quiet?
 Answer:
  - Make sure the Google Meet tab is playing audio (unmuted).
  - If you muted the site/tab or Google Meet, tab audio won’t be captured.
- - If mic mix is on, confirm the OS/input device and levels.
+ - If a microphone mode is enabled, confirm the OS/input device and levels.
 
 Question: “Stop & Download” finishes but no file appears. What do I do?
 Answer:

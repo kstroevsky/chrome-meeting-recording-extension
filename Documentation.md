@@ -1,7 +1,7 @@
 # Chrome Extension Analysis and Documentation
 
 ## Project Overview
-This extension records Google Meet sessions (tab video/audio plus optional microphone and optional self video) and exports caption transcripts.
+This extension records Google Meet sessions (tab video/audio plus configurable microphone mode plus optional self video) and exports caption transcripts.
 
 It is built on Manifest V3 and uses an Offscreen Document for media APIs that are unavailable in service workers.
 
@@ -29,7 +29,7 @@ Responsibilities:
 - Handles local-file save requests (`OFFSCREEN_SAVE`) through `chrome.downloads.download`.
 - Preserves state across service worker restarts via `chrome.storage.session` rehydration:
   - phase (`idle`, `recording`, `uploading`)
-  - active run config (`storageMode`, `recordSelfVideo`, `selfVideoQuality`)
+  - active run config (`storageMode`, `micMode`, `recordSelfVideo`, `selfVideoQuality`)
 
 Drive auth behavior:
 - Silent auth first: `chrome.identity.getAuthToken({ interactive: false })`.
@@ -54,7 +54,7 @@ Role:
 
 Responsibilities:
 - Captures tab stream from background-provided `streamId`.
-- Captures microphone stream best-effort.
+- Applies the selected microphone mode (`off`, `mixed`, `separate`) before recording starts.
 - Optionally captures self-video camera stream.
 - Starts independent `MediaRecorder` instances per stream.
 - Streams chunks only to local `StorageTarget` implementations.
@@ -114,7 +114,7 @@ Responsibilities:
 - Downloads transcript from content script data.
 - Handles microphone priming flow.
 - Reflects current phase and upload summary.
-- Rehydrates active run config on popup reopen from `GET_RECORDING_STATUS`.
+- Rehydrates the persisted recording session snapshot on popup reopen from `GET_RECORDING_STATUS`.
 
 Important property:
 - Popup is not part of the recording/upload control plane. It can be closed safely while upload continues.
@@ -414,7 +414,7 @@ MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hi
 Recording and upload state live in background/offscreen. The popup is just a client. Closing the popup does not stop recording or upload.
 
 ### Popup State Rehydration
-`GET_RECORDING_STATUS` now returns both phase and active run config while work is active. When popup is reopened mid-run, controls are locked to the real run settings so UI cannot drift from the actual recording configuration.
+`GET_RECORDING_STATUS` now returns a full recording session snapshot. When popup is reopened mid-run, controls are locked to the real run settings so UI cannot drift from the actual recording configuration.
 
 ### Message Surface (Current Minimal Set)
 The recording control plane intentionally uses a small message surface:
