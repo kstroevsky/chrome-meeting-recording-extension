@@ -44,7 +44,7 @@ Key responsibilities:
 - Hydrates legacy session keys (`phase`, `activeRunConfig`) when present so old in-session state is not lost during migration.
 
 ### Offscreen Document
-Files: `offscreen.html`, `src/offscreen.ts`
+Files: `static/offscreen.html`, `src/offscreen.ts`
 
 Purpose:
 - Own all browser APIs unavailable in MV3 service workers:
@@ -61,7 +61,7 @@ Key responsibilities:
 - Emits explicit runtime phase updates back to background: `starting`, `recording`, `stopping`, `uploading`, `failed`, `idle`.
 
 ### Popup
-Files: `popup.html`, `src/popup.ts`, `src/popup/*`
+Files: `static/popup.html`, `src/popup.ts`, `src/popup/*`
 
 Purpose:
 - Collect user intent and render current session state.
@@ -276,11 +276,13 @@ Folder model:
 
 ### 7. Popup Control Layer
 Files:
-- `popup.html`
+- runtime popup: `popup.html` (source: `static/popup.html`)
 - `src/popup.ts`
 - `src/popup/PopupController.ts`
 - `src/popup/popupRunConfig.ts`
 - `src/popup/popupView.ts`
+- `src/popup/popupStatus.ts`
+- `src/popup/popupMessages.ts`
 - `src/popup/MicPermissionService.ts`
 - `src/popup/CameraPermissionService.ts`
 
@@ -753,7 +755,7 @@ flowchart TD
 | `src/debug.ts` | diagnostics page entrypoint |
 | `src/debug/DebugDashboard.ts` | renders aggregated perf snapshot |
 | `src/debug/debugDashboardText.ts` | dashboard text and formatting helpers |
-| `debug.html` | diagnostics page shell |
+| `static/debug.html` | diagnostics page shell |
 
 ### Transcript Collection
 | File | Role |
@@ -791,12 +793,13 @@ flowchart TD
 | `src/platform/chrome/tabs.ts` | active tab, tab messages, stream ID |
 
 ## Manifest and Entry Surfaces
-File: `manifest.json`
+File: `static/manifest.json`
 
 Note:
 - `oauth2.client_id` in source control is a placeholder.
 - Webpack injects the real value from `.env` / shell env key `GOOGLE_OAUTH_CLIENT_ID` into `dist/manifest.json` at build time.
 - If the env var is missing, build keeps the placeholder and logs a warning; Drive auth will fail until configured.
+- Source HTML shells and the source manifest live under `static/`, while the emitted extension layout in `dist/` remains flat.
 
 Important permissions:
 - `activeTab`
