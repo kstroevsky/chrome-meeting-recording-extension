@@ -1,3 +1,13 @@
+/**
+ * @file background/driveAuth.ts
+ *
+ * Handles Chrome Identity OAuth token acquisition for Drive uploads, including
+ * silent-first fallback and explicit diagnostics for bad client IDs.
+ */
+
+import { getAuthToken, removeCachedAuthToken } from '../platform/chrome/identity';
+import { getRuntimeId, getRuntimeManifest } from '../platform/chrome/runtime';
+
 type DriveTokenOk = { ok: true; token: string };
 type DriveTokenErr = { ok: false; error: string };
 export type DriveTokenResponse = DriveTokenOk | DriveTokenErr;
@@ -6,36 +16,10 @@ export type DriveTokenOptions = { refresh?: boolean };
 const BAD_CLIENT_ID_RE = /bad client id/i;
 let lastIssuedToken: string | null = null;
 
-function getAuthToken(interactive: boolean): Promise<string> {
-  return new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive }, (result) => {
-      const err = chrome.runtime.lastError;
-      if (err?.message) return reject(new Error(err.message));
-      const token = typeof result === 'string' ? result : result?.token;
-      if (!token) return reject(new Error('No OAuth token returned'));
-      lastIssuedToken = token;
-      resolve(token);
-    });
-  });
-}
-
-function removeCachedAuthToken(token: string): Promise<void> {
-  return new Promise((resolve) => {
-    const remover = chrome.identity.removeCachedAuthToken as
-      | ((details: { token: string }, callback?: () => void) => void)
-      | undefined;
-
-    if (!remover) {
-      resolve();
-      return;
-    }
-
-    try {
-      remover({ token }, () => resolve());
-    } catch {
-      resolve();
-    }
-  });
+async function issueAuthToken(interactive: boolean): Promise<string> {
+  const token = await getAuthToken(interactive);
+  lastIssuedToken = token;
+  return token;
 }
 
 async function invalidateLastIssuedToken(): Promise<void> {
@@ -50,9 +34,9 @@ function isBadClientIdError(message: string): boolean {
 }
 
 function buildBadClientIdError(rawError: string): string {
-  const manifest = chrome.runtime.getManifest();
+  const manifest = getRuntimeManifest();
   const configuredClientId = manifest.oauth2?.client_id ?? '(missing in manifest.oauth2.client_id)';
-  const extensionId = chrome.runtime.id ?? '(unknown extension id)';
+  const extensionId = getRuntimeId() ?? '(unknown extension id)';
 
   return [
     `Google OAuth is misconfigured: ${rawError}`,
@@ -68,7 +52,7 @@ export async function fetchDriveTokenWithFallback(options: DriveTokenOptions = {
   }
 
   try {
-    const token = await getAuthToken(false);
+    const token = await issueAuthToken(false);
     return { ok: true, token };
   } catch (silentErr: any) {
     const silentMessage = silentErr?.message || String(silentErr);
@@ -76,7 +60,7 @@ export async function fetchDriveTokenWithFallback(options: DriveTokenOptions = {
       return { ok: false, error: buildBadClientIdError(silentMessage) };
     }
     try {
-      const token = await getAuthToken(true);
+      const token = await issueAuthToken(true);
       return { ok: true, token };
     } catch (interactiveErr: any) {
       const interactiveMessage = interactiveErr?.message || String(interactiveErr);

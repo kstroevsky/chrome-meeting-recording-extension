@@ -1,4 +1,10 @@
 describe('background runtime messages', () => {
+  const activeSession = {
+    phase: 'recording',
+    runConfig: null,
+    updatedAt: Date.now(),
+  };
+
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
@@ -8,14 +14,14 @@ describe('background runtime messages', () => {
   it('forwards refresh=true on GET_DRIVE_TOKEN to the auth helper', async () => {
     const fetchDriveTokenWithFallback = jest.fn().mockResolvedValue({ ok: true, token: 'fresh-token' });
     const offscreenInstance = {
-      onPhaseChanged: undefined as ((phase: 'idle' | 'recording' | 'uploading') => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
-      setRunConfig: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
-      getRecordingStatus: jest.fn().mockReturnValue('idle'),
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn(),
+      revokeBlobUrl: jest.fn(),
     };
 
     jest.doMock('../src/background/driveAuth', () => ({
@@ -26,6 +32,7 @@ describe('background runtime messages', () => {
     }));
 
     await import('../src/background');
+    await new Promise(process.nextTick);
 
     const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
     const response = await new Promise<any>((resolve) => {
@@ -37,16 +44,16 @@ describe('background runtime messages', () => {
   });
 
   it('clears diagnostics only after the debug dashboard disconnects while the session is idle', async () => {
-    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ phase: 'recording' });
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
     const offscreenInstance = {
-      onPhaseChanged: undefined as ((phase: 'idle' | 'recording' | 'uploading') => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
-      setRunConfig: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
-      getRecordingStatus: jest.fn().mockReturnValue('idle'),
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn(),
+      revokeBlobUrl: jest.fn(),
     };
 
     jest.doMock('../src/background/driveAuth', () => ({
@@ -57,6 +64,7 @@ describe('background runtime messages', () => {
     }));
 
     await import('../src/background');
+    await new Promise(process.nextTick);
 
     const connectListener = (chrome.runtime.onConnect.addListener as jest.Mock).mock.calls[0][0];
     const onDisconnect = { addListener: jest.fn() };
@@ -66,6 +74,8 @@ describe('background runtime messages', () => {
     });
 
     expect(chrome.storage.session.remove).not.toHaveBeenCalled();
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
+    expect(chrome.storage.session.remove).not.toHaveBeenCalled();
 
     const disconnectListener = onDisconnect.addListener.mock.calls[0][0];
     disconnectListener();
@@ -74,16 +84,16 @@ describe('background runtime messages', () => {
   });
 
   it('preserves diagnostics when the debug dashboard disconnects before recording ends', async () => {
-    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ phase: 'recording' });
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
     const offscreenInstance = {
-      onPhaseChanged: undefined as ((phase: 'idle' | 'recording' | 'uploading') => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
-      setRunConfig: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
-      getRecordingStatus: jest.fn().mockReturnValue('recording'),
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn(),
+      revokeBlobUrl: jest.fn(),
     };
 
     jest.doMock('../src/background/driveAuth', () => ({
@@ -94,6 +104,7 @@ describe('background runtime messages', () => {
     }));
 
     await import('../src/background');
+    await new Promise(process.nextTick);
 
     const connectListener = (chrome.runtime.onConnect.addListener as jest.Mock).mock.calls[0][0];
     const onDisconnect = { addListener: jest.fn() };
@@ -109,16 +120,16 @@ describe('background runtime messages', () => {
   });
 
   it('preserves diagnostics after recording finishes while the debug dashboard is still open', async () => {
-    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ phase: 'recording' });
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
     const offscreenInstance = {
-      onPhaseChanged: undefined as ((phase: 'idle' | 'recording' | 'uploading') => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
-      setRunConfig: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
-      getRecordingStatus: jest.fn().mockReturnValue('idle'),
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn(),
+      revokeBlobUrl: jest.fn(),
     };
 
     jest.doMock('../src/background/driveAuth', () => ({
@@ -129,6 +140,7 @@ describe('background runtime messages', () => {
     }));
 
     await import('../src/background');
+    await new Promise(process.nextTick);
 
     const connectListener = (chrome.runtime.onConnect.addListener as jest.Mock).mock.calls[0][0];
     connectListener({
@@ -136,7 +148,7 @@ describe('background runtime messages', () => {
       onDisconnect: { addListener: jest.fn() },
     });
 
-    offscreenInstance.onPhaseChanged?.('idle');
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
 
     expect(chrome.storage.session.remove).not.toHaveBeenCalled();
   });

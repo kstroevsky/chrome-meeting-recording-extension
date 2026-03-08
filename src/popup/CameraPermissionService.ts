@@ -1,6 +1,14 @@
+/**
+ * @file popup/CameraPermissionService.ts
+ *
+ * Popup-side camera permission helper used when self-video capture is enabled.
+ */
+
+import { createRuntimeTab } from '../platform/chrome/tabs';
+
 export class CameraPermissionService {
   async openCameraSetupTab() {
-    await chrome.tabs.create({ url: chrome.runtime.getURL('camsetup.html') });
+    await createRuntimeTab('camsetup.html');
   }
 
   async queryCameraPermissionState(): Promise<'granted' | 'denied' | 'prompt' | 'unknown'> {
@@ -27,6 +35,10 @@ export class CameraPermissionService {
   async ensureReadyForRecording(): Promise<boolean> {
     const state = await this.queryCameraPermissionState();
     if (state === 'granted') return true;
+    if (state === 'denied') {
+      await this.openCameraSetupTab();
+      return false;
+    }
 
     const ok = await this.tryPrimeInline().catch(() => false);
     if (ok) return true;

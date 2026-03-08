@@ -1,3 +1,9 @@
+/**
+ * @file shared/async.ts
+ *
+ * Small async primitives shared across runtime contexts.
+ */
+
 export async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let t: ReturnType<typeof setTimeout> | null = null;
 

@@ -1,3 +1,9 @@
+/**
+ * @file shared/rpc.ts
+ *
+ * Minimal Port-based RPC transport used between background and offscreen.
+ */
+
 import type { RpcRequest, RpcResponse } from './protocol';
 import { makeId } from './protocol';
 

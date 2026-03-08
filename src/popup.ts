@@ -8,9 +8,9 @@
  * PopupController, which owns all interaction logic.
  *
  * Message flow:
- *   popup → background (runtime.sendMessage):  START_RECORDING, STOP_RECORDING, GET_RECORDING_STATUS
- *   popup → content script (tabs.sendMessage):  GET_TRANSCRIPT, RESET_TRANSCRIPT
- *   background → popup (runtime.sendMessage):   RECORDING_STATE, RECORDING_SAVED
+ *   popup → background: START_RECORDING, STOP_RECORDING, GET_RECORDING_STATUS
+ *   popup → content script: GET_TRANSCRIPT, RESET_TRANSCRIPT
+ *   background → popup: RECORDING_STATE, RECORDING_SAVED
  *
  * @see src/popup/PopupController.ts   — all interaction logic
  * @see src/popup/MicPermissionService.ts — permission query + priming flow
@@ -21,11 +21,11 @@ import { PopupController } from './popup/PopupController';
 const controller = new PopupController({
   saveBtn: document.getElementById('save') as HTMLButtonElement | null,
   micBtn: document.getElementById('enable-mic') as HTMLButtonElement | null,
+  micModeSelect: document.getElementById('mic-mode') as HTMLSelectElement | null,
   startBtn: document.getElementById('start-rec') as HTMLButtonElement | null,
   stopBtn: document.getElementById('stop-rec') as HTMLButtonElement | null,
   storageModeSelect: document.getElementById('storage-mode') as HTMLSelectElement | null,
   recordSelfVideoCheckbox: document.getElementById('record-self-video') as HTMLInputElement | null,
-  selfVideoHighQualityCheckbox: document.getElementById('self-video-high-quality') as HTMLInputElement | null,
   openDiagnosticsBtn: document.getElementById('open-diagnostics') as HTMLButtonElement | null,
   recordingStatusEl: document.getElementById('recording-status') as HTMLElement | null,
 });

@@ -1,3 +1,10 @@
+/**
+ * @file background/PerfDebugStore.ts
+ *
+ * Aggregates perf events into a session-scoped diagnostics snapshot that can be
+ * rendered by the debug dashboard and persisted across service worker restarts.
+ */
+
 import {
   PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
   type PerfDebugSnapshot,
@@ -7,6 +14,11 @@ import {
   type PerfPhase,
   type PerfSettings,
 } from '../shared/perf';
+import {
+  hasSessionStorageArea,
+  removeSessionStorageValues,
+  setSessionStorageValues,
+} from '../platform/chrome/storage';
 
 function toNumber(value: PerfFields[string]): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -325,7 +337,14 @@ export class PerfDebugStore {
     runtime.sampleCount += 1;
 
     const phase = entry.fields.phase;
-    if (phase === 'idle' || phase === 'recording' || phase === 'uploading') {
+    if (
+      phase === 'idle'
+      || phase === 'starting'
+      || phase === 'recording'
+      || phase === 'stopping'
+      || phase === 'uploading'
+      || phase === 'failed'
+    ) {
       runtime.state = phase;
       this.snapshot.summary.currentPhase = phase;
     }
@@ -378,7 +397,7 @@ export class PerfDebugStore {
   }
 
   private persist(delayMs = 400): void {
-    if (!chrome.storage?.session?.set) return;
+    if (!hasSessionStorageArea()) return;
     if (delayMs === 0) {
       if (this.persistTimer) {
         clearTimeout(this.persistTimer);
@@ -396,9 +415,8 @@ export class PerfDebugStore {
   }
 
   private persistNow(): void {
-    chrome.storage.session
-      .set({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: this.getSnapshot() })
-      .catch?.((error: any) => this.warn('Failed to persist perf debug snapshot', error));
+    void setSessionStorageValues({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: this.getSnapshot() })
+      .catch((error: any) => this.warn('Failed to persist perf debug snapshot', error));
   }
 
   private removePersistedSnapshot(): void {
@@ -406,8 +424,8 @@ export class PerfDebugStore {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
     }
-    if (!chrome.storage?.session?.remove) return;
-    const removal = chrome.storage.session.remove(PERF_DEBUG_SNAPSHOT_STORAGE_KEY);
-    removal?.catch?.((error: any) => this.warn('Failed to clear perf debug snapshot', error));
+    if (!hasSessionStorageArea()) return;
+    void removeSessionStorageValues(PERF_DEBUG_SNAPSHOT_STORAGE_KEY)
+      .catch((error: any) => this.warn('Failed to clear perf debug snapshot', error));
   }
 }

@@ -39,20 +39,18 @@ describe('OffscreenManager', () => {
     );
   });
 
-  it('syncs phase updates from offscreen to badge and popup broadcast', () => {
+  it('syncs phase updates from offscreen to the badge and listener callback', () => {
     manager.attachPort(mockPort);
+    manager.onStateChanged = jest.fn();
     const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
     const setBadgeTextSpy = jest.spyOn(chrome.action, 'setBadgeText');
 
-    onMessageListener({ type: 'RECORDING_STATE', phase: 'uploading' });
+    onMessageListener({ type: 'OFFSCREEN_STATE', phase: 'uploading' });
 
     expect(manager.getRecordingStatus()).toBe('uploading');
     expect(setBadgeTextSpy).toHaveBeenCalledWith({ text: 'UP' });
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'RECORDING_STATE',
-        phase: 'uploading',
-      })
+    expect(manager.onStateChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'OFFSCREEN_STATE', phase: 'uploading' })
     );
   });
 
@@ -67,25 +65,11 @@ describe('OffscreenManager', () => {
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
   });
 
-  it('keeps OPFS cleanup only for successful downloads', () => {
-    jest.useFakeTimers();
+  it('forwards blob cleanup requests back to the offscreen port', () => {
     manager.attachPort(mockPort);
-    const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
 
-    (chrome.downloads.download as jest.Mock)
-      .mockImplementationOnce((_opts: any, cb: Function) => {
-        cb();
-      })
-      .mockImplementationOnce((_opts: any, cb: Function) => {
-        (chrome.runtime as any).lastError = { message: 'Download blocked' };
-        cb();
-        (chrome.runtime as any).lastError = undefined;
-      });
-
-    onMessageListener({ type: 'OFFSCREEN_SAVE', filename: 'ok.webm', blobUrl: 'blob:ok', opfsFilename: 'ok.webm' });
-    onMessageListener({ type: 'OFFSCREEN_SAVE', filename: 'fail.webm', blobUrl: 'blob:fail', opfsFilename: 'fail.webm' });
-
-    jest.runAllTimers();
+    manager.revokeBlobUrl('blob:ok', 'ok.webm');
+    manager.revokeBlobUrl('blob:fail');
 
     expect(mockPort.postMessage).toHaveBeenCalledWith({
       type: 'REVOKE_BLOB_URL',
@@ -97,10 +81,5 @@ describe('OffscreenManager', () => {
       blobUrl: 'blob:fail',
       opfsFilename: undefined,
     });
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'RECORDING_SAVE_ERROR', filename: 'fail.webm' })
-    );
-
-    jest.useRealTimers();
   });
 });

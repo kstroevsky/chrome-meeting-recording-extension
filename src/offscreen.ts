@@ -9,23 +9,31 @@
  *   - During recording, all streams write only to local storage targets.
  *   - After stop, this context seals those files and either:
  *       * asks background to download them (local mode), or
- *       * uploads them to Drive sequentially, falling back to download per file.
+ *       * uploads them to Drive, falling back to download per file.
  *   - Popup state is observational only; uploads continue even if popup closes.
  */
+import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
 import { makeLogger } from './shared/logger';
+import { sendToBackground } from './shared/messages';
 import { createPortRpcServer } from './shared/rpc';
 import type {
   BgToOffscreenOneWay,
   BgToOffscreenRpc,
   BgToOffscreenRuntime,
-  RecordingPhase,
   RpcResponse,
 } from './shared/protocol';
+import { isBgToOffscreenRuntimeMessage } from './shared/protocol';
 import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
+import {
+  DEFAULT_RECORDING_RUN_CONFIG,
+  normalizeRunConfig,
+  type RecordingPhase,
+  type RecordingRunConfig,
+} from './shared/recording';
 
 const L = makeLogger('offscreen');
 const RUNTIME_SAMPLE_INTERVAL_MS = 2_000;
@@ -40,11 +48,7 @@ window.addEventListener('unhandledrejection', (e: any) => {
 L.log('script loaded');
 
 function sendPerfEvent(entry: PerfEventEntry) {
-  try {
-    chrome.runtime.sendMessage({ type: 'PERF_EVENT', entry }, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch {}
+  void trySendRuntimeMessage({ type: 'PERF_EVENT', entry });
 }
 
 void configurePerfRuntime({
@@ -54,8 +58,9 @@ void configurePerfRuntime({
 
 let portRef: chrome.runtime.Port | null = null;
 let reconnectEnabled = true;
-let currentStorageMode: 'local' | 'drive' = 'local';
+let currentStorageMode: 'local' | 'drive' = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 let currentPhase: RecordingPhase = 'idle';
+let currentRunConfig: RecordingRunConfig | null = null;
 let finalizeRunPromise: Promise<void> | null = null;
 let expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
 let runtimeSampleCount = 0;
@@ -84,7 +89,7 @@ if (typeof PerformanceObserver !== 'undefined') {
 
 function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   try { portRef?.disconnect(); } catch {}
-  const port = chrome.runtime.connect({ name: 'offscreen' });
+  const port = connectRuntimePort('offscreen');
   wirePortHandlers(port);
 
   port.onDisconnect.addListener(() => {
@@ -97,7 +102,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   });
 
   port.postMessage({ type: 'OFFSCREEN_READY' });
-  port.postMessage({ type: 'RECORDING_STATE', phase: currentPhase });
+  port.postMessage({ type: 'OFFSCREEN_STATE', phase: currentPhase });
   L.log('READY signaled via Port');
 
   portRef = port;
@@ -118,12 +123,7 @@ function pushState(phase: RecordingPhase, extra?: Record<string, any>) {
     expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
   }
   currentPhase = phase;
-  try {
-    (chrome.storage as any)?.session?.set?.({ phase }).catch?.((e: any) => {
-      L.warn('storage.session.set failed — phase will not persist across SW restarts:', e);
-    });
-  } catch {}
-  getPort().postMessage({ type: 'RECORDING_STATE', phase, ...(extra ?? {}) });
+  getPort().postMessage({ type: 'OFFSCREEN_STATE', phase, ...(extra ?? {}) });
 }
 
 function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
@@ -131,13 +131,9 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
 }
 
 async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN', refresh: options?.refresh === true }, (res) => {
-      if (!res) return reject(new Error('No response to GET_DRIVE_TOKEN'));
-      if (!res.ok) return reject(new Error(`Token fetch failed: ${res.error}`));
-      resolve(res.token);
-    });
-  });
+  const res = await sendToBackground({ type: 'GET_DRIVE_TOKEN', refresh: options?.refresh === true });
+  if (!res.ok) throw new Error(`Token fetch failed: ${res.error}`);
+  return res.token;
 }
 
 const finalizer = new RecordingFinalizer({
@@ -152,16 +148,20 @@ async function finalizeCurrentRecordingRun(): Promise<void> {
 
   finalizeRunPromise = (async () => {
     const artifacts = await engine.stop();
+    if (currentStorageMode === 'drive' && artifacts.length > 0) {
+      pushState('uploading');
+    }
     const summary = await finalizer.finalize({
       artifacts,
       storageMode: currentStorageMode,
     });
-
+    currentRunConfig = null;
     pushState('idle', summary ? { uploadSummary: summary } : undefined);
   })()
     .catch((e) => {
       L.error('Stop/finalize pipeline failed', describeRuntimeError(e));
-      pushState('idle');
+      currentRunConfig = null;
+      pushState('failed', { error: describeRuntimeError(e) });
     })
     .finally(() => {
       finalizeRunPromise = null;
@@ -175,7 +175,6 @@ const engine = new RecorderEngine({
   warn: L.warn,
   error: L.error,
   notifyPhase: pushState,
-  enableMicMix: true,
   openTarget: async (filename: string) => {
     try {
       return await LocalFileTarget.create(filename);
@@ -222,21 +221,25 @@ function wirePortHandlers(port: chrome.runtime.Port) {
     {
       OFFSCREEN_START: async (msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_START' }>) => {
         const streamId = msg.streamId as string | undefined;
+        const runConfig = normalizeRunConfig(msg.runConfig);
         if (!streamId) return { ok: false, error: 'Missing streamId' };
+        if (!runConfig) return { ok: false, error: 'Missing run configuration' };
         if (currentPhase !== 'idle' || finalizeRunPromise) {
           return { ok: false, error: `Recorder is busy (${currentPhase})` };
         }
 
-        currentStorageMode = msg.storageMode === 'drive' ? 'drive' : 'local';
-        const recordSelfVideo = !!msg.recordSelfVideo;
-        const selfVideoQuality = msg.selfVideoQuality === 'high' ? 'high' : 'standard';
+        currentRunConfig = runConfig;
+        currentStorageMode = runConfig.storageMode;
+        pushState('starting');
 
         try {
-          await engine.startFromStreamId(streamId, { recordSelfVideo, selfVideoQuality });
+          await engine.startFromStreamId(streamId, runConfig);
           return { ok: true };
         } catch (e: any) {
-          pushState('idle');
-          return { ok: false, error: `${e?.name || 'Error'}: ${e?.message || e}` };
+          currentRunConfig = null;
+          const error = `${e?.name || 'Error'}: ${e?.message || e}`;
+          pushState('failed', { error });
+          return { ok: false, error };
         }
       },
 
@@ -245,9 +248,7 @@ function wirePortHandlers(port: chrome.runtime.Port) {
           return { ok: false, error: 'Stop requested but recorder is not active' };
         }
 
-        if (currentStorageMode === 'drive') {
-          pushState('uploading');
-        }
+        pushState('stopping');
         void finalizeCurrentRecordingRun();
         return { ok: true };
       },
@@ -274,9 +275,13 @@ function wirePortHandlers(port: chrome.runtime.Port) {
 
 getPort();
 
-chrome.runtime.onMessage.addListener((msg: BgToOffscreenRuntime, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((
+  msg: BgToOffscreenRuntime,
+  _sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void
+) => {
   try {
-    if ((msg as any)?.type === 'OFFSCREEN_CONNECT') {
+    if (isBgToOffscreenRuntimeMessage(msg)) {
       connectPort();
       sendResponse({ ok: true });
       return true;

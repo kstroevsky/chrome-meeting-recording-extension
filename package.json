@@ -5,7 +5,11 @@
         "dev": "webpack --mode=development",
         "build": "webpack --mode=production",
         "watch": "webpack --mode=development --watch",
-        "test": "jest"
+        "test": "npm run test:unit",
+        "test:unit": "jest --runInBand --watchman=false --testPathIgnorePatterns=/tests/e2e.test.ts",
+        "test:e2e": "jest --runInBand --watchman=false tests/e2e.test.ts",
+        "typecheck": "tsc --noEmit",
+        "lint": "npm run typecheck"
     },
     "devDependencies": {
         "@types/chrome": "^0.0.326",
