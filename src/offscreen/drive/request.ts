@@ -16,30 +16,37 @@ export type TokenProvider = (options?: { refresh?: boolean }) => Promise<string>
 export function createCachedTokenProvider(getToken: TokenProvider): TokenProvider {
   let cachedToken: string | null = null;
   let pendingToken: Promise<string> | null = null;
+  let generation = 0;
 
-  const loadToken = async (options?: { refresh?: boolean }) => {
+  const loadToken = async (options?: { refresh?: boolean }, requestGeneration = generation) => {
     if (!pendingToken) {
-      pendingToken = getToken(options)
+      const tokenPromise = getToken(options)
         .then((token) => {
-          cachedToken = token;
+          if (requestGeneration === generation) {
+            cachedToken = token;
+          }
           return token;
         })
         .finally(() => {
-          pendingToken = null;
+          if (pendingToken === tokenPromise) {
+            pendingToken = null;
+          }
         });
+      pendingToken = tokenPromise;
     }
     return await pendingToken;
   };
 
   return async (options?: { refresh?: boolean }) => {
     if (options?.refresh) {
+      generation += 1;
       cachedToken = null;
       pendingToken = null;
-      return await loadToken({ refresh: true });
+      return await loadToken({ refresh: true }, generation);
     }
 
     if (cachedToken) return cachedToken;
-    return await loadToken();
+    return await loadToken(undefined, generation);
   };
 }
 

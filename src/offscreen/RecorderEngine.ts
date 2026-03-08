@@ -7,7 +7,7 @@
  */
 
 import { withTimeout } from '../shared/async';
-import { PERF_FLAGS, clamp, logPerf, nowMs, roundMs } from '../shared/perf';
+import { PERF_FLAGS, clamp, debugPerf, logPerf, nowMs, roundMs } from '../shared/perf';
 import type { RecordingPhase, RecordingStream } from '../shared/protocol';
 import { TIMEOUTS } from '../shared/timeouts';
 
@@ -118,6 +118,14 @@ export class RecorderEngine {
 
   isRecording(): boolean {
     return this.state === 'recording' || this.state === 'starting' || this.state === 'stopping';
+  }
+
+  getActiveRecorderCount(): number {
+    return this.activeRecorders;
+  }
+
+  getDebugState(): EngineState {
+    return this.state;
   }
 
   async startFromStreamId(streamId: string, options: StartOptions = {}): Promise<void> {
@@ -350,9 +358,16 @@ export class RecorderEngine {
 
     recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      void target.write(e.data).catch((err) =>
-        this.deps.error('Target write error', describeMediaError(err))
-      );
+      const writeStartedAt = nowMs();
+      void target.write(e.data)
+        .then(() => {
+          debugPerf(this.deps.log, 'recorder', 'chunk_persisted', {
+            stream: 'tab',
+            chunkBytes: e.data.size,
+            durationMs: roundMs(nowMs() - writeStartedAt),
+          });
+        })
+        .catch((err) => this.deps.error('Target write error', describeMediaError(err)));
     };
 
     recorder.onerror = (e: any) => {
@@ -433,9 +448,16 @@ export class RecorderEngine {
 
     recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      void target.write(e.data).catch((err) =>
-        this.deps.error('Mic target write error', describeMediaError(err))
-      );
+      const writeStartedAt = nowMs();
+      void target.write(e.data)
+        .then(() => {
+          debugPerf(this.deps.log, 'recorder', 'chunk_persisted', {
+            stream: 'mic',
+            chunkBytes: e.data.size,
+            durationMs: roundMs(nowMs() - writeStartedAt),
+          });
+        })
+        .catch((err) => this.deps.error('Mic target write error', describeMediaError(err)));
     };
 
     recorder.onerror = (e: any) => {
@@ -536,9 +558,16 @@ export class RecorderEngine {
 
     recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      void target.write(e.data).catch((err) =>
-        this.deps.error('Self video target write error', describeMediaError(err))
-      );
+      const writeStartedAt = nowMs();
+      void target.write(e.data)
+        .then(() => {
+          debugPerf(this.deps.log, 'recorder', 'chunk_persisted', {
+            stream: 'selfVideo',
+            chunkBytes: e.data.size,
+            durationMs: roundMs(nowMs() - writeStartedAt),
+          });
+        })
+        .catch((err) => this.deps.error('Self video target write error', describeMediaError(err)));
     };
 
     recorder.onerror = (e: any) => {

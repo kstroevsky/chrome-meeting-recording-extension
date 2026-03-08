@@ -23,7 +23,7 @@
  */
 
 import { TIMEOUTS } from './shared/timeouts';
-import { logPerf } from './shared/perf';
+import { configurePerfRuntime, logPerf, type PerfEventEntry } from './shared/perf';
 
 type Chunk = {
   startTime: number;
@@ -37,6 +37,19 @@ type ObservedCaptionBlock = {
   observer: MutationObserver;
   textNode: HTMLElement;
 };
+
+function sendPerfEvent(entry: PerfEventEntry) {
+  try {
+    chrome.runtime.sendMessage({ type: 'PERF_EVENT', entry }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch {}
+}
+
+void configurePerfRuntime({
+  source: 'captions',
+  sink: sendPerfEvent,
+});
 
 
 /**
@@ -131,17 +144,12 @@ class TranscriptCollector {
     this.cleanupAllSpeakerBlockObservers();
     this.activeRegion = region;
 
-    const regionParent = region.parentElement;
-    if (regionParent) {
-      this.regionParentObserver = new MutationObserver(() => {
-        if (!this.activeRegion?.isConnected) {
-          this.onRegionRemoved();
-        }
-      });
-      this.regionParentObserver.observe(regionParent, { childList: true });
-    } else {
-      this.regionParentObserver = null;
-    }
+    this.regionParentObserver = new MutationObserver(() => {
+      if (!this.activeRegion?.isConnected) {
+        this.onRegionRemoved();
+      }
+    });
+    this.regionParentObserver.observe(document.body, { childList: true, subtree: true });
 
     this.captionObserver = new MutationObserver((mutations) => {
       for (const m of mutations) {

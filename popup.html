@@ -21,6 +21,15 @@
       High quality webcam (720p)
     </label>
     <br/><br/>
+    <label>
+      <input type="checkbox" id="debug-mode" />
+      Debug mode
+    </label>
+    <details style="margin-top: 8px;">
+      <summary>Performance metrics</summary>
+      <pre id="debug-metrics" style="white-space: pre-wrap; font-size: 11px; max-height: 220px; overflow: auto; border: 1px solid #ddd; padding: 8px;">Debug mode is off.</pre>
+    </details>
+    <br/><br/>
     <div id="recording-status" style="min-height: 1.5em; font-size: 12px; color: #a15c00;"></div>
     <button id="start-rec">Start Recording</button>
     <button id="stop-rec" disabled>Stop Recording</button>
