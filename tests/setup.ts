@@ -13,6 +13,12 @@ Object.assign(global, {
       onConnect: {
         addListener: jest.fn()
       },
+      connect: jest.fn().mockReturnValue({
+        disconnect: jest.fn(),
+        onDisconnect: {
+          addListener: jest.fn(),
+        },
+      }),
       getManifest: jest.fn(() => ({
         oauth2: {
           client_id: 'manifest-client-id.apps.googleusercontent.com',
@@ -39,6 +45,7 @@ Object.assign(global, {
           return {};
         }),
         set: jest.fn().mockResolvedValue(undefined),
+        remove: jest.fn().mockResolvedValue(undefined),
       },
       onChanged: {
         addListener: jest.fn(),
