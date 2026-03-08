@@ -11,6 +11,13 @@ export type RecordingRunConfig = {
   selfVideoQuality: SelfVideoQuality;
 };
 
+export const DEFAULT_RECORDING_RUN_CONFIG: Readonly<RecordingRunConfig> = {
+  storageMode: 'drive',
+  micMode: 'separate',
+  recordSelfVideo: true,
+  selfVideoQuality: 'standard',
+};
+
 export type UploadSummaryEntry = {
   stream: RecordingStream;
   filename: string;
@@ -46,7 +53,9 @@ export function normalizePhase(value: unknown): RecordingPhase {
 }
 
 export function normalizeStorageMode(value: unknown): StorageMode {
-  return value === 'drive' ? 'drive' : 'local';
+  return value === 'local' || value === 'drive'
+    ? value
+    : DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 }
 
 export function normalizeMicMode(value: unknown): MicMode {
@@ -55,12 +64,18 @@ export function normalizeMicMode(value: unknown): MicMode {
     case 'separate':
       return value;
     default:
-      return 'off';
+      return DEFAULT_RECORDING_RUN_CONFIG.micMode;
   }
 }
 
 export function normalizeSelfVideoQuality(value: unknown): SelfVideoQuality {
-  return value === 'high' ? 'high' : 'standard';
+  return value === 'high' || value === 'standard'
+    ? value
+    : DEFAULT_RECORDING_RUN_CONFIG.selfVideoQuality;
+}
+
+export function createDefaultRunConfig(): RecordingRunConfig {
+  return { ...DEFAULT_RECORDING_RUN_CONFIG };
 }
 
 export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
@@ -70,7 +85,10 @@ export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
   return {
     storageMode: normalizeStorageMode(candidate.storageMode),
     micMode: normalizeMicMode(candidate.micMode),
-    recordSelfVideo: candidate.recordSelfVideo === true,
+    recordSelfVideo:
+      typeof candidate.recordSelfVideo === 'boolean'
+        ? candidate.recordSelfVideo
+        : DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo,
     selfVideoQuality: normalizeSelfVideoQuality(candidate.selfVideoQuality),
   };
 }

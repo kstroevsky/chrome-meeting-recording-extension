@@ -23,11 +23,12 @@ import {
 } from './RecorderProfiles';
 import { describeMediaError } from './RecorderSupport';
 import { PERF_FLAGS, debugPerf, logPerf, nowMs, roundMs } from '../shared/perf';
-import type {
-  MicMode,
-  RecordingPhase,
-  RecordingRunConfig,
-  RecordingStream,
+import {
+  DEFAULT_RECORDING_RUN_CONFIG,
+  type MicMode,
+  type RecordingPhase,
+  type RecordingRunConfig,
+  type RecordingStream,
 } from '../shared/recording';
 import { TIMEOUTS } from '../shared/timeouts';
 
@@ -109,9 +110,9 @@ export class RecorderEngine {
   private selfVideoStream: MediaStream | null = null;
 
   private suffix = 'google-meet';
-  private micMode: MicMode = 'off';
-  private recordSelfVideo = false;
-  private selfVideoQuality: SelfVideoQuality = 'standard';
+  private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
+  private recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
+  private selfVideoQuality: SelfVideoQuality = DEFAULT_RECORDING_RUN_CONFIG.selfVideoQuality;
 
   private playback: AudioPlaybackBridge | null = null;
   private mixedAudio: MixedAudioMixer | null = null;
@@ -647,9 +648,9 @@ export class RecorderEngine {
     this.mixedAudio?.stop();
     this.mixedAudio = null;
     this.suffix = 'google-meet';
-    this.micMode = 'off';
-    this.recordSelfVideo = false;
-    this.selfVideoQuality = 'standard';
+    this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
+    this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
+    this.selfVideoQuality = DEFAULT_RECORDING_RUN_CONFIG.selfVideoQuality;
     this.finalizedArtifacts = [];
     this.stopPromise = null;
     this.resolveStop = null;

@@ -28,7 +28,12 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
-import { normalizeRunConfig, type RecordingPhase, type RecordingRunConfig } from './shared/recording';
+import {
+  DEFAULT_RECORDING_RUN_CONFIG,
+  normalizeRunConfig,
+  type RecordingPhase,
+  type RecordingRunConfig,
+} from './shared/recording';
 
 const L = makeLogger('offscreen');
 const RUNTIME_SAMPLE_INTERVAL_MS = 2_000;
@@ -53,7 +58,7 @@ void configurePerfRuntime({
 
 let portRef: chrome.runtime.Port | null = null;
 let reconnectEnabled = true;
-let currentStorageMode: 'local' | 'drive' = 'local';
+let currentStorageMode: 'local' | 'drive' = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 let currentPhase: RecordingPhase = 'idle';
 let currentRunConfig: RecordingRunConfig | null = null;
 let finalizeRunPromise: Promise<void> | null = null;

@@ -14,7 +14,9 @@ import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
 import {
+  createDefaultRunConfig,
   isBusyPhase,
+  normalizeMicMode,
   normalizeRunConfig,
   normalizeSessionSnapshot,
   type MicMode,
@@ -54,13 +56,14 @@ export class PopupController {
   private shownUploadSummary = '';
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
-  private activeRunConfig: RecordingRunConfig | null = null;
+  private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
 
   constructor(el: Elements) {
     this.el = el;
   }
 
   init() {
+    this.setActiveRunConfig(createDefaultRunConfig());
     this.wireRecordingStateListener();
     this.wireTranscriptDownload();
     this.wireStartStop();
@@ -177,7 +180,9 @@ export class PopupController {
 
   private applySession(snapshot: RecordingSessionSnapshot) {
     const prevPhase = this.lastPhase;
-    const runConfig = snapshot.phase === 'idle' ? null : normalizeRunConfig(snapshot.runConfig);
+    const runConfig = snapshot.phase === 'idle'
+      ? createDefaultRunConfig()
+      : normalizeRunConfig(snapshot.runConfig);
     this.setActiveRunConfig(runConfig);
     this.setUI(snapshot.phase);
 
@@ -193,7 +198,7 @@ export class PopupController {
       const res = await sendToBackground({ type: 'GET_RECORDING_STATUS' });
       this.applySession(normalizeSessionSnapshot(res.session));
     } catch {
-      this.setActiveRunConfig(null);
+      this.setActiveRunConfig(createDefaultRunConfig());
       this.setUI('idle');
     }
   }
@@ -316,8 +321,7 @@ export class PopupController {
   }
 
   private getSelectedMicMode(): MicMode {
-    const value = this.el.micModeSelect?.value;
-    return value === 'mixed' || value === 'separate' ? value : 'off';
+    return normalizeMicMode(this.el.micModeSelect?.value);
   }
 
   private wireStartStop() {
@@ -335,17 +339,19 @@ export class PopupController {
 
         await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
-        const storageMode = this.el.storageModeSelect?.value === 'drive' ? 'drive' : 'local';
+        const defaultRunConfig = createDefaultRunConfig();
         const micMode = this.getSelectedMicMode();
-        const recordSelfVideo = !!this.el.recordSelfVideoCheckbox?.checked;
+        const recordSelfVideo = this.el.recordSelfVideoCheckbox?.checked ?? defaultRunConfig.recordSelfVideo;
         const selfVideoQuality =
-          recordSelfVideo && this.el.selfVideoHighQualityCheckbox?.checked ? 'high' : 'standard';
-        const runConfig: RecordingRunConfig = {
-          storageMode,
+          recordSelfVideo && this.el.selfVideoHighQualityCheckbox?.checked
+            ? 'high'
+            : defaultRunConfig.selfVideoQuality;
+        const runConfig = normalizeRunConfig({
+          storageMode: this.el.storageModeSelect?.value,
           micMode,
           recordSelfVideo,
           selfVideoQuality,
-        };
+        }) ?? defaultRunConfig;
 
         const micReady = await this.mic.ensureReadyForRecording(micMode);
         if (!micReady) {
@@ -377,7 +383,6 @@ export class PopupController {
         this.toast('Recording started');
       } catch (e: any) {
         console.error('[popup] START_RECORDING error', e);
-        this.setActiveRunConfig(null);
         this.setUI('idle');
         alert(`Failed to start recording:\n${e?.message || e}`);
       } finally {
