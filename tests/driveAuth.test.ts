@@ -21,6 +21,7 @@ describe('driveAuth', () => {
         client_id: 'manifest-client-id.apps.googleusercontent.com',
       },
     });
+    (chrome.identity.removeCachedAuthToken as jest.Mock).mockImplementation((_details: any, cb?: () => void) => cb?.());
   });
 
   it('returns token when silent auth succeeds', async () => {
@@ -62,5 +63,22 @@ describe('driveAuth', () => {
       expect(result.error).toContain('Chrome Extension');
     }
     expect(chrome.identity.getAuthToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates the cached auth token before a forced refresh', async () => {
+    mockAuthReplies([
+      { token: 'cached-token' },
+      { token: 'refreshed-token' },
+    ]);
+
+    const first = await fetchDriveTokenWithFallback();
+    const second = await fetchDriveTokenWithFallback({ refresh: true });
+
+    expect(first).toEqual({ ok: true, token: 'cached-token' });
+    expect(second).toEqual({ ok: true, token: 'refreshed-token' });
+    expect(chrome.identity.removeCachedAuthToken).toHaveBeenCalledWith(
+      { token: 'cached-token' },
+      expect.any(Function)
+    );
   });
 });

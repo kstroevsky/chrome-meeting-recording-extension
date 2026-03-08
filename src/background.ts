@@ -13,9 +13,17 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 import { OffscreenManager } from './background/OffscreenManager';
+import { PerfDebugStore } from './background/PerfDebugStore';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
 import { makeLogger } from './shared/logger';
 import type { RecordingPhase, RecordingRunConfig } from './shared/protocol';
+import {
+  configurePerfRuntime,
+  getPerfSettingsSnapshot,
+  PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
+  type PerfDebugSnapshot,
+  type PerfEventEntry,
+} from './shared/perf';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
@@ -24,6 +32,7 @@ const SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 let activeRunConfig: RecordingRunConfig | null = null;
+const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), L.warn);
 
 function normalizeRunConfig(value: any): RecordingRunConfig | null {
   if (!value || typeof value !== 'object') return null;
@@ -53,6 +62,7 @@ offscreen.onPhaseChanged = (phase: RecordingPhase) => {
     activeRunConfig = null;
     offscreen.setRunConfig(null);
   }
+  perfDebugStore.setPhase(phase);
   (chrome.storage as any)?.session?.set?.({
     [SESSION_PHASE_KEY]: phase,
     [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
@@ -63,11 +73,24 @@ offscreen.onPhaseChanged = (phase: RecordingPhase) => {
 
 (async () => {
   try {
-    const res = await chrome.storage.session.get([SESSION_PHASE_KEY, SESSION_RUN_CONFIG_KEY]);
+    const settings = await configurePerfRuntime({
+      source: 'background',
+      sink: (entry) => perfDebugStore.record(entry),
+      onSettingsChanged: (nextSettings) => perfDebugStore.setSettings(nextSettings),
+    });
+
+    const res = await chrome.storage.session.get([
+      SESSION_PHASE_KEY,
+      SESSION_RUN_CONFIG_KEY,
+      PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
+    ]);
+    perfDebugStore.hydrate(res?.[PERF_DEBUG_SNAPSHOT_STORAGE_KEY] as PerfDebugSnapshot | undefined);
+    perfDebugStore.setSettings(settings);
     const phase = (res?.phase === 'recording' || res?.phase === 'uploading') ? res.phase : 'idle';
     activeRunConfig = phase === 'idle' ? null : normalizeRunConfig(res?.[SESSION_RUN_CONFIG_KEY]);
     offscreen.hydratePhase(phase);
     offscreen.setRunConfig(activeRunConfig);
+    perfDebugStore.setPhase(phase);
     if (phase !== 'idle') {
       L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
@@ -99,8 +122,14 @@ function getStreamIdForTab(tabId: number): Promise<string> {
 }
 
 chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
+  if (msg?.type === 'PERF_EVENT') {
+    perfDebugStore.record(msg.entry as PerfEventEntry);
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (msg?.type === 'GET_DRIVE_TOKEN') {
-    fetchDriveTokenWithFallback()
+    fetchDriveTokenWithFallback({ refresh: msg.refresh === true })
       .then((res) => {
         if (!res.ok) L.warn('GET_DRIVE_TOKEN failed:', res.error);
         sendResponse(res);

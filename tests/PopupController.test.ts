@@ -1,6 +1,7 @@
 import { CameraPermissionService } from '../src/popup/CameraPermissionService';
 import { MicPermissionService } from '../src/popup/MicPermissionService';
 import { PopupController } from '../src/popup/PopupController';
+import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY, PERF_SETTINGS_STORAGE_KEY } from '../src/shared/perf';
 
 jest.mock('../src/popup/MicPermissionService');
 jest.mock('../src/popup/CameraPermissionService');
@@ -20,10 +21,13 @@ describe('PopupController', () => {
       storageModeSelect: document.createElement('select'),
       recordSelfVideoCheckbox: document.createElement('input'),
       selfVideoHighQualityCheckbox: document.createElement('input'),
+      debugModeCheckbox: document.createElement('input'),
+      debugMetricsEl: document.createElement('pre'),
       recordingStatusEl: document.createElement('div'),
     };
     elements.recordSelfVideoCheckbox.type = 'checkbox';
     elements.selfVideoHighQualityCheckbox.type = 'checkbox';
+    elements.debugModeCheckbox.type = 'checkbox';
 
     const optLocal = document.createElement('option');
     optLocal.value = 'local';
@@ -37,6 +41,10 @@ describe('PopupController', () => {
 
     mockTabsQuery = chrome.tabs.query as jest.Mock;
     mockTabsQuery.mockResolvedValue([{ id: 101, url: 'https://meet.google.com/abc-defg' }]);
+    (chrome.storage.local.get as jest.Mock).mockResolvedValue({
+      [PERF_SETTINGS_STORAGE_KEY]: { debugMode: false },
+    });
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({});
 
     (CameraPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(true);
 
@@ -48,6 +56,7 @@ describe('PopupController', () => {
   });
 
   afterEach(() => {
+    controller.destroy();
     jest.restoreAllMocks();
   });
 
@@ -177,5 +186,94 @@ describe('PopupController', () => {
       expect.stringContaining('Local save failed: google-meet-recording-x.webm')
     );
     expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Download blocked'));
+  });
+
+  it('loads the debug mode checkbox from stored settings', async () => {
+    (chrome.storage.local.get as jest.Mock).mockResolvedValue({
+      [PERF_SETTINGS_STORAGE_KEY]: { debugMode: true },
+    });
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({
+      [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: {
+        enabled: true,
+        settings: {
+          debugMode: true,
+          audioPlaybackBridgeMode: 'always',
+          adaptiveSelfVideoProfile: false,
+          extendedTimeslice: false,
+          dynamicDriveChunkSizing: false,
+          parallelUploadConcurrency: 1,
+        },
+        updatedAt: Date.now(),
+        droppedEvents: 0,
+        entries: [],
+        summary: {
+          currentPhase: 'recording',
+          totalEvents: 1,
+          countsByScope: { recorder: 1 },
+          recorder: {
+            startCountByStream: { tab: 1 },
+            lastStartLatencyMsByStream: { tab: 120 },
+            avgStartLatencyMsByStream: { tab: 120 },
+            persistedChunkCount: 0,
+            persistedChunkBytes: 0,
+            avgPersistedChunkDurationMs: null,
+            lastPersistedChunkDurationMs: null,
+            lastPersistedChunkBytes: null,
+            lastTimesliceMs: 2000,
+            lastSelfVideoBitrate: null,
+            lastAudioBridgeMode: 'always',
+            lastAudioBridgeSuppressed: false,
+            lastAudioBridgeEnabled: false,
+          },
+          captions: { currentObserverCount: 0, maxObserverCount: 0 },
+          upload: {
+            chunkCount: 0,
+            totalChunkBytes: 0,
+            avgChunkDurationMs: null,
+            lastChunkDurationMs: null,
+            lastChunkBytes: null,
+            lastChunkThroughputMbps: null,
+            retryCount: 0,
+            retriedChunkCount: 0,
+            fileCount: 0,
+            uploadedCount: 0,
+            fallbackCount: 0,
+            avgFileDurationMs: null,
+            lastFileDurationMs: null,
+            lastFallbackRate: null,
+            lastConcurrency: null,
+          },
+          runtime: {
+            sampleCount: 1,
+            state: 'recording',
+            activeRecorders: 1,
+            lastHeapUsedMb: 42,
+            maxHeapUsedMb: 42,
+            lastHeapLimitMb: 256,
+          },
+        },
+      },
+    });
+
+    controller.init();
+    await new Promise(process.nextTick);
+
+    expect(elements.debugModeCheckbox.checked).toBe(true);
+    expect(elements.debugMetricsEl.textContent).toContain('Debug mode: on');
+    expect(elements.debugMetricsEl.textContent).toContain('Phase: recording');
+  });
+
+  it('persists debug mode changes from the popup checkbox', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+
+    elements.debugModeCheckbox.checked = true;
+    elements.debugModeCheckbox.dispatchEvent(new Event('change'));
+    await new Promise(process.nextTick);
+
+    expect(chrome.storage.local.set).toHaveBeenCalledWith({
+      [PERF_SETTINGS_STORAGE_KEY]: expect.objectContaining({ debugMode: true }),
+    });
+    expect(console.log).toHaveBeenCalledWith('[popup]', expect.stringContaining('Debug mode enabled'));
   });
 });

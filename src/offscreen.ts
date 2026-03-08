@@ -25,6 +25,7 @@ import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
+import { configurePerfRuntime, debugPerf, isPerfDebugMode, roundMs, type PerfEventEntry } from './shared/perf';
 
 const L = makeLogger('offscreen');
 
@@ -36,6 +37,19 @@ window.addEventListener('unhandledrejection', (e: any) => {
   console.error('[offscreen] unhandledrejection', e?.reason || e);
 });
 L.log('script loaded');
+
+function sendPerfEvent(entry: PerfEventEntry) {
+  try {
+    chrome.runtime.sendMessage({ type: 'PERF_EVENT', entry }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch {}
+}
+
+void configurePerfRuntime({
+  source: 'offscreen',
+  sink: sendPerfEvent,
+});
 
 let portRef: chrome.runtime.Port | null = null;
 let reconnectEnabled = true;
@@ -88,9 +102,9 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
   getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl, opfsFilename });
 }
 
-async function getDriveToken(_options?: { refresh?: boolean }): Promise<string> {
+async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN' }, (res) => {
+    chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN', refresh: options?.refresh === true }, (res) => {
       if (!res) return reject(new Error('No response to GET_DRIVE_TOKEN'));
       if (!res.ok) return reject(new Error(`Token fetch failed: ${res.error}`));
       resolve(res.token);
@@ -143,6 +157,21 @@ const engine = new RecorderEngine({
     }
   },
 });
+
+function sampleRuntimeMetrics() {
+  if (!isPerfDebugMode() || currentPhase === 'idle') return;
+  const perfMemory = (performance as any)?.memory;
+  debugPerf(L.log, 'runtime', 'sample', {
+    phase: currentPhase,
+    recorderState: engine.getDebugState(),
+    activeRecorders: engine.getActiveRecorderCount(),
+    usedJSHeapSizeMb: perfMemory?.usedJSHeapSize != null ? roundMs(perfMemory.usedJSHeapSize / 1024 / 1024) : undefined,
+    totalJSHeapSizeMb: perfMemory?.totalJSHeapSize != null ? roundMs(perfMemory.totalJSHeapSize / 1024 / 1024) : undefined,
+    jsHeapSizeLimitMb: perfMemory?.jsHeapSizeLimit != null ? roundMs(perfMemory.jsHeapSizeLimit / 1024 / 1024) : undefined,
+  });
+}
+
+setInterval(sampleRuntimeMetrics, 2_000);
 
 function wirePortHandlers(port: chrome.runtime.Port) {
   createPortRpcServer(

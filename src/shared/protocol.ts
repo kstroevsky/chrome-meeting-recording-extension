@@ -78,7 +78,7 @@ export type PopupToBg =
     }
   | { type: 'STOP_RECORDING' }
   | { type: 'GET_RECORDING_STATUS' }
-  | { type: 'GET_DRIVE_TOKEN' };
+  | { type: 'GET_DRIVE_TOKEN'; refresh?: boolean };
 
 export type BgToPopup =
   | {
