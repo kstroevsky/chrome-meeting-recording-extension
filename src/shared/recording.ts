@@ -5,67 +5,51 @@
  * persisted session snapshots, and normalization helpers.
  */
 
-export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'uploading' | 'failed';
-export type RecordingStream = 'tab' | 'mic' | 'selfVideo';
-export type StorageMode = 'local' | 'drive';
-export type MicMode = 'off' | 'mixed' | 'separate';
+import {
+  BUSY_RECORDING_PHASES,
+  DEFAULT_RECORDING_RUN_CONFIG,
+  NON_IDLE_RECORDING_PHASES,
+  RECORDING_SESSION_STORAGE_KEY,
+  VALID_MIC_MODES,
+  VALID_STORAGE_MODES,
+} from './recordingConstants';
+import type {
+  MicMode,
+  RecordingPhase,
+  RecordingRunConfig,
+  RecordingSessionSnapshot,
+  StorageMode,
+  UploadSummary,
+  UploadSummaryEntry,
+} from './recordingTypes';
+import { isRecord } from './typeGuards';
 
-export type RecordingRunConfig = {
-  storageMode: StorageMode;
-  micMode: MicMode;
-  recordSelfVideo: boolean;
-};
+export type {
+  MicMode,
+  RecordingPhase,
+  RecordingRunConfig,
+  RecordingSessionSnapshot,
+  RecordingStream,
+  StorageMode,
+  UploadSummary,
+  UploadSummaryEntry,
+} from './recordingTypes';
+export { DEFAULT_RECORDING_RUN_CONFIG, RECORDING_SESSION_STORAGE_KEY } from './recordingConstants';
 
-export const DEFAULT_RECORDING_RUN_CONFIG: Readonly<RecordingRunConfig> = {
-  storageMode: 'drive',
-  micMode: 'separate',
-  recordSelfVideo: true,
-};
-
-export type UploadSummaryEntry = {
-  stream: RecordingStream;
-  filename: string;
-  error?: string;
-};
-
-export type UploadSummary = {
-  uploaded: UploadSummaryEntry[];
-  localFallbacks: UploadSummaryEntry[];
-};
-
-export type RecordingSessionSnapshot = {
-  phase: RecordingPhase;
-  runConfig: RecordingRunConfig | null;
-  uploadSummary?: UploadSummary;
-  error?: string;
-  updatedAt: number;
-};
-
-export const RECORDING_SESSION_STORAGE_KEY = 'recordingSession';
-const NON_IDLE_PHASES: RecordingPhase[] = ['starting', 'recording', 'stopping', 'uploading', 'failed'];
-const VALID_STORAGE_MODES: StorageMode[] = ['local', 'drive'];
-const VALID_MIC_MODES: MicMode[] = ['off', 'mixed', 'separate'];
-
-function isRecord<T extends object>(value: unknown): value is Partial<T> {
-  return !!value && typeof value === 'object';
+function hasAllowedString<T extends string>(value: unknown, allowedValues: readonly T[]): value is T {
+  return typeof value === 'string' && allowedValues.includes(value as T);
 }
 
 export function normalizePhase(value: unknown): RecordingPhase {
-  return typeof value === 'string' && NON_IDLE_PHASES.includes(value as RecordingPhase)
-    ? value as RecordingPhase
-    : 'idle';
+  return hasAllowedString(value, NON_IDLE_RECORDING_PHASES) ? value : 'idle';
 }
 
 export function normalizeStorageMode(value: unknown): StorageMode {
-  return typeof value === 'string' && VALID_STORAGE_MODES.includes(value as StorageMode)
-    ? value as StorageMode
-    : DEFAULT_RECORDING_RUN_CONFIG.storageMode;
+  return hasAllowedString(value, VALID_STORAGE_MODES) ? value : DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 }
 
 export function normalizeMicMode(value: unknown): MicMode {
-  return typeof value === 'string' && VALID_MIC_MODES.includes(value as MicMode)
-    ? value as MicMode
-    : DEFAULT_RECORDING_RUN_CONFIG.micMode;
+  return hasAllowedString(value, VALID_MIC_MODES) ? value : DEFAULT_RECORDING_RUN_CONFIG.micMode;
 }
 
 export function createDefaultRunConfig(): RecordingRunConfig {
@@ -73,8 +57,8 @@ export function createDefaultRunConfig(): RecordingRunConfig {
 }
 
 export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
-  if (!isRecord<RecordingRunConfig>(value)) return null;
-  const candidate = value;
+  if (!isRecord(value)) return null;
+  const candidate = value as Partial<RecordingRunConfig>;
 
   return {
     storageMode: normalizeStorageMode(candidate.storageMode),
@@ -91,13 +75,14 @@ export function getRunConfigOrDefault(value: unknown): RecordingRunConfig {
 }
 
 function normalizeUploadSummaryEntry(entry: unknown): UploadSummaryEntry | null {
-  if (!isRecord<UploadSummaryEntry>(entry)) return null;
+  if (!isRecord(entry)) return null;
+  const candidate = entry as Partial<UploadSummaryEntry>;
 
   const stream =
-    entry.stream === 'mic' || entry.stream === 'selfVideo' ? entry.stream : 'tab';
-  const filename = typeof entry.filename === 'string' ? entry.filename.trim() : '';
+    candidate.stream === 'mic' || candidate.stream === 'selfVideo' ? candidate.stream : 'tab';
+  const filename = typeof candidate.filename === 'string' ? candidate.filename.trim() : '';
   if (!filename) return null;
-  const error = typeof entry.error === 'string' ? entry.error.trim() : '';
+  const error = typeof candidate.error === 'string' ? candidate.error.trim() : '';
 
   return {
     stream,
@@ -107,8 +92,8 @@ function normalizeUploadSummaryEntry(entry: unknown): UploadSummaryEntry | null 
 }
 
 export function normalizeUploadSummary(value: unknown): UploadSummary | undefined {
-  if (!isRecord<UploadSummary>(value)) return undefined;
-  const candidate = value;
+  if (!isRecord(value)) return undefined;
+  const candidate = value as Partial<UploadSummary>;
 
   const normalizeEntries = (entries: unknown): UploadSummaryEntry[] => {
     if (!Array.isArray(entries)) return [];
@@ -132,8 +117,8 @@ export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
 }
 
 export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapshot {
-  if (!isRecord<RecordingSessionSnapshot>(value)) return createIdleSession();
-  const candidate = value;
+  if (!isRecord(value)) return createIdleSession();
+  const candidate = value as Partial<RecordingSessionSnapshot>;
   const phase = normalizePhase(candidate.phase);
   const runConfig = phase === 'idle' ? null : normalizeRunConfig(candidate.runConfig);
 
@@ -147,5 +132,5 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
 }
 
 export function isBusyPhase(phase: RecordingPhase): boolean {
-  return phase === 'starting' || phase === 'recording' || phase === 'stopping' || phase === 'uploading';
+  return (BUSY_RECORDING_PHASES as readonly RecordingPhase[]).includes(phase);
 }

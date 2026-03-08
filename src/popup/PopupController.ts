@@ -8,15 +8,25 @@
 
 import { CameraPermissionService } from './CameraPermissionService';
 import { MicPermissionService } from './MicPermissionService';
+import {
+  buildLocalSaveFailedAlert,
+  buildLocalSaveFailedToast,
+  buildMicPermissionError,
+  buildSavedLocallyMessage,
+  buildStartErrorAlert,
+  buildStopErrorAlert,
+  buildTranscriptFilename,
+  CAMERA_PERMISSION_ERROR,
+  POPUP_TOAST_DURATION_MS,
+  POPUP_TOAST_TEXT,
+} from './popupMessages';
 import { applyRunConfigToForm, buildRunConfigFromForm } from './popupRunConfig';
 import {
-  describeRunConfig,
-  formatUploadFallbackMessage,
   setControlsForPhase,
   setStatusText,
-  STATUS_BY_PHASE,
   type PopupElements,
 } from './popupView';
+import { describeRunConfig, formatUploadFallbackMessage, STATUS_BY_PHASE } from './popupStatus';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
@@ -102,7 +112,7 @@ export class PopupController {
     this.statusTimer = setTimeout(() => {
       this.statusTimer = null;
       this.setStatus(this.persistentStatus);
-    }, 12_000);
+    }, POPUP_TOAST_DURATION_MS);
 
     if (isTestRuntime()) console.log('[popup]', msg);
   }
@@ -139,14 +149,12 @@ export class PopupController {
       }
 
       if (msg?.type === 'RECORDING_SAVED') {
-        this.toast(`Saved locally: ${msg.filename || 'recording.webm'}`);
+        this.toast(buildSavedLocallyMessage(msg.filename));
       }
 
       if (msg?.type === 'RECORDING_SAVE_ERROR') {
-        const name = msg.filename || 'recording.webm';
-        const error = msg.error || 'Unknown save error';
-        this.toast(`Local save failed: ${name} (${error})`);
-        alert(`Failed to save ${name} locally:\n${error}`);
+        this.toast(buildLocalSaveFailedToast(msg.filename, msg.error));
+        alert(buildLocalSaveFailedAlert(msg.filename, msg.error));
       }
     });
   }
@@ -202,13 +210,13 @@ export class PopupController {
       if (!tab?.id) return;
 
       const res = await sendToContent(tab.id, { type: 'GET_TRANSCRIPT' }).catch(() => {
-        this.toast('No transcript on this page');
+        this.toast(POPUP_TOAST_TEXT.noTranscriptOnPage);
         return undefined;
       });
 
       const transcript = res?.transcript;
       if (!transcript?.trim()) {
-        this.toast('Transcript is empty');
+        this.toast(POPUP_TOAST_TEXT.transcriptEmpty);
         return;
       }
 
@@ -219,7 +227,7 @@ export class PopupController {
       try {
         await downloadFile({
           url,
-          filename: `google-meet-transcript-${suffix}-${Date.now()}.txt`,
+          filename: buildTranscriptFilename(suffix),
           saveAs: true,
         });
       } finally {
@@ -247,21 +255,12 @@ export class PopupController {
         const { micMode, recordSelfVideo } = runConfig;
 
         const micReady = await this.mic.ensureReadyForRecording(micMode);
-        if (!micReady) {
-          throw new Error(
-            micMode === 'mixed'
-              ? 'Microphone permission is required to mix your voice into the tab recording. A setup tab was opened.'
-              : 'Microphone permission is required to save a separate microphone file. A setup tab was opened.'
-          );
-        }
+        if (!micReady) throw new Error(buildMicPermissionError(micMode));
 
         if (recordSelfVideo) {
           const cameraReady = await this.camera.ensureReadyForRecording();
           if (!cameraReady) {
-            throw new Error(
-              'Camera permission is required for "Record my camera separately". ' +
-              'A setup tab was opened. Enable camera there and start again.'
-            );
+            throw new Error(CAMERA_PERMISSION_ERROR);
           }
         }
 
@@ -273,11 +272,11 @@ export class PopupController {
         if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
 
         this.applySession(resp.session);
-        this.toast('Recording started');
-      } catch (e: any) {
+        this.toast(POPUP_TOAST_TEXT.recordingStarted);
+      } catch (e: unknown) {
         console.error('[popup] START_RECORDING error', e);
         this.setUI('idle');
-        alert(`Failed to start recording:\n${e?.message || e}`);
+        alert(buildStartErrorAlert(e));
       } finally {
         this.inFlight = false;
       }
@@ -292,10 +291,10 @@ export class PopupController {
         const resp = await sendToBackground({ type: 'STOP_RECORDING' });
         if (resp.ok === false) throw new Error(resp.error || 'Failed to stop');
         this.applySession(resp.session);
-        this.toast('Stopping... finalizing local files. You can close this popup.');
-      } catch (e: any) {
+        this.toast(POPUP_TOAST_TEXT.stopping);
+      } catch (e: unknown) {
         console.error('[popup] STOP_RECORDING error', e);
-        alert(`Failed to stop recording:\n${e?.message || e}`);
+        alert(buildStopErrorAlert(e));
         this.setUI('idle');
       } finally {
         this.inFlight = false;

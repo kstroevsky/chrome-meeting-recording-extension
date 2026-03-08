@@ -739,7 +739,9 @@ flowchart TD
 | `src/popup.ts` | popup entrypoint |
 | `src/popup/PopupController.ts` | UI orchestration |
 | `src/popup/popupRunConfig.ts` | popup form <-> run-config mapping helpers |
-| `src/popup/popupView.ts` | popup control state and status-text helpers |
+| `src/popup/popupView.ts` | popup control state DOM helpers |
+| `src/popup/popupStatus.ts` | popup status and upload-summary text formatting |
+| `src/popup/popupMessages.ts` | user-facing popup copy constants/builders |
 | `src/popup/MicPermissionService.ts` | microphone permission flow |
 | `src/popup/CameraPermissionService.ts` | camera permission flow |
 | `src/micsetup.ts` | dedicated mic setup page |
@@ -763,8 +765,12 @@ flowchart TD
 ### Shared Infrastructure
 | File | Role |
 | :--- | :--- |
-| `src/shared/recording.ts` | recording domain model |
+| `src/shared/recordingTypes.ts` | recording domain types |
+| `src/shared/recordingConstants.ts` | recording defaults and allowed values |
+| `src/shared/recording.ts` | recording normalization and session helpers |
 | `src/shared/protocol.ts` | message contracts |
+| `src/shared/protocolMessageTypes.ts` | runtime message type constants |
+| `src/shared/typeGuards.ts` | shared runtime type guards |
 | `src/shared/messages.ts` | typed message helpers |
 | `src/shared/rpc.ts` | port RPC transport |
 | `src/shared/perf.ts` | perf settings, event types, and helpers |
