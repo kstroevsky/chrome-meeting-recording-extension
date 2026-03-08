@@ -22,7 +22,10 @@
  * @see src/shared/timeouts.ts  — CAPTION_GRACE_MS constant
  */
 
+import { GoogleMeetAdapter } from './content/GoogleMeetAdapter';
+import type { MeetingProviderAdapter } from './content/MeetingProviderAdapter';
 import { TIMEOUTS } from './shared/timeouts';
+import { isPopupToContentMessage } from './shared/protocol';
 import { configurePerfRuntime, logPerf, type PerfEventEntry } from './shared/perf';
 
 type Chunk = {
@@ -51,31 +54,6 @@ void configurePerfRuntime({
   sink: sendPerfEvent,
 });
 
-
-/**
- * ⚠️  FRAGILE SELECTORS — Reverse-engineered from Google Meet's obfuscated CSS.
- *
- * These WILL break if Google updates their frontend. When captions stop working:
- *   1. Open meet.google.com and start a meeting with captions ON.
- *   2. Open DevTools → Elements and inspect an active caption bubble.
- *   3. Find the element containing the spoken text and update captionText.
- *   4. Find the element containing the speaker's name and update speakerName.
- *   5. Find the parent container (one per active speaker) and update captionBlock.
- *
- * Also check: the aria-label of the region element in observeCaptionsRegionAppearance()
- * in case Google renames the "Captions" region.
- *
- * Last verified: 2026-03
- */
-const MEET_SELECTORS = {
-  /** The element containing the text of what is currently being said. */
-  captionText:  '.ygicle',
-  /** The element containing the speaker's display name. */
-  speakerName:  '.NWpY1d',
-  /** The parent container for one speaker's caption block (one per active speaker). */
-  captionBlock: '.nMcdL',
-} as const;
-
 function normalize(pre: string) {
   return pre
     .toLowerCase()
@@ -85,6 +63,8 @@ function normalize(pre: string) {
 }
 
 class TranscriptCollector {
+  constructor(private readonly provider: MeetingProviderAdapter) {}
+
   private transcript: string[] = [];
   private prior = new Map<string, OpenChunk>();
   private lastSeen = new Map<string, string>();
@@ -130,7 +110,7 @@ class TranscriptCollector {
   }
 
   private findCaptionsRegion(): HTMLElement | null {
-    return document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]');
+    return this.provider.findCaptionsRegion(document);
   }
 
   private attachRegion(region: HTMLElement) {
@@ -170,7 +150,7 @@ class TranscriptCollector {
 
     this.captionObserver.observe(region, { childList: true, subtree: true });
 
-    region.querySelectorAll<HTMLElement>(MEET_SELECTORS.captionBlock).forEach((el) => this.scanSpeakerBlock(el));
+    this.provider.collectCaptionBlocks(region).forEach((el) => this.scanSpeakerBlock(el));
   }
 
   private onRegionRemoved() {
@@ -184,23 +164,13 @@ class TranscriptCollector {
   }
 
   private collectCaptionBlocks(node: Node): HTMLElement[] {
-    if (!(node instanceof HTMLElement)) return [];
-
-    const blocks: HTMLElement[] = [];
-    if (node.matches(MEET_SELECTORS.captionBlock)) {
-      blocks.push(node);
-    }
-    node.querySelectorAll<HTMLElement>(MEET_SELECTORS.captionBlock).forEach((block) => blocks.push(block));
-    return blocks;
+    return this.provider.collectCaptionBlocks(node);
   }
 
   private scanSpeakerBlock(block: HTMLElement) {
-    const txtNode = block.querySelector<HTMLDivElement>(MEET_SELECTORS.captionText);
-    if (!txtNode) return;
-
-    const speakerName =
-      block.querySelector<HTMLElement>(MEET_SELECTORS.speakerName)?.textContent?.trim() ?? ' ';
-    const key = block.getAttribute('data-participant-id') || speakerName;
+    const data = this.provider.getCaptionBlockData(block);
+    if (!data) return;
+    const { textNode: txtNode, speakerName, key } = data;
 
     const push = () => {
       const trimmed = txtNode.textContent?.trim() ?? '';
@@ -317,16 +287,30 @@ class TranscriptCollector {
   }
 
   private exposeMessageApi() {
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (msg?.type === 'GET_TRANSCRIPT') {
-        sendResponse({ transcript: this.getTranscriptText() });
+    chrome.runtime.onMessage.addListener((
+      msg: unknown,
+      _sender: chrome.runtime.MessageSender,
+      sendResponse: (response?: unknown) => void
+    ) => {
+      if (!isPopupToContentMessage(msg)) return false;
+
+      if (msg.type === 'GET_TRANSCRIPT') {
+        sendResponse({
+          transcript: this.getTranscriptText(),
+          provider: this.provider.getProviderInfo(window.location),
+        });
         return true;
       }
-      if (msg?.type === 'RESET_TRANSCRIPT') {
+      if (msg.type === 'RESET_TRANSCRIPT') {
         this.reset();
         sendResponse({ ok: true });
         return true;
       }
+      if (msg.type === 'GET_PROVIDER_INFO') {
+        sendResponse(this.provider.getProviderInfo(window.location));
+        return true;
+      }
+      return false;
     });
   }
 
@@ -343,7 +327,7 @@ class TranscriptCollector {
   }
 }
 
-const collector = new TranscriptCollector();
+const collector = new TranscriptCollector(new GoogleMeetAdapter());
 if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
   (window as any).collector = collector;
 } else {
