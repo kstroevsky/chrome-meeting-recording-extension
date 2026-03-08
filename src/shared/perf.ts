@@ -1,8 +1,14 @@
 import { isDevBuild } from './build';
+import {
+  getLocalStorageValues,
+  hasLocalStorageArea,
+  setLocalStorageValues,
+} from '../platform/chrome/storage';
+import type { RecordingPhase } from './recording';
 
 export type AudioPlaybackBridgeMode = 'always' | 'auto';
 export type PerfSource = 'background' | 'offscreen' | 'captions' | 'popup' | 'unknown';
-export type PerfPhase = 'idle' | 'recording' | 'uploading';
+export type PerfPhase = RecordingPhase;
 
 export type PerfFlags = {
   audioPlaybackBridgeMode: AudioPlaybackBridgeMode;
@@ -135,10 +141,7 @@ function cleanPerfFields(fields?: PerfFields): Record<string, string | number | 
 }
 
 function hasChromeStorage(): boolean {
-  return typeof chrome !== 'undefined'
-    && !!chrome.storage
-    && !!chrome.storage.local
-    && typeof chrome.storage.local.get === 'function';
+  return hasLocalStorageArea();
 }
 
 export function normalizePerfSettings(raw?: unknown): PerfSettings {
@@ -178,7 +181,7 @@ export function applyPerfSettings(raw?: unknown): PerfSettings {
 export async function readStoredPerfSettings(): Promise<PerfSettings> {
   if (!hasChromeStorage()) return getPerfSettingsSnapshot();
   try {
-    const res = await chrome.storage.local.get(PERF_SETTINGS_STORAGE_KEY);
+    const res = await getLocalStorageValues(PERF_SETTINGS_STORAGE_KEY);
     return normalizePerfSettings(res?.[PERF_SETTINGS_STORAGE_KEY]);
   } catch {
     return getPerfSettingsSnapshot();
@@ -191,7 +194,7 @@ export async function updateStoredPerfSettings(partial: Partial<PerfSettings>): 
   applyPerfSettings(next);
   if (!hasChromeStorage()) return next;
   try {
-    await chrome.storage.local.set({ [PERF_SETTINGS_STORAGE_KEY]: next });
+    await setLocalStorageValues({ [PERF_SETTINGS_STORAGE_KEY]: next });
   } catch {}
   return next;
 }
@@ -205,7 +208,7 @@ export async function configurePerfRuntime(options: ConfigurePerfRuntimeOptions)
 
   if (!storageWatchInstalled && typeof chrome !== 'undefined' && chrome.storage?.onChanged?.addListener) {
     storageWatchInstalled = true;
-    chrome.storage.onChanged.addListener((changes, areaName) => {
+    chrome.storage.onChanged.addListener((changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
       if (areaName !== 'local') return;
       if (!changes?.[PERF_SETTINGS_STORAGE_KEY]) return;
       const next = applyPerfSettings(changes[PERF_SETTINGS_STORAGE_KEY].newValue);

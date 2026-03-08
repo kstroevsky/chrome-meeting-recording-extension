@@ -1,6 +1,9 @@
+import type { MicMode } from '../shared/recording';
+import { createRuntimeTab } from '../platform/chrome/tabs';
+
 export class MicPermissionService {
   async openMicSetupTab() {
-    await chrome.tabs.create({ url: chrome.runtime.getURL('micsetup.html') });
+    await createRuntimeTab('micsetup.html');
   }
 
   async queryMicPermissionState(): Promise<'granted' | 'denied' | 'prompt' | 'unknown'> {
@@ -24,12 +27,17 @@ export class MicPermissionService {
     }
   }
 
-  async ensurePrimedBestEffort(): Promise<void> {
-    const state = await this.queryMicPermissionState();
-    if (state === 'granted') return;
+  async ensureReadyForRecording(micMode: MicMode): Promise<boolean> {
+    if (micMode === 'off') return true;
 
-    // Try inline; if blocked, ignore and continue without mic (matches prior behavior)
-    await this.tryPrimeInline().catch(() => {});
+    const state = await this.queryMicPermissionState();
+    if (state === 'granted') return true;
+
+    const ok = await this.tryPrimeInline().catch(() => false);
+    if (ok) return true;
+
+    await this.openMicSetupTab();
+    return false;
   }
 
   bindButton(
@@ -53,7 +61,7 @@ export class MicPermissionService {
       micBtn.title =
         state === 'granted'
           ? 'Microphone is already enabled for this extension'
-          : 'Grant microphone permission so your voice is included in recordings';
+          : 'Grant microphone permission so your voice can be recorded in mixed or separate mic modes';
     };
 
     void refresh();

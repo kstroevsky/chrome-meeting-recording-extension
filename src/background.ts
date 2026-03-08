@@ -14,9 +14,19 @@
  */
 import { OffscreenManager } from './background/OffscreenManager';
 import { PerfDebugStore } from './background/PerfDebugStore';
+import { RecordingSession } from './background/RecordingSession';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
+import { downloadFile } from './platform/chrome/downloads';
+import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
+import { getMediaStreamIdForTab } from './platform/chrome/tabs';
+import { pokeRuntime } from './platform/chrome/runtime';
 import { makeLogger } from './shared/logger';
-import type { RecordingPhase, RecordingRunConfig } from './shared/protocol';
+import { broadcastToPopup } from './shared/messages';
+import {
+  isPerfEventMessage,
+  isPopupToBgMessage,
+  type CommandResult,
+} from './shared/protocol';
 import {
   configurePerfRuntime,
   getPerfSettingsSnapshot,
@@ -24,31 +34,50 @@ import {
   type PerfDebugSnapshot,
   type PerfEventEntry,
 } from './shared/perf';
+import {
+  isBusyPhase,
+  normalizeRunConfig,
+  RECORDING_SESSION_STORAGE_KEY,
+  type RecordingSessionSnapshot,
+} from './shared/recording';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
-const SESSION_PHASE_KEY = 'phase';
-const SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
+const LEGACY_SESSION_PHASE_KEY = 'phase';
+const LEGACY_SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
-let activeRunConfig: RecordingRunConfig | null = null;
 let activeDebugDashboards = 0;
+let sessionHydrated = false;
 const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), L.warn);
-
-function normalizeRunConfig(value: any): RecordingRunConfig | null {
-  if (!value || typeof value !== 'object') return null;
-  const storageMode = value.storageMode === 'drive' ? 'drive' : value.storageMode === 'local' ? 'local' : null;
-  if (!storageMode) return null;
-  return {
-    storageMode,
-    recordSelfVideo: !!value.recordSelfVideo,
-    selfVideoQuality: value.selfVideoQuality === 'high' ? 'high' : 'standard',
-  };
-}
+const session = new RecordingSession(
+  async (snapshot) => {
+    try {
+      await setSessionStorageValues({
+        [RECORDING_SESSION_STORAGE_KEY]: snapshot,
+      });
+    } catch (error) {
+      L.warn('storage.session.set failed (recording session):', error);
+    }
+  },
+  (snapshot) => {
+    if (isBusyPhase(snapshot.phase)) {
+      startKeepAlive();
+    } else {
+      stopKeepAlive();
+    }
+    offscreen.hydratePhase(snapshot.phase);
+    perfDebugStore.setPhase(snapshot.phase);
+    if (!isBusyPhase(snapshot.phase)) {
+      maybeClearPerfDiagnostics();
+    }
+    void broadcastToPopup({ type: 'RECORDING_STATE', session: snapshot });
+  }
+);
 
 function startKeepAlive() {
   if (keepAliveTimer) return;
-  keepAliveTimer = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20_000);
+  keepAliveTimer = setInterval(() => pokeRuntime(), 20_000);
 }
 
 function stopKeepAlive() {
@@ -58,27 +87,42 @@ function stopKeepAlive() {
 }
 
 function maybeClearPerfDiagnostics() {
+  if (!sessionHydrated) return;
   if (activeDebugDashboards > 0) return;
-  if (offscreen.getRecordingStatus() !== 'idle') return;
+  if (isBusyPhase(session.getSnapshot().phase)) return;
   perfDebugStore.clear();
 }
 
-offscreen.onPhaseChanged = (phase: RecordingPhase) => {
-  phase === 'idle' ? stopKeepAlive() : startKeepAlive();
-  if (phase === 'idle') {
-    activeRunConfig = null;
-    offscreen.setRunConfig(null);
-  }
-  perfDebugStore.setPhase(phase);
-  if (phase === 'idle') {
-    maybeClearPerfDiagnostics();
-  }
-  (chrome.storage as any)?.session?.set?.({
-    [SESSION_PHASE_KEY]: phase,
-    [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
-  }).catch?.((e: any) => {
-    L.warn('storage.session.set failed (phase/run config):', e);
-  });
+offscreen.onStateChanged = (msg) => {
+  session.applyOffscreenPhase(msg);
+};
+
+offscreen.onSaveRequested = ({ filename, blobUrl, opfsFilename }) => {
+  const resolvedFilename =
+    typeof filename === 'string' && filename.trim()
+      ? filename
+      : `google-meet-recording-${Date.now()}.webm`;
+
+  if (!blobUrl) return;
+
+  L.log('Saving OFFSCREEN_SAVE via blobUrl', resolvedFilename);
+  void (async () => {
+    let cleanupOpfsFilename: string | undefined;
+
+    try {
+      await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
+      cleanupOpfsFilename = opfsFilename;
+      await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      L.warn('downloads.download error:', message);
+      await broadcastToPopup({ type: 'RECORDING_SAVE_ERROR', filename: resolvedFilename, error: message });
+    } finally {
+      setTimeout(() => {
+        offscreen.revokeBlobUrl(blobUrl, cleanupOpfsFilename);
+      }, 10_000);
+    }
+  })();
 };
 
 (async () => {
@@ -89,32 +133,34 @@ offscreen.onPhaseChanged = (phase: RecordingPhase) => {
       onSettingsChanged: (nextSettings) => perfDebugStore.setSettings(nextSettings),
     });
 
-    const res = await chrome.storage.session.get([
-      SESSION_PHASE_KEY,
-      SESSION_RUN_CONFIG_KEY,
+    const res = await getSessionStorageValues([
+      RECORDING_SESSION_STORAGE_KEY,
+      LEGACY_SESSION_PHASE_KEY,
+      LEGACY_SESSION_RUN_CONFIG_KEY,
       PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
     ]);
     perfDebugStore.hydrate(res?.[PERF_DEBUG_SNAPSHOT_STORAGE_KEY] as PerfDebugSnapshot | undefined);
     perfDebugStore.setSettings(settings);
-    const phase = (res?.phase === 'recording' || res?.phase === 'uploading') ? res.phase : 'idle';
-    activeRunConfig = phase === 'idle' ? null : normalizeRunConfig(res?.[SESSION_RUN_CONFIG_KEY]);
-    offscreen.hydratePhase(phase);
-    offscreen.setRunConfig(activeRunConfig);
-    perfDebugStore.setPhase(phase);
-    if (phase === 'idle') {
+    const snapshot = session.hydrate(
+      res?.[RECORDING_SESSION_STORAGE_KEY] ?? hydrateLegacySession(res)
+    );
+    if (!isBusyPhase(snapshot.phase)) {
       maybeClearPerfDiagnostics();
     }
-    if (phase !== 'idle') {
+    if (isBusyPhase(snapshot.phase)) {
       L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
       startKeepAlive();
     }
   } catch (e) {
     L.warn('Session re-hydration failed (non-fatal):', e);
+  } finally {
+    sessionHydrated = true;
+    maybeClearPerfDiagnostics();
   }
 })();
 
-chrome.runtime.onConnect.addListener((port) => {
+chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
   if (port.name === 'offscreen') {
     offscreen.attachPort(port);
     return;
@@ -130,28 +176,21 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 function getStreamIdForTab(tabId: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id?: string) => {
-        const err = chrome.runtime.lastError;
-        if (err) return reject(new Error(err.message));
-        if (!id) return reject(new Error('Empty streamId'));
-        resolve(id);
-      });
-    } catch (e) {
-      reject(e as any);
-    }
-  });
+  return getMediaStreamIdForTab(tabId);
 }
 
-chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
-  if (msg?.type === 'PERF_EVENT') {
+chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+  if (isPerfEventMessage(msg)) {
     perfDebugStore.record(msg.entry as PerfEventEntry);
     sendResponse({ ok: true });
     return false;
   }
 
-  if (msg?.type === 'GET_DRIVE_TOKEN') {
+  if (!isPopupToBgMessage(msg)) {
+    return false;
+  }
+
+  if (msg.type === 'GET_DRIVE_TOKEN') {
     fetchDriveTokenWithFallback({ refresh: msg.refresh === true })
       .then((res) => {
         if (!res.ok) L.warn('GET_DRIVE_TOKEN failed:', res.error);
@@ -166,86 +205,86 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
   }
 
   (async () => {
-    if (msg?.type === 'START_RECORDING') {
-      const tabId: number | undefined = msg.tabId;
-      if (typeof tabId !== 'number') {
-        sendResponse({ ok: false, error: 'Missing tabId' });
+    if (msg.type === 'START_RECORDING') {
+      if (typeof msg.tabId !== 'number') {
+        sendResponse(failureResult('Missing tabId'));
         return;
       }
 
-      L.log('Popup requested START_RECORDING for tabId', tabId);
+      const runConfig = normalizeRunConfig(msg.runConfig);
+      if (!runConfig) {
+        sendResponse(failureResult('Missing or invalid run configuration'));
+        return;
+      }
+
+      session.start(runConfig);
+
+      L.log('Popup requested START_RECORDING for tabId', msg.tabId);
 
       try {
         await offscreen.ensureReady();
         L.log('ensureReady() completed');
       } catch (e: any) {
-        sendResponse({ ok: false, error: `Offscreen not ready: ${e?.message || e}` });
+        session.fail(`Offscreen not ready: ${e?.message || e}`);
+        sendResponse(failureResult(`Offscreen not ready: ${e?.message || e}`));
         return;
       }
 
       try {
-        const streamId = await getStreamIdForTab(tabId);
-        const runConfig: RecordingRunConfig = {
-          storageMode: msg.storageMode === 'drive' ? 'drive' : 'local',
-          recordSelfVideo: !!msg.recordSelfVideo,
-          selfVideoQuality: msg.selfVideoQuality === 'high' ? 'high' : 'standard',
-        };
-        const recordSelfVideo = !!msg.recordSelfVideo;
-        const selfVideoQuality = msg.selfVideoQuality === 'high' ? 'high' : 'standard';
+        const streamId = await getStreamIdForTab(msg.tabId);
         const r = await offscreen.rpc<{ ok: boolean; error?: string }>({
           type: 'OFFSCREEN_START',
           streamId,
-          storageMode: runConfig.storageMode,
-          recordSelfVideo,
-          selfVideoQuality,
-        } as any);
+          runConfig,
+        });
 
         L.log('rpc(OFFSCREEN_START) response', r);
         if (r?.ok) {
-          activeRunConfig = runConfig;
-          offscreen.setRunConfig(activeRunConfig);
-          (chrome.storage as any)?.session?.set?.({
-            [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
-          }).catch?.((e: any) => {
-            L.warn('storage.session.set failed (start run config):', e);
-          });
-          sendResponse({ ok: true });
+          sendResponse(successResult());
         } else {
-          sendResponse({ ok: false, error: r?.error || 'Failed to start' });
+          session.fail(r?.error || 'Failed to start');
+          sendResponse(failureResult(r?.error || 'Failed to start'));
         }
       } catch (e: any) {
         L.error('OFFSCREEN_START failed', e);
-        sendResponse({ ok: false, error: `OFFSCREEN_START failed: ${e?.message || e}` });
+        session.fail(`OFFSCREEN_START failed: ${e?.message || e}`);
+        sendResponse(failureResult(`OFFSCREEN_START failed: ${e?.message || e}`));
       }
       return;
     }
 
-    if (msg?.type === 'STOP_RECORDING') {
+    if (msg.type === 'STOP_RECORDING') {
+      const snapshot = session.getSnapshot();
+      if (!isBusyPhase(snapshot.phase)) {
+        sendResponse(failureResult('Stop requested but no recording session is active'));
+        return;
+      }
+      session.markStopping();
+
       try {
         await offscreen.ensureReady();
-        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_STOP' } as any);
+        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_STOP' });
         if (!r?.ok) {
-          sendResponse({ ok: false, error: r?.error || 'Stop failed in offscreen' });
+          session.fail(r?.error || 'Stop failed in offscreen');
+          sendResponse(failureResult(r?.error || 'Stop failed in offscreen'));
           return;
         }
-        sendResponse({ ok: true });
+        sendResponse(successResult());
       } catch (e: any) {
-        sendResponse({ ok: false, error: `STOP failed: ${e?.message || e}` });
+        session.fail(`STOP failed: ${e?.message || e}`);
+        sendResponse(failureResult(`STOP failed: ${e?.message || e}`));
       }
       return;
     }
 
-    if (msg?.type === 'GET_RECORDING_STATUS') {
-      const phase = offscreen.getRecordingStatus();
-      sendResponse({
-        phase,
-        runConfig: phase === 'idle' ? undefined : (activeRunConfig ?? undefined),
-      });
+    if (msg.type === 'GET_RECORDING_STATUS') {
+      sendResponse({ session: session.getSnapshot() });
       return;
     }
   })().catch((err) => {
     console.error('[background] top-level error', err);
-    sendResponse({ ok: false, error: String(err) });
+    session.fail(String(err));
+    sendResponse(failureResult(String(err)));
   });
 
   return true;
@@ -254,3 +293,31 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
 chrome.runtime.onSuspend?.addListener(async () => {
   await offscreen.stopIfPossibleOnSuspend();
 });
+
+function successResult(): CommandResult {
+  return { ok: true, session: session.getSnapshot() };
+}
+
+function failureResult(error: string): CommandResult {
+  return { ok: false, error, session: session.getSnapshot() };
+}
+
+function hydrateLegacySession(value: Record<string, unknown> | undefined): RecordingSessionSnapshot | undefined {
+  const legacyPhase =
+    value?.[LEGACY_SESSION_PHASE_KEY] === 'starting'
+    || value?.[LEGACY_SESSION_PHASE_KEY] === 'recording'
+    || value?.[LEGACY_SESSION_PHASE_KEY] === 'stopping'
+    || value?.[LEGACY_SESSION_PHASE_KEY] === 'uploading'
+    || value?.[LEGACY_SESSION_PHASE_KEY] === 'failed'
+      ? value[LEGACY_SESSION_PHASE_KEY]
+      : value?.[LEGACY_SESSION_PHASE_KEY] === 'idle'
+        ? 'idle'
+        : null;
+  if (!legacyPhase) return undefined;
+
+  return {
+    phase: legacyPhase,
+    runConfig: legacyPhase === 'idle' ? null : normalizeRunConfig(value?.[LEGACY_SESSION_RUN_CONFIG_KEY]),
+    updatedAt: Date.now(),
+  };
+}

@@ -1,6 +1,8 @@
+import { createRuntimeTab } from '../platform/chrome/tabs';
+
 export class CameraPermissionService {
   async openCameraSetupTab() {
-    await chrome.tabs.create({ url: chrome.runtime.getURL('camsetup.html') });
+    await createRuntimeTab('camsetup.html');
   }
 
   async queryCameraPermissionState(): Promise<'granted' | 'denied' | 'prompt' | 'unknown'> {

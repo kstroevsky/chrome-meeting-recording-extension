@@ -8,12 +8,26 @@
 
 import { CameraPermissionService } from './CameraPermissionService';
 import { MicPermissionService } from './MicPermissionService';
-import type { RecordingPhase, RecordingRunConfig, UploadSummary } from '../shared/protocol';
+import { downloadFile } from '../platform/chrome/downloads';
+import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
+import { sendToBackground, sendToContent } from '../shared/messages';
+import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
+import {
+  isBusyPhase,
+  normalizeRunConfig,
+  normalizeSessionSnapshot,
+  type MicMode,
+  type RecordingPhase,
+  type RecordingRunConfig,
+  type RecordingSessionSnapshot,
+  type UploadSummary,
+} from '../shared/recording';
 
 type Elements = {
   saveBtn: HTMLButtonElement | null;
   micBtn: HTMLButtonElement | null;
+  micModeSelect: HTMLSelectElement | null;
   startBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
   storageModeSelect: HTMLSelectElement | null;
@@ -23,7 +37,13 @@ type Elements = {
   recordingStatusEl: HTMLElement | null;
 };
 
-const UPLOADING_STATUS = 'Finalizing and saving files... you can close this popup.';
+const STATUS_BY_PHASE: Record<Exclude<RecordingPhase, 'idle'>, string> = {
+  starting: 'Starting recording...',
+  recording: 'Recording in progress.',
+  stopping: 'Stopping recording and sealing files...',
+  uploading: 'Finalizing and saving files... you can close this popup.',
+  failed: 'The last recording attempt failed.',
+};
 
 export class PopupController {
   private readonly el: Elements;
@@ -61,6 +81,7 @@ export class PopupController {
     const {
       startBtn,
       stopBtn,
+      micModeSelect,
       storageModeSelect,
       recordSelfVideoCheckbox,
       selfVideoHighQualityCheckbox,
@@ -68,10 +89,11 @@ export class PopupController {
 
     if (!startBtn || !stopBtn) return;
 
-    startBtn.disabled = phase !== 'idle';
-    stopBtn.disabled = phase !== 'recording';
+    const busy = isBusyPhase(phase);
+    startBtn.disabled = busy;
+    stopBtn.disabled = !(phase === 'starting' || phase === 'recording' || phase === 'stopping');
 
-    const busy = phase !== 'idle';
+    if (micModeSelect) micModeSelect.disabled = busy;
     if (storageModeSelect) storageModeSelect.disabled = busy;
     if (recordSelfVideoCheckbox) recordSelfVideoCheckbox.disabled = busy;
     if (selfVideoHighQualityCheckbox) {
@@ -92,10 +114,11 @@ export class PopupController {
       this.persistentStatus = '';
     } else {
       const run = this.describeRunConfig(this.activeRunConfig);
-      this.persistentStatus =
-        phase === 'recording'
-          ? `Recording in progress. ${run}`
-          : `${UPLOADING_STATUS} ${run}`;
+      const suffix = run ? ` ${run}` : '';
+      const errorSuffix = phase === 'failed' && this.lastPhase === 'failed'
+        ? ''
+        : '';
+      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${suffix}${errorSuffix}`;
     }
     if (!this.statusTimer) {
       this.setStatus(this.persistentStatus);
@@ -105,22 +128,18 @@ export class PopupController {
   private describeRunConfig(config: RecordingRunConfig | null): string {
     if (!config) return '';
     const mode = config.storageMode === 'drive' ? 'Mode: Drive.' : 'Mode: Local.';
+    const mic =
+      config.micMode === 'mixed'
+        ? 'Microphone: Mixed into tab recording.'
+        : config.micMode === 'separate'
+          ? 'Microphone: Saved as a separate audio file.'
+          : 'Microphone: Off.';
     const camera = config.recordSelfVideo
       ? config.selfVideoQuality === 'high'
         ? 'Camera: On (High quality).'
         : 'Camera: On (Standard quality).'
       : 'Camera: Off.';
-    return `${mode} ${camera}`;
-  }
-
-  private parseRunConfig(raw: any): RecordingRunConfig | null {
-    if (!raw || typeof raw !== 'object') return null;
-    if (raw.storageMode !== 'drive' && raw.storageMode !== 'local') return null;
-    return {
-      storageMode: raw.storageMode,
-      recordSelfVideo: !!raw.recordSelfVideo,
-      selfVideoQuality: raw.selfVideoQuality === 'high' ? 'high' : 'standard',
-    };
+    return `${mode} ${mic} ${camera}`.trim();
   }
 
   private setActiveRunConfig(config: RecordingRunConfig | null) {
@@ -129,6 +148,9 @@ export class PopupController {
 
     if (this.el.storageModeSelect) {
       this.el.storageModeSelect.value = config.storageMode;
+    }
+    if (this.el.micModeSelect) {
+      this.el.micModeSelect.value = config.micMode;
     }
     if (this.el.recordSelfVideoCheckbox) {
       this.el.recordSelfVideoCheckbox.checked = config.recordSelfVideo;
@@ -153,16 +175,23 @@ export class PopupController {
     if (isTestRuntime()) console.log('[popup]', msg);
   }
 
+  private applySession(snapshot: RecordingSessionSnapshot) {
+    const prevPhase = this.lastPhase;
+    const runConfig = snapshot.phase === 'idle' ? null : normalizeRunConfig(snapshot.runConfig);
+    this.setActiveRunConfig(runConfig);
+    this.setUI(snapshot.phase);
+
+    if (snapshot.phase === 'failed' && snapshot.error) {
+      this.toast(`Recording error: ${snapshot.error}`);
+    }
+
+    this.handleUploadSummary(prevPhase, snapshot.phase, snapshot.uploadSummary);
+  }
+
   private async refreshInitialUi() {
     try {
-      const st = await chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATUS' });
-      const phase = st?.phase === 'recording' || st?.phase === 'uploading' ? st.phase : 'idle';
-      if (phase === 'idle') {
-        this.setActiveRunConfig(null);
-      } else {
-        this.setActiveRunConfig(this.parseRunConfig(st?.runConfig));
-      }
-      this.setUI(phase);
+      const res = await sendToBackground({ type: 'GET_RECORDING_STATUS' });
+      this.applySession(normalizeSessionSnapshot(res.session));
     } catch {
       this.setActiveRunConfig(null);
       this.setUI('idle');
@@ -170,18 +199,9 @@ export class PopupController {
   }
 
   private wireRecordingStateListener() {
-    chrome.runtime.onMessage.addListener((msg) => {
+    chrome.runtime.onMessage.addListener((msg: BgToPopup) => {
       if (msg?.type === 'RECORDING_STATE') {
-        const prevPhase = this.lastPhase;
-        const phase = msg.phase === 'recording' || msg.phase === 'uploading' ? msg.phase : 'idle';
-        if (phase === 'idle') {
-          this.setActiveRunConfig(null);
-        } else {
-          const runConfig = this.parseRunConfig(msg.runConfig);
-          if (runConfig) this.setActiveRunConfig(runConfig);
-        }
-        this.setUI(phase);
-        this.handleUploadSummary(prevPhase, phase, msg.uploadSummary as UploadSummary | undefined);
+        this.applySession(normalizeSessionSnapshot(msg.session));
       }
 
       if (msg?.type === 'RECORDING_SAVED') {
@@ -256,7 +276,7 @@ export class PopupController {
 
     openDiagnosticsBtn.hidden = false;
     openDiagnosticsBtn.addEventListener('click', async () => {
-      await chrome.tabs.create({ url: chrome.runtime.getURL('debug.html') });
+      await createRuntimeTab('debug.html');
     });
   }
 
@@ -265,15 +285,15 @@ export class PopupController {
     if (!saveBtn) return;
 
     saveBtn.addEventListener('click', async () => {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await queryActiveTab();
       if (!tab?.id) return;
 
-      const res = await chrome.tabs.sendMessage(tab.id, { type: 'GET_TRANSCRIPT' }).catch(() => {
+      const res = await sendToContent(tab.id, { type: 'GET_TRANSCRIPT' }).catch(() => {
         this.toast('No transcript on this page');
         return undefined;
       });
 
-      const transcript = (res as any)?.transcript as string | undefined;
+      const transcript = res?.transcript;
       if (!transcript?.trim()) {
         this.toast('Transcript is empty');
         return;
@@ -281,14 +301,23 @@ export class PopupController {
 
       const blob = new Blob([transcript], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
-      const suffix =
-        new URL(tab.url ?? 'https://meet.google.com').pathname.split('/').pop() || 'google-meet';
+      const suffix = res?.provider.meetingId || 'google-meet';
 
-      chrome.downloads.download(
-        { url, filename: `google-meet-transcript-${suffix}-${Date.now()}.txt`, saveAs: true },
-        () => URL.revokeObjectURL(url)
-      );
+      try {
+        await downloadFile({
+          url,
+          filename: `google-meet-transcript-${suffix}-${Date.now()}.txt`,
+          saveAs: true,
+        });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     });
+  }
+
+  private getSelectedMicMode(): MicMode {
+    const value = this.el.micModeSelect?.value;
+    return value === 'mixed' || value === 'separate' ? value : 'off';
   }
 
   private wireStartStop() {
@@ -301,22 +330,31 @@ export class PopupController {
       startBtn.disabled = true;
 
       try {
-        await this.mic.ensurePrimedBestEffort();
-
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await queryActiveTab();
         if (!tab?.id) throw new Error('No active tab');
 
-        await chrome.tabs.sendMessage(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
+        await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
         const storageMode = this.el.storageModeSelect?.value === 'drive' ? 'drive' : 'local';
+        const micMode = this.getSelectedMicMode();
         const recordSelfVideo = !!this.el.recordSelfVideoCheckbox?.checked;
         const selfVideoQuality =
           recordSelfVideo && this.el.selfVideoHighQualityCheckbox?.checked ? 'high' : 'standard';
         const runConfig: RecordingRunConfig = {
           storageMode,
+          micMode,
           recordSelfVideo,
           selfVideoQuality,
         };
+
+        const micReady = await this.mic.ensureReadyForRecording(micMode);
+        if (!micReady) {
+          throw new Error(
+            micMode === 'mixed'
+              ? 'Microphone permission is required to mix your voice into the tab recording. A setup tab was opened.'
+              : 'Microphone permission is required to save a separate microphone file. A setup tab was opened.'
+          );
+        }
 
         if (recordSelfVideo) {
           const cameraReady = await this.camera.ensureReadyForRecording();
@@ -328,18 +366,14 @@ export class PopupController {
           }
         }
 
-        const resp = await chrome.runtime.sendMessage({
+        const resp = await sendToBackground({
           type: 'START_RECORDING',
           tabId: tab.id,
-          storageMode,
-          recordSelfVideo,
-          selfVideoQuality,
+          runConfig,
         });
-        if (!resp) throw new Error('No response from background');
         if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
 
-        this.setActiveRunConfig(runConfig);
-        this.setUI('recording');
+        this.applySession(resp.session);
         this.toast('Recording started');
       } catch (e: any) {
         console.error('[popup] START_RECORDING error', e);
@@ -357,9 +391,9 @@ export class PopupController {
       stopBtn.disabled = true;
 
       try {
-        const resp = await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
-        if (!resp) throw new Error('No response from background');
+        const resp = await sendToBackground({ type: 'STOP_RECORDING' });
         if (resp.ok === false) throw new Error(resp.error || 'Failed to stop');
+        this.applySession(resp.session);
         this.toast('Stopping... finalizing local files. You can close this popup.');
       } catch (e: any) {
         console.error('[popup] STOP_RECORDING error', e);

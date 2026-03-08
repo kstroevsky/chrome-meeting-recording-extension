@@ -7,7 +7,7 @@
  * back to local download per-file if Drive fails.
  */
 
-import type { RecordingStream, UploadSummary } from '../shared/protocol';
+import type { RecordingStream, UploadSummary } from '../shared/recording';
 import { DriveTarget } from './DriveTarget';
 import { DriveFolderResolver } from './drive/DriveFolderResolver';
 import { DRIVE_ROOT_FOLDER_NAME } from './drive/constants';
