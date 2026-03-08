@@ -23,30 +23,43 @@ function escapeDriveQueryLiteral(value: string): string {
 export class DriveFolderResolver {
   private static recordingFolderCache = new Map<string, Promise<string>>();
   private resolvedUploadParentId: string | null = null;
+  private resolvedUploadParentPromise: Promise<string | null> | null = null;
 
   constructor(private readonly getToken: TokenProvider) {}
 
   async resolveUploadParentId(hierarchy: DriveFolderHierarchy): Promise<string | null> {
     if (this.resolvedUploadParentId) return this.resolvedUploadParentId;
+    if (this.resolvedUploadParentPromise) return await this.resolvedUploadParentPromise;
 
-    const rootFolderName = hierarchy.rootFolderName?.trim();
-    if (!rootFolderName) return null;
+    this.resolvedUploadParentPromise = (async () => {
+      const rootFolderName = hierarchy.rootFolderName?.trim();
+      if (!rootFolderName) return null;
 
-    const rootFolderId = await this.getOrCreateFolder(rootFolderName, null);
-    const recordingFolderName = hierarchy.recordingFolderName?.trim();
-    if (!recordingFolderName) {
-      this.resolvedUploadParentId = rootFolderId;
-      return rootFolderId;
-    }
+      const rootFolderId = await this.getOrCreateFolder(rootFolderName, null);
+      const recordingFolderName = hierarchy.recordingFolderName?.trim();
+      if (!recordingFolderName) {
+        this.resolvedUploadParentId = rootFolderId;
+        return rootFolderId;
+      }
 
     const cacheKey = `${rootFolderId}:${recordingFolderName}`;
     let folderPromise = DriveFolderResolver.recordingFolderCache.get(cacheKey);
     if (!folderPromise) {
-      folderPromise = this.getOrCreateFolder(recordingFolderName, rootFolderId);
+      folderPromise = this.getOrCreateFolder(recordingFolderName, rootFolderId).catch((error) => {
+        DriveFolderResolver.recordingFolderCache.delete(cacheKey);
+        throw error;
+      });
       DriveFolderResolver.recordingFolderCache.set(cacheKey, folderPromise);
     }
-    this.resolvedUploadParentId = await folderPromise;
-    return this.resolvedUploadParentId;
+      this.resolvedUploadParentId = await folderPromise;
+      return this.resolvedUploadParentId;
+    })();
+
+    try {
+      return await this.resolvedUploadParentPromise;
+    } finally {
+      this.resolvedUploadParentPromise = null;
+    }
   }
 
   private async getOrCreateFolder(name: string, parentId: string | null): Promise<string> {

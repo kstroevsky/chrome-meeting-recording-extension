@@ -9,13 +9,21 @@
 
 import type { RecordingStream, UploadSummary } from '../shared/protocol';
 import { DriveTarget } from './DriveTarget';
+import { DriveFolderResolver } from './drive/DriveFolderResolver';
 import { DRIVE_ROOT_FOLDER_NAME } from './drive/constants';
 import { inferDriveRecordingFolderName } from './drive/folderNaming';
-import type { TokenProvider } from './drive/request';
+import { createCachedTokenProvider, type TokenProvider } from './drive/request';
 import { describeRuntimeError } from './errors';
 import type { CompletedRecordingArtifact, SealedStorageFile } from './RecorderEngine';
+import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'selfVideo'];
+type UploadOutcome = {
+  stream: RecordingStream;
+  filename: string;
+  uploaded: boolean;
+  error?: string;
+};
 
 export type RecordingFinalizerDeps = {
   log: (...a: any[]) => void;
@@ -77,35 +85,139 @@ export class RecordingFinalizer {
     artifacts: CompletedRecordingArtifact[],
     recordingFolderName: string
   ): Promise<UploadSummary> {
+    const sharedGetUploadToken = createCachedTokenProvider(this.deps.getDriveToken);
+    const folderResolver = new DriveFolderResolver(sharedGetUploadToken);
+    let sharedSetupError: string | null = null;
+    try {
+      await folderResolver.resolveUploadParentId({
+        rootFolderName: DRIVE_ROOT_FOLDER_NAME,
+        recordingFolderName,
+      });
+    } catch (e) {
+      sharedSetupError = describeRuntimeError(e);
+      this.deps.warn('Drive setup failed; all artifacts will fall back locally', sharedSetupError);
+    }
+
     const summary: UploadSummary = {
       uploaded: [],
       localFallbacks: [],
     };
 
-    for (const entry of artifacts) {
-      const { artifact, stream } = entry;
-      const driveTarget = new DriveTarget(
-        artifact.filename,
-        this.deps.getDriveToken,
-        (filename) => this.deps.log('Drive target complete:', filename),
-        {
-          rootFolderName: DRIVE_ROOT_FOLDER_NAME,
-          recordingFolderName,
-        }
-      );
+    const outcomes = await this.runWithConcurrency(
+      artifacts,
+      Math.min(PERF_FLAGS.parallelUploadConcurrency, 2),
+      async ({ artifact, stream }) => {
+        const startedAt = nowMs();
 
-      try {
-        await driveTarget.upload(artifact.file);
-        summary.uploaded.push({ stream, filename: artifact.filename });
-        await this.cleanupArtifact(artifact);
-      } catch (e) {
-        const error = describeRuntimeError(e);
-        this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
-        summary.localFallbacks.push({ stream, filename: artifact.filename, error });
-        this.saveArtifactLocally(artifact);
+        if (sharedSetupError) {
+          this.saveArtifactLocally(artifact);
+          logPerf(this.deps.log, 'finalizer', 'drive_file_complete', {
+            filename: artifact.filename,
+            stream,
+            uploaded: false,
+            durationMs: roundMs(nowMs() - startedAt),
+          });
+          return {
+            stream,
+            filename: artifact.filename,
+            uploaded: false,
+            error: sharedSetupError,
+          } satisfies UploadOutcome;
+        }
+
+        const driveTarget = new DriveTarget(
+          artifact.filename,
+          sharedGetUploadToken,
+          (filename) => this.deps.log('Drive target complete:', filename),
+          {
+            rootFolderName: DRIVE_ROOT_FOLDER_NAME,
+            recordingFolderName,
+            shared: {
+              getUploadToken: sharedGetUploadToken,
+              folderResolver,
+              log: this.deps.log,
+            },
+          }
+        );
+
+        try {
+          await driveTarget.upload(artifact.file);
+          await this.cleanupArtifact(artifact);
+          logPerf(this.deps.log, 'finalizer', 'drive_file_complete', {
+            filename: artifact.filename,
+            stream,
+            uploaded: true,
+            durationMs: roundMs(nowMs() - startedAt),
+          });
+          return {
+            stream,
+            filename: artifact.filename,
+            uploaded: true,
+          } satisfies UploadOutcome;
+        } catch (e) {
+          const error = describeRuntimeError(e);
+          this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
+          this.saveArtifactLocally(artifact);
+          logPerf(this.deps.log, 'finalizer', 'drive_file_complete', {
+            filename: artifact.filename,
+            stream,
+            uploaded: false,
+            durationMs: roundMs(nowMs() - startedAt),
+          });
+          return {
+            stream,
+            filename: artifact.filename,
+            uploaded: false,
+            error,
+          } satisfies UploadOutcome;
+        }
       }
+    );
+
+    for (const outcome of outcomes) {
+      if (outcome.uploaded) {
+        summary.uploaded.push({ stream: outcome.stream, filename: outcome.filename });
+        continue;
+      }
+      summary.localFallbacks.push({
+        stream: outcome.stream,
+        filename: outcome.filename,
+        error: outcome.error,
+      });
     }
 
+    logPerf(this.deps.log, 'finalizer', 'drive_finalize_complete', {
+      artifactCount: artifacts.length,
+      uploadedCount: summary.uploaded.length,
+      localFallbackCount: summary.localFallbacks.length,
+      fallbackRate:
+        artifacts.length > 0 ? Math.round((summary.localFallbacks.length / artifacts.length) * 1000) / 1000 : 0,
+      concurrency: Math.min(PERF_FLAGS.parallelUploadConcurrency, 2),
+    });
+
     return summary;
+  }
+
+  private async runWithConcurrency<TItem, TResult>(
+    items: TItem[],
+    concurrency: number,
+    work: (item: TItem, index: number) => Promise<TResult>
+  ): Promise<TResult[]> {
+    if (!items.length) return [];
+
+    const results = new Array<TResult>(items.length);
+    let nextIndex = 0;
+
+    const worker = async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await work(items[currentIndex], currentIndex);
+      }
+    };
+
+    const workerCount = Math.max(1, Math.min(concurrency, items.length));
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
   }
 }

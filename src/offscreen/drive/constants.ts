@@ -22,6 +22,21 @@ export const DRIVE_ROOT_FOLDER_NAME = 'Google Meet Records';
 /** Size of each resumable upload chunk for finished-file Drive uploads. */
 export const DRIVE_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 
+/** Lower bound used by adaptive upload chunk sizing. */
+export const DRIVE_MIN_UPLOAD_CHUNK_BYTES = 1 * 1024 * 1024;
+
+/** Upper bound used by adaptive upload chunk sizing. */
+export const DRIVE_MAX_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** Step size used when adaptive chunk sizing is enabled. */
+export const DRIVE_UPLOAD_CHUNK_STEP_BYTES = 1 * 1024 * 1024;
+
+/** Consecutive uploads faster than this are eligible to increase chunk size. */
+export const DRIVE_FAST_CHUNK_MS = 1_500;
+
+/** Slow uploads or retries above this threshold reduce chunk size immediately. */
+export const DRIVE_SLOW_CHUNK_MS = 8_000;
+
 /** Per-request timeout for Drive HTTP calls. */
 export const DRIVE_REQUEST_TIMEOUT_MS = 180_000;
 

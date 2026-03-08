@@ -41,6 +41,7 @@ Object.assign(global, {
     },
     identity: {
       getAuthToken: jest.fn(),
+      removeCachedAuthToken: jest.fn((_details: any, cb?: () => void) => cb?.()),
     }
   }
 });

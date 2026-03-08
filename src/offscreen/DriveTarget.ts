@@ -6,10 +6,15 @@
  */
 
 import {
+  DRIVE_FAST_CHUNK_MS,
+  DRIVE_MAX_UPLOAD_CHUNK_BYTES,
   DRIVE_MAX_RETRIES,
+  DRIVE_MIN_UPLOAD_CHUNK_BYTES,
   DRIVE_REQUEST_TIMEOUT_MS,
   DRIVE_RETRY_BASE_DELAY_MS,
+  DRIVE_SLOW_CHUNK_MS,
   DRIVE_UPLOAD_CHUNK_BYTES,
+  DRIVE_UPLOAD_CHUNK_STEP_BYTES,
   DRIVE_UPLOAD_URL,
 } from './drive/constants';
 import { type DriveFolderHierarchy, DriveFolderResolver } from './drive/DriveFolderResolver';
@@ -19,6 +24,7 @@ import {
   fetchWithAuthRetry,
   type TokenProvider,
 } from './drive/request';
+import { PERF_FLAGS, clamp, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -42,6 +48,24 @@ function backoffMs(attempt: number): number {
 }
 
 export type DriveTargetOptions = DriveFolderHierarchy;
+export type DriveUploadSharedContext = {
+  getUploadToken: TokenProvider;
+  folderResolver: DriveFolderResolver;
+  log?: (...a: any[]) => void;
+};
+
+type DriveTargetCtorOptions = DriveFolderHierarchy & {
+  shared?: DriveUploadSharedContext;
+};
+
+type UploadChunkResult = {
+  nextStart: number;
+  attempts: number;
+  hadRetry: boolean;
+  durationMs: number;
+  status: number | null;
+  sentBytes: number;
+};
 
 /**
  * Per-file Drive uploader.
@@ -54,16 +78,24 @@ export class DriveTarget {
   private sessionUri: string | null = null;
   private readonly getUploadToken: TokenProvider;
   private readonly folderResolver: DriveFolderResolver;
+  private readonly hierarchy: DriveFolderHierarchy;
+  private readonly log: (...a: any[]) => void;
   private used = false;
 
   constructor(
     private readonly filename: string,
     getToken: TokenProvider,
     private readonly onDone: (filename: string) => void,
-    private readonly options: DriveTargetOptions = {}
+    options: DriveTargetCtorOptions = {}
   ) {
-    this.getUploadToken = createCachedTokenProvider(getToken);
-    this.folderResolver = new DriveFolderResolver(this.getUploadToken);
+    const shared = options.shared;
+    this.getUploadToken = shared?.getUploadToken ?? createCachedTokenProvider(getToken);
+    this.folderResolver = shared?.folderResolver ?? new DriveFolderResolver(this.getUploadToken);
+    this.hierarchy = {
+      rootFolderName: options.rootFolderName,
+      recordingFolderName: options.recordingFolderName,
+    };
+    this.log = shared?.log ?? (() => {});
   }
 
   async upload(file: Blob): Promise<void> {
@@ -71,23 +103,48 @@ export class DriveTarget {
     this.used = true;
     if (file.size === 0) return;
 
+    const uploadStartedAt = nowMs();
     await this.initSession();
 
     const total = file.size;
     let start = 0;
+    let chunkSize = DRIVE_UPLOAD_CHUNK_BYTES;
+    let fastChunkStreak = 0;
 
     while (start < total) {
-      const endExclusive = Math.min(start + DRIVE_UPLOAD_CHUNK_BYTES, total);
+      const endExclusive = Math.min(start + chunkSize, total);
       const body = file.slice(start, endExclusive, 'video/webm');
       const isFinal = endExclusive >= total;
-      start = await this.uploadChunk(start, body, total, isFinal);
+      const chunkResult = await this.uploadChunk(start, body, total, isFinal);
+      start = chunkResult.nextStart;
+
+      logPerf(this.log, 'drive', 'chunk_uploaded', {
+        filename: this.filename,
+        chunkBytes: chunkResult.sentBytes,
+        durationMs: chunkResult.durationMs,
+        attempts: chunkResult.attempts,
+        retried: chunkResult.hadRetry,
+        status: chunkResult.status,
+        isFinal,
+      });
+
+      if (!PERF_FLAGS.dynamicDriveChunkSizing || isFinal) continue;
+
+      const tuned = this.adjustChunkSize(chunkSize, fastChunkStreak, chunkResult);
+      chunkSize = tuned.chunkSize;
+      fastChunkStreak = tuned.fastChunkStreak;
     }
 
+    logPerf(this.log, 'drive', 'file_uploaded', {
+      filename: this.filename,
+      totalBytes: total,
+      durationMs: roundMs(nowMs() - uploadStartedAt),
+    });
     this.onDone(this.filename);
   }
 
   private async initSession(): Promise<void> {
-    const parentFolderId = await this.folderResolver.resolveUploadParentId(this.options);
+    const parentFolderId = await this.folderResolver.resolveUploadParentId(this.hierarchy);
     const metadata: Record<string, any> = {
       name: this.filename,
       mimeType: 'video/webm',
@@ -116,11 +173,13 @@ export class DriveTarget {
     this.sessionUri = uri;
   }
 
-  private async uploadChunk(start: number, body: Blob, total: number, isFinal: boolean): Promise<number> {
+  private async uploadChunk(start: number, body: Blob, total: number, isFinal: boolean): Promise<UploadChunkResult> {
     let chunkStart = start;
     let chunkBody = body;
     let attempts = 0;
     let lastStatus: number | null = null;
+    let hadRetry = false;
+    const chunkStartedAt = nowMs();
 
     while (attempts < DRIVE_MAX_RETRIES) {
       attempts += 1;
@@ -140,8 +199,18 @@ export class DriveTarget {
         });
       } catch (e) {
         if (!isTransientFetchError(e)) throw e;
+        hadRetry = true;
         const recovered = await this.recoverFromCommittedState(token, chunkStart, chunkBody, total);
-        if (recovered.done) return recovered.start;
+        if (recovered.done) {
+          return {
+            nextStart: recovered.start,
+            attempts,
+            hadRetry,
+            durationMs: roundMs(nowMs() - chunkStartedAt),
+            status: lastStatus,
+            sentBytes: body.size,
+          };
+        }
         chunkStart = recovered.start;
         chunkBody = recovered.body;
         await delay(backoffMs(attempts));
@@ -151,14 +220,29 @@ export class DriveTarget {
       lastStatus = res.status;
 
       if (!isFinal && res.status === 308) {
-        return chunkStart + chunkBody.size;
+        return {
+          nextStart: chunkStart + chunkBody.size,
+          attempts,
+          hadRetry,
+          durationMs: roundMs(nowMs() - chunkStartedAt),
+          status: lastStatus,
+          sentBytes: body.size,
+        };
       }
 
       if (isFinal && (res.status === 200 || res.status === 201)) {
-        return total;
+        return {
+          nextStart: total,
+          attempts,
+          hadRetry,
+          durationMs: roundMs(nowMs() - chunkStartedAt),
+          status: lastStatus,
+          sentBytes: body.size,
+        };
       }
 
       if ((res.status === 401 || res.status === 403) && attempts < 2) {
+        hadRetry = true;
         await this.getUploadToken({ refresh: true });
         continue;
       }
@@ -169,8 +253,18 @@ export class DriveTarget {
         res.status === 308 ||
         (res.status >= 500 && res.status <= 599)
       ) {
+        hadRetry = true;
         const recovered = await this.recoverFromCommittedState(token, chunkStart, chunkBody, total);
-        if (recovered.done) return recovered.start;
+        if (recovered.done) {
+          return {
+            nextStart: recovered.start,
+            attempts,
+            hadRetry,
+            durationMs: roundMs(nowMs() - chunkStartedAt),
+            status: lastStatus,
+            sentBytes: body.size,
+          };
+        }
         chunkStart = recovered.start;
         chunkBody = recovered.body;
         await delay(backoffMs(attempts));
@@ -184,6 +278,40 @@ export class DriveTarget {
     throw new Error(
       formatDriveError('Drive PUT failed after retries', lastStatus ?? 0, 'Transient failure persisted')
     );
+  }
+
+  private adjustChunkSize(
+    currentChunkSize: number,
+    fastChunkStreak: number,
+    chunkResult: UploadChunkResult
+  ): { chunkSize: number; fastChunkStreak: number } {
+    if (chunkResult.hadRetry || chunkResult.durationMs >= DRIVE_SLOW_CHUNK_MS) {
+      return {
+        chunkSize: clamp(
+          currentChunkSize - DRIVE_UPLOAD_CHUNK_STEP_BYTES,
+          DRIVE_MIN_UPLOAD_CHUNK_BYTES,
+          DRIVE_MAX_UPLOAD_CHUNK_BYTES
+        ),
+        fastChunkStreak: 0,
+      };
+    }
+
+    if (chunkResult.durationMs <= DRIVE_FAST_CHUNK_MS && chunkResult.sentBytes === currentChunkSize) {
+      const nextStreak = fastChunkStreak + 1;
+      if (nextStreak >= 2) {
+        return {
+          chunkSize: clamp(
+            currentChunkSize + DRIVE_UPLOAD_CHUNK_STEP_BYTES,
+            DRIVE_MIN_UPLOAD_CHUNK_BYTES,
+            DRIVE_MAX_UPLOAD_CHUNK_BYTES
+          ),
+          fastChunkStreak: 0,
+        };
+      }
+      return { chunkSize: currentChunkSize, fastChunkStreak: nextStreak };
+    }
+
+    return { chunkSize: currentChunkSize, fastChunkStreak: 0 };
   }
 
   private async recoverFromCommittedState(

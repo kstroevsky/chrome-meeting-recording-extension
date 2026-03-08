@@ -79,13 +79,14 @@ Responsibilities by file:
 - `RecordingFinalizer.ts`:
   - Sorts sealed artifacts into deterministic upload order (`tab`, `mic`, `selfVideo`).
   - In local mode, requests background downloads.
-  - In Drive mode, uploads each sealed file sequentially.
+  - In Drive mode, reuses one upload setup context across the whole finalize run.
+  - Uploads sealed files sequentially by default, with guarded optional concurrency.
   - Falls back per-file to local download if Drive upload fails.
 - `DriveTarget.ts`:
   - Opens Drive resumable upload sessions for finished files.
-  - Uploads in fixed chunks with `Content-Range`.
+  - Uploads in `Content-Range` chunks, with guarded optional dynamic chunk sizing.
   - Probes committed byte range after transient failure.
-  - Reuses a cached OAuth token during one file upload.
+  - Reuses cached OAuth tokens and supports explicit forced refresh after `401/403`.
 - `drive/DriveFolderResolver.ts`:
   - Finds or creates target folder hierarchy.
   - Caches per-recording folder creation promises to avoid duplicate creates.
@@ -124,6 +125,7 @@ Role:
 
 Responsibilities:
 - Observes Meet caption DOM.
+- Cleans up and re-arms caption observers as the Meet captions region appears/disappears.
 - Aggregates/debounces speaker text.
 - Serves transcript via message API.
 
@@ -396,7 +398,8 @@ MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hi
 
 ### Resumable Upload Behavior
 `DriveTarget` uploads finished files using resumable PUT requests:
-- chunk size: `2 MiB`
+- default chunk size: `2 MiB`
+- optional guarded adaptive range: `1-8 MiB`
 - non-final chunk success: HTTP `308`
 - final chunk success: HTTP `200` or `201`
 - `408`, `429`, `5xx`, and network aborts trigger committed-offset probe and retry
@@ -404,6 +407,7 @@ MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hi
 ### OAuth and Misconfiguration Diagnostics
 `driveAuth.ts` increases reliability and clarity:
 - uses silent auth first, interactive fallback second
+- supports explicit cached-token invalidation before forced refresh
 - detects `bad client id` and returns explicit remediation including extension ID and manifest client ID
 
 ### Popup Closure Safety
@@ -430,9 +434,11 @@ Caption scraping depends on Meet DOM selectors (for example `.ygicle`, `.NWpY1d`
 Current performance-sensitive design choices:
 - recording is disk-backed rather than RAM-buffered for long meetings
 - upload happens after stop, not during capture
-- Drive uploads are sequential for reliability
-- Drive auth token is cached for the lifetime of one file upload, avoiding one token fetch per chunk
+- Drive uploads are sequential by default for reliability
+- Drive auth and folder setup are reused across one finalize run
 - tab recording prefers VP8 to reduce CPU cost when multiple recorders run at once
+- caption block observers are cleaned up as Meet mutates the captions DOM
+- lightweight internal telemetry logs recorder start latency, caption observer count, and upload timings
 
 Potential future improvements:
 - adaptive webcam profile selection based on actual camera capability

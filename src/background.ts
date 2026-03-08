@@ -100,7 +100,7 @@ function getStreamIdForTab(tabId: number): Promise<string> {
 
 chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
   if (msg?.type === 'GET_DRIVE_TOKEN') {
-    fetchDriveTokenWithFallback()
+    fetchDriveTokenWithFallback({ refresh: msg.refresh === true })
       .then((res) => {
         if (!res.ok) L.warn('GET_DRIVE_TOKEN failed:', res.error);
         sendResponse(res);

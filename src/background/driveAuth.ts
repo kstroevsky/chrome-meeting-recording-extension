@@ -1,8 +1,10 @@
 type DriveTokenOk = { ok: true; token: string };
 type DriveTokenErr = { ok: false; error: string };
 export type DriveTokenResponse = DriveTokenOk | DriveTokenErr;
+export type DriveTokenOptions = { refresh?: boolean };
 
 const BAD_CLIENT_ID_RE = /bad client id/i;
+let lastIssuedToken: string | null = null;
 
 function getAuthToken(interactive: boolean): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -11,9 +13,36 @@ function getAuthToken(interactive: boolean): Promise<string> {
       if (err?.message) return reject(new Error(err.message));
       const token = typeof result === 'string' ? result : result?.token;
       if (!token) return reject(new Error('No OAuth token returned'));
+      lastIssuedToken = token;
       resolve(token);
     });
   });
+}
+
+function removeCachedAuthToken(token: string): Promise<void> {
+  return new Promise((resolve) => {
+    const remover = chrome.identity.removeCachedAuthToken as
+      | ((details: { token: string }, callback?: () => void) => void)
+      | undefined;
+
+    if (!remover) {
+      resolve();
+      return;
+    }
+
+    try {
+      remover({ token }, () => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
+async function invalidateLastIssuedToken(): Promise<void> {
+  if (!lastIssuedToken) return;
+  const token = lastIssuedToken;
+  lastIssuedToken = null;
+  await removeCachedAuthToken(token);
 }
 
 function isBadClientIdError(message: string): boolean {
@@ -33,7 +62,11 @@ function buildBadClientIdError(rawError: string): string {
   ].join(' ');
 }
 
-export async function fetchDriveTokenWithFallback(): Promise<DriveTokenResponse> {
+export async function fetchDriveTokenWithFallback(options: DriveTokenOptions = {}): Promise<DriveTokenResponse> {
+  if (options.refresh) {
+    await invalidateLastIssuedToken();
+  }
+
   try {
     const token = await getAuthToken(false);
     return { ok: true, token };

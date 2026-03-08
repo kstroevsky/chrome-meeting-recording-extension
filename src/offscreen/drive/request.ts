@@ -15,12 +15,31 @@ export type TokenProvider = (options?: { refresh?: boolean }) => Promise<string>
  */
 export function createCachedTokenProvider(getToken: TokenProvider): TokenProvider {
   let cachedToken: string | null = null;
+  let pendingToken: Promise<string> | null = null;
+
+  const loadToken = async (options?: { refresh?: boolean }) => {
+    if (!pendingToken) {
+      pendingToken = getToken(options)
+        .then((token) => {
+          cachedToken = token;
+          return token;
+        })
+        .finally(() => {
+          pendingToken = null;
+        });
+    }
+    return await pendingToken;
+  };
 
   return async (options?: { refresh?: boolean }) => {
-    if (options?.refresh || !cachedToken) {
-      cachedToken = await getToken(options);
+    if (options?.refresh) {
+      cachedToken = null;
+      pendingToken = null;
+      return await loadToken({ refresh: true });
     }
-    return cachedToken;
+
+    if (cachedToken) return cachedToken;
+    return await loadToken();
   };
 }
 

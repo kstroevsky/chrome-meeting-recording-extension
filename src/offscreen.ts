@@ -88,9 +88,9 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
   getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl, opfsFilename });
 }
 
-async function getDriveToken(_options?: { refresh?: boolean }): Promise<string> {
+async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN' }, (res) => {
+    chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN', refresh: options?.refresh === true }, (res) => {
       if (!res) return reject(new Error('No response to GET_DRIVE_TOKEN'));
       if (!res.ok) return reject(new Error(`Token fetch failed: ${res.error}`));
       resolve(res.token);

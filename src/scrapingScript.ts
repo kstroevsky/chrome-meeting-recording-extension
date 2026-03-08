@@ -23,6 +23,7 @@
  */
 
 import { TIMEOUTS } from './shared/timeouts';
+import { logPerf } from './shared/perf';
 
 type Chunk = {
   startTime: number;
@@ -32,6 +33,10 @@ type Chunk = {
 };
 
 type OpenChunk = Chunk & { timer: number };
+type ObservedCaptionBlock = {
+  observer: MutationObserver;
+  textNode: HTMLElement;
+};
 
 
 /**
@@ -72,6 +77,11 @@ class TranscriptCollector {
   private lastSeen = new Map<string, string>();
   private captionObserver: MutationObserver | null = null;
   private regionObserver: MutationObserver | null = null;
+  private regionParentObserver: MutationObserver | null = null;
+  private activeRegion: HTMLElement | null = null;
+  private readonly blockObservers = new WeakMap<HTMLElement, ObservedCaptionBlock>();
+  private readonly observedBlocks = new Set<HTMLElement>();
+  private activeBlockObserverCount = 0;
 
   start() {
     this.observeCaptionsRegionAppearance();
@@ -93,28 +103,60 @@ class TranscriptCollector {
   }
 
   private observeCaptionsRegionAppearance() {
-    const existing = document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]');
+    const existing = this.findCaptionsRegion();
     if (existing) {
       this.attachRegion(existing);
       return;
     }
 
+    this.regionObserver?.disconnect();
     this.regionObserver = new MutationObserver(() => {
-      const region = document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]');
+      const region = this.findCaptionsRegion();
       if (region) this.attachRegion(region);
     });
     this.regionObserver.observe(document.body, { childList: true, subtree: true });
   }
 
+  private findCaptionsRegion(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('div[role="region"][aria-label="Captions"]');
+  }
+
   private attachRegion(region: HTMLElement) {
+    if (this.activeRegion === region) return;
+
+    this.regionObserver?.disconnect();
+    this.regionObserver = null;
     this.captionObserver?.disconnect();
+    this.regionParentObserver?.disconnect();
+    this.cleanupAllSpeakerBlockObservers();
+    this.activeRegion = region;
+
+    const regionParent = region.parentElement;
+    if (regionParent) {
+      this.regionParentObserver = new MutationObserver(() => {
+        if (!this.activeRegion?.isConnected) {
+          this.onRegionRemoved();
+        }
+      });
+      this.regionParentObserver.observe(regionParent, { childList: true });
+    } else {
+      this.regionParentObserver = null;
+    }
 
     this.captionObserver = new MutationObserver((mutations) => {
       for (const m of mutations) {
         for (const node of Array.from(m.addedNodes)) {
-          if (node instanceof HTMLElement && node.matches(MEET_SELECTORS.captionBlock)) {
-            this.scanSpeakerBlock(node);
+          for (const block of this.collectCaptionBlocks(node)) {
+            this.scanSpeakerBlock(block);
           }
+        }
+
+        for (const node of Array.from(m.removedNodes)) {
+          if (node === this.activeRegion) {
+            this.onRegionRemoved();
+            return;
+          }
+          this.cleanupSpeakerBlockObservers(node);
         }
       }
     });
@@ -123,6 +165,27 @@ class TranscriptCollector {
     console.log('Caption observer attached');
 
     region.querySelectorAll<HTMLElement>(MEET_SELECTORS.captionBlock).forEach((el) => this.scanSpeakerBlock(el));
+  }
+
+  private onRegionRemoved() {
+    this.captionObserver?.disconnect();
+    this.captionObserver = null;
+    this.regionParentObserver?.disconnect();
+    this.regionParentObserver = null;
+    this.activeRegion = null;
+    this.cleanupAllSpeakerBlockObservers();
+    this.observeCaptionsRegionAppearance();
+  }
+
+  private collectCaptionBlocks(node: Node): HTMLElement[] {
+    if (!(node instanceof HTMLElement)) return [];
+
+    const blocks: HTMLElement[] = [];
+    if (node.matches(MEET_SELECTORS.captionBlock)) {
+      blocks.push(node);
+    }
+    node.querySelectorAll<HTMLElement>(MEET_SELECTORS.captionBlock).forEach((block) => blocks.push(block));
+    return blocks;
   }
 
   private scanSpeakerBlock(block: HTMLElement) {
@@ -140,12 +203,57 @@ class TranscriptCollector {
 
     push();
 
-    // Observe refinement updates
-    new MutationObserver(push).observe(txtNode, {
+    const existing = this.blockObservers.get(block);
+    if (existing?.textNode === txtNode) return;
+
+    existing?.observer.disconnect();
+
+    const observer = new MutationObserver(push);
+    observer.observe(txtNode, {
       childList: true,
       subtree: true,
       characterData: true,
     });
+
+    this.blockObservers.set(block, { observer, textNode: txtNode });
+    if (!existing) {
+      this.observedBlocks.add(block);
+      this.activeBlockObserverCount += 1;
+      this.reportObserverCount();
+    }
+  }
+
+  private cleanupSpeakerBlockObservers(node: Node) {
+    for (const block of this.collectCaptionBlocks(node)) {
+      const observed = this.blockObservers.get(block);
+      if (!observed) continue;
+      observed.observer.disconnect();
+      this.blockObservers.delete(block);
+      this.observedBlocks.delete(block);
+      this.activeBlockObserverCount = Math.max(0, this.activeBlockObserverCount - 1);
+      this.reportObserverCount();
+    }
+  }
+
+  private cleanupAllSpeakerBlockObservers() {
+    for (const block of Array.from(this.observedBlocks)) {
+      const observed = this.blockObservers.get(block);
+      observed?.observer.disconnect();
+      this.blockObservers.delete(block);
+    }
+    this.observedBlocks.clear();
+    this.activeBlockObserverCount = 0;
+    this.reportObserverCount();
+  }
+
+  private reportObserverCount() {
+    logPerf(console.log, 'captions', 'observer_count', {
+      activeBlockObservers: this.activeBlockObserverCount,
+    });
+  }
+
+  getActiveBlockObserverCount(): number {
+    return this.activeBlockObserverCount;
   }
 
   private handleCaption(speakerKey: string, speakerName: string, rawText: string) {
@@ -220,6 +328,12 @@ class TranscriptCollector {
     this.reset();
     this.captionObserver?.disconnect();
     this.regionObserver?.disconnect();
+    this.regionParentObserver?.disconnect();
+    this.captionObserver = null;
+    this.regionObserver = null;
+    this.regionParentObserver = null;
+    this.activeRegion = null;
+    this.cleanupAllSpeakerBlockObservers();
   }
 }
 

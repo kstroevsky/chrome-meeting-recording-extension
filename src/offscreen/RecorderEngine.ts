@@ -7,6 +7,7 @@
  */
 
 import { withTimeout } from '../shared/async';
+import { PERF_FLAGS, clamp, logPerf, nowMs, roundMs } from '../shared/perf';
 import type { RecordingPhase, RecordingStream } from '../shared/protocol';
 import { TIMEOUTS } from '../shared/timeouts';
 
@@ -19,6 +20,7 @@ type StartOptions = {
 
 type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
 const CHUNK_TIMESLICE_MS = 2000;
+const EXTENDED_CHUNK_TIMESLICE_MS = 4000;
 
 export interface SealedStorageFile {
   filename: string;
@@ -130,6 +132,7 @@ export class RecorderEngine {
     const runId = this.runId;
     this.recordSelfVideo = !!options.recordSelfVideo;
     this.selfVideoQuality = options.selfVideoQuality === 'high' ? 'high' : 'standard';
+    const runStartedAt = nowMs();
 
     try {
       const baseStream = await this.captureWithStreamId(streamId);
@@ -138,12 +141,12 @@ export class RecorderEngine {
       await this.ensureAudiblePlaybackIfSuppressed(baseStream);
       this.suffix = await this.inferSuffixFromActiveTab().catch(() => 'google-meet');
 
-      const tabStarted = this.startTabRecorder(baseStream);
-      void this.tryStartMicRecorder(runId).catch((e) =>
+      const tabStarted = this.startTabRecorder(baseStream, runStartedAt);
+      void this.tryStartMicRecorder(runId, runStartedAt).catch((e) =>
         this.deps.warn('Mic recorder start failed', describeMediaError(e))
       );
       if (this.recordSelfVideo) {
-        void this.tryStartSelfVideoRecorder(runId).catch((e) =>
+        void this.tryStartSelfVideoRecorder(runId, runStartedAt).catch((e) =>
           this.deps.warn(
             'Self video recorder start failed (continuing without camera stream)',
             describeMediaError(e)
@@ -250,7 +253,18 @@ export class RecorderEngine {
 
     const settings = rawAudio.getSettings?.();
     const suppress = (settings as any)?.suppressLocalAudioPlayback;
-    if (suppress ?? true) {
+    const shouldBridge =
+      PERF_FLAGS.audioPlaybackBridgeMode === 'always'
+        ? (suppress ?? true)
+        : suppress === true;
+
+    logPerf(this.deps.log, 'recorder', 'tab_audio_bridge_check', {
+      mode: PERF_FLAGS.audioPlaybackBridgeMode,
+      suppressLocalAudioPlayback: suppress,
+      willBridge: shouldBridge,
+    });
+
+    if (shouldBridge) {
       this.playback = new AudioPlaybackBridge(this.deps);
       await this.playback.start(rawAudio);
     }
@@ -272,7 +286,7 @@ export class RecorderEngine {
       : 'video/webm';
   }
 
-  private getSelfVideoProfile(): { constraints: MediaTrackConstraints; videoBitsPerSecond: number } {
+  private getSelfVideoProfile(): { constraints: MediaTrackConstraints; defaultVideoBitsPerSecond: number } {
     if (this.selfVideoQuality === 'high') {
       return {
         constraints: {
@@ -280,18 +294,18 @@ export class RecorderEngine {
           height: { ideal: 720, max: 720 },
           frameRate: { ideal: 30, max: 30 },
         },
-        videoBitsPerSecond: 2_500_000,
+        defaultVideoBitsPerSecond: 2_500_000,
       };
     }
 
     return {
-      constraints: {
-        width: { ideal: 960, max: 960 },
-        height: { ideal: 540, max: 540 },
-        frameRate: { ideal: 24, max: 24 },
-      },
-      videoBitsPerSecond: 1_200_000,
-    };
+        constraints: {
+          width: { ideal: 960, max: 960 },
+          height: { ideal: 540, max: 540 },
+          frameRate: { ideal: 24, max: 24 },
+        },
+        defaultVideoBitsPerSecond: 1_200_000,
+      };
   }
 
   private getAudioMime(): string {
@@ -300,9 +314,10 @@ export class RecorderEngine {
       : 'audio/webm';
   }
 
-  private async startTabRecorder(baseStream: MediaStream): Promise<void> {
+  private async startTabRecorder(baseStream: MediaStream, runStartedAt: number): Promise<void> {
     const mime = this.getVideoMime();
     let started = false;
+    const timesliceMs = this.getChunkTimesliceMs();
 
     const recorder = new MediaRecorder(baseStream, {
       mimeType: mime,
@@ -313,10 +328,8 @@ export class RecorderEngine {
 
     const filename = `google-meet-recording-${this.suffix}-${Date.now()}.webm`;
     const target = await this.openStorageTarget(filename, mime);
-    let ioChain: Promise<void> = Promise.resolve();
 
     const finalize = async (label: string) => {
-      await ioChain.catch(() => {});
       try {
         const artifact = await target.close();
         if (artifact) this.finalizedArtifacts.push({ stream: 'tab', artifact });
@@ -337,10 +350,9 @@ export class RecorderEngine {
 
     recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      ioChain = ioChain
-        .catch(() => {})
-        .then(() => target.write(e.data))
-        .catch((err) => this.deps.error('Target write error', describeMediaError(err)));
+      void target.write(e.data).catch((err) =>
+        this.deps.error('Target write error', describeMediaError(err))
+      );
     };
 
     recorder.onerror = (e: any) => {
@@ -369,15 +381,21 @@ export class RecorderEngine {
         clearTimeout(startTimeout);
         started = true;
         this.onRecorderStarted();
+        logPerf(this.deps.log, 'recorder', 'recorder_started', {
+          stream: 'tab',
+          latencyMs: roundMs(nowMs() - runStartedAt),
+          mime,
+          timesliceMs,
+        });
         this.deps.log('Tab MediaRecorder started');
         resolve();
       };
 
-      recorder.start(CHUNK_TIMESLICE_MS);
+      recorder.start(timesliceMs);
     });
   }
 
-  private async tryStartMicRecorder(runId: number): Promise<void> {
+  private async tryStartMicRecorder(runId: number, runStartedAt: number): Promise<void> {
     const mic = await this.maybeGetMicStream();
     if (!mic?.getAudioTracks().length || this.runId !== runId || this.state === 'stopping' || this.state === 'idle') {
       mic?.getTracks().forEach((t) => t.stop());
@@ -393,15 +411,14 @@ export class RecorderEngine {
     this.micStream = mic;
     const mime = this.getAudioMime();
     let started = false;
+    const timesliceMs = this.getChunkTimesliceMs();
     const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
     this.micRecorder = recorder;
 
     const filename = `google-meet-mic-${this.suffix}-${Date.now()}.webm`;
     const target = await this.openStorageTarget(filename, mime);
-    let ioChain: Promise<void> = Promise.resolve();
 
     const finalize = async (label: string) => {
-      await ioChain.catch(() => {});
       try {
         const artifact = await target.close();
         if (artifact) this.finalizedArtifacts.push({ stream: 'mic', artifact });
@@ -416,10 +433,9 @@ export class RecorderEngine {
 
     recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      ioChain = ioChain
-        .catch(() => {})
-        .then(() => target.write(e.data))
-        .catch((err) => this.deps.error('Mic target write error', describeMediaError(err)));
+      void target.write(e.data).catch((err) =>
+        this.deps.error('Mic target write error', describeMediaError(err))
+      );
     };
 
     recorder.onerror = (e: any) => {
@@ -442,15 +458,21 @@ export class RecorderEngine {
         clearTimeout(startTimeout);
         started = true;
         this.onRecorderStarted();
+        logPerf(this.deps.log, 'recorder', 'recorder_started', {
+          stream: 'mic',
+          latencyMs: roundMs(nowMs() - runStartedAt),
+          mime,
+          timesliceMs,
+        });
         this.deps.log('Mic MediaRecorder started');
         resolve();
       };
 
-      recorder.start(CHUNK_TIMESLICE_MS);
+      recorder.start(timesliceMs);
     });
   }
 
-  private async tryStartSelfVideoRecorder(runId: number): Promise<void> {
+  private async tryStartSelfVideoRecorder(runId: number, runStartedAt: number): Promise<void> {
     const selfVideo = await this.maybeGetSelfVideoStream();
     if (
       !selfVideo?.getVideoTracks().length ||
@@ -472,23 +494,27 @@ export class RecorderEngine {
     const profile = this.getSelfVideoProfile();
     const mime = this.getVideoOnlyMime();
     let started = false;
+    const timesliceMs = this.getChunkTimesliceMs();
     const track = selfVideo.getVideoTracks()[0];
+    const settings = track?.getSettings?.();
+    const videoBitsPerSecond = this.resolveSelfVideoBitrate(
+      profile.defaultVideoBitsPerSecond,
+      settings
+    );
     try {
       if (track && 'contentHint' in track) (track as any).contentHint = 'motion';
     } catch {}
 
     const recorder = new MediaRecorder(selfVideo, {
       mimeType: mime,
-      videoBitsPerSecond: profile.videoBitsPerSecond,
+      videoBitsPerSecond,
     });
     this.selfVideoRecorder = recorder;
 
     const filename = `google-meet-self-video-${this.suffix}-${Date.now()}.webm`;
     const target = await this.openStorageTarget(filename, mime);
-    let ioChain: Promise<void> = Promise.resolve();
 
     const finalize = async (label: string) => {
-      await ioChain.catch(() => {});
       try {
         const artifact = await target.close();
         if (artifact) this.finalizedArtifacts.push({ stream: 'selfVideo', artifact });
@@ -510,10 +536,9 @@ export class RecorderEngine {
 
     recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      ioChain = ioChain
-        .catch(() => {})
-        .then(() => target.write(e.data))
-        .catch((err) => this.deps.error('Self video target write error', describeMediaError(err)));
+      void target.write(e.data).catch((err) =>
+        this.deps.error('Self video target write error', describeMediaError(err))
+      );
     };
 
     recorder.onerror = (e: any) => {
@@ -536,15 +561,22 @@ export class RecorderEngine {
         clearTimeout(startTimeout);
         started = true;
         this.onRecorderStarted();
+        logPerf(this.deps.log, 'recorder', 'recorder_started', {
+          stream: 'selfVideo',
+          latencyMs: roundMs(nowMs() - runStartedAt),
+          mime,
+          timesliceMs,
+          videoBitsPerSecond,
+        });
         this.deps.log('Self video MediaRecorder started', {
           quality: this.selfVideoQuality,
           mime,
-          videoBitsPerSecond: profile.videoBitsPerSecond,
+          videoBitsPerSecond,
         });
         resolve();
       };
 
-      recorder.start(CHUNK_TIMESLICE_MS);
+      recorder.start(timesliceMs);
     });
   }
 
@@ -612,6 +644,12 @@ export class RecorderEngine {
         deviceId: settings?.deviceId,
         muted: t?.muted,
         enabled: t?.enabled,
+      });
+      logPerf(this.deps.log, 'recorder', 'self_video_stream_acquired', {
+        quality: this.selfVideoQuality,
+        width: settings?.width,
+        height: settings?.height,
+        frameRate: settings?.frameRate,
       });
       return stream;
     } catch (e) {
@@ -685,6 +723,31 @@ export class RecorderEngine {
     } catch {
       return 'google-meet';
     }
+  }
+
+  private getChunkTimesliceMs(): number {
+    if (PERF_FLAGS.extendedTimeslice && (this.deps.enableMicMix || this.recordSelfVideo)) {
+      return EXTENDED_CHUNK_TIMESLICE_MS;
+    }
+    return CHUNK_TIMESLICE_MS;
+  }
+
+  private resolveSelfVideoBitrate(
+    fallbackBitsPerSecond: number,
+    settings?: MediaTrackSettings
+  ): number {
+    if (!PERF_FLAGS.adaptiveSelfVideoProfile) return fallbackBitsPerSecond;
+
+    const width = settings?.width;
+    const height = settings?.height;
+    const frameRate = settings?.frameRate;
+    if (!width || !height || !frameRate) return fallbackBitsPerSecond;
+
+    const estimated = Math.round(
+      width * height * frameRate * (this.selfVideoQuality === 'high' ? 0.1 : 0.075)
+    );
+    const minBitsPerSecond = this.selfVideoQuality === 'high' ? 1_000_000 : 500_000;
+    return clamp(estimated, minBitsPerSecond, fallbackBitsPerSecond);
   }
 }
 
