@@ -21,6 +21,8 @@ If you'd rather use a bot or desktop recording form factor, check out [Recall.ai
 
 **Optional mic mix** – include your microphone in the recording (once you grant permission).
 
+**Optional self video capture** – record your camera feed as a separate `.webm` file via popup checkbox.
+
 **MV3/Offscreen architecture** – recording runs in a hidden offscreen document. Resilient to Service Worker suspension with keep-alive routines and event-driven backoff reconnects!
 
 ## How it works (high level)
@@ -67,6 +69,8 @@ Open a Google Meet, click the extension icon:
  - **Download Transcript** – saves a `.txt` of the live captions (turn captions ON in Google Meet).
  - **Enable Microphone** – grants mic permission so your voice can be mixed into recordings.
  - **Storage Mode Dropdown** — Choose whether to save the final recording directly on Local Disk (OPFS) or straight to Google Drive (Cloud).
+ - **Record my camera separately** — optional checkbox to save your camera stream as a separate recording file.
+ - **High quality webcam (720p)** — optional quality toggle for the separate camera recording.
  - **Start Recording (tab) / Stop & Download** – creates a `.webm` file streamed continuously to your chosen storage mode.
 
 ## Install & build (detailed)
@@ -119,6 +123,8 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
         - The mic prompt may not appear reliably in a popup. If so, the button opens a dedicated `Enable Microphone` page (`micsetup.html`) where you can click `Enable` and allow mic access.
         - Once granted, the label changes to `Microphone Enabled`.
       - **Start Recording**: Starts a recording of the current tab (video + system audio). If mic is enabled and mixing is on (default), your mic is mixed in.
+      - **Record my camera separately**: If checked, starts an additional camera-only recorder and saves `google-meet-self-video-<meeting-id>-<timestamp>.webm`. If camera permission is missing, a camera setup tab opens.
+      - **High quality webcam (720p)**: Uses a higher camera profile and bitrate for the separate webcam file.
       - **Stop & Download**: Finalizes and downloads `google-meet-recording-<meeting-id>-<timestamp>.webm.`
 
 > The extension shows a “REC” badge while recording. All files are saved locally via Chrome’s Downloads API.
@@ -172,6 +178,7 @@ const WANT_MIC_MIX = true
 
 - Output filenames
   - Recordings: `google-meet-recording-<meet-suffix>-<timestamp>.webm`
+  - Self video (optional): `google-meet-self-video-<meet-suffix>-<timestamp>.webm`
   - Transcripts: `google-meet-transcript-<meet-suffix>-<timestamp>.txt`
 
 ## Scripts

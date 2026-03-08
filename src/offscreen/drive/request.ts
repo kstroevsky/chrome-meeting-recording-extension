@@ -1,15 +1,32 @@
 /**
  * @file offscreen/drive/request.ts
  *
- * Small helper for Drive requests that should retry once with a freshly
- * acquired OAuth token on auth-related statuses.
+ * Small helpers for Drive requests that need token reuse and a single auth retry.
  */
 
-export type TokenProvider = () => Promise<string>;
+export type TokenProvider = (options?: { refresh?: boolean }) => Promise<string>;
 
 /**
- * Runs a request with an OAuth token and retries once for 401/403.
- * Returns the final Response (caller handles non-OK details).
+ * Wraps a token provider with in-memory per-upload caching.
+ *
+ * This avoids calling chrome.identity.getAuthToken for every single upload
+ * chunk while still allowing one forced refresh when Google responds with
+ * 401/403.
+ */
+export function createCachedTokenProvider(getToken: TokenProvider): TokenProvider {
+  let cachedToken: string | null = null;
+
+  return async (options?: { refresh?: boolean }) => {
+    if (options?.refresh || !cachedToken) {
+      cachedToken = await getToken(options);
+    }
+    return cachedToken;
+  };
+}
+
+/**
+ * Runs a request with an OAuth token and retries once with a refreshed token
+ * for auth-related statuses.
  */
 export async function fetchWithAuthRetry(
   getToken: TokenProvider,
@@ -17,7 +34,7 @@ export async function fetchWithAuthRetry(
 ): Promise<Response> {
   let last: Response | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const token = await getToken();
+    const token = await getToken(attempt === 0 ? undefined : { refresh: true });
     const res = await request(token);
     last = res;
     if ((res.status === 401 || res.status === 403) && attempt === 0) continue;

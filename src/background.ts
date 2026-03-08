@@ -1,58 +1,75 @@
 /**
  * @context  Background Service Worker (MV3)
- * @role     Orchestrator — the only context that can call tabCapture and
- *           chrome.downloads. Never handles media (MediaRecorder/AudioContext)
- *           directly; those live in the Offscreen document.
- * @lifetime Event-driven. Chrome will terminate and restart this worker at will.
- *           Do NOT store recording state here that must survive suspension — use
- *           chrome.storage.session (via OffscreenManager) for that.
+ * @role     Orchestrator for popup, offscreen, downloads, and auth.
+ * @lifetime Event-driven. Chrome may suspend and restart this worker at will.
  *
- * Message flow this file handles:
- *   Popup  →  background  (runtime.sendMessage):  START_RECORDING, STOP_RECORDING, GET_RECORDING_STATUS
- *   Offscreen → background (Port):                OFFSCREEN_READY, RECORDING_STATE, OFFSCREEN_SAVE
+ * Responsibilities:
+ *   - Accept user commands from popup (start/stop/status)
+ *   - Own tabCapture.getMediaStreamId and chrome.downloads access
+ *   - Keep the extension alive while work is active (`recording` or `uploading`)
+ *   - Re-attach to the offscreen document after service worker restarts
  *
- * @see src/background/OffscreenManager.ts  — offscreen lifecycle + Port RPC client
- * @see src/shared/protocol.ts              — all message type definitions
- * @see src/shared/rpc.ts                  — Port-based bidirectional RPC helpers
+ * The worker does not handle media directly. Capture, encoding, OPFS writes,
+ * and post-stop Drive upload sequencing all live in the offscreen document.
  */
-import { makeLogger } from './shared/logger';
 import { OffscreenManager } from './background/OffscreenManager';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
+import { makeLogger } from './shared/logger';
+import type { RecordingPhase, RecordingRunConfig } from './shared/protocol';
 
 const L = makeLogger('background');
-
 const offscreen = new OffscreenManager();
+const SESSION_PHASE_KEY = 'phase';
+const SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
 
-// ── Keepalive ──────────────────────────────────────────────────────────────
-// Prevents SW from being suspended while recording is active.
-// chrome.runtime.getPlatformInfo is a zero-cost API call that resets the
-// 30 s idle timer. Not a permanent guarantee (Chrome may enforce a hard cap
-// in future), but combined with session-storage re-hydration provides
-// defence-in-depth for long recordings.
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+let activeRunConfig: RecordingRunConfig | null = null;
+
+function normalizeRunConfig(value: any): RecordingRunConfig | null {
+  if (!value || typeof value !== 'object') return null;
+  const storageMode = value.storageMode === 'drive' ? 'drive' : value.storageMode === 'local' ? 'local' : null;
+  if (!storageMode) return null;
+  return {
+    storageMode,
+    recordSelfVideo: !!value.recordSelfVideo,
+    selfVideoQuality: value.selfVideoQuality === 'high' ? 'high' : 'standard',
+  };
+}
 
 function startKeepAlive() {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20_000);
 }
+
 function stopKeepAlive() {
   if (!keepAliveTimer) return;
   clearInterval(keepAliveTimer);
   keepAliveTimer = null;
 }
 
-offscreen.onRecordingChanged = (recording) => {
-  recording ? startKeepAlive() : stopKeepAlive();
+offscreen.onPhaseChanged = (phase: RecordingPhase) => {
+  phase === 'idle' ? stopKeepAlive() : startKeepAlive();
+  if (phase === 'idle') {
+    activeRunConfig = null;
+    offscreen.setRunConfig(null);
+  }
+  (chrome.storage as any)?.session?.set?.({
+    [SESSION_PHASE_KEY]: phase,
+    [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
+  }).catch?.((e: any) => {
+    L.warn('storage.session.set failed (phase/run config):', e);
+  });
 };
 
-// ── Session-storage re-hydration ───────────────────────────────────────────
-// If the SW is restarted while recording is active, re-attach the offscreen
-// port so the badge and popup state are restored.
 (async () => {
   try {
-    const res = await chrome.storage.session.get(['recording']);
-    if (res?.recording === true) {
-      L.log('SW restarted during recording — re-attaching offscreen');
+    const res = await chrome.storage.session.get([SESSION_PHASE_KEY, SESSION_RUN_CONFIG_KEY]);
+    const phase = (res?.phase === 'recording' || res?.phase === 'uploading') ? res.phase : 'idle';
+    activeRunConfig = phase === 'idle' ? null : normalizeRunConfig(res?.[SESSION_RUN_CONFIG_KEY]);
+    offscreen.hydratePhase(phase);
+    offscreen.setRunConfig(activeRunConfig);
+    if (phase !== 'idle') {
+      L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
       startKeepAlive();
     }
@@ -61,13 +78,11 @@ offscreen.onRecordingChanged = (recording) => {
   }
 })();
 
-// Port connection from offscreen.html
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'offscreen') return;
   offscreen.attachPort(port);
 });
 
-// Stream ID helper (unchanged behavior)
 function getStreamIdForTab(tabId: number): Promise<string> {
   return new Promise((resolve, reject) => {
     try {
@@ -83,7 +98,6 @@ function getStreamIdForTab(tabId: number): Promise<string> {
   });
 }
 
-// Main message listener
 chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
   if (msg?.type === 'GET_DRIVE_TOKEN') {
     fetchDriveTokenWithFallback()
@@ -96,13 +110,16 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
         L.error('GET_DRIVE_TOKEN unexpected failure:', error);
         sendResponse({ ok: false, error });
       });
-    return true; // Keep channel open for async sendResponse
+    return true;
   }
 
   (async () => {
     if (msg?.type === 'START_RECORDING') {
       const tabId: number | undefined = msg.tabId;
-      if (typeof tabId !== 'number') { sendResponse({ ok: false, error: 'Missing tabId' }); return; }
+      if (typeof tabId !== 'number') {
+        sendResponse({ ok: false, error: 'Missing tabId' });
+        return;
+      }
 
       L.log('Popup requested START_RECORDING for tabId', tabId);
 
@@ -116,12 +133,30 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
 
       try {
         const streamId = await getStreamIdForTab(tabId);
-        const storageMode = msg.storageMode;
-        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_START', streamId, storageMode } as any);
+        const runConfig: RecordingRunConfig = {
+          storageMode: msg.storageMode === 'drive' ? 'drive' : 'local',
+          recordSelfVideo: !!msg.recordSelfVideo,
+          selfVideoQuality: msg.selfVideoQuality === 'high' ? 'high' : 'standard',
+        };
+        const recordSelfVideo = !!msg.recordSelfVideo;
+        const selfVideoQuality = msg.selfVideoQuality === 'high' ? 'high' : 'standard';
+        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({
+          type: 'OFFSCREEN_START',
+          streamId,
+          storageMode: runConfig.storageMode,
+          recordSelfVideo,
+          selfVideoQuality,
+        } as any);
 
         L.log('rpc(OFFSCREEN_START) response', r);
-
         if (r?.ok) {
+          activeRunConfig = runConfig;
+          offscreen.setRunConfig(activeRunConfig);
+          (chrome.storage as any)?.session?.set?.({
+            [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
+          }).catch?.((e: any) => {
+            L.warn('storage.session.set failed (start run config):', e);
+          });
           sendResponse({ ok: true });
         } else {
           sendResponse({ ok: false, error: r?.error || 'Failed to start' });
@@ -130,14 +165,17 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
         L.error('OFFSCREEN_START failed', e);
         sendResponse({ ok: false, error: `OFFSCREEN_START failed: ${e?.message || e}` });
       }
-
       return;
     }
 
     if (msg?.type === 'STOP_RECORDING') {
       try {
         await offscreen.ensureReady();
-        await offscreen.rpc({ type: 'OFFSCREEN_STOP' } as any);
+        const r = await offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_STOP' } as any);
+        if (!r?.ok) {
+          sendResponse({ ok: false, error: r?.error || 'Stop failed in offscreen' });
+          return;
+        }
         sendResponse({ ok: true });
       } catch (e: any) {
         sendResponse({ ok: false, error: `STOP failed: ${e?.message || e}` });
@@ -146,7 +184,11 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
     }
 
     if (msg?.type === 'GET_RECORDING_STATUS') {
-      sendResponse({ recording: offscreen.getRecordingStatus() });
+      const phase = offscreen.getRecordingStatus();
+      sendResponse({
+        phase,
+        runConfig: phase === 'idle' ? undefined : (activeRunConfig ?? undefined),
+      });
       return;
     }
   })().catch((err) => {
@@ -154,10 +196,9 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
     sendResponse({ ok: false, error: String(err) });
   });
 
-  return true; // Keep channel open for async sendResponse
+  return true;
 });
 
-// Cleanup on suspend
 chrome.runtime.onSuspend?.addListener(async () => {
   await offscreen.stopIfPossibleOnSuspend();
 });

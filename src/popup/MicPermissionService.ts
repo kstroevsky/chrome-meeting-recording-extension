@@ -35,7 +35,7 @@ export class MicPermissionService {
   bindButton(
     micBtn: HTMLButtonElement,
     onTextChange?: (text: string) => void
-  ) {
+  ): void {
     const refresh = async () => {
       const state = await this.queryMicPermissionState();
 
@@ -87,6 +87,5 @@ export class MicPermissionService {
       }
     });
 
-    return { refresh };
   }
 }

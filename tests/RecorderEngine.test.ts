@@ -1,5 +1,27 @@
 import { RecorderEngine } from '../src/offscreen/RecorderEngine';
 
+function chunk(text: string, type = 'video/webm'): Blob {
+  return new Blob([text], { type });
+}
+
+async function toText(payload: unknown): Promise<string> {
+  const asAny = payload as any;
+  if (typeof asAny?.text === 'function') return asAny.text();
+  if (typeof asAny?.arrayBuffer === 'function') {
+    const ab = await asAny.arrayBuffer();
+    return new TextDecoder().decode(ab);
+  }
+  if (typeof FileReader !== 'undefined' && typeof asAny?.size === 'number' && typeof asAny?.slice === 'function') {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.readAsText(asAny as Blob);
+    });
+  }
+  return String(payload ?? '');
+}
+
 describe('RecorderEngine', () => {
   let deps: any;
   let engine: RecorderEngine;
@@ -9,9 +31,8 @@ describe('RecorderEngine', () => {
       log: jest.fn(),
       warn: jest.fn(),
       error: jest.fn(),
-      notifyState: jest.fn(),
-      requestSave: jest.fn(),
-      enableMicMix: false, // simpler for test
+      notifyPhase: jest.fn(),
+      enableMicMix: false,
     };
     engine = new RecorderEngine(deps);
   });
@@ -20,24 +41,52 @@ describe('RecorderEngine', () => {
     expect(engine.isRecording()).toBe(false);
   });
 
-  it('throws an error if stopped while not recording', () => {
-    expect(() => engine.stop()).toThrow('Not currently recording');
+  it('returns an empty result if stopped while not recording', async () => {
+    await expect(engine.stop()).resolves.toEqual([]);
     expect(deps.warn).toHaveBeenCalledWith('Stop called but not recording');
   });
 
-  it('transitions to recording', async () => {
-    // MediaStream/getUserMedia are mocked in setup.ts to resolve immediately
-    const startPromise = engine.startFromStreamId('test-stream-id');
-    
-    // Grab the media recorder that was created inside the engine
-    // Since we mocked MediaRecorder, its constructor isn't easily inspectable unless we expose it.
-    // However, engine will wait for `recorder.onstart`. We must manually trigger `onstart` on the mocked MediaRecorder instance.
-    
-    // We can just verify `isRecording()` is true (it hits 'starting' immediately)
-    expect(engine.isRecording()).toBe(true);
+  it('falls back to in-memory storage when local target creation fails', async () => {
+    deps.openTarget = jest.fn().mockRejectedValue(new Error('OPFS unavailable'));
+    engine = new RecorderEngine(deps);
 
-    // Because we mock getUserMedia and MediaRecorder but haven't wired up triggering `onstart` synchronously, 
-    // the promise will hang if we await it directly without triggering onstart.
-    // In a real automated setup we'd spy on the MockMediaRecorder instance and fire .onstart()
+    const target = await (engine as any).openStorageTarget('test.webm', 'video/webm');
+    await target.write(chunk('abc'));
+    const artifact = await target.close();
+
+    expect(deps.warn).toHaveBeenCalledWith(
+      'Failed to open storage target, falling back to RAM buffer',
+      expect.stringContaining('OPFS unavailable')
+    );
+    expect(artifact?.filename).toBe('test.webm');
+    expect(await toText(artifact?.file)).toBe('abc');
+  });
+
+  it('notifies recording phase only when the first recorder starts', () => {
+    (engine as any).onRecorderStarted();
+    (engine as any).onRecorderStarted();
+
+    expect(deps.notifyPhase).toHaveBeenCalledTimes(1);
+    expect(deps.notifyPhase).toHaveBeenCalledWith('recording');
+  });
+
+  it('resolves the pending stop promise when the last recorder stops', () => {
+    const artifact = {
+      filename: 'test.webm',
+      file: chunk('x'),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    const resolveStop = jest.fn();
+
+    (engine as any).activeRecorders = 1;
+    (engine as any).resolveStop = resolveStop;
+    (engine as any).stopPromise = Promise.resolve([]);
+    (engine as any).finalizedArtifacts = [{ stream: 'tab', artifact }];
+
+    (engine as any).onRecorderStopped();
+
+    expect(resolveStop).toHaveBeenCalledWith([{ stream: 'tab', artifact }]);
+    expect((engine as any).finalizedArtifacts).toEqual([]);
+    expect(engine.isRecording()).toBe(false);
   });
 });

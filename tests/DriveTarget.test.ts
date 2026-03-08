@@ -1,5 +1,24 @@
 import { DriveTarget } from '../src/offscreen/DriveTarget';
 
+async function bodyToText(body: unknown): Promise<string> {
+  if (typeof body === 'string') return body;
+  const asAny = body as any;
+  if (typeof asAny?.text === 'function') return asAny.text();
+  if (typeof asAny?.arrayBuffer === 'function') {
+    const ab = await asAny.arrayBuffer();
+    return new TextDecoder().decode(ab);
+  }
+  if (typeof FileReader !== 'undefined' && typeof asAny?.size === 'number' && typeof asAny?.slice === 'function') {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.readAsText(asAny as Blob);
+    });
+  }
+  return String(body ?? '');
+}
+
 describe('DriveTarget', () => {
   let target: DriveTarget;
   let mockGetToken: jest.Mock;
@@ -19,102 +38,107 @@ describe('DriveTarget', () => {
     jest.resetAllMocks();
   });
 
-  it('initializes session on first write', async () => {
-    // Mock the session creation fetch
+  it('initializes a Drive session and uploads a finished file', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      headers: new Headers({ Location: 'https://googleapis.com/upload/session-uri' })
+      headers: new Headers({ Location: 'https://googleapis.com/upload/session-uri' }),
     });
-
-    const chunk = new Blob(['123'], { type: 'video/webm' });
-    await target.write(chunk);
-
-    expect(mockGetToken).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    
-    // Verify the HTTP request structure
-    const fetchCall = mockFetch.mock.calls[0];
-    expect(fetchCall[0]).toBe('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true');
-    expect(fetchCall[1].method).toBe('POST');
-    expect(fetchCall[1].headers.Authorization).toBe('Bearer fake-token');
-    expect(JSON.parse(fetchCall[1].body)).toEqual({ name: 'test.webm', mimeType: 'video/webm' });
-  });
-
-  it('flushes when threshold is reached and rotates token', async () => {
-    // 1. Session creation response
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ Location: 'https://googleapis.com/upload/session-uri' })
-    });
-
-    // 2. Chunk upload response (308 Resume Incomplete)
-    mockFetch.mockResolvedValueOnce({
-      status: 308,
-    });
-
-    // Create a 5MB blob to force a flush
-    const bigChunk = new Blob([new ArrayBuffer(5 * 1024 * 1024)]);
-    await target.write(bigChunk);
-
-    // Initial session + flush token
-    expect(mockGetToken).toHaveBeenCalledTimes(2);
-
-    // Verify the flush request
-    const flushCall = mockFetch.mock.calls[1];
-    expect(flushCall[0]).toBe('https://googleapis.com/upload/session-uri');
-    expect(flushCall[1].method).toBe('PUT');
-    expect(flushCall[1].headers['Content-Range']).toBe('bytes 0-5242879/*');
-  });
-
-  it('notifies onDone when closed', async () => {
-    // Session setup
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ Location: 'https://googleapis.com/upload/session-uri' })
-    });
-    // Final chunk response
     mockFetch.mockResolvedValueOnce({
       status: 200,
     });
 
-    await target.write(new Blob(['data']));
-    await target.close();
+    await target.upload(new Blob(['1234'], { type: 'video/webm' }));
 
-    // Verify final flush is correctly marked
-    const finalFlushCall = mockFetch.mock.calls[1];
-    expect(finalFlushCall[1].headers['Content-Range']).toBe(`bytes 0-3/4`);
-
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockGetToken).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true'
+    );
+    expect(mockFetch.mock.calls[1][1].headers['Content-Range']).toBe('bytes 0-3/4');
     expect(mockOnDone).toHaveBeenCalledWith('test.webm');
   });
 
-  it('recovers from a 503 error by querying committed offset', async () => {
-    // 1. Session setup
+  it('uploads large files in sequential 2MB chunks', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      headers: new Headers({ Location: 'https://session-uri' })
+      headers: new Headers({ Location: 'https://session-uri' }),
     });
+    mockFetch
+      .mockResolvedValueOnce({ status: 308 })
+      .mockResolvedValueOnce({ status: 308 })
+      .mockResolvedValueOnce({ status: 200 });
 
-    // 2. Failed chunk upload (simulated network drop)
+    const bigFile = new Blob([new ArrayBuffer(5 * 1024 * 1024)]);
+    await target.upload(bigFile);
+
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    expect(mockGetToken).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[1][1].headers['Content-Range']).toBe(`bytes 0-${2 * 1024 * 1024 - 1}/${bigFile.size}`);
+    expect(mockFetch.mock.calls[2][1].headers['Content-Range']).toBe(`bytes ${2 * 1024 * 1024}-${4 * 1024 * 1024 - 1}/${bigFile.size}`);
+    expect(mockFetch.mock.calls[3][1].headers['Content-Range']).toBe(`bytes ${4 * 1024 * 1024}-${bigFile.size - 1}/${bigFile.size}`);
+  });
+
+  it('refreshes the cached token when Google rejects the current one', async () => {
+    mockGetToken
+      .mockResolvedValueOnce('stale-token')
+      .mockResolvedValueOnce('fresh-token');
     mockFetch.mockResolvedValueOnce({
-      status: 503,
+      ok: true,
+      headers: new Headers({ Location: 'https://session-uri' }),
     });
+    mockFetch
+      .mockResolvedValueOnce({ status: 401 })
+      .mockResolvedValueOnce({ status: 200 });
 
-    // 3. Status query to check what Drive received
+    await target.upload(new Blob(['1234'], { type: 'video/webm' }));
+
+    expect(mockGetToken).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe('Bearer stale-token');
+    expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe('Bearer fresh-token');
+  });
+
+  it('recovers from AbortError by probing committed range and slicing the retry body', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ Location: 'https://session-uri' }),
+    });
+    mockFetch.mockRejectedValueOnce(new DOMException('signal is aborted without reason', 'AbortError'));
     mockFetch.mockResolvedValueOnce({
       status: 308,
-      headers: new Headers({ Range: 'bytes=0-0' }) // Drive only got 1 byte
+      headers: {
+        get: (key: string) => (key.toLowerCase() === 'range' ? 'bytes=0-1' : null),
+      } as any,
     });
+    mockFetch.mockResolvedValueOnce({ status: 200 });
 
-    // 4. Retry upload succeeds
+    await target.upload(new Blob(['abcdef'], { type: 'video/webm' }));
+
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    const retryCall = mockFetch.mock.calls[3];
+    expect(retryCall[1].headers['Content-Range']).toBe('bytes 2-5/6');
+    expect(await bodyToText(retryCall[1].body)).toBe('cdef');
+    expect(mockOnDone).toHaveBeenCalledWith('test.webm');
+  });
+
+  it('recovers from 503 by probing committed range and resuming from the next byte', async () => {
     mockFetch.mockResolvedValueOnce({
-      status: 200, // Finish
+      ok: true,
+      headers: new Headers({ Location: 'https://session-uri' }),
     });
+    mockFetch.mockResolvedValueOnce({ status: 503 });
+    mockFetch.mockResolvedValueOnce({
+      status: 308,
+      headers: {
+        get: (key: string) => (key.toLowerCase() === 'range' ? 'bytes=0-2' : null),
+      } as any,
+    });
+    mockFetch.mockResolvedValueOnce({ status: 200 });
 
-    await target.write(new Blob(['abcdefg']));
-    await target.close();
+    await target.upload(new Blob(['abcdef'], { type: 'video/webm' }));
 
-    expect(mockFetch).toHaveBeenCalledTimes(4); // Init + Fail + Query + Retry
-    expect(mockOnDone).toHaveBeenCalled();
+    const retryCall = mockFetch.mock.calls[3];
+    expect(retryCall[1].headers['Content-Range']).toBe('bytes 3-5/6');
+    expect(await bodyToText(retryCall[1].body)).toBe('def');
   });
 
   it('includes Drive error details when session init fails', async () => {
@@ -131,50 +155,18 @@ describe('DriveTarget', () => {
       headers: new Headers(),
     });
 
-    await expect(target.write(new Blob(['x']))).rejects.toThrow('insufficientPermissions');
-    expect(mockFetch).toHaveBeenCalledTimes(2); // retried once for auth-related failure
+    await expect(target.upload(new Blob(['x']))).rejects.toThrow('insufficientPermissions');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('creates missing root + recording folders and uploads into recording folder', async () => {
-    const targetWithFolders = new DriveTarget('test.webm', mockGetToken, mockOnDone, {
-      rootFolderName: 'Google Meet Records',
-      recordingFolderName: 'abc-defg-hij-1712088000000',
+  it('cannot be reused for a second upload', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ Location: 'https://session-uri' }),
     });
+    mockFetch.mockResolvedValueOnce({ status: 200 });
 
-    // root lookup -> not found
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ files: [] }),
-    });
-    // root create
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ id: 'root-folder-id' }),
-    });
-    // recording lookup -> not found
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ files: [] }),
-    });
-    // recording create
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ id: 'recording-folder-id' }),
-    });
-    // upload session init
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ Location: 'https://googleapis.com/upload/session-uri' }),
-    });
-
-    await targetWithFolders.write(new Blob(['1']));
-
-    const uploadCall = mockFetch.mock.calls[4];
-    expect(uploadCall[0]).toBe('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true');
-    expect(JSON.parse(uploadCall[1].body)).toEqual({
-      name: 'test.webm',
-      mimeType: 'video/webm',
-      parents: ['recording-folder-id'],
-    });
+    await target.upload(new Blob(['x']));
+    await expect(target.upload(new Blob(['y']))).rejects.toThrow('already used');
   });
 });

@@ -1,7 +1,9 @@
-import { PopupController } from '../src/popup/PopupController';
+import { CameraPermissionService } from '../src/popup/CameraPermissionService';
 import { MicPermissionService } from '../src/popup/MicPermissionService';
+import { PopupController } from '../src/popup/PopupController';
 
 jest.mock('../src/popup/MicPermissionService');
+jest.mock('../src/popup/CameraPermissionService');
 
 describe('PopupController', () => {
   let controller: PopupController;
@@ -15,9 +17,14 @@ describe('PopupController', () => {
       micBtn: document.createElement('button'),
       startBtn: document.createElement('button'),
       stopBtn: document.createElement('button'),
-      storageModeSelect: document.createElement('select')
+      storageModeSelect: document.createElement('select'),
+      recordSelfVideoCheckbox: document.createElement('input'),
+      selfVideoHighQualityCheckbox: document.createElement('input'),
+      recordingStatusEl: document.createElement('div'),
     };
-    
+    elements.recordSelfVideoCheckbox.type = 'checkbox';
+    elements.selfVideoHighQualityCheckbox.type = 'checkbox';
+
     const optLocal = document.createElement('option');
     optLocal.value = 'local';
     const optDrive = document.createElement('option');
@@ -31,8 +38,10 @@ describe('PopupController', () => {
     mockTabsQuery = chrome.tabs.query as jest.Mock;
     mockTabsQuery.mockResolvedValue([{ id: 101, url: 'https://meet.google.com/abc-defg' }]);
 
+    (CameraPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(true);
+
     controller = new PopupController(elements);
-    // Suppress console error output for tests evaluating thrown exceptions
+
     jest.spyOn(console, 'error').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(window, 'alert').mockImplementation(() => {});
@@ -42,38 +51,48 @@ describe('PopupController', () => {
     jest.restoreAllMocks();
   });
 
-  it('initializes UI correctly from existing recording state', async () => {
-    mockSendMessage.mockResolvedValueOnce({ recording: true });
+  it('initializes UI correctly from existing uploading state', async () => {
+    mockSendMessage.mockResolvedValueOnce({
+      phase: 'uploading',
+      runConfig: {
+        storageMode: 'drive',
+        recordSelfVideo: true,
+        selfVideoQuality: 'high',
+      },
+    });
     controller.init();
-    
-    // Allow async refreshInitialUi to resolve
     await new Promise(process.nextTick);
 
     expect(mockSendMessage).toHaveBeenCalledWith({ type: 'GET_RECORDING_STATUS' });
     expect(elements.startBtn.disabled).toBe(true);
-    expect(elements.stopBtn.disabled).toBe(false);
+    expect(elements.stopBtn.disabled).toBe(true);
     expect(elements.storageModeSelect.disabled).toBe(true);
+    expect(elements.storageModeSelect.value).toBe('drive');
+    expect(elements.recordSelfVideoCheckbox.checked).toBe(true);
+    expect(elements.selfVideoHighQualityCheckbox.checked).toBe(true);
+    expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
+    expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
   });
 
   it('handles START_RECORDING click', async () => {
     controller.init();
-    await new Promise(process.nextTick); // let init settle
-
-    elements.storageModeSelect.selectedIndex = 1;
-
-    // Simulate click
-    elements.startBtn.click();
-    
-    // Wait for the async click handler
     await new Promise(process.nextTick);
 
-    // Verify messages sent
+    elements.storageModeSelect.selectedIndex = 1;
+    elements.recordSelfVideoCheckbox.checked = true;
+    elements.selfVideoHighQualityCheckbox.checked = true;
+
+    elements.startBtn.click();
+    await new Promise(process.nextTick);
+
     expect(mockTabsQuery).toHaveBeenCalled();
     expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(101, { type: 'RESET_TRANSCRIPT' });
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
       type: 'START_RECORDING',
       tabId: 101,
-      storageMode: 'drive'
+      storageMode: 'drive',
+      recordSelfVideo: true,
+      selfVideoQuality: 'high',
     });
 
     expect(elements.startBtn.disabled).toBe(true);
@@ -81,17 +100,82 @@ describe('PopupController', () => {
   });
 
   it('handles STOP_RECORDING click', async () => {
-    // Start with recording state
-    mockSendMessage.mockResolvedValueOnce({ recording: true });
+    mockSendMessage.mockResolvedValueOnce({ phase: 'recording' });
     controller.init();
     await new Promise(process.nextTick);
-    
-    // Send message mock for STOP_RECORDING
+
     mockSendMessage.mockResolvedValueOnce({ ok: true });
-    
     elements.stopBtn.click();
     await new Promise(process.nextTick);
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'STOP_RECORDING' });
+    expect(console.log).toHaveBeenCalledWith('[popup]', expect.stringContaining('Stopping...'));
+  });
+
+  it('shows uploading status while Drive upload continues after popup stop', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+
+    (controller as any).setActiveRunConfig({
+      storageMode: 'drive',
+      recordSelfVideo: true,
+      selfVideoQuality: 'standard',
+    });
+    (controller as any).setUI('uploading');
+
+    expect(elements.startBtn.disabled).toBe(true);
+    expect(elements.stopBtn.disabled).toBe(true);
+    expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
+    expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
+  });
+
+  it('shows final upload summary when some files fell back to local download', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    const runtimeListener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
+    (window.alert as jest.Mock).mockClear();
+
+    runtimeListener({ type: 'RECORDING_STATE', phase: 'uploading' });
+    runtimeListener({
+      type: 'RECORDING_STATE',
+      phase: 'idle',
+      uploadSummary: {
+        uploaded: [{ stream: 'mic', filename: 'google-meet-mic-x.webm' }],
+        localFallbacks: [
+          {
+            stream: 'tab',
+            filename: 'google-meet-recording-x.webm',
+            error: 'AbortError: signal is aborted without reason',
+          },
+        ],
+      },
+    });
+
+    expect(window.alert).toHaveBeenCalledWith(
+      expect.stringContaining('Saved locally instead')
+    );
+    expect(window.alert).toHaveBeenCalledWith(
+      expect.stringContaining('google-meet-recording-x.webm')
+    );
+  });
+
+  it('alerts when local fallback download fails', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    const runtimeListener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
+    (window.alert as jest.Mock).mockClear();
+    (console.log as jest.Mock).mockClear();
+
+    runtimeListener({
+      type: 'RECORDING_SAVE_ERROR',
+      filename: 'google-meet-recording-x.webm',
+      error: 'Download blocked',
+    });
+
+    expect(console.log).toHaveBeenCalledWith(
+      '[popup]',
+      expect.stringContaining('Local save failed: google-meet-recording-x.webm')
+    );
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Download blocked'));
   });
 });

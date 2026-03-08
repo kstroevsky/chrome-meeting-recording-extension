@@ -1,58 +1,88 @@
 /**
  * @file offscreen/DriveTarget.ts
  *
- * StorageTarget implementation that streams MediaRecorder chunks directly into
- * Google Drive using the Drive "resumable upload" protocol.
- *
- * Responsibilities:
- *   1) Resolve upload parent folder hierarchy (if configured).
- *   2) Open a resumable upload session.
- *   3) Flush chunks with bounded memory and retry rules.
- *
- * @see src/offscreen/drive/DriveFolderResolver.ts — folder lookup/create logic
- * @see src/offscreen/RecorderEngine.ts            — StorageTarget interface
+ * Uploads a fully sealed local recording file to Google Drive using the
+ * resumable upload protocol. Recording itself never writes to Drive directly.
  */
-import type { StorageTarget } from './RecorderEngine';
-import { DRIVE_UPLOAD_URL } from './drive/constants';
+
+import {
+  DRIVE_MAX_RETRIES,
+  DRIVE_REQUEST_TIMEOUT_MS,
+  DRIVE_RETRY_BASE_DELAY_MS,
+  DRIVE_UPLOAD_CHUNK_BYTES,
+  DRIVE_UPLOAD_URL,
+} from './drive/constants';
 import { type DriveFolderHierarchy, DriveFolderResolver } from './drive/DriveFolderResolver';
 import { formatDriveError, readDriveErrorDetail } from './drive/errors';
-import { fetchWithAuthRetry, type TokenProvider } from './drive/request';
+import {
+  createCachedTokenProvider,
+  fetchWithAuthRetry,
+  type TokenProvider,
+} from './drive/request';
 
-const FLUSH_THRESHOLD_BYTES = 5 * 1024 * 1024; // 5 MB
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isTransientFetchError(err: unknown): boolean {
+  const e = err as any;
+  return e?.name === 'AbortError' || e?.name === 'TypeError';
+}
+
+function backoffMs(attempt: number): number {
+  return DRIVE_RETRY_BASE_DELAY_MS * Math.min(8, 2 ** Math.max(0, attempt - 1));
+}
 
 export type DriveTargetOptions = DriveFolderHierarchy;
 
-export class DriveTarget implements StorageTarget {
+/**
+ * Per-file Drive uploader.
+ *
+ * One instance uploads exactly one sealed artifact. It reuses a cached token
+ * across folder lookup, session creation, and chunk uploads, and refreshes that
+ * token only when Google explicitly rejects it.
+ */
+export class DriveTarget {
   private sessionUri: string | null = null;
-  private uploadedBytes = 0;
-  private pending: Blob[] = [];
-  private pendingSize = 0;
+  private readonly getUploadToken: TokenProvider;
   private readonly folderResolver: DriveFolderResolver;
+  private used = false;
 
   constructor(
     private readonly filename: string,
-    /** Callback to get a fresh OAuth token. Background calls chrome.identity.getAuthToken(). */
-    private readonly getToken: TokenProvider,
-    /** Callback when the file is successfully uploaded and finalized. */
+    getToken: TokenProvider,
     private readonly onDone: (filename: string) => void,
     private readonly options: DriveTargetOptions = {}
   ) {
-    this.folderResolver = new DriveFolderResolver(getToken);
+    this.getUploadToken = createCachedTokenProvider(getToken);
+    this.folderResolver = new DriveFolderResolver(this.getUploadToken);
   }
 
-  async write(chunk: Blob): Promise<void> {
-    if (!this.sessionUri) await this.initSession();
-    this.pending.push(chunk);
-    this.pendingSize += chunk.size;
+  async upload(file: Blob): Promise<void> {
+    if (this.used) throw new Error('Drive target already used');
+    this.used = true;
+    if (file.size === 0) return;
 
-    if (this.pendingSize >= FLUSH_THRESHOLD_BYTES) {
-      await this.flush(false);
+    await this.initSession();
+
+    const total = file.size;
+    let start = 0;
+
+    while (start < total) {
+      const endExclusive = Math.min(start + DRIVE_UPLOAD_CHUNK_BYTES, total);
+      const body = file.slice(start, endExclusive, 'video/webm');
+      const isFinal = endExclusive >= total;
+      start = await this.uploadChunk(start, body, total, isFinal);
     }
-  }
 
-  async close(): Promise<void> {
-    if (!this.sessionUri && this.pendingSize === 0) return;
-    await this.flush(true);
     this.onDone(this.filename);
   }
 
@@ -64,8 +94,8 @@ export class DriveTarget implements StorageTarget {
     };
     if (parentFolderId) metadata.parents = [parentFolderId];
 
-    const res = await fetchWithAuthRetry(this.getToken, (token) =>
-      fetch(DRIVE_UPLOAD_URL, {
+    const res = await fetchWithAuthRetry(this.getUploadToken, (token) =>
+      fetchWithTimeout(DRIVE_UPLOAD_URL, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -86,80 +116,109 @@ export class DriveTarget implements StorageTarget {
     this.sessionUri = uri;
   }
 
-  private async flush(isFinal: boolean): Promise<void> {
-    if (!this.pending.length && !isFinal) return;
+  private async uploadChunk(start: number, body: Blob, total: number, isFinal: boolean): Promise<number> {
+    let chunkStart = start;
+    let chunkBody = body;
+    let attempts = 0;
+    let lastStatus: number | null = null;
 
-    const body = new Blob(this.pending);
-    const start = this.uploadedBytes;
+    while (attempts < DRIVE_MAX_RETRIES) {
+      attempts += 1;
+      const token = await this.getUploadToken();
+      const end = chunkStart + chunkBody.size - 1;
 
-    // Finalize an already-emptied upload by querying commit state.
-    if (body.size === 0 && isFinal) {
-      const res = await fetchWithAuthRetry(this.getToken, (token) =>
-        fetch(this.sessionUri!, {
+      let res: Response;
+      try {
+        res = await fetchWithTimeout(this.sessionUri!, {
           method: 'PUT',
           headers: {
             Authorization: `Bearer ${token}`,
-            'Content-Range': `bytes */${this.uploadedBytes}`,
+            'Content-Range': `bytes ${chunkStart}-${end}/${total}`,
+            'Content-Type': 'video/webm',
           },
-        })
-      );
-      if (res.status === 200 || res.status === 201) return;
-      const detail = await readDriveErrorDetail(res);
-      throw new Error(formatDriveError('Final empty Drive PUT failed', res.status, detail));
-    }
-
-    const end = start + body.size - 1;
-    const total = isFinal ? String(start + body.size) : '*';
-
-    let attempts = 0;
-    while (attempts < 2) {
-      attempts++;
-      const token = await this.getToken();
-      const res = await fetch(this.sessionUri!, {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Range': `bytes ${start}-${end}/${total}`,
-          'Content-Type': 'video/webm',
-        },
-        body,
-      });
-
-      if (!isFinal && res.status === 308) {
-        this.uploadedBytes += body.size;
-        this.pending = [];
-        this.pendingSize = 0;
-        return;
-      }
-
-      if (isFinal && (res.status === 200 || res.status === 201)) {
-        this.pending = [];
-        this.pendingSize = 0;
-        return;
-      }
-
-      if ((res.status === 401 || res.status === 403) && attempts < 2) {
+          body: chunkBody,
+        });
+      } catch (e) {
+        if (!isTransientFetchError(e)) throw e;
+        const recovered = await this.recoverFromCommittedState(token, chunkStart, chunkBody, total);
+        if (recovered.done) return recovered.start;
+        chunkStart = recovered.start;
+        chunkBody = recovered.body;
+        await delay(backoffMs(attempts));
         continue;
       }
 
-      if (res.status === 503 || res.status === 500) {
-        const committedRes = await fetch(this.sessionUri!, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Range': `bytes */${isFinal ? start + body.size : '*'}`,
-          },
-        });
-        const range = committedRes.headers.get('Range');
-        if (range) {
-          const committed = parseInt(range.split('-')[1]) + 1;
-          this.uploadedBytes = committed;
-        }
+      lastStatus = res.status;
+
+      if (!isFinal && res.status === 308) {
+        return chunkStart + chunkBody.size;
+      }
+
+      if (isFinal && (res.status === 200 || res.status === 201)) {
+        return total;
+      }
+
+      if ((res.status === 401 || res.status === 403) && attempts < 2) {
+        await this.getUploadToken({ refresh: true });
+        continue;
+      }
+
+      if (
+        res.status === 429 ||
+        res.status === 408 ||
+        res.status === 308 ||
+        (res.status >= 500 && res.status <= 599)
+      ) {
+        const recovered = await this.recoverFromCommittedState(token, chunkStart, chunkBody, total);
+        if (recovered.done) return recovered.start;
+        chunkStart = recovered.start;
+        chunkBody = recovered.body;
+        await delay(backoffMs(attempts));
         continue;
       }
 
       const detail = await readDriveErrorDetail(res);
       throw new Error(formatDriveError('Drive PUT failed', res.status, detail));
     }
+
+    throw new Error(
+      formatDriveError('Drive PUT failed after retries', lastStatus ?? 0, 'Transient failure persisted')
+    );
+  }
+
+  private async recoverFromCommittedState(
+    token: string,
+    start: number,
+    body: Blob,
+    total: number
+  ): Promise<{ done: boolean; start: number; body: Blob }> {
+    try {
+      const committedRes = await fetchWithTimeout(this.sessionUri!, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Range': `bytes */${total}`,
+        },
+      });
+
+      if (committedRes.status === 200 || committedRes.status === 201) {
+        return { done: true, start: total, body: new Blob() };
+      }
+
+      const range = committedRes.headers.get('Range');
+      if (!range) return { done: false, start, body };
+
+      const committed = parseInt(range.split('-')[1], 10) + 1;
+      if (!Number.isFinite(committed)) return { done: false, start, body };
+
+      const end = start + body.size;
+      if (committed >= end) return { done: true, start: committed, body: new Blob() };
+      if (committed > start) {
+        const consumed = committed - start;
+        return { done: false, start: committed, body: body.slice(consumed) };
+      }
+    } catch {}
+
+    return { done: false, start, body };
   }
 }
