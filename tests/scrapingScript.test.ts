@@ -27,6 +27,17 @@ function mountCaptionsRegion(...blocks: HTMLDivElement[]): HTMLElement {
   return region;
 }
 
+function mountCaptionsRegionInWrapper(...blocks: HTMLDivElement[]): { wrapper: HTMLElement; region: HTMLElement } {
+  const wrapper = document.createElement('div');
+  const region = document.createElement('div');
+  region.setAttribute('role', 'region');
+  region.setAttribute('aria-label', 'Captions');
+  blocks.forEach((block) => region.appendChild(block));
+  wrapper.appendChild(region);
+  document.body.appendChild(wrapper);
+  return { wrapper, region };
+}
+
 async function flushMutations(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -128,5 +139,42 @@ describe('scrapingScript', () => {
     await flushMutations();
 
     expect(getCollector().getActiveBlockObserverCount()).toBe(0);
+  });
+
+  it('re-arms region discovery when the captions parent subtree is removed', async () => {
+    const { wrapper } = mountCaptionsRegionInWrapper(createCaptionBlock('user1', 'John Doe', 'Hello world'));
+
+    await flushMutations();
+    expect(getCollector().getActiveBlockObserverCount()).toBe(1);
+
+    wrapper.remove();
+    await flushMutations();
+    expect(getCollector().getActiveBlockObserverCount()).toBe(0);
+
+    mountCaptionsRegion(createCaptionBlock('user2', 'Jane Doe', 'Second line'));
+    await flushMutations();
+    expect(getCollector().getActiveBlockObserverCount()).toBe(1);
+  });
+
+  it('rebinds a speaker block observer when Meet replaces the text node', async () => {
+    const region = mountCaptionsRegion(createCaptionBlock('user1', 'John Doe', 'Hello'));
+
+    await flushMutations();
+    const block = region.querySelector('.nMcdL') as HTMLElement;
+    const originalText = block.querySelector('.ygicle') as HTMLElement;
+    const replacement = document.createElement('div');
+    replacement.className = 'ygicle';
+    replacement.textContent = 'Hello again';
+
+    originalText.replaceWith(replacement);
+    getCollector().scanSpeakerBlock(block);
+    await flushMutations();
+
+    replacement.textContent = 'Hello again there';
+    await flushMutations();
+    expect(getCollector().getActiveBlockObserverCount()).toBe(1);
+
+    jest.advanceTimersByTime(TIMEOUTS.CAPTION_GRACE_MS + 100);
+    expect((window as any).getTranscript()).toContain('John Doe : Hello again there');
   });
 });

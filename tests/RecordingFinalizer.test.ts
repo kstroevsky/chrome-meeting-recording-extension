@@ -167,4 +167,64 @@ describe('RecordingFinalizer', () => {
       localFallbacks: [],
     });
   });
+
+  it('falls back every artifact locally when shared Drive setup fails before uploads start', async () => {
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockRejectedValue(new Error('folder lookup failed'));
+    const uploadSpy = jest.spyOn(DriveTarget.prototype, 'upload');
+
+    const tab = makeArtifact('tab.webm');
+    const mic = makeArtifact('mic.webm');
+
+    const summary = await finalizer.finalize({
+      storageMode: 'drive',
+      artifacts: [
+        { stream: 'tab', artifact: tab },
+        { stream: 'mic', artifact: mic },
+      ],
+    });
+
+    expect(uploadSpy).not.toHaveBeenCalled();
+    expect(summary).toEqual({
+      uploaded: [],
+      localFallbacks: [
+        { stream: 'tab', filename: 'tab.webm', error: 'Error: folder lookup failed' },
+        { stream: 'mic', filename: 'mic.webm', error: 'Error: folder lookup failed' },
+      ],
+    });
+    expect(deps.requestSave).toHaveBeenNthCalledWith(1, 'tab.webm', 'blob:4', 'tab.webm');
+    expect(deps.requestSave).toHaveBeenNthCalledWith(2, 'mic.webm', 'blob:4', 'mic.webm');
+  });
+
+  it('preserves deterministic summary order when parallel uploads finish with mixed outcomes', async () => {
+    resetPerfFlags();
+    PERF_FLAGS.parallelUploadConcurrency = 2;
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    jest.spyOn(DriveTarget.prototype, 'upload').mockImplementation(function (this: any) {
+      if (this.filename === 'tab.webm') {
+        return Promise.reject(new DOMException('network timeout', 'AbortError'));
+      }
+      return Promise.resolve();
+    });
+
+    const tab = makeArtifact('tab.webm');
+    const mic = makeArtifact('mic.webm');
+
+    const summary = await finalizer.finalize({
+      storageMode: 'drive',
+      artifacts: [
+        { stream: 'mic', artifact: mic },
+        { stream: 'tab', artifact: tab },
+      ],
+    });
+
+    expect(summary).toEqual({
+      uploaded: [{ stream: 'mic', filename: 'mic.webm' }],
+      localFallbacks: [
+        { stream: 'tab', filename: 'tab.webm', error: 'AbortError: network timeout code=20' },
+      ],
+    });
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:4', 'tab.webm');
+    expect(mic.cleanup).toHaveBeenCalledTimes(1);
+    expect(tab.cleanup).not.toHaveBeenCalled();
+  });
 });

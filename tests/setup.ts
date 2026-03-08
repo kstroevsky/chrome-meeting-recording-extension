@@ -24,10 +24,24 @@ Object.assign(global, {
       hasDocument: jest.fn().mockResolvedValue(false),
     },
     storage: {
+      local: {
+        get: jest.fn().mockImplementation(async (keys?: string | string[] | Record<string, unknown>) => {
+          if (typeof keys === 'string') return {};
+          return {};
+        }),
+        set: jest.fn().mockResolvedValue(undefined),
+      },
       session: {
-        get: jest.fn().mockResolvedValue({}),
-        set: jest.fn(),
-      }
+        get: jest.fn().mockImplementation(async (keys?: string | string[] | Record<string, unknown>) => {
+          if (typeof keys === 'string') return {};
+          return {};
+        }),
+        set: jest.fn().mockResolvedValue(undefined),
+      },
+      onChanged: {
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+      },
     },
     tabs: {
       query: jest.fn().mockResolvedValue([{ url: 'https://meet.google.com/abc-defg-hij' }]),

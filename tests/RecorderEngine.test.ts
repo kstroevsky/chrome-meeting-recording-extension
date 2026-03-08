@@ -128,10 +128,17 @@ describe('RecorderEngine', () => {
   let deps: any;
   let engine: RecorderEngine;
   let originalMediaRecorder: typeof MediaRecorder;
+  let originalAudioContext: typeof AudioContext | undefined;
+  let originalMediaStream: typeof MediaStream | undefined;
 
   beforeEach(() => {
     originalMediaRecorder = global.MediaRecorder as any;
+    originalAudioContext = (global as any).AudioContext;
+    originalMediaStream = (global as any).MediaStream;
     (global as any).MediaRecorder = FakeMediaRecorder as any;
+    (global as any).MediaStream = class {
+      constructor(public readonly tracks: any[] = []) {}
+    } as any;
     FakeMediaRecorder.instances = [];
     FakeMediaRecorder.stopPayloadByKind = {
       tab: 'tab',
@@ -152,6 +159,8 @@ describe('RecorderEngine', () => {
 
   afterEach(() => {
     (global as any).MediaRecorder = originalMediaRecorder;
+    (global as any).AudioContext = originalAudioContext;
+    (global as any).MediaStream = originalMediaStream;
     resetPerfFlags();
   });
 
@@ -298,5 +307,113 @@ describe('RecorderEngine', () => {
     await engine.startFromStreamId('stream-id');
 
     expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(4000);
+  });
+
+  it('keeps the default 2000 ms timeslice when the extended flag is off', async () => {
+    deps.enableMicMix = true;
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) {
+        return makeStream({ audioTracks: [makeTrack('audio')] });
+      }
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id');
+
+    expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(2000);
+  });
+
+  it('skips the audio playback bridge in auto mode when local tab audio is not suppressed', async () => {
+    PERF_FLAGS.audioPlaybackBridgeMode = 'auto';
+    const createMediaStreamSource = jest.fn().mockReturnValue({ connect: jest.fn() });
+    const audioContextCtor = jest.fn().mockImplementation(() => ({
+      resume: jest.fn().mockResolvedValue(undefined),
+      createMediaStreamSource,
+      destination: {},
+      close: jest.fn(),
+    }));
+    (global as any).AudioContext = audioContextCtor;
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id');
+
+    expect(audioContextCtor).not.toHaveBeenCalled();
+  });
+
+  it('preserves always mode parity when the suppression flag is missing', async () => {
+    PERF_FLAGS.audioPlaybackBridgeMode = 'always';
+    const connect = jest.fn();
+    const createMediaStreamSource = jest.fn().mockReturnValue({ connect });
+    const audioContextCtor = jest.fn().mockImplementation(() => ({
+      resume: jest.fn().mockResolvedValue(undefined),
+      createMediaStreamSource,
+      destination: {},
+      close: jest.fn(),
+    }));
+    (global as any).AudioContext = audioContextCtor;
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', {})],
+      videoTracks: [makeTrack('video')],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id');
+
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(createMediaStreamSource).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses capability-aware self video bitrate ceilings when adaptive profiling is enabled', async () => {
+    PERF_FLAGS.adaptiveSelfVideoProfile = true;
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const selfVideoStream = makeStream({
+      videoTracks: [makeTrack('video', { width: 640, height: 360, frameRate: 15 })],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.video && constraints.audio === false) return selfVideoStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', {
+      recordSelfVideo: true,
+      selfVideoQuality: 'high',
+    });
+
+    const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
+    expect(selfVideoRecorder?.options.videoBitsPerSecond).toBe(1_000_000);
   });
 });
