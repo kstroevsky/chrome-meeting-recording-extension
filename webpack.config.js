@@ -6,6 +6,7 @@ const { CleanWebpackPlugin } = require('clean-webpack-plugin')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
+const STATIC_DIR = 'static'
 
 function parseDotEnv(rawContent) {
   const parsed = {}
@@ -97,15 +98,15 @@ module.exports = (_env, argv) => {
       new CopyWebpackPlugin({
         patterns: [
           {
-            from: 'manifest.json',
+            from: path.join(STATIC_DIR, 'manifest.json'),
             to: 'manifest.json',
             transform: (content) => transformManifest(content, googleOauthClientId),
           },
-          { from: 'popup.html',     to: 'popup.html' },
-          { from: 'debug.html',     to: 'debug.html' },
-          { from: 'offscreen.html', to: 'offscreen.html', noErrorOnMissing: true },
-          { from: 'micsetup.html', to: 'micsetup.html' },
-          { from: 'camsetup.html', to: 'camsetup.html' },
+          { from: path.join(STATIC_DIR, 'popup.html'),     to: 'popup.html' },
+          { from: path.join(STATIC_DIR, 'debug.html'),     to: 'debug.html' },
+          { from: path.join(STATIC_DIR, 'offscreen.html'), to: 'offscreen.html', noErrorOnMissing: true },
+          { from: path.join(STATIC_DIR, 'micsetup.html'), to: 'micsetup.html' },
+          { from: path.join(STATIC_DIR, 'camsetup.html'), to: 'camsetup.html' },
         ]
       })
     ]
