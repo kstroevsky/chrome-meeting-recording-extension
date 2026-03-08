@@ -787,6 +787,11 @@ flowchart TD
 ## Manifest and Entry Surfaces
 File: `manifest.json`
 
+Note:
+- `oauth2.client_id` in source control is a placeholder.
+- Webpack injects the real value from `.env` / shell env key `GOOGLE_OAUTH_CLIENT_ID` into `dist/manifest.json` at build time.
+- If the env var is missing, build keeps the placeholder and logs a warning; Drive auth will fail until configured.
+
 Important permissions:
 - `activeTab`
 - `downloads`

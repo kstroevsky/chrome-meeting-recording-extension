@@ -161,11 +161,15 @@ If you want to use the **Google Drive** storage target, you must provision an OA
 2. Setup an OAuth Consent Screen and add the `https://www.googleapis.com/auth/drive.file` scope.
 3. In `chrome://extensions`, confirm your extension ID after loading `dist/`.
 4. Create an OAuth client with **Application type: Chrome Extension** and that exact extension ID.
-5. Replace `manifest.json -> oauth2.client_id` with that OAuth client ID.
-6. Keep a stable extension ID:
+5. Create a local `.env` file (or export a shell variable) with:
+   - `GOOGLE_OAUTH_CLIENT_ID=<your chrome extension oauth client id>`
+   - You can copy from `.env.example`.
+   - If omitted, build still succeeds with a placeholder client ID, but Drive uploads will fail.
+6. Build again so webpack injects it into `dist/manifest.json`.
+7. Keep a stable extension ID:
    - Keep `manifest.json -> key` checked into your repo (already present in this project).
    - If the key changes, the extension ID changes and OAuth will fail until you recreate the Chrome Extension OAuth client for the new ID.
-7. Drive mode will auto-create:
+8. Drive mode will auto-create:
    - top-level folder: `Google Meet Records`
    - per-recording folder: `<google-meet-id>-<timestamp>`
 
@@ -255,7 +259,7 @@ Answer:
  - Verify the OAuth credential type is **Chrome Extension** (not Web/Desktop/Installed).
  - Verify the OAuth client was created for the exact ID shown in `chrome://extensions`.
  - Verify your OAuth consent screen includes `https://www.googleapis.com/auth/drive.file` and your account is added as a test user if the app is in Testing mode.
- - Reload the extension after changing `manifest.json` and retry recording in Drive mode.
+ - Rebuild (`npm run build` or `npm run watch`) after updating `.env`, then reload the extension and retry Drive mode.
 
 Question: I see `Drive session init failed: 403`.
 Answer:
