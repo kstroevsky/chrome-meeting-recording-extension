@@ -1,3 +1,9 @@
+/**
+ * @file offscreen/RecorderCapture.ts
+ *
+ * Media acquisition helpers for tab, microphone, and self-video capture.
+ */
+
 import { withTimeout } from '../shared/async';
 import type { MicMode, RecordingRunConfig } from '../shared/recording';
 import { TIMEOUTS } from '../shared/timeouts';

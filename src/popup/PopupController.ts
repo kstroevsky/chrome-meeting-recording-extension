@@ -8,6 +8,15 @@
 
 import { CameraPermissionService } from './CameraPermissionService';
 import { MicPermissionService } from './MicPermissionService';
+import { applyRunConfigToForm, buildRunConfigFromForm } from './popupRunConfig';
+import {
+  describeRunConfig,
+  formatUploadFallbackMessage,
+  setControlsForPhase,
+  setStatusText,
+  STATUS_BY_PHASE,
+  type PopupElements,
+} from './popupView';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
@@ -15,40 +24,16 @@ import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
 import {
   createDefaultRunConfig,
-  isBusyPhase,
-  normalizeMicMode,
   normalizeRunConfig,
   normalizeSessionSnapshot,
-  type MicMode,
   type RecordingPhase,
   type RecordingRunConfig,
   type RecordingSessionSnapshot,
   type UploadSummary,
 } from '../shared/recording';
 
-type Elements = {
-  saveBtn: HTMLButtonElement | null;
-  micBtn: HTMLButtonElement | null;
-  micModeSelect: HTMLSelectElement | null;
-  startBtn: HTMLButtonElement | null;
-  stopBtn: HTMLButtonElement | null;
-  storageModeSelect: HTMLSelectElement | null;
-  recordSelfVideoCheckbox: HTMLInputElement | null;
-  selfVideoHighQualityCheckbox: HTMLInputElement | null;
-  openDiagnosticsBtn: HTMLButtonElement | null;
-  recordingStatusEl: HTMLElement | null;
-};
-
-const STATUS_BY_PHASE: Record<Exclude<RecordingPhase, 'idle'>, string> = {
-  starting: 'Starting recording...',
-  recording: 'Recording in progress.',
-  stopping: 'Stopping recording and sealing files...',
-  uploading: 'Finalizing and saving files... you can close this popup.',
-  failed: 'The last recording attempt failed.',
-};
-
 export class PopupController {
-  private readonly el: Elements;
+  private readonly el: PopupElements;
   private readonly mic = new MicPermissionService();
   private readonly camera = new CameraPermissionService();
   private inFlight = false;
@@ -58,7 +43,7 @@ export class PopupController {
   private persistentStatus = '';
   private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
 
-  constructor(el: Elements) {
+  constructor(el: PopupElements) {
     this.el = el;
   }
 
@@ -81,42 +66,20 @@ export class PopupController {
   }
 
   private setUI(phase: RecordingPhase) {
-    const {
-      startBtn,
-      stopBtn,
-      micModeSelect,
-      storageModeSelect,
-      recordSelfVideoCheckbox,
-      selfVideoHighQualityCheckbox,
-    } = this.el;
-
-    if (!startBtn || !stopBtn) return;
-
-    const busy = isBusyPhase(phase);
-    startBtn.disabled = busy;
-    stopBtn.disabled = !(phase === 'starting' || phase === 'recording' || phase === 'stopping');
-
-    if (micModeSelect) micModeSelect.disabled = busy;
-    if (storageModeSelect) storageModeSelect.disabled = busy;
-    if (recordSelfVideoCheckbox) recordSelfVideoCheckbox.disabled = busy;
-    if (selfVideoHighQualityCheckbox) {
-      selfVideoHighQualityCheckbox.disabled =
-        busy || !recordSelfVideoCheckbox?.checked;
-    }
-
+    setControlsForPhase(this.el, phase);
     this.lastPhase = phase;
     this.syncPhaseStatus(phase);
   }
 
   private setStatus(text: string) {
-    if (this.el.recordingStatusEl) this.el.recordingStatusEl.textContent = text;
+    setStatusText(this.el, text);
   }
 
   private syncPhaseStatus(phase: RecordingPhase) {
     if (phase === 'idle') {
       this.persistentStatus = '';
     } else {
-      const run = this.describeRunConfig(this.activeRunConfig);
+      const run = describeRunConfig(this.activeRunConfig);
       const suffix = run ? ` ${run}` : '';
       const errorSuffix = phase === 'failed' && this.lastPhase === 'failed'
         ? ''
@@ -128,39 +91,9 @@ export class PopupController {
     }
   }
 
-  private describeRunConfig(config: RecordingRunConfig | null): string {
-    if (!config) return '';
-    const mode = config.storageMode === 'drive' ? 'Mode: Drive.' : 'Mode: Local.';
-    const mic =
-      config.micMode === 'mixed'
-        ? 'Microphone: Mixed into tab recording.'
-        : config.micMode === 'separate'
-          ? 'Microphone: Saved as a separate audio file.'
-          : 'Microphone: Off.';
-    const camera = config.recordSelfVideo
-      ? config.selfVideoQuality === 'high'
-        ? 'Camera: On (High quality).'
-        : 'Camera: On (Standard quality).'
-      : 'Camera: Off.';
-    return `${mode} ${mic} ${camera}`.trim();
-  }
-
   private setActiveRunConfig(config: RecordingRunConfig | null) {
     this.activeRunConfig = config;
-    if (!config) return;
-
-    if (this.el.storageModeSelect) {
-      this.el.storageModeSelect.value = config.storageMode;
-    }
-    if (this.el.micModeSelect) {
-      this.el.micModeSelect.value = config.micMode;
-    }
-    if (this.el.recordSelfVideoCheckbox) {
-      this.el.recordSelfVideoCheckbox.checked = config.recordSelfVideo;
-    }
-    if (this.el.selfVideoHighQualityCheckbox) {
-      this.el.selfVideoHighQualityCheckbox.checked = config.selfVideoQuality === 'high';
-    }
+    applyRunConfigToForm(this.el, config);
   }
 
   private toast(msg: string) {
@@ -233,16 +166,9 @@ export class PopupController {
     if (this.shownUploadSummary === key) return;
     this.shownUploadSummary = key;
 
-    if (summary.localFallbacks.length > 0) {
-      const uploaded = summary.uploaded.map((x) => x.filename).join('\n') || '(none)';
-      const fallback = summary.localFallbacks
-        .map((x) => `${x.filename}${x.error ? `\n  ${x.error}` : ''}`)
-        .join('\n\n');
-      alert(
-        'Drive upload completed with local fallback for some files.\n\n' +
-        `Uploaded to Drive:\n${uploaded}\n\n` +
-        `Saved locally instead:\n${fallback}`
-      );
+    const fallbackMessage = formatUploadFallbackMessage(summary);
+    if (fallbackMessage) {
+      alert(fallbackMessage);
       return;
     }
 
@@ -320,10 +246,6 @@ export class PopupController {
     });
   }
 
-  private getSelectedMicMode(): MicMode {
-    return normalizeMicMode(this.el.micModeSelect?.value);
-  }
-
   private wireStartStop() {
     const { startBtn, stopBtn } = this.el;
     if (!startBtn || !stopBtn) return;
@@ -339,19 +261,9 @@ export class PopupController {
 
         await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
-        const defaultRunConfig = createDefaultRunConfig();
-        const micMode = this.getSelectedMicMode();
-        const recordSelfVideo = this.el.recordSelfVideoCheckbox?.checked ?? defaultRunConfig.recordSelfVideo;
-        const selfVideoQuality =
-          recordSelfVideo && this.el.selfVideoHighQualityCheckbox?.checked
-            ? 'high'
-            : defaultRunConfig.selfVideoQuality;
-        const runConfig = normalizeRunConfig({
-          storageMode: this.el.storageModeSelect?.value,
-          micMode,
-          recordSelfVideo,
-          selfVideoQuality,
-        }) ?? defaultRunConfig;
+        const runConfig = buildRunConfigFromForm(this.el);
+        const micMode = runConfig.micMode;
+        const recordSelfVideo = runConfig.recordSelfVideo;
 
         const micReady = await this.mic.ensureReadyForRecording(micMode);
         if (!micReady) {

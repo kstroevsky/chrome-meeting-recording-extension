@@ -1,3 +1,10 @@
+/**
+ * @file platform/chrome/tabs.ts
+ *
+ * Shared wrappers for active-tab queries, runtime-page tabs, tab messaging,
+ * and tab capture stream IDs.
+ */
+
 import { getRuntimeUrl } from './runtime';
 
 export async function queryActiveTab(): Promise<chrome.tabs.Tab | undefined> {

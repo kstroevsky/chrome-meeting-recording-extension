@@ -1,3 +1,10 @@
+/**
+ * @file popup/MicPermissionService.ts
+ *
+ * Popup-side microphone permission helper. It handles state queries, inline
+ * permission priming, and setup-page fallback when Chrome blocks inline prompts.
+ */
+
 import type { MicMode } from '../shared/recording';
 import { createRuntimeTab } from '../platform/chrome/tabs';
 
@@ -32,6 +39,10 @@ export class MicPermissionService {
 
     const state = await this.queryMicPermissionState();
     if (state === 'granted') return true;
+    if (state === 'denied') {
+      await this.openMicSetupTab();
+      return false;
+    }
 
     const ok = await this.tryPrimeInline().catch(() => false);
     if (ok) return true;

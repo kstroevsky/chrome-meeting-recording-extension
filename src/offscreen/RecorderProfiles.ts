@@ -1,3 +1,9 @@
+/**
+ * @file offscreen/RecorderProfiles.ts
+ *
+ * MIME, bitrate, and chunking policy helpers for recorder setup.
+ */
+
 import { PERF_FLAGS, clamp } from '../shared/perf';
 import type { MicMode, RecordingRunConfig } from '../shared/recording';
 

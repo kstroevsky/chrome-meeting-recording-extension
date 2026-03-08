@@ -1,3 +1,10 @@
+/**
+ * @file shared/recording.ts
+ *
+ * Shared recording domain model: phases, run configuration, upload summaries,
+ * persisted session snapshots, and normalization helpers.
+ */
+
 export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'uploading' | 'failed';
 export type RecordingStream = 'tab' | 'mic' | 'selfVideo';
 export type StorageMode = 'local' | 'drive';

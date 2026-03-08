@@ -1,3 +1,9 @@
+/**
+ * @file platform/chrome/offscreen.ts
+ *
+ * Small wrappers around MV3 offscreen-document lifecycle APIs.
+ */
+
 import { getRuntimeUrl, trySendRuntimeMessage } from './runtime';
 
 type OffscreenReason = 'BLOBS' | 'AUDIO_PLAYBACK' | 'USER_MEDIA';

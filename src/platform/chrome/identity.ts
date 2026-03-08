@@ -1,3 +1,9 @@
+/**
+ * @file platform/chrome/identity.ts
+ *
+ * Promise-based wrappers around the Chrome Identity API.
+ */
+
 export function getAuthToken(interactive: boolean): Promise<string> {
   return new Promise((resolve, reject) => {
     chrome.identity.getAuthToken({ interactive }, (result) => {

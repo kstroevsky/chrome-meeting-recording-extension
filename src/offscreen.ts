@@ -9,7 +9,7 @@
  *   - During recording, all streams write only to local storage targets.
  *   - After stop, this context seals those files and either:
  *       * asks background to download them (local mode), or
- *       * uploads them to Drive sequentially, falling back to download per file.
+ *       * uploads them to Drive, falling back to download per file.
  *   - Popup state is observational only; uploads continue even if popup closes.
  */
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';

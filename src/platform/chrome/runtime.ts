@@ -1,3 +1,9 @@
+/**
+ * @file platform/chrome/runtime.ts
+ *
+ * Shared wrappers for Chrome runtime messaging, ports, and manifest helpers.
+ */
+
 export function connectRuntimePort(name: string): chrome.runtime.Port {
   return chrome.runtime.connect({ name });
 }

@@ -1,3 +1,10 @@
+/**
+ * @file shared/perf.ts
+ *
+ * Cross-context perf flags, event types, and persisted debug settings used by
+ * background, offscreen, captions, popup, and the diagnostics dashboard.
+ */
+
 import { isDevBuild } from './build';
 import {
   getLocalStorageValues,

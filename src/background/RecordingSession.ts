@@ -1,3 +1,10 @@
+/**
+ * @file background/RecordingSession.ts
+ *
+ * Canonical session state machine for the recording control plane. Background
+ * owns this snapshot and persists it across service worker restarts.
+ */
+
 import {
   createIdleSession,
   normalizePhase,

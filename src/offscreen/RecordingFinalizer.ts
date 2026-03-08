@@ -3,8 +3,9 @@
  *
  * Handles the persistence phase that starts only after capture has fully
  * stopped. In local mode it exposes the sealed artifacts to the background for
- * download. In Drive mode it uploads sealed OPFS files sequentially and falls
- * back to local download per-file if Drive fails.
+ * download. In Drive mode it uploads sealed OPFS files in deterministic order,
+ * with guarded limited concurrency, and falls back to local download per-file
+ * if Drive fails.
  */
 
 import type { RecordingStream, UploadSummary } from '../shared/recording';

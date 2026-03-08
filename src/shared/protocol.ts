@@ -1,9 +1,12 @@
+/**
+ * @file shared/protocol.ts
+ *
+ * Single source of truth for all inter-context message contracts in the
+ * extension.
+ */
+
 import type { MeetingProviderInfo } from './provider';
 import type { RecordingRunConfig, RecordingSessionSnapshot, RecordingPhase, UploadSummary } from './recording';
-
-/**
- * Single source of truth for ALL inter-context messages in this extension.
- */
 
 export type RpcId = string;
 

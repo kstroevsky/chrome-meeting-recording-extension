@@ -1,3 +1,10 @@
+/**
+ * @file background/PerfDebugStore.ts
+ *
+ * Aggregates perf events into a session-scoped diagnostics snapshot that can be
+ * rendered by the debug dashboard and persisted across service worker restarts.
+ */
+
 import {
   PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
   type PerfDebugSnapshot,

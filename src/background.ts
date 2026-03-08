@@ -6,7 +6,8 @@
  * Responsibilities:
  *   - Accept user commands from popup (start/stop/status)
  *   - Own tabCapture.getMediaStreamId and chrome.downloads access
- *   - Keep the extension alive while work is active (`recording` or `uploading`)
+ *   - Keep the extension alive while work is active (`starting`, `recording`,
+ *     `stopping`, or `uploading`)
  *   - Re-attach to the offscreen document after service worker restarts
  *
  * The worker does not handle media directly. Capture, encoding, OPFS writes,

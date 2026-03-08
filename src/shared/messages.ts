@@ -1,3 +1,9 @@
+/**
+ * @file shared/messages.ts
+ *
+ * Thin typed wrappers around extension runtime and tab messaging.
+ */
+
 import type {
   BgToPopup,
   PopupToBg,

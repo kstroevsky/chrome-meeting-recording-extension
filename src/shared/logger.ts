@@ -1,3 +1,9 @@
+/**
+ * @file shared/logger.ts
+ *
+ * Tiny namespaced logger helper for consistent console prefixes.
+ */
+
 import { isTestRuntime } from './build';
 
 export type LogFn = (...a: any[]) => void;

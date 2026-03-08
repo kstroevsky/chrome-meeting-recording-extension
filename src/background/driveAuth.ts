@@ -1,3 +1,10 @@
+/**
+ * @file background/driveAuth.ts
+ *
+ * Handles Chrome Identity OAuth token acquisition for Drive uploads, including
+ * silent-first fallback and explicit diagnostics for bad client IDs.
+ */
+
 import { getAuthToken, removeCachedAuthToken } from '../platform/chrome/identity';
 import { getRuntimeId, getRuntimeManifest } from '../platform/chrome/runtime';
 

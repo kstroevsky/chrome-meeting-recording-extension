@@ -1,3 +1,9 @@
+/**
+ * @context  Diagnostics Page
+ * @role     Entry point that wires DOM nodes into `DebugDashboard`.
+ * @lifetime Lives for the lifetime of `debug.html`.
+ */
+
 import { DebugDashboard } from './debug/DebugDashboard';
 
 const dashboard = new DebugDashboard({

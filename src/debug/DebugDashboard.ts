@@ -1,4 +1,21 @@
+/**
+ * @file debug/DebugDashboard.ts
+ *
+ * Renders the diagnostics dashboard and keeps it synchronized with the
+ * session-scoped perf snapshot written by background.
+ */
+
 import { isDevBuild, isTestRuntime } from '../shared/build';
+import {
+  buildCaptionsText,
+  buildRecorderText,
+  buildRuntimeText,
+  buildSummaryText,
+  buildUploadText,
+  escapeHtml,
+  formatEventFields,
+  formatTimestamp,
+} from './debugDashboardText';
 import {
   PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
   type PerfDebugSnapshot,
@@ -105,76 +122,31 @@ export class DebugDashboard {
       return;
     }
 
-    const { summary } = snapshot;
     if (this.el.updatedAtEl) {
       this.el.updatedAtEl.textContent = snapshot.updatedAt == null
         ? 'No updates yet'
-        : `Last update: ${this.formatTimestamp(snapshot.updatedAt)}`;
+        : `Last update: ${formatTimestamp(snapshot.updatedAt)}`;
     }
     if (this.el.downloadBtn) this.el.downloadBtn.disabled = false;
 
     if (this.el.summaryEl) {
-      this.el.summaryEl.textContent = [
-        `Phase: ${summary.currentPhase}`,
-        `Events captured: ${summary.totalEvents}`,
-        `Retained events: ${snapshot.entries.length}`,
-        `Dropped events: ${snapshot.droppedEvents}`,
-        `Flags: audioBridge=${snapshot.settings.audioPlaybackBridgeMode}, adaptiveSelfVideo=${snapshot.settings.adaptiveSelfVideoProfile ? 'on' : 'off'}, extendedTimeslice=${snapshot.settings.extendedTimeslice ? 'on' : 'off'}, dynamicChunks=${snapshot.settings.dynamicDriveChunkSizing ? 'on' : 'off'}, parallelUploads=${snapshot.settings.parallelUploadConcurrency}`,
-      ].join('\n');
+      this.el.summaryEl.textContent = buildSummaryText(snapshot);
     }
 
     if (this.el.recorderEl) {
-      this.el.recorderEl.textContent = [
-        `Active recorders: ${summary.runtime.activeRecorders}`,
-        `Timeslice: ${summary.recorder.lastTimesliceMs ?? 'n/a'} ms`,
-        `Tab start latency: ${this.formatMetric(summary.recorder.lastStartLatencyMsByStream.tab, 'ms')}`,
-        `Mic start latency: ${this.formatMetric(summary.recorder.lastStartLatencyMsByStream.mic, 'ms')}`,
-        `Self-video start latency: ${this.formatMetric(summary.recorder.lastStartLatencyMsByStream.selfVideo, 'ms')}`,
-        `Persisted chunks: ${summary.recorder.persistedChunkCount}`,
-        `Persisted bytes: ${this.formatBytes(summary.recorder.persistedChunkBytes)}`,
-        `Average chunk write: ${this.formatMetric(summary.recorder.avgPersistedChunkDurationMs, 'ms')}`,
-        `Self-video bitrate: ${this.formatBitrate(summary.recorder.lastSelfVideoBitrate)}`,
-        `Audio bridge: mode=${summary.recorder.lastAudioBridgeMode ?? 'n/a'}, suppressed=${this.formatBool(summary.recorder.lastAudioBridgeSuppressed)}, enabled=${this.formatBool(summary.recorder.lastAudioBridgeEnabled)}`,
-      ].join('\n');
+      this.el.recorderEl.textContent = buildRecorderText(snapshot);
     }
 
     if (this.el.uploadEl) {
-      this.el.uploadEl.textContent = [
-        `Chunk uploads: ${summary.upload.chunkCount}`,
-        `Retries: ${summary.upload.retryCount}`,
-        `Retried chunks: ${summary.upload.retriedChunkCount}`,
-        `Transferred bytes: ${this.formatBytes(summary.upload.totalChunkBytes)}`,
-        `Average chunk duration: ${this.formatMetric(summary.upload.avgChunkDurationMs, 'ms')}`,
-        `Latest chunk throughput: ${this.formatMetric(summary.upload.lastChunkThroughputMbps, 'MB/s')}`,
-        `Completed files: ${summary.upload.fileCount}`,
-        `Uploaded to Drive: ${summary.upload.uploadedCount}`,
-        `Local fallbacks: ${summary.upload.fallbackCount}`,
-        `Average file duration: ${this.formatMetric(summary.upload.avgFileDurationMs, 'ms')}`,
-        `Latest fallback rate: ${summary.upload.lastFallbackRate ?? 'n/a'}`,
-        `Upload concurrency: ${summary.upload.lastConcurrency ?? 'n/a'}`,
-      ].join('\n');
+      this.el.uploadEl.textContent = buildUploadText(snapshot);
     }
 
     if (this.el.captionsEl) {
-      this.el.captionsEl.textContent = [
-        `Current block observers: ${summary.captions.currentObserverCount}`,
-        `Peak block observers: ${summary.captions.maxObserverCount}`,
-      ].join('\n');
+      this.el.captionsEl.textContent = buildCaptionsText(snapshot);
     }
 
     if (this.el.runtimeEl) {
-      this.el.runtimeEl.textContent = [
-        `State: ${summary.runtime.state}`,
-        `Samples: ${summary.runtime.sampleCount}`,
-        `Hardware threads: ${summary.runtime.hardwareConcurrency ?? 'n/a'}`,
-        `Device memory: ${this.formatMetric(summary.runtime.deviceMemoryGb, 'GB')}`,
-        `Used JS heap: ${this.formatMetric(summary.runtime.lastHeapUsedMb, 'MB')}`,
-        `Total JS heap: ${this.formatMetric(summary.runtime.lastTotalHeapMb, 'MB')}`,
-        `Max JS heap seen: ${this.formatMetric(summary.runtime.maxHeapUsedMb, 'MB')}`,
-        `JS heap limit: ${this.formatMetric(summary.runtime.lastHeapLimitMb, 'MB')}`,
-        `CPU pressure proxy (event loop lag): current=${this.formatMetric(summary.runtime.lastEventLoopLagMs, 'ms')}, avg=${this.formatMetric(summary.runtime.avgEventLoopLagMs, 'ms')}, max=${this.formatMetric(summary.runtime.maxEventLoopLagMs, 'ms')}`,
-        `Long tasks: count=${summary.runtime.longTaskCount}, last=${this.formatMetric(summary.runtime.lastLongTaskMs, 'ms')}, max=${this.formatMetric(summary.runtime.maxLongTaskMs, 'ms')}`,
-      ].join('\n');
+      this.el.runtimeEl.textContent = buildRuntimeText(snapshot);
     }
 
     if (this.el.systemEl) {
@@ -236,11 +208,11 @@ export class DebugDashboard {
   private createEventRow(entry: PerfEventEntry): HTMLTableRowElement {
     const row = document.createElement('tr');
     row.innerHTML = [
-      `<td>${this.escapeHtml(this.formatTimestamp(entry.ts))}</td>`,
-      `<td>${this.escapeHtml(entry.source)}</td>`,
-      `<td>${this.escapeHtml(entry.scope)}</td>`,
-      `<td>${this.escapeHtml(entry.event)}</td>`,
-      `<td>${this.escapeHtml(this.formatFields(entry))}</td>`,
+      `<td>${escapeHtml(formatTimestamp(entry.ts))}</td>`,
+      `<td>${escapeHtml(entry.source)}</td>`,
+      `<td>${escapeHtml(entry.scope)}</td>`,
+      `<td>${escapeHtml(entry.event)}</td>`,
+      `<td>${escapeHtml(formatEventFields(entry))}</td>`,
     ].join('');
     return row;
   }
@@ -265,39 +237,6 @@ export class DebugDashboard {
     const container = this.el.eventsScrollEl;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }
-
-  private formatFields(entry: PerfEventEntry): string {
-    if (!Object.keys(entry.fields).length) return '-';
-    return Object.entries(entry.fields)
-      .map(([key, value]) => `${key}=${String(value)}`)
-      .join(', ');
-  }
-
-  private formatTimestamp(ts: number): string {
-    const date = new Date(ts);
-    const ms = String(date.getMilliseconds()).padStart(3, '0');
-    return `${date.toLocaleString()} .${ms}`;
-  }
-
-  private formatMetric(value: number | null | undefined, unit: string): string {
-    return value == null ? 'n/a' : `${value} ${unit}`;
-  }
-
-  private formatBytes(value: number): string {
-    if (!Number.isFinite(value) || value <= 0) return '0 B';
-    if (value >= 1024 * 1024 * 1024) return `${Math.round((value / 1024 / 1024 / 1024) * 100) / 100} GB`;
-    if (value >= 1024 * 1024) return `${Math.round((value / 1024 / 1024) * 10) / 10} MB`;
-    if (value >= 1024) return `${Math.round((value / 1024) * 10) / 10} KB`;
-    return `${value} B`;
-  }
-
-  private formatBitrate(value: number | null): string {
-    return value == null ? 'n/a' : `${Math.round((value / 1_000_000) * 100) / 100} Mbps`;
-  }
-
-  private formatBool(value: boolean | null): string {
-    return value == null ? 'n/a' : value ? 'yes' : 'no';
   }
 
   private downloadSnapshot() {
@@ -385,14 +324,5 @@ export class DebugDashboard {
     } catch {
       return null;
     }
-  }
-
-  private escapeHtml(value: string): string {
-    return value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
   }
 }

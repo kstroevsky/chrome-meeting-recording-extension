@@ -1,3 +1,10 @@
+/**
+ * @file offscreen/RecorderAudio.ts
+ *
+ * Audio-specific helpers used by `RecorderEngine` for microphone mixing and
+ * local playback restoration.
+ */
+
 import { describeMediaError } from './RecorderSupport';
 
 type RecorderAudioDeps = {

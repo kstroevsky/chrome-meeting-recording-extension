@@ -1,3 +1,9 @@
+/**
+ * @file offscreen/RecorderSupport.ts
+ *
+ * Small recorder-focused error formatting helpers.
+ */
+
 export function describeMediaError(err: unknown): string {
   const error = err as any;
   const name = error?.name || 'Error';

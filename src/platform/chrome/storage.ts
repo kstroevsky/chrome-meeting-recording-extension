@@ -1,3 +1,9 @@
+/**
+ * @file platform/chrome/storage.ts
+ *
+ * Shared wrappers around local/session extension storage.
+ */
+
 type StorageValues = Record<string, unknown>;
 
 export function hasLocalStorageArea(): boolean {

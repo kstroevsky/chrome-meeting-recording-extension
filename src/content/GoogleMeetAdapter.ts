@@ -1,3 +1,9 @@
+/**
+ * @file content/GoogleMeetAdapter.ts
+ *
+ * Google Meet implementation of `MeetingProviderAdapter`.
+ */
+
 import type { MeetingProviderAdapter, CaptionBlockData } from './MeetingProviderAdapter';
 import type { MeetingProviderInfo } from '../shared/provider';
 
