@@ -1,27 +1,33 @@
 # Chrome Extension Analysis and Documentation
 
 ## Project Overview
-This extension records Google Meet sessions (tab video/audio plus optional microphone) and exports caption transcripts.
+This extension records Google Meet sessions (tab video/audio plus optional microphone and optional self video) and exports caption transcripts.
 
 It is built on Manifest V3 and uses an Offscreen Document for media APIs that are unavailable in service workers.
 
 It supports two recording storage modes:
-- Local mode: stream chunks to OPFS, then trigger a download via background.
-- Drive mode: stream chunks directly to Google Drive via resumable upload.
+- Local mode: record to local temp storage, then download after stop.
+- Drive mode: record to local temp storage, then upload finished files to Google Drive after stop.
+
+Current architectural principle:
+- Recording and network upload are separate phases.
+- Capture is local-first.
+- Upload continues even if the popup is closed.
 
 ## Architecture (Manifest V3)
 
 ### 1. Background Service Worker (`src/background.ts`)
 Role:
-- Orchestrator and policy boundary.
+- Orchestrator and Chrome API boundary.
 
 Responsibilities:
 - Receives popup commands (`START_RECORDING`, `STOP_RECORDING`, `GET_RECORDING_STATUS`).
 - Ensures Offscreen is alive and connected through `OffscreenManager`.
 - Acquires tab capture stream ID (`chrome.tabCapture.getMediaStreamId`).
 - Handles Drive token requests (`GET_DRIVE_TOKEN`) through `fetchDriveTokenWithFallback`.
-- Maintains recording keepalive and badge state.
+- Maintains keepalive while phase is `recording` or `uploading`.
 - Handles local-file save requests (`OFFSCREEN_SAVE`) through `chrome.downloads.download`.
+- Preserves state across service worker restarts via `chrome.storage.session` phase rehydration.
 
 Drive auth behavior:
 - Silent auth first: `chrome.identity.getAuthToken({ interactive: false })`.
@@ -30,13 +36,15 @@ Drive auth behavior:
 
 ### 2. Offscreen Document (`src/offscreen.ts`, `offscreen.html`)
 Role:
-- Recording runtime (DOM-capable context).
+- Recording runtime and post-stop persistence runtime.
 
 Responsibilities:
 - Owns `RecorderEngine` lifecycle.
 - Maintains persistent `chrome.runtime.Port` to background and reconnect logic.
-- Chooses storage target per run (`LocalFileTarget` or `DriveTarget`) based on `storageMode`.
-- In Drive mode, derives one per-recording folder name and reuses it for tab, mic, and optional self-video files.
+- Writes all live recording data to local storage targets.
+- Runs `RecordingFinalizer` after stop.
+- In Drive mode, uploads finished files sequentially and falls back to local download per file if needed.
+- Broadcasts lifecycle phase (`idle`, `recording`, `uploading`).
 
 ### 3. Recorder Engine (`src/offscreen/RecorderEngine.ts`)
 Role:
@@ -45,27 +53,44 @@ Role:
 Responsibilities:
 - Captures tab stream from background-provided `streamId`.
 - Captures microphone stream best-effort.
-- Starts independent tab and mic `MediaRecorder` instances.
-- Optionally starts a third self-video `MediaRecorder` (camera-only stream) when enabled from popup.
-- Streams chunks to selected `StorageTarget`.
+- Optionally captures self-video camera stream.
+- Starts independent `MediaRecorder` instances per stream.
+- Streams chunks only to local `StorageTarget` implementations.
 - Tracks recording state machine (`idle`, `starting`, `recording`, `stopping`).
+- Returns sealed local artifacts only after write-drain is complete.
 
-### 4. Drive Upload Subsystem (`src/offscreen/DriveTarget.ts`, `src/offscreen/drive/*`)
+### 4. Local Storage Subsystem (`src/offscreen/LocalFileTarget.ts`)
 Role:
-- Direct cloud streaming and folder organization.
+- Disk-backed live recording sink.
+
+Responsibilities:
+- Streams chunks to OPFS during recording.
+- Serializes writes to avoid concurrent OPFS write failures.
+- Seals the file on `close()`.
+- Returns `{ filename, file, opfsFilename, cleanup() }` to the caller.
+
+### 5. Drive Upload Subsystem (`src/offscreen/RecordingFinalizer.ts`, `src/offscreen/DriveTarget.ts`, `src/offscreen/drive/*`)
+Role:
+- Post-stop file persistence and cloud upload.
 
 Responsibilities by file:
+- `RecordingFinalizer.ts`:
+  - Sorts sealed artifacts into deterministic upload order (`tab`, `mic`, `selfVideo`).
+  - In local mode, requests background downloads.
+  - In Drive mode, uploads each sealed file sequentially.
+  - Falls back per-file to local download if Drive upload fails.
 - `DriveTarget.ts`:
-  - Opens resumable upload session.
-  - Buffers chunks up to 5 MB and flushes with `Content-Range`.
-  - Handles finalization and transient retry logic.
+  - Opens Drive resumable upload sessions for finished files.
+  - Uploads in fixed chunks with `Content-Range`.
+  - Probes committed byte range after transient failure.
+  - Reuses a cached OAuth token during one file upload.
 - `drive/DriveFolderResolver.ts`:
   - Finds or creates target folder hierarchy.
   - Caches per-recording folder creation promises to avoid duplicate creates.
 - `drive/constants.ts`:
-  - Drive endpoint constants and root folder name (`Google Meet Records`).
+  - Drive endpoints, root folder name, and upload tuning constants.
 - `drive/request.ts`:
-  - Auth-aware request helper with one retry for `401/403`.
+  - Token caching helper plus auth-aware retry helper.
 - `drive/errors.ts`:
   - Normalizes Drive error details and hint text.
 - `drive/folderNaming.ts`:
@@ -76,7 +101,7 @@ Current folder model:
 - Per-recording folder: `<google-meet-id>-<timestamp>` (created per run).
 - Tab, mic, and optional self-video files from one run go into the same per-recording folder.
 
-### 5. Popup UI (`src/popup.ts`, `src/popup/*`)
+### 6. Popup UI (`src/popup.ts`, `src/popup/*`)
 Role:
 - User control surface.
 
@@ -85,8 +110,12 @@ Responsibilities:
 - Selects storage mode (`local` or `drive`).
 - Downloads transcript from content script data.
 - Handles microphone priming flow.
+- Reflects current phase and upload summary.
 
-### 6. Content Script (`src/scrapingScript.ts`)
+Important property:
+- Popup is not part of the recording/upload control plane. It can be closed safely while upload continues.
+
+### 7. Content Script (`src/scrapingScript.ts`)
 Role:
 - Caption collector.
 
@@ -117,10 +146,9 @@ graph TB
     P -->|START/STOP/STATUS| B
     P -->|GET_TRANSCRIPT/RESET| C
     B <-->|Port: RPC + events| O
-    O -->|getUserMedia(streamId)| M
-    O -->|Drive REST upload + folder APIs| G
-    O -->|OFFSCREEN_SAVE (local mode only)| B
-    B -->|downloads.download (local mode only)| D
+    B -->|downloads.download| D
+    O -->|getUserMedia / MediaRecorder| M
+    O -->|finished-file upload after stop| G
 ```
 
 ### 2. Recording Flow (Local and Drive)
@@ -142,34 +170,32 @@ sequenceDiagram
     O->>O: RecorderEngine.startFromStreamId()
     O->>O: start tab recorder
     O->>O: try start mic recorder
+    O->>O: try start self-video recorder
+    O->>O: write chunks to local StorageTarget
+    O-->>B: RECORDING_STATE(phase=recording)
+
+    User->>P: Stop Recording
+    P->>B: STOP_RECORDING
+    B->>O: OFFSCREEN_STOP
 
     alt storageMode = local
-        O->>O: open LocalFileTarget for tab/mic
-        O-->>B: RECORDING_STATE(recording=true)
-        User->>P: Stop Recording
-        P->>B: STOP_RECORDING
-        B->>O: OFFSCREEN_STOP
-        O->>O: finalize OPFS files
-        O-->>B: OFFSCREEN_SAVE(tab)
-        O-->>B: OFFSCREEN_SAVE(mic)
-        B->>B: downloads.download for each blob
+        O->>O: stop recorders and seal local artifacts
+        O->>O: RecordingFinalizer requests local saves
+        O-->>B: OFFSCREEN_SAVE(tab/mic/selfVideo)
+        B->>B: downloads.download for each file
+        O-->>B: RECORDING_STATE(phase=idle)
     else storageMode = drive
-        O->>B: GET_DRIVE_TOKEN
-        B->>B: silent auth then interactive fallback if needed
-        B-->>O: token or error
-        O->>G: find/create Google Meet Records
-        O->>G: find/create meet-id-timestamp folder
-        O->>G: create resumable session with parents
-        O->>G: PUT chunk stream for tab/mic
-        O-->>B: RECORDING_STATE(recording=true)
-        User->>P: Stop Recording
-        P->>B: STOP_RECORDING
-        B->>O: OFFSCREEN_STOP
-        O->>G: finalize uploads (close targets)
+        O-->>B: RECORDING_STATE(phase=uploading)
+        O->>O: stop recorders and seal local artifacts
+        O->>G: upload tab file
+        O->>G: upload mic file
+        O->>G: upload self-video file
+        opt one upload fails
+            O-->>B: OFFSCREEN_SAVE(failed file)
+            B->>B: downloads.download fallback file
+        end
+        O-->>B: RECORDING_STATE(phase=idle, uploadSummary)
     end
-
-    O-->>B: RECORDING_STATE(recording=false)
-    B-->>P: RECORDING_STATE(recording=false)
 ```
 
 ### 3. Drive OAuth Token Fallback
@@ -208,6 +234,7 @@ sequenceDiagram
 
     O->>B: runtime.connect name=offscreen
     O->>B: Port message OFFSCREEN_READY
+    O->>B: Port message RECORDING_STATE(current phase)
     B->>B: signalReady resolves promise
     B->>O: OFFSCREEN_START via Port RPC
 ```
@@ -218,23 +245,22 @@ stateDiagram-v2
     [*] --> idle
 
     idle --> starting : startFromStreamId
-    starting --> recording : tab recorder onstart
+    starting --> recording : first recorder onstart
     starting --> idle : startup error or timeout
 
     recording --> stopping : stop called
-    recording --> stopping : video track ended
+    recording --> stopping : captured video track ended
 
-    stopping --> idle : activeRecorders reaches zero
+    stopping --> idle : all recorders finalized
 
-    note right of starting
-        openTarget is selected per file:
-        LocalFileTarget in local mode
-        DriveTarget in drive mode
+    note right of recording
+        All live chunks go only to local StorageTarget
+        implementations such as LocalFileTarget.
     end note
 
     note right of stopping
-        Local mode sends OFFSCREEN_SAVE
-        Drive mode finalizes cloud uploads
+        Drive upload is not part of RecorderEngine.
+        It begins only after sealed artifacts are returned.
     end note
 ```
 
@@ -278,40 +304,66 @@ flowchart TD
     I --> J[Offscreen mic capture can proceed next run]
 ```
 
-### 8. Drive Folder Resolution and Session Init
+### 8. Post-Stop Persistence Pipeline
 ```mermaid
 flowchart TD
-    A[DriveTarget initSession] --> B[Resolve upload parent folder]
-    B --> C[Find or create root folder Google Meet Records]
-    C --> D[Find or create recording folder meet-id-timestamp]
-    D --> E[Build file metadata with parents folderId]
-    E --> F[POST resumable session]
-    F --> G{Session response ok}
-    G -->|yes| H[Store session URI]
-    G -->|no| I[Parse error detail and throw formatted error]
+    A[RecorderEngine returns sealed artifacts] --> B{storageMode}
+
+    B -->|local| C[RecordingFinalizer creates blob URLs]
+    C --> D[Background downloads files]
+    D --> E[Cleanup OPFS temp after successful handoff]
+
+    B -->|drive| F[Sort artifacts tab -> mic -> selfVideo]
+    F --> G[Upload next file to Drive]
+    G --> H{Upload succeeded}
+    H -->|yes| I[Cleanup OPFS temp]
+    H -->|no| J[Request local fallback download]
+    J --> K[Keep OPFS temp until download succeeds]
+    I --> L{More files}
+    K --> L
+    L -->|yes| G
+    L -->|no| M[Broadcast phase=idle with summary]
+```
+
+### 9. Drive Folder Resolution and Session Init
+```mermaid
+flowchart TD
+    A[RecordingFinalizer uploads file] --> B[DriveTarget initSession]
+    B --> C[Resolve upload parent folder]
+    C --> D[Find or create root folder Google Meet Records]
+    D --> E[Find or create recording folder meet-id-timestamp]
+    E --> F[Build file metadata with parents folderId]
+    F --> G[POST resumable session]
+    G --> H{Session response ok}
+    H -->|yes| I[Store session URI]
+    H -->|no| J[Parse error detail and throw formatted error]
 ```
 
 ## File Breakdown
 
 | File | Context | Description |
 | :--- | :--- | :--- |
-| `src/background.ts` | Service Worker | Message entry point, recording orchestration, Drive token endpoint. |
+| `src/background.ts` | Service Worker | Message entry point, recording orchestration, keepalive control, Drive token endpoint. |
 | `src/background/OffscreenManager.ts` | Service Worker | Offscreen lifecycle, Port wiring, badge state, local downloads from OFFSCREEN_SAVE. |
 | `src/background/driveAuth.ts` | Service Worker | Silent-plus-interactive OAuth fallback and bad-client-id diagnostics. |
-| `src/offscreen.ts` | Offscreen Document | Offscreen bootstrap, Port RPC server, storage-target selection. |
-| `src/offscreen/RecorderEngine.ts` | Offscreen Document | Tab/mic capture and recorder state machine. |
-| `src/offscreen/LocalFileTarget.ts` | Offscreen Document | OPFS streaming target used in local mode. |
-| `src/offscreen/DriveTarget.ts` | Offscreen Document | Drive resumable upload target used in Drive mode. |
-| `src/offscreen/drive/constants.ts` | Offscreen Document | Drive URLs, MIME constants, root folder name. |
-| `src/offscreen/drive/request.ts` | Offscreen Document | Auth-aware Drive request retry helper. |
+| `src/offscreen.ts` | Offscreen Document | Offscreen bootstrap, Port RPC server, phase updates, local-first recording runtime. |
+| `src/offscreen/RecorderEngine.ts` | Offscreen Document | Tab/mic/self-video capture and recorder state machine. |
+| `src/offscreen/LocalFileTarget.ts` | Offscreen Document | OPFS-backed live recording target. |
+| `src/offscreen/RecordingFinalizer.ts` | Offscreen Document | Post-stop local save / Drive upload coordinator. |
+| `src/offscreen/DriveTarget.ts` | Offscreen Document | Drive resumable uploader for one finished file. |
+| `src/offscreen/errors.ts` | Offscreen Document | Runtime error formatting helpers. |
+| `src/offscreen/drive/constants.ts` | Offscreen Document | Drive URLs, MIME constants, folder name, upload tuning constants. |
+| `src/offscreen/drive/request.ts` | Offscreen Document | Token caching and auth-aware Drive retry helper. |
 | `src/offscreen/drive/errors.ts` | Offscreen Document | Drive response detail extraction and hint formatting. |
 | `src/offscreen/drive/folderNaming.ts` | Offscreen Document | Per-recording folder naming from generated filenames. |
 | `src/offscreen/drive/DriveFolderResolver.ts` | Offscreen Document | Root/per-recording folder lookup and creation. |
 | `src/popup.ts` | Popup | Popup entrypoint. |
-| `src/popup/PopupController.ts` | Popup | UI wiring for start/stop, transcript save, storage mode. |
+| `src/popup/PopupController.ts` | Popup | UI wiring for start/stop, transcript save, phase display, upload summary. |
 | `src/popup/MicPermissionService.ts` | Popup | Microphone permission query and setup-tab fallback. |
+| `src/popup/CameraPermissionService.ts` | Popup | Camera permission query and setup-tab fallback. |
 | `src/scrapingScript.ts` | Content Script | Meet caption observation and transcript aggregation. |
 | `src/micsetup.ts` | Extension Tab | Dedicated microphone permission primer page. |
+| `src/camsetup.ts` | Extension Tab | Dedicated camera permission primer page. |
 | `src/shared/protocol.ts` | Shared | Typed message and RPC protocol definitions. |
 | `src/shared/rpc.ts` | Shared | Port-based RPC client/server transport. |
 | `src/shared/timeouts.ts` | Shared | Timeout constants for capture and startup paths. |
@@ -322,30 +374,49 @@ flowchart TD
 ## Key Concepts and Logic
 
 ### Offscreen Pattern
-MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hidden DOM context for media capture and encoding.
+MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hidden DOM context for media capture, OPFS access, and post-stop upload orchestration.
 
-### Storage Mode Split
+### Local-First Storage Model
 - Local mode:
   - Stream chunks to OPFS (`LocalFileTarget`).
-  - On completion, offscreen sends blob URLs to background (`OFFSCREEN_SAVE`) and background triggers downloads.
+  - On completion, offscreen asks background to download the sealed files.
 - Drive mode:
-  - Stream chunks directly to Drive (`DriveTarget`).
-  - No background download step for recording files.
+  - Stream chunks to OPFS (`LocalFileTarget`).
+  - After stop, upload the sealed files to Drive (`RecordingFinalizer` + `DriveTarget`).
+  - Fall back per-file to local download if upload fails.
 
-### Drive Folder Determinism per Run
-`offscreen.ts` sets one `currentDriveRecordingFolderName` on first target open after `OFFSCREEN_START`. The same value is reused by both tab and mic targets, keeping both files together.
+### Deterministic Per-Run Drive Foldering
+`RecordingFinalizer` derives one per-recording folder name from the first sealed filename after stop. The same value is reused for tab, mic, and optional self-video uploads from that run.
 
 ### Resumable Upload Behavior
-`DriveTarget` uses bounded buffering and resumable PUT uploads:
-- Flush threshold: 5 MB.
-- Non-final chunk success: HTTP `308`.
-- Final chunk success: HTTP `200` or `201`.
-- `500/503` triggers commit-offset probe and retry.
+`DriveTarget` uploads finished files using resumable PUT requests:
+- chunk size: `2 MiB`
+- non-final chunk success: HTTP `308`
+- final chunk success: HTTP `200` or `201`
+- `408`, `429`, `5xx`, and network aborts trigger committed-offset probe and retry
 
 ### OAuth and Misconfiguration Diagnostics
 `driveAuth.ts` increases reliability and clarity:
-- Uses silent auth first, interactive fallback second.
-- Detects `bad client id` and returns explicit remediation including extension ID and manifest client ID.
+- uses silent auth first, interactive fallback second
+- detects `bad client id` and returns explicit remediation including extension ID and manifest client ID
+
+### Popup Closure Safety
+Recording and upload state live in background/offscreen. The popup is just a client. Closing the popup does not stop recording or upload.
 
 ### Caption Selector Fragility
 Caption scraping depends on Meet DOM selectors (for example `.ygicle`, `.NWpY1d`). These may change when Meet frontend updates.
+
+## Performance Notes
+
+Current performance-sensitive design choices:
+- recording is disk-backed rather than RAM-buffered for long meetings
+- upload happens after stop, not during capture
+- Drive uploads are sequential for reliability
+- Drive auth token is cached for the lifetime of one file upload, avoiding one token fetch per chunk
+- tab recording prefers VP8 to reduce CPU cost when multiple recorders run at once
+
+Potential future improvements:
+- adaptive webcam profile selection based on actual camera capability
+- dynamic Drive chunk sizing based on throughput
+- optional limited upload parallelism after long-run reliability validation
+- lightweight upload telemetry for retry counts and upload duration
