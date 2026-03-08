@@ -1,3 +1,5 @@
+;(globalThis as any).__DEV_BUILD__ = false;
+
 // Mock global Chrome API for tests
 Object.assign(global, {
   chrome: {
@@ -11,6 +13,12 @@ Object.assign(global, {
       onConnect: {
         addListener: jest.fn()
       },
+      connect: jest.fn().mockReturnValue({
+        disconnect: jest.fn(),
+        onDisconnect: {
+          addListener: jest.fn(),
+        },
+      }),
       getManifest: jest.fn(() => ({
         oauth2: {
           client_id: 'manifest-client-id.apps.googleusercontent.com',
@@ -37,6 +45,7 @@ Object.assign(global, {
           return {};
         }),
         set: jest.fn().mockResolvedValue(undefined),
+        remove: jest.fn().mockResolvedValue(undefined),
       },
       onChanged: {
         addListener: jest.fn(),
@@ -45,6 +54,7 @@ Object.assign(global, {
     },
     tabs: {
       query: jest.fn().mockResolvedValue([{ url: 'https://meet.google.com/abc-defg-hij' }]),
+      create: jest.fn().mockResolvedValue(undefined),
       sendMessage: jest.fn().mockResolvedValue(undefined),
     },
     downloads: {

@@ -1,5 +1,5 @@
 import { PerfDebugStore } from '../src/background/PerfDebugStore';
-import { normalizePerfSettings, type PerfEventEntry } from '../src/shared/perf';
+import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY, normalizePerfSettings, type PerfEventEntry } from '../src/shared/perf';
 
 function event(
   scope: string,
@@ -16,6 +16,15 @@ function event(
 }
 
 describe('PerfDebugStore', () => {
+  beforeEach(() => {
+    (globalThis as any).__DEV_BUILD__ = true;
+  });
+
+  afterEach(() => {
+    (globalThis as any).__DEV_BUILD__ = false;
+    jest.restoreAllMocks();
+  });
+
   it('aggregates recorder, upload, caption, and runtime metrics into one snapshot', () => {
     const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
 
@@ -45,8 +54,15 @@ describe('PerfDebugStore', () => {
     store.record(event('runtime', 'sample', {
       phase: 'uploading',
       activeRecorders: 0,
+      hardwareConcurrency: 8,
+      deviceMemoryGb: 16,
       usedJSHeapSizeMb: 48.2,
+      totalJSHeapSizeMb: 96.4,
       jsHeapSizeLimitMb: 256,
+      eventLoopLagMs: 3.1,
+      longTaskCount: 2,
+      lastLongTaskMs: 112.5,
+      maxLongTaskMs: 130.2,
     }));
 
     const snapshot = store.getSnapshot();
@@ -60,18 +76,48 @@ describe('PerfDebugStore', () => {
     expect(snapshot.summary.upload.chunkCount).toBe(1);
     expect(snapshot.summary.upload.retryCount).toBe(1);
     expect(snapshot.summary.upload.fallbackCount).toBe(1);
+    expect(snapshot.summary.runtime.hardwareConcurrency).toBe(8);
+    expect(snapshot.summary.runtime.deviceMemoryGb).toBe(16);
     expect(snapshot.summary.runtime.lastHeapUsedMb).toBe(48.2);
+    expect(snapshot.summary.runtime.lastTotalHeapMb).toBe(96.4);
+    expect(snapshot.summary.runtime.lastEventLoopLagMs).toBe(3.1);
+    expect(snapshot.summary.runtime.longTaskCount).toBe(2);
   });
 
   it('clears collected metrics when debug mode is disabled', () => {
     const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
     store.record(event('captions', 'observer_count', { activeBlockObservers: 2 }));
 
-    store.setSettings(normalizePerfSettings({ debugMode: false }));
+    (globalThis as any).__DEV_BUILD__ = false;
+    store.setSettings(normalizePerfSettings({}));
     const snapshot = store.getSnapshot();
 
     expect(snapshot.enabled).toBe(false);
     expect(snapshot.entries).toHaveLength(0);
     expect(snapshot.summary.totalEvents).toBe(0);
+  });
+
+  it('keeps the full active-session event history until explicitly cleared', () => {
+    const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
+    store.record(event('runtime', 'sample', { phase: 'recording' }));
+    store.record(event('runtime', 'sample', { phase: 'uploading' }));
+    const snapshot = store.getSnapshot();
+
+    expect(snapshot.entries).toHaveLength(2);
+    expect(snapshot.entries[0].fields.phase).toBe('recording');
+    expect(snapshot.entries[1].fields.phase).toBe('uploading');
+  });
+
+  it('clears in-memory and persisted diagnostics snapshots on clear()', async () => {
+    const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
+    store.record(event('runtime', 'sample', { phase: 'recording' }));
+
+    store.clear();
+    await Promise.resolve();
+
+    const snapshot = store.getSnapshot();
+    expect(snapshot.entries).toHaveLength(0);
+    expect(snapshot.summary.totalEvents).toBe(0);
+    expect(chrome.storage.session.remove).toHaveBeenCalledWith(PERF_DEBUG_SNAPSHOT_STORAGE_KEY);
   });
 });

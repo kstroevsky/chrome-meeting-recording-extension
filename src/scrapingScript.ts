@@ -100,7 +100,6 @@ class TranscriptCollector {
     this.observeCaptionsRegionAppearance();
     this.exposeWindowApi();
     this.exposeMessageApi();
-    console.log('Transcript collector ready');
   }
 
   getTranscriptText(): string {
@@ -170,7 +169,6 @@ class TranscriptCollector {
     });
 
     this.captionObserver.observe(region, { childList: true, subtree: true });
-    console.log('Caption observer attached');
 
     region.querySelectorAll<HTMLElement>(MEET_SELECTORS.captionBlock).forEach((el) => this.scanSpeakerBlock(el));
   }

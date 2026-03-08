@@ -1,3 +1,5 @@
+import { isDevBuild } from './build';
+
 export type AudioPlaybackBridgeMode = 'always' | 'auto';
 export type PerfSource = 'background' | 'offscreen' | 'captions' | 'popup' | 'unknown';
 export type PerfPhase = 'idle' | 'recording' | 'uploading';
@@ -17,6 +19,7 @@ export type PerfSettings = PerfFlags & {
 export const PERF_SETTINGS_STORAGE_KEY = 'perfSettings';
 export const PERF_DEBUG_SNAPSHOT_STORAGE_KEY = 'perfDebugSnapshot';
 export const PERF_EVENT_BUFFER_LIMIT = 120;
+export const PERF_EVENT_MAX_AGE_MS = 15 * 60 * 1000;
 
 const DEFAULT_PERF_SETTINGS: PerfSettings = {
   audioPlaybackBridgeMode: 'always',
@@ -24,7 +27,7 @@ const DEFAULT_PERF_SETTINGS: PerfSettings = {
   extendedTimeslice: false,
   dynamicDriveChunkSizing: false,
   parallelUploadConcurrency: 1,
-  debugMode: false,
+  debugMode: isDevBuild(),
 };
 
 export const PERF_FLAGS: PerfFlags = {
@@ -88,9 +91,18 @@ export type PerfDebugSummary = {
     sampleCount: number;
     state: PerfPhase;
     activeRecorders: number;
+    hardwareConcurrency: number | null;
+    deviceMemoryGb: number | null;
     lastHeapUsedMb: number | null;
+    lastTotalHeapMb: number | null;
     maxHeapUsedMb: number | null;
     lastHeapLimitMb: number | null;
+    lastEventLoopLagMs: number | null;
+    avgEventLoopLagMs: number | null;
+    maxEventLoopLagMs: number | null;
+    longTaskCount: number;
+    lastLongTaskMs: number | null;
+    maxLongTaskMs: number | null;
   };
 };
 
@@ -137,7 +149,7 @@ export function normalizePerfSettings(raw?: unknown): PerfSettings {
     extendedTimeslice: value.extendedTimeslice === true,
     dynamicDriveChunkSizing: value.dynamicDriveChunkSizing === true,
     parallelUploadConcurrency: value.parallelUploadConcurrency === 2 ? 2 : DEFAULT_PERF_SETTINGS.parallelUploadConcurrency,
-    debugMode: value.debugMode === true,
+    debugMode: isDevBuild(),
   };
 }
 
@@ -246,11 +258,7 @@ function emitPerfEntry(scope: string, event: string, fields: Record<string, stri
 
 export function logPerf(log: (...a: any[]) => void, scope: string, event: string, fields?: PerfFields): void {
   const cleaned = cleanPerfFields(fields);
-  if (Object.keys(cleaned).length === 0) {
-    log(`[perf:${scope}] ${event}`);
-  } else {
-    log(`[perf:${scope}] ${event}`, cleaned);
-  }
+  void log;
   emitPerfEntry(scope, event, cleaned);
 }
 

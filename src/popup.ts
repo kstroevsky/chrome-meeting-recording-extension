@@ -26,8 +26,7 @@ const controller = new PopupController({
   storageModeSelect: document.getElementById('storage-mode') as HTMLSelectElement | null,
   recordSelfVideoCheckbox: document.getElementById('record-self-video') as HTMLInputElement | null,
   selfVideoHighQualityCheckbox: document.getElementById('self-video-high-quality') as HTMLInputElement | null,
-  debugModeCheckbox: document.getElementById('debug-mode') as HTMLInputElement | null,
-  debugMetricsEl: document.getElementById('debug-metrics') as HTMLElement | null,
+  openDiagnosticsBtn: document.getElementById('open-diagnostics') as HTMLButtonElement | null,
   recordingStatusEl: document.getElementById('recording-status') as HTMLElement | null,
 });
 

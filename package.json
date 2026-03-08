@@ -2,6 +2,7 @@
     "name": "google-meet-caption-extension",
     "version": "1.0.0",
     "scripts": {
+        "dev": "webpack --mode=development",
         "build": "webpack --mode=production",
         "watch": "webpack --mode=development --watch",
         "test": "jest"
