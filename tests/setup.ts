@@ -1,3 +1,5 @@
+;(globalThis as any).__DEV_BUILD__ = false;
+
 // Mock global Chrome API for tests
 Object.assign(global, {
   chrome: {
@@ -45,6 +47,7 @@ Object.assign(global, {
     },
     tabs: {
       query: jest.fn().mockResolvedValue([{ url: 'https://meet.google.com/abc-defg-hij' }]),
+      create: jest.fn().mockResolvedValue(undefined),
       sendMessage: jest.fn().mockResolvedValue(undefined),
     },
     downloads: {

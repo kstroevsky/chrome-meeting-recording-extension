@@ -16,6 +16,14 @@ function event(
 }
 
 describe('PerfDebugStore', () => {
+  beforeEach(() => {
+    (globalThis as any).__DEV_BUILD__ = true;
+  });
+
+  afterEach(() => {
+    (globalThis as any).__DEV_BUILD__ = false;
+  });
+
   it('aggregates recorder, upload, caption, and runtime metrics into one snapshot', () => {
     const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
 
@@ -67,7 +75,8 @@ describe('PerfDebugStore', () => {
     const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
     store.record(event('captions', 'observer_count', { activeBlockObservers: 2 }));
 
-    store.setSettings(normalizePerfSettings({ debugMode: false }));
+    (globalThis as any).__DEV_BUILD__ = false;
+    store.setSettings(normalizePerfSettings({}));
     const snapshot = store.getSnapshot();
 
     expect(snapshot.enabled).toBe(false);
