@@ -1,4 +1,5 @@
 import { DriveTarget } from '../src/offscreen/DriveTarget';
+import { PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
 
 async function bodyToText(body: unknown): Promise<string> {
   if (typeof body === 'string') return body;
@@ -30,12 +31,14 @@ describe('DriveTarget', () => {
     mockOnDone = jest.fn();
     mockFetch = jest.fn();
     global.fetch = mockFetch;
+    resetPerfFlags();
 
     target = new DriveTarget('test.webm', mockGetToken, mockOnDone);
   });
 
   afterEach(() => {
     jest.resetAllMocks();
+    resetPerfFlags();
   });
 
   it('initializes a Drive session and uploads a finished file', async () => {
@@ -168,5 +171,60 @@ describe('DriveTarget', () => {
 
     await target.upload(new Blob(['x']));
     await expect(target.upload(new Blob(['y']))).rejects.toThrow('already used');
+  });
+
+  it('can increase upload chunk size after consecutive fast chunks when enabled', async () => {
+    PERF_FLAGS.dynamicDriveChunkSizing = true;
+    jest.spyOn(global.performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(200)
+      .mockReturnValueOnce(200)
+      .mockReturnValueOnce(400)
+      .mockReturnValueOnce(400)
+      .mockReturnValueOnce(600)
+      .mockReturnValueOnce(600);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ Location: 'https://session-uri' }),
+    });
+    mockFetch
+      .mockResolvedValueOnce({ status: 308 })
+      .mockResolvedValueOnce({ status: 308 })
+      .mockResolvedValueOnce({ status: 200 });
+
+    const file = new Blob([new ArrayBuffer(7 * 1024 * 1024)]);
+    await target.upload(file);
+
+    expect(mockFetch.mock.calls[3][1].headers['Content-Range']).toBe(
+      `bytes ${4 * 1024 * 1024}-${file.size - 1}/${file.size}`
+    );
+  });
+
+  it('can reduce upload chunk size after a slow chunk when enabled', async () => {
+    PERF_FLAGS.dynamicDriveChunkSizing = true;
+    jest.spyOn(global.performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(9_000)
+      .mockReturnValueOnce(9_000)
+      .mockReturnValueOnce(9_200)
+      .mockReturnValueOnce(9_200);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ Location: 'https://session-uri' }),
+    });
+    mockFetch
+      .mockResolvedValueOnce({ status: 308 })
+      .mockResolvedValueOnce({ status: 200 });
+
+    const file = new Blob([new ArrayBuffer(3 * 1024 * 1024)]);
+    await target.upload(file);
+
+    expect(mockFetch.mock.calls[2][1].headers['Content-Range']).toBe(
+      `bytes ${2 * 1024 * 1024}-${file.size - 1}/${file.size}`
+    );
   });
 });
