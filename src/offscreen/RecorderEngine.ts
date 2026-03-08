@@ -1,65 +1,49 @@
 /**
  * @file offscreen/RecorderEngine.ts
  *
- * Core recording logic. Captures tab audio+video and microphone audio
- * using the MediaRecorder API, and streams the finished blobs to a specified
- * `StorageTarget` (e.g. OPFS local disk or Google Drive cloud).
- *
- * This class is intentionally decoupled from Chrome extension APIs:
- * all extension I/O (port messages, storage targets) is injected via `deps`.
- * This makes the engine independently testable with mock callbacks.
- *
- * AudioPlaybackBridge (private inner class):
- *   When Chrome captures a tab stream, it can suppress local playback so
- *   the user goes deaf during recording. The bridge re-routes captured tab
- *   audio back to speakers via an AudioContext to prevent this.
- *
- * @see src/offscreen.ts        — wires the deps and handles Port RPC
- * @see src/shared/timeouts.ts — GUM_MS, RECORDER_START_MS constants
+ * Core recording logic. Captures tab audio+video and optional microphone/self
+ * video streams, writes chunks to local storage targets, and returns sealed
+ * local artifacts once capture stops.
  */
 
 import { withTimeout } from '../shared/async';
+import type { RecordingPhase, RecordingStream } from '../shared/protocol';
 import { TIMEOUTS } from '../shared/timeouts';
 
 type RecordingStateExtra = Record<string, any> | undefined;
 type SelfVideoQuality = 'standard' | 'high';
+type StartOptions = {
+  recordSelfVideo?: boolean;
+  selfVideoQuality?: SelfVideoQuality;
+};
+
+type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
+const CHUNK_TIMESLICE_MS = 2000;
+
+export interface SealedStorageFile {
+  filename: string;
+  file: Blob;
+  opfsFilename?: string;
+  cleanup: () => Promise<void>;
+}
 
 export interface StorageTarget {
-  /** Called for each MediaRecorder ondataavailable chunk. May be called concurrently. */
   write(chunk: Blob): Promise<void>;
-  /** Called once after MediaRecorder.onstop fires. Must finalise/flush any buffered data. */
-  close(): Promise<void>;
+  close(): Promise<SealedStorageFile | null>;
 }
+
+export type CompletedRecordingArtifact = {
+  stream: RecordingStream;
+  artifact: SealedStorageFile;
+};
 
 export type RecorderEngineDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
   error: (...a: any[]) => void;
-
-  /** Send state updates to background/popup */
-  notifyState: (recording: boolean, extra?: RecordingStateExtra) => void;
-
-  /** Ask background to download a blob via blob URL (used only for legacy memory fallback) */
-  requestSave: (filename: string, blobUrl: string) => void;
-
-  /**
-   * Whether to capture and record the local microphone alongside tab audio.
-   * Defaults to true. Set to false to record tab-only (no mic track).
-   */
+  notifyPhase: (phase: RecordingPhase, extra?: RecordingStateExtra) => void;
   enableMicMix?: boolean;
-
-  /**
-   * Optional streaming storage backend (e.g., OPFS or Google Drive).
-   * When provided: chunks are streamed directly by the target instead of buffering in RAM.
-   * When absent: legacy in-memory blob path is used (for dev/testing).
-   */
   openTarget?: (filename: string) => Promise<StorageTarget>;
-};
-
-type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
-type StartOptions = {
-  recordSelfVideo?: boolean;
-  selfVideoQuality?: SelfVideoQuality;
 };
 
 function describeMediaError(err: unknown): string {
@@ -67,31 +51,51 @@ function describeMediaError(err: unknown): string {
   const name = e?.name || 'Error';
   const message = e?.message || String(e);
   const constraint = e?.constraint ? ` constraint=${e.constraint}` : '';
-  return `${name}: ${message}${constraint}`;
+  const code = e?.code != null ? ` code=${e.code}` : '';
+  return `${name}: ${message}${constraint}${code}`;
 }
 
-/**
- * State machine:
- *
- *   idle ──startFromStreamId()──▶ starting ──onstart event──▶ recording
- *    ▲                                                              │
- *    └───────onRecorderStopped() (activeRecorders === 0)──◀──stop()──▶ stopping
- *
- * isRecording() returns true for: starting, recording, stopping
- */
+class InMemoryStorageTarget implements StorageTarget {
+  private readonly chunks: Blob[] = [];
+  private closed = false;
+
+  constructor(
+    private readonly filename: string,
+    private readonly mimeType: string,
+  ) {}
+
+  async write(chunk: Blob): Promise<void> {
+    if (this.closed) throw new Error('In-memory target is closed');
+    this.chunks.push(chunk);
+  }
+
+  async close(): Promise<SealedStorageFile | null> {
+    if (this.closed) return null;
+    this.closed = true;
+    if (!this.chunks.length) return null;
+
+    const file = new File([new Blob(this.chunks, { type: this.mimeType })], this.filename, {
+      type: this.mimeType,
+    });
+
+    return {
+      filename: this.filename,
+      file,
+      cleanup: async () => {},
+    };
+  }
+}
+
 export class RecorderEngine {
-  private deps: RecorderEngineDeps;
+  private readonly deps: RecorderEngineDeps;
 
   private state: EngineState = 'idle';
   private activeRecorders = 0;
+  private runId = 0;
 
   private tabRecorder: MediaRecorder | null = null;
   private micRecorder: MediaRecorder | null = null;
   private selfVideoRecorder: MediaRecorder | null = null;
-
-  private tabChunks: BlobPart[] = [];
-  private micChunks: BlobPart[] = [];
-  private selfVideoChunks: BlobPart[] = [];
 
   private tabStream: MediaStream | null = null;
   private micStream: MediaStream | null = null;
@@ -102,6 +106,9 @@ export class RecorderEngine {
   private selfVideoQuality: SelfVideoQuality = 'standard';
 
   private playback: AudioPlaybackBridge | null = null;
+  private stopPromise: Promise<CompletedRecordingArtifact[]> | null = null;
+  private resolveStop: ((artifacts: CompletedRecordingArtifact[]) => void) | null = null;
+  private finalizedArtifacts: CompletedRecordingArtifact[] = [];
 
   constructor(deps: RecorderEngineDeps) {
     this.deps = deps;
@@ -117,60 +124,70 @@ export class RecorderEngine {
       return;
     }
 
-    this.state = 'starting';
     this.resetRunState();
+    this.state = 'starting';
+    this.runId += 1;
+    const runId = this.runId;
     this.recordSelfVideo = !!options.recordSelfVideo;
     this.selfVideoQuality = options.selfVideoQuality === 'high' ? 'high' : 'standard';
 
-    const baseStream = await this.captureWithStreamId(streamId);
-    this.tabStream = baseStream;
+    try {
+      const baseStream = await this.captureWithStreamId(streamId);
+      this.tabStream = baseStream;
+      this.assertVideoTrack(baseStream);
+      await this.ensureAudiblePlaybackIfSuppressed(baseStream);
+      this.suffix = await this.inferSuffixFromActiveTab().catch(() => 'google-meet');
 
-    this.assertVideoTrack(baseStream);
-
-    // Some Chrome configs suppress local audio playback when capturing tab audio.
-    await this.ensureAudiblePlaybackIfSuppressed(baseStream);
-
-    // Determine suffix (best-effort)
-    this.suffix = await this.inferSuffixFromActiveTab().catch(() => 'google-meet');
-
-    // Setup + start recorders
-    const tabStarted = this.startTabRecorder(baseStream);
-    void this.tryStartMicRecorder().catch((e) => this.deps.warn('Mic recorder start failed', e));
-    if (this.recordSelfVideo) {
-      void this.tryStartSelfVideoRecorder().catch((e) =>
-        this.deps.warn('Self video recorder start failed (continuing without camera stream)', e)
+      const tabStarted = this.startTabRecorder(baseStream);
+      void this.tryStartMicRecorder(runId).catch((e) =>
+        this.deps.warn('Mic recorder start failed', describeMediaError(e))
       );
+      if (this.recordSelfVideo) {
+        void this.tryStartSelfVideoRecorder(runId).catch((e) =>
+          this.deps.warn(
+            'Self video recorder start failed (continuing without camera stream)',
+            describeMediaError(e)
+          )
+        );
+      }
+
+      await tabStarted;
+      if (this.runId === runId && this.state === 'starting') {
+        this.state = 'recording';
+      }
+    } catch (e) {
+      this.state = 'idle';
+      this.resetRunState();
+      throw e;
     }
-
-    // Wait only for TAB recorder to confirm start (matches previous behavior)
-    await tabStarted;
-
-    this.state = 'recording';
   }
 
-  stop(): void {
+  stop(): Promise<CompletedRecordingArtifact[]> {
     if (!this.tabRecorder || !this.isRecording()) {
       this.deps.warn('Stop called but not recording');
-      throw new Error('Not currently recording');
+      return Promise.resolve([]);
     }
 
-    this.state = 'stopping';
+    if (this.stopPromise) return this.stopPromise;
 
-    try { this.tabRecorder.stop(); } catch (e) { this.deps.error('Tab stop error', e); throw e; }
-    try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', e); }
-    try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', e); }
+    this.state = 'stopping';
+    this.stopPromise = new Promise<CompletedRecordingArtifact[]>((resolve) => {
+      this.resolveStop = resolve;
+    });
+
+    try { this.tabRecorder.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); throw e; }
+    try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', describeMediaError(e)); }
+    try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', describeMediaError(e)); }
 
     this.playback?.stop();
     this.playback = null;
+
+    return this.stopPromise;
   }
 
   revokeBlobUrl(blobUrl: string) {
     try { URL.revokeObjectURL(blobUrl); } catch {}
   }
-
-  // -------------------------
-  // Capture + track assertions
-  // -------------------------
 
   private makeConstraints(streamId: string, source: 'tab' | 'desktop'): MediaStreamConstraints {
     const mandatory = { chromeMediaSource: source, chromeMediaSourceId: streamId } as any;
@@ -211,8 +228,7 @@ export class RecorderEngine {
   }
 
   private assertVideoTrack(stream: MediaStream) {
-    const v = stream.getVideoTracks();
-    if (!v.length) throw new Error('No video track in captured stream');
+    if (!stream.getVideoTracks().length) throw new Error('No video track in captured stream');
   }
 
   private async ensureAudiblePlaybackIfSuppressed(stream: MediaStream) {
@@ -225,16 +241,13 @@ export class RecorderEngine {
       audioEnabled: rawAudio?.enabled,
     });
 
-    // Force-enable audio track
     stream.getAudioTracks().forEach((t) => { try { t.enabled = true; } catch {} });
 
     if (!rawAudio) {
       this.deps.warn('WARNING: tab stream has NO audio track — tab recording will be silent');
-      this.deps.notifyState(false, { warning: 'NO_TAB_AUDIO' });
       return;
     }
 
-    // Heuristic: tab capture frequently suppresses local playback.
     const settings = rawAudio.getSettings?.();
     const suppress = (settings as any)?.suppressLocalAudioPlayback;
     if (suppress ?? true) {
@@ -243,21 +256,16 @@ export class RecorderEngine {
     }
   }
 
-  // -------------------------
-  // Recorder creation + wiring
-  // -------------------------
-
   private getVideoMime(): string {
-    // Prefer VP8 first to reduce CPU load while running multiple encoders.
-    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus'))
+    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
       return 'video/webm;codecs=vp8,opus';
+    }
     return MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
       ? 'video/webm;codecs=vp9,opus'
       : 'video/webm';
   }
 
   private getVideoOnlyMime(): string {
-    // VP8 is usually less CPU intensive for real-time multi-stream recording.
     if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) return 'video/webm;codecs=vp8';
     return MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
       ? 'video/webm;codecs=vp9'
@@ -293,7 +301,6 @@ export class RecorderEngine {
   }
 
   private async startTabRecorder(baseStream: MediaStream): Promise<void> {
-    this.tabChunks = [];
     const mime = this.getVideoMime();
     let started = false;
 
@@ -303,18 +310,24 @@ export class RecorderEngine {
       audioBitsPerSecond: 96_000,
     });
     this.tabRecorder = recorder;
-    
-    const filename = `google-meet-recording-${this.suffix}-${Date.now()}.webm`;
-    let target: StorageTarget | null = null;
-    if (this.deps.openTarget) {
-      try {
-        target = await this.deps.openTarget(filename);
-      } catch (e) {
-        this.deps.warn('Failed to open storage target, falling back to RAM buffer', e);
-      }
-    }
 
-    // Stop if captured video track ends (tab closed / navigation / capture ended)
+    const filename = `google-meet-recording-${this.suffix}-${Date.now()}.webm`;
+    const target = await this.openStorageTarget(filename, mime);
+    let ioChain: Promise<void> = Promise.resolve();
+
+    const finalize = async (label: string) => {
+      await ioChain.catch(() => {});
+      try {
+        const artifact = await target.close();
+        if (artifact) this.finalizedArtifacts.push({ stream: 'tab', artifact });
+      } catch (e) {
+        this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
+      } finally {
+        this.tabRecorder = null;
+        if (started) this.onRecorderStopped();
+      }
+    };
+
     baseStream.getVideoTracks()[0]?.addEventListener('ended', () => {
       this.deps.log('Video track ended');
       if (this.tabRecorder && this.isRecording()) { try { this.tabRecorder.stop(); } catch {} }
@@ -322,13 +335,12 @@ export class RecorderEngine {
       if (this.selfVideoRecorder && this.isRecording()) { try { this.selfVideoRecorder.stop(); } catch {} }
     });
 
-    recorder.ondataavailable = async (e: BlobEvent) => {
+    recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      if (target) {
-        await target.write(e.data).catch(err => this.deps.error('Target write error', err));
-      } else {
-        this.tabChunks.push(e.data);
-      }
+      ioChain = ioChain
+        .catch(() => {})
+        .then(() => target.write(e.data))
+        .catch((err) => this.deps.error('Target write error', describeMediaError(err)));
     };
 
     recorder.onerror = (e: any) => {
@@ -340,31 +352,14 @@ export class RecorderEngine {
       if (this.selfVideoRecorder && this.selfVideoRecorder.state !== 'inactive') {
         try { this.selfVideoRecorder.stop(); } catch {}
       }
-      if (started) this.onRecorderStopped();
-      this.tabRecorder = null;
-      if (target) {
-        target.close().catch(err => this.deps.error('Target finalisation failed on error', err));
-      }
-      this.deps.notifyState(false);
+      void finalize('Tab');
     };
 
-    recorder.onstop = async () => {
-      try {
-        if (target) {
-          await target.close(); // Target handles its own file finalisation
-        } else {
-          this.saveChunksToFileLegacy(this.tabChunks, mime, filename);
-        }
-      } catch (e) {
-        this.deps.error('Tab finalize/save failed', e);
-      } finally {
-        this.tabRecorder = null;
-        this.tabChunks = [];
-        if (started) this.onRecorderStopped();
-      }
+    recorder.onstop = () => {
+      void finalize('Tab');
     };
 
-    return new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const startTimeout = setTimeout(
         () => reject(new Error('Tab MediaRecorder did not start (timeout)')),
         TIMEOUTS.RECORDER_START_MS
@@ -378,72 +373,63 @@ export class RecorderEngine {
         resolve();
       };
 
-      // Start with timeslice to ensure continuous chunking
-      recorder.start(2000);
+      recorder.start(CHUNK_TIMESLICE_MS);
     });
   }
 
-  private async tryStartMicRecorder(): Promise<void> {
+  private async tryStartMicRecorder(runId: number): Promise<void> {
     const mic = await this.maybeGetMicStream();
-    if (!mic?.getAudioTracks().length) {
+    if (!mic?.getAudioTracks().length || this.runId !== runId || this.state === 'stopping' || this.state === 'idle') {
       mic?.getTracks().forEach((t) => t.stop());
       this.micStream = null;
-      this.deps.log('Mic stream unavailable; continuing with tab-only recording');
+      if (mic?.getAudioTracks().length) {
+        this.deps.log('Mic stream obtained after stop; discarding it');
+      } else {
+        this.deps.log('Mic stream unavailable; continuing with tab-only recording');
+      }
       return;
     }
 
     this.micStream = mic;
-    this.micChunks = [];
-
     const mime = this.getAudioMime();
     let started = false;
     const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
     this.micRecorder = recorder;
-    
-    const filename = `google-meet-mic-${this.suffix}-${Date.now()}.webm`;
-    let target: StorageTarget | null = null;
-    if (this.deps.openTarget) {
-      try {
-        target = await this.deps.openTarget(filename);
-      } catch (e) {
-        this.deps.warn('Failed to open mic storage target, falling back to RAM buffer', e);
-      }
-    }
 
-    recorder.ondataavailable = async (e: BlobEvent) => {
-      if (!e.data?.size) return;
-      if (target) {
-        await target.write(e.data).catch(err => this.deps.error('Mic Target write error', err));
-      } else {
-        this.micChunks.push(e.data);
+    const filename = `google-meet-mic-${this.suffix}-${Date.now()}.webm`;
+    const target = await this.openStorageTarget(filename, mime);
+    let ioChain: Promise<void> = Promise.resolve();
+
+    const finalize = async (label: string) => {
+      await ioChain.catch(() => {});
+      try {
+        const artifact = await target.close();
+        if (artifact) this.finalizedArtifacts.push({ stream: 'mic', artifact });
+      } catch (e) {
+        this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
+      } finally {
+        this.micRecorder = null;
+        this.micStream = null;
+        if (started) this.onRecorderStopped();
       }
+    };
+
+    recorder.ondataavailable = (e: BlobEvent) => {
+      if (!e.data?.size) return;
+      ioChain = ioChain
+        .catch(() => {})
+        .then(() => target.write(e.data))
+        .catch((err) => this.deps.error('Mic target write error', describeMediaError(err)));
     };
 
     recorder.onerror = (e: any) => {
       this.deps.error('Mic MediaRecorder error', e);
       this.safeStopStream(this.micStream);
-      this.micRecorder = null;
-      this.micStream = null;
-      if (target) {
-        target.close().catch(err => this.deps.error('Mic Target finalisation failed on error', err));
-      }
-      if (started) this.onRecorderStopped();
+      void finalize('Mic');
     };
 
-    recorder.onstop = async () => {
-      try {
-        if (target) {
-          await target.close(); // Target handles its own file finalisation
-        } else {
-          this.saveChunksToFileLegacy(this.micChunks, mime, filename);
-        }
-      } catch (e) {
-        this.deps.error('Mic finalize/save failed', e);
-      } finally {
-        this.micRecorder = null;
-        this.micChunks = [];
-        if (started) this.onRecorderStopped();
-      }
+    recorder.onstop = () => {
+      void finalize('Mic');
     };
 
     await new Promise<void>((resolve, reject) => {
@@ -460,23 +446,30 @@ export class RecorderEngine {
         resolve();
       };
 
-      recorder.start(2000);
+      recorder.start(CHUNK_TIMESLICE_MS);
     });
   }
 
-  private async tryStartSelfVideoRecorder(): Promise<void> {
+  private async tryStartSelfVideoRecorder(runId: number): Promise<void> {
     const selfVideo = await this.maybeGetSelfVideoStream();
-    if (!selfVideo?.getVideoTracks().length) {
+    if (
+      !selfVideo?.getVideoTracks().length ||
+      this.runId !== runId ||
+      this.state === 'stopping' ||
+      this.state === 'idle'
+    ) {
       selfVideo?.getTracks().forEach((t) => t.stop());
       this.selfVideoStream = null;
-      this.deps.warn('Self video stream unavailable; continuing without camera recording');
+      if (selfVideo?.getVideoTracks().length) {
+        this.deps.log('Self video stream obtained after stop; discarding it');
+      } else {
+        this.deps.warn('Self video stream unavailable; continuing without camera recording');
+      }
       return;
     }
 
     this.selfVideoStream = selfVideo;
-    this.selfVideoChunks = [];
     const profile = this.getSelfVideoProfile();
-
     const mime = this.getVideoOnlyMime();
     let started = false;
     const track = selfVideo.getVideoTracks()[0];
@@ -491,14 +484,22 @@ export class RecorderEngine {
     this.selfVideoRecorder = recorder;
 
     const filename = `google-meet-self-video-${this.suffix}-${Date.now()}.webm`;
-    let target: StorageTarget | null = null;
-    if (this.deps.openTarget) {
+    const target = await this.openStorageTarget(filename, mime);
+    let ioChain: Promise<void> = Promise.resolve();
+
+    const finalize = async (label: string) => {
+      await ioChain.catch(() => {});
       try {
-        target = await this.deps.openTarget(filename);
+        const artifact = await target.close();
+        if (artifact) this.finalizedArtifacts.push({ stream: 'selfVideo', artifact });
       } catch (e) {
-        this.deps.warn('Failed to open self video storage target, falling back to RAM buffer', e);
+        this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
+      } finally {
+        this.selfVideoRecorder = null;
+        this.selfVideoStream = null;
+        if (started) this.onRecorderStopped();
       }
-    }
+    };
 
     selfVideo.getVideoTracks()[0]?.addEventListener('ended', () => {
       this.deps.log('Self video track ended');
@@ -507,40 +508,22 @@ export class RecorderEngine {
       }
     });
 
-    recorder.ondataavailable = async (e: BlobEvent) => {
+    recorder.ondataavailable = (e: BlobEvent) => {
       if (!e.data?.size) return;
-      if (target) {
-        await target.write(e.data).catch(err => this.deps.error('Self video target write error', err));
-      } else {
-        this.selfVideoChunks.push(e.data);
-      }
+      ioChain = ioChain
+        .catch(() => {})
+        .then(() => target.write(e.data))
+        .catch((err) => this.deps.error('Self video target write error', describeMediaError(err)));
     };
 
     recorder.onerror = (e: any) => {
       this.deps.error('Self video MediaRecorder error', e);
       this.safeStopStream(this.selfVideoStream);
-      this.selfVideoRecorder = null;
-      this.selfVideoStream = null;
-      if (target) {
-        target.close().catch(err => this.deps.error('Self video target finalisation failed on error', err));
-      }
-      if (started) this.onRecorderStopped();
+      void finalize('Self video');
     };
 
-    recorder.onstop = async () => {
-      try {
-        if (target) {
-          await target.close();
-        } else {
-          this.saveChunksToFileLegacy(this.selfVideoChunks, mime, filename);
-        }
-      } catch (e) {
-        this.deps.error('Self video finalize/save failed', e);
-      } finally {
-        this.selfVideoRecorder = null;
-        this.selfVideoChunks = [];
-        if (started) this.onRecorderStopped();
-      }
+    recorder.onstop = () => {
+      void finalize('Self video');
     };
 
     await new Promise<void>((resolve, reject) => {
@@ -561,8 +544,22 @@ export class RecorderEngine {
         resolve();
       };
 
-      recorder.start(2000);
+      recorder.start(CHUNK_TIMESLICE_MS);
     });
+  }
+
+  private async openStorageTarget(filename: string, mimeType: string): Promise<StorageTarget> {
+    if (!this.deps.openTarget) return new InMemoryStorageTarget(filename, mimeType);
+
+    try {
+      return await this.deps.openTarget(filename);
+    } catch (e) {
+      this.deps.warn(
+        'Failed to open storage target, falling back to RAM buffer',
+        describeMediaError(e)
+      );
+      return new InMemoryStorageTarget(filename, mimeType);
+    }
   }
 
   private async maybeGetMicStream(): Promise<MediaStream | null> {
@@ -583,10 +580,9 @@ export class RecorderEngine {
 
       const t = mic.getAudioTracks()[0];
       this.deps.log('mic stream acquired:', !!t, 'muted:', t?.muted, 'enabled:', t?.enabled);
-
       return mic;
     } catch (e) {
-      this.deps.warn('mic getUserMedia failed (continuing without mic):', e);
+      this.deps.warn('mic getUserMedia failed (continuing without mic):', describeMediaError(e));
       return null;
     }
   }
@@ -627,20 +623,8 @@ export class RecorderEngine {
     }
   }
 
-  private saveChunksToFileLegacy(chunks: BlobPart[], mime: string, filename: string) {
-    const blob = new Blob(chunks, { type: mime });
-    this.deps.log('Finalizing (legacy RAM Buffer)', filename, 'chunks =', chunks.length, 'blob.size =', blob.size);
-
-    const blobUrl = URL.createObjectURL(blob);
-    this.deps.requestSave(filename, blobUrl);
-  }
-
-  // -------------------------
-  // State + cleanup management
-  // -------------------------
-
   private onRecorderStarted() {
-    if (this.activeRecorders === 0) this.deps.notifyState(true);
+    if (this.activeRecorders === 0) this.deps.notifyPhase('recording');
     this.activeRecorders += 1;
   }
 
@@ -648,19 +632,25 @@ export class RecorderEngine {
     this.activeRecorders = Math.max(0, this.activeRecorders - 1);
 
     if (this.activeRecorders === 0) {
+      const artifacts = [...this.finalizedArtifacts];
       this.state = 'idle';
-      this.deps.notifyState(false);
       this.safeStopStream(this.tabStream);
       this.safeStopStream(this.micStream);
       this.safeStopStream(this.selfVideoStream);
       this.tabStream = null;
       this.micStream = null;
       this.selfVideoStream = null;
+      this.finalizedArtifacts = [];
+
+      const resolveStop = this.resolveStop;
+      this.resolveStop = null;
+      this.stopPromise = null;
+      resolveStop?.(artifacts);
     }
   }
 
-  private safeStopStream(s: MediaStream | null) {
-    try { s?.getTracks().forEach((t) => t.stop()); } catch {}
+  private safeStopStream(stream: MediaStream | null) {
+    try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
   }
 
   private resetRunState() {
@@ -668,9 +658,6 @@ export class RecorderEngine {
     this.tabRecorder = null;
     this.micRecorder = null;
     this.selfVideoRecorder = null;
-    this.tabChunks = [];
-    this.micChunks = [];
-    this.selfVideoChunks = [];
     this.safeStopStream(this.tabStream);
     this.safeStopStream(this.micStream);
     this.safeStopStream(this.selfVideoStream);
@@ -682,6 +669,9 @@ export class RecorderEngine {
     this.suffix = 'google-meet';
     this.recordSelfVideo = false;
     this.selfVideoQuality = 'standard';
+    this.finalizedArtifacts = [];
+    this.stopPromise = null;
+    this.resolveStop = null;
   }
 
   private async inferSuffixFromActiveTab(): Promise<string> {
@@ -691,8 +681,7 @@ export class RecorderEngine {
     try {
       if (!url) return 'google-meet';
       const u = new URL(url);
-      const last = u.pathname.split('/').pop() || 'google-meet';
-      return last;
+      return u.pathname.split('/').pop() || 'google-meet';
     } catch {
       return 'google-meet';
     }
@@ -700,7 +689,7 @@ export class RecorderEngine {
 }
 
 class AudioPlaybackBridge {
-  private deps: RecorderEngineDeps;
+  private readonly deps: RecorderEngineDeps;
   private ctx: AudioContext | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
 
@@ -721,7 +710,7 @@ class AudioPlaybackBridge {
       src.connect(ctx.destination);
       this.deps.log('Re-routed captured tab audio back to speakers');
     } catch (e) {
-      this.deps.warn('Audio playback bridge failed (non-fatal)', e);
+      this.deps.warn('Audio playback bridge failed (non-fatal)', describeMediaError(e));
       this.stop();
     }
   }
