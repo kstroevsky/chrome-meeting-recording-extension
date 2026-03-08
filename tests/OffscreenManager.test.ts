@@ -1,72 +1,106 @@
 import { OffscreenManager } from '../src/background/OffscreenManager';
-import { TIMEOUTS } from '../src/shared/timeouts';
 
 describe('OffscreenManager', () => {
-    let manager: OffscreenManager;
-    let mockPort: any;
+  let manager: OffscreenManager;
+  let mockPort: any;
 
-    beforeEach(() => {
-        manager = new OffscreenManager();
-        mockPort = {
-            name: 'offscreen',
-            onMessage: { addListener: jest.fn() },
-            onDisconnect: { addListener: jest.fn() },
-            postMessage: jest.fn()
-        };
+  beforeEach(() => {
+    manager = new OffscreenManager();
+    mockPort = {
+      name: 'offscreen',
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+    };
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('creates offscreen document if it does not exist', async () => {
+    const createDocumentSpy = jest
+      .spyOn(chrome.offscreen, 'createDocument')
+      .mockImplementation(async () => {});
+
+    const ensureReadyPromise = manager.ensureReady();
+    manager.attachPort(mockPort);
+
+    const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
+    onMessageListener({ type: 'OFFSCREEN_READY' });
+
+    await ensureReadyPromise;
+
+    expect(createDocumentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'chrome-extension://mock-id/offscreen.html',
+        reasons: ['BLOBS', 'AUDIO_PLAYBACK', 'USER_MEDIA'],
+      })
+    );
+  });
+
+  it('syncs phase updates from offscreen to badge and popup broadcast', () => {
+    manager.attachPort(mockPort);
+    const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
+    const setBadgeTextSpy = jest.spyOn(chrome.action, 'setBadgeText');
+
+    onMessageListener({ type: 'RECORDING_STATE', phase: 'uploading' });
+
+    expect(manager.getRecordingStatus()).toBe('uploading');
+    expect(setBadgeTextSpy).toHaveBeenCalledWith({ text: 'UP' });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'RECORDING_STATE',
+        phase: 'uploading',
+      })
+    );
+  });
+
+  it('gracefully handles port disconnects', () => {
+    manager.attachPort(mockPort);
+    expect((manager as any).port).toBe(mockPort);
+
+    const disconnectListener = mockPort.onDisconnect.addListener.mock.calls[0][0];
+    disconnectListener();
+
+    expect((manager as any).port).toBe(null);
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
+  });
+
+  it('keeps OPFS cleanup only for successful downloads', () => {
+    jest.useFakeTimers();
+    manager.attachPort(mockPort);
+    const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
+
+    (chrome.downloads.download as jest.Mock)
+      .mockImplementationOnce((_opts: any, cb: Function) => {
+        cb();
+      })
+      .mockImplementationOnce((_opts: any, cb: Function) => {
+        (chrome.runtime as any).lastError = { message: 'Download blocked' };
+        cb();
+        (chrome.runtime as any).lastError = undefined;
+      });
+
+    onMessageListener({ type: 'OFFSCREEN_SAVE', filename: 'ok.webm', blobUrl: 'blob:ok', opfsFilename: 'ok.webm' });
+    onMessageListener({ type: 'OFFSCREEN_SAVE', filename: 'fail.webm', blobUrl: 'blob:fail', opfsFilename: 'fail.webm' });
+
+    jest.runAllTimers();
+
+    expect(mockPort.postMessage).toHaveBeenCalledWith({
+      type: 'REVOKE_BLOB_URL',
+      blobUrl: 'blob:ok',
+      opfsFilename: 'ok.webm',
     });
-
-    afterEach(() => {
-        jest.clearAllMocks();
+    expect(mockPort.postMessage).toHaveBeenCalledWith({
+      type: 'REVOKE_BLOB_URL',
+      blobUrl: 'blob:fail',
+      opfsFilename: undefined,
     });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'RECORDING_SAVE_ERROR', filename: 'fail.webm' })
+    );
 
-    it('creates offscreen document if it does not exist', async () => {
-        const createDocumentSpy = jest.spyOn(chrome.offscreen, 'createDocument')
-            .mockImplementation(async () => {});
-
-        // We don't want ensureReady to hang waiting for the port ready signal
-        // We simulate the port attaching and signaling ready immediately
-        const ensureReadyPromise = manager.ensureReady();
-        
-        // Simulate extension messaging behavior
-        manager.attachPort(mockPort);
-        
-        // Find the onMessage listener attached inside attachPort
-        const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
-        onMessageListener({ type: 'OFFSCREEN_READY' });
-
-        await ensureReadyPromise;
-
-        expect(createDocumentSpy).toHaveBeenCalled();
-        expect(createDocumentSpy.mock.calls[0][0]).toMatchObject({
-            url: 'chrome-extension://mock-id/offscreen.html',
-            reasons: ['BLOBS', 'AUDIO_PLAYBACK', 'USER_MEDIA'],
-            justification: 'Record tab audio+video in offscreen using MediaRecorder'
-        });
-    });
-
-    it('syncs recording state from offscreen to badge and background', () => {
-        manager.attachPort(mockPort);
-        const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
-
-        // Ensure badge tracking works
-        const setBadgeTextSpy = jest.spyOn(chrome.action, 'setBadgeText');
-        
-        // Invoke mock message
-        onMessageListener({ type: 'RECORDING_STATE', recording: true });
-
-        expect(manager.getRecordingStatus()).toBe(true);
-        expect(setBadgeTextSpy).toHaveBeenCalledWith({ text: 'REC' });
-        expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'RECORDING_STATE', recording: true });
-    });
-
-    it('gracefully handles port disconnects', () => {
-        manager.attachPort(mockPort);
-        expect((manager as any).port).toBe(mockPort);
-
-        const disconnectListener = mockPort.onDisconnect.addListener.mock.calls[0][0];
-        disconnectListener();
-
-        expect((manager as any).port).toBe(null);
-        expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' }); // clears REC badge
-    });
+    jest.useRealTimers();
+  });
 });

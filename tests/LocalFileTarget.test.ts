@@ -1,5 +1,23 @@
 import { LocalFileTarget } from '../src/offscreen/LocalFileTarget';
 
+async function toText(payload: unknown): Promise<string> {
+  const asAny = payload as any;
+  if (typeof asAny?.text === 'function') return asAny.text();
+  if (typeof asAny?.arrayBuffer === 'function') {
+    const ab = await asAny.arrayBuffer();
+    return new TextDecoder().decode(ab);
+  }
+  if (typeof FileReader !== 'undefined' && typeof asAny?.size === 'number' && typeof asAny?.slice === 'function') {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.readAsText(asAny as Blob);
+    });
+  }
+  return String(payload ?? '');
+}
+
 describe('LocalFileTarget', () => {
   let mockGetDirectory: jest.Mock;
   let mockGetFileHandle: jest.Mock;
@@ -7,53 +25,46 @@ describe('LocalFileTarget', () => {
   let mockWrite: jest.Mock;
   let mockClose: jest.Mock;
   let mockGetFile: jest.Mock;
-  let mockOnReady: jest.Mock;
+  let mockRemoveEntry: jest.Mock;
 
   beforeEach(() => {
     mockWrite = jest.fn().mockResolvedValue(undefined);
     mockClose = jest.fn().mockResolvedValue(undefined);
     mockCreateWritable = jest.fn().mockResolvedValue({
       write: mockWrite,
-      close: mockClose
+      close: mockClose,
     });
-    mockGetFile = jest.fn().mockResolvedValue(new Blob(['test']));
+    mockGetFile = jest.fn().mockResolvedValue(new File(['test'], 'test.webm', { type: 'video/webm' }));
     mockGetFileHandle = jest.fn().mockResolvedValue({
       createWritable: mockCreateWritable,
-      getFile: mockGetFile
+      getFile: mockGetFile,
     });
+    mockRemoveEntry = jest.fn().mockResolvedValue(undefined);
     mockGetDirectory = jest.fn().mockResolvedValue({
-      getFileHandle: mockGetFileHandle
+      getFileHandle: mockGetFileHandle,
+      removeEntry: mockRemoveEntry,
     });
 
     Object.defineProperty(global.navigator, 'storage', {
       value: { getDirectory: mockGetDirectory },
-      writable: true
+      writable: true,
     });
-
-    global.URL.createObjectURL = jest.fn().mockReturnValue('blob:test-url');
-    mockOnReady = jest.fn();
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('checks availability', async () => {
-    const isAvail = await LocalFileTarget.isAvailable();
-    expect(isAvail).toBe(true);
-    expect(mockGetDirectory).toHaveBeenCalled();
-  });
-
   it('creates and writes chunks', async () => {
-    const target = await LocalFileTarget.create('test.webm', mockOnReady);
-    
+    const target = await LocalFileTarget.create('test.webm');
+
     expect(mockGetDirectory).toHaveBeenCalled();
     expect(mockGetFileHandle).toHaveBeenCalledWith('test.webm', { create: true });
     expect(mockCreateWritable).toHaveBeenCalled();
 
     const chunk1 = new Blob(['1']);
     const chunk2 = new Blob(['2']);
-    
+
     await target.write(chunk1);
     await target.write(chunk2);
 
@@ -62,26 +73,33 @@ describe('LocalFileTarget', () => {
     expect(mockWrite).toHaveBeenNthCalledWith(2, chunk2);
   });
 
-  it('recovers from write errors and continues', async () => {
-    jest.spyOn(console, 'error').mockImplementationOnce(() => {});
-    // Make the first write fail
-    mockWrite.mockRejectedValueOnce(new Error('Write failed'));
-    
-    const target = await LocalFileTarget.create('test.webm', mockOnReady);
-    
-    await target.write(new Blob(['fail']));
-    await target.write(new Blob(['success']));
-
-    expect(mockWrite).toHaveBeenCalledTimes(2); // Second write still attempted
-  });
-
-  it('closes and fires onReady', async () => {
-    const target = await LocalFileTarget.create('test.webm', mockOnReady);
-    await target.close();
+  it('returns a sealed artifact on close', async () => {
+    const target = await LocalFileTarget.create('test.webm');
+    await target.write(new Blob(['abc']));
+    const artifact = await target.close();
 
     expect(mockClose).toHaveBeenCalled();
     expect(mockGetFile).toHaveBeenCalled();
-    expect(global.URL.createObjectURL).toHaveBeenCalled();
-    expect(mockOnReady).toHaveBeenCalledWith('blob:test-url', 'test.webm');
+    expect(artifact?.filename).toBe('test.webm');
+    expect(artifact?.opfsFilename).toBe('test.webm');
+    expect(await toText(artifact?.file)).toBe('test');
+  });
+
+  it('cleanup removes the OPFS temp file', async () => {
+    const target = await LocalFileTarget.create('test.webm');
+    await target.write(new Blob(['abc']));
+    const artifact = await target.close();
+
+    await artifact?.cleanup();
+
+    expect(mockRemoveEntry).toHaveBeenCalledWith('test.webm');
+  });
+
+  it('deletes empty temp files instead of returning an artifact', async () => {
+    const target = await LocalFileTarget.create('empty.webm');
+    const artifact = await target.close();
+
+    expect(artifact).toBeNull();
+    expect(mockRemoveEntry).toHaveBeenCalledWith('empty.webm');
   });
 });
