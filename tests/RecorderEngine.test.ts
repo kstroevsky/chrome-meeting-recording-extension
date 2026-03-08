@@ -1,5 +1,6 @@
 import { RecorderEngine, type SealedStorageFile, type StorageTarget } from '../src/offscreen/RecorderEngine';
 import { PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
+import type { RecordingRunConfig } from '../src/shared/recording';
 
 function chunk(text: string, type = 'video/webm'): Blob {
   return new Blob([text], { type });
@@ -45,6 +46,16 @@ function makeStream(options: {
     getVideoTracks: () => videoTracks,
     getTracks: () => [...audioTracks, ...videoTracks],
   } as any;
+}
+
+function makeRunConfig(overrides: Partial<RecordingRunConfig> = {}): RecordingRunConfig {
+  return {
+    storageMode: 'local',
+    micMode: 'off',
+    recordSelfVideo: false,
+    selfVideoQuality: 'standard',
+    ...overrides,
+  };
 }
 
 class BufferedTarget implements StorageTarget {
@@ -138,6 +149,9 @@ describe('RecorderEngine', () => {
     (global as any).MediaRecorder = FakeMediaRecorder as any;
     (global as any).MediaStream = class {
       constructor(public readonly tracks: any[] = []) {}
+      getTracks() { return this.tracks; }
+      getAudioTracks() { return this.tracks.filter((track) => track?.kind === 'audio'); }
+      getVideoTracks() { return this.tracks.filter((track) => track?.kind === 'video'); }
     } as any;
     FakeMediaRecorder.instances = [];
     FakeMediaRecorder.stopPayloadByKind = {
@@ -231,7 +245,7 @@ describe('RecorderEngine', () => {
     deps.openTarget = jest.fn(async (filename: string) => new BufferedTarget(filename, 'video/webm', 10));
     FakeMediaRecorder.stopPayloadByKind.tab = '';
 
-    await engine.startFromStreamId('stream-id');
+    await engine.startFromStreamId('stream-id', makeRunConfig());
     const recorder = FakeMediaRecorder.instances[0];
 
     recorder.ondataavailable?.({ data: chunk('part-1') } as BlobEvent);
@@ -244,7 +258,6 @@ describe('RecorderEngine', () => {
   });
 
   it('finalizes tab, mic, and self-video artifacts in one stop flow', async () => {
-    deps.enableMicMix = true;
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
       videoTracks: [makeTrack('video')],
@@ -265,10 +278,11 @@ describe('RecorderEngine', () => {
 
     deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
 
-    await engine.startFromStreamId('stream-id', {
+    await engine.startFromStreamId('stream-id', makeRunConfig({
+      micMode: 'separate',
       recordSelfVideo: true,
       selfVideoQuality: 'high',
-    });
+    }));
 
     const artifacts = await engine.stop();
     const byStream = Object.fromEntries(
@@ -285,9 +299,47 @@ describe('RecorderEngine', () => {
     });
   });
 
+  it('mixes microphone audio into the tab recording when micMode=mixed', async () => {
+    const createMediaStreamSource = jest.fn().mockReturnValue({ connect: jest.fn() });
+    const mixedAudioTrack = makeTrack('audio');
+    const createMediaStreamDestination = jest.fn().mockReturnValue({
+      stream: makeStream({ audioTracks: [mixedAudioTrack] }),
+    });
+    const audioContextCtor = jest.fn().mockImplementation(() => ({
+      resume: jest.fn().mockResolvedValue(undefined),
+      createMediaStreamSource,
+      createMediaStreamDestination,
+      destination: {},
+      close: jest.fn(),
+    }));
+    (global as any).AudioContext = audioContextCtor;
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const micStream = makeStream({
+      audioTracks: [makeTrack('audio')],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return micStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'mixed' }));
+    const artifacts = await engine.stop();
+
+    expect(createMediaStreamDestination).toHaveBeenCalledTimes(1);
+    expect(artifacts.map((entry) => entry.stream)).toEqual(['tab']);
+    expect(await toText(artifacts[0].artifact.file)).toBe('tab');
+  });
+
   it('uses the extended timeslice only when the feature flag is enabled', async () => {
     PERF_FLAGS.extendedTimeslice = true;
-    deps.enableMicMix = true;
 
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
@@ -304,13 +356,12 @@ describe('RecorderEngine', () => {
 
     deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
 
-    await engine.startFromStreamId('stream-id');
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
 
     expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(4000);
   });
 
   it('keeps the default 2000 ms timeslice when the extended flag is off', async () => {
-    deps.enableMicMix = true;
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
       videoTracks: [makeTrack('video')],
@@ -326,7 +377,7 @@ describe('RecorderEngine', () => {
 
     deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
 
-    await engine.startFromStreamId('stream-id');
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
 
     expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(2000);
   });
@@ -354,7 +405,7 @@ describe('RecorderEngine', () => {
 
     deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
 
-    await engine.startFromStreamId('stream-id');
+    await engine.startFromStreamId('stream-id', makeRunConfig());
 
     expect(audioContextCtor).not.toHaveBeenCalled();
   });
@@ -383,7 +434,7 @@ describe('RecorderEngine', () => {
 
     deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
 
-    await engine.startFromStreamId('stream-id');
+    await engine.startFromStreamId('stream-id', makeRunConfig());
 
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
     expect(createMediaStreamSource).toHaveBeenCalledTimes(1);
@@ -408,10 +459,10 @@ describe('RecorderEngine', () => {
 
     deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
 
-    await engine.startFromStreamId('stream-id', {
+    await engine.startFromStreamId('stream-id', makeRunConfig({
       recordSelfVideo: true,
       selfVideoQuality: 'high',
-    });
+    }));
 
     const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
     expect(selfVideoRecorder?.options.videoBitsPerSecond).toBe(1_000_000);
