@@ -1,3 +1,5 @@
+import { isTestRuntime } from './build';
+
 export type LogFn = (...a: any[]) => void;
 
 /**
@@ -15,7 +17,9 @@ export type LogFn = (...a: any[]) => void;
  */
 export function makeLogger(prefix: string) {
   return {
-    log:   (...a: any[]) => console.log(`[${prefix}]`, ...a),
+    log:   (...a: any[]) => {
+      if (isTestRuntime()) console.log(`[${prefix}]`, ...a);
+    },
     warn:  (...a: any[]) => console.warn(`[${prefix}] WARN`, ...a),
     error: (...a: any[]) => console.error(`[${prefix}] ERR`, ...a),
   };

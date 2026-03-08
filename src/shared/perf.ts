@@ -1,3 +1,5 @@
+import { isDevBuild } from './build';
+
 export type AudioPlaybackBridgeMode = 'always' | 'auto';
 export type PerfSource = 'background' | 'offscreen' | 'captions' | 'popup' | 'unknown';
 export type PerfPhase = 'idle' | 'recording' | 'uploading';
@@ -24,7 +26,7 @@ const DEFAULT_PERF_SETTINGS: PerfSettings = {
   extendedTimeslice: false,
   dynamicDriveChunkSizing: false,
   parallelUploadConcurrency: 1,
-  debugMode: false,
+  debugMode: isDevBuild(),
 };
 
 export const PERF_FLAGS: PerfFlags = {
@@ -137,7 +139,7 @@ export function normalizePerfSettings(raw?: unknown): PerfSettings {
     extendedTimeslice: value.extendedTimeslice === true,
     dynamicDriveChunkSizing: value.dynamicDriveChunkSizing === true,
     parallelUploadConcurrency: value.parallelUploadConcurrency === 2 ? 2 : DEFAULT_PERF_SETTINGS.parallelUploadConcurrency,
-    debugMode: value.debugMode === true,
+    debugMode: isDevBuild(),
   };
 }
 
