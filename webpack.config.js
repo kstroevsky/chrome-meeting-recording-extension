@@ -8,6 +8,7 @@ module.exports = {
   entry: {
     scrapingScript: './src/scrapingScript.ts',
     popup: './src/popup.ts',
+      debug: './src/debug.ts',
     background: './src/background.ts',
     offscreen: './src/offscreen.ts',
     micsetup: './src/micsetup.ts',
@@ -33,6 +34,7 @@ module.exports = {
       patterns: [
         { from: 'manifest.json',  to: 'manifest.json' },
         { from: 'popup.html',     to: 'popup.html' },
+          { from: 'debug.html',     to: 'debug.html' },
         { from: 'offscreen.html', to: 'offscreen.html', noErrorOnMissing: true },
         { from: 'micsetup.html', to: 'micsetup.html' },
         { from: 'camsetup.html', to: 'camsetup.html' },

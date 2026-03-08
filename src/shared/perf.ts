@@ -246,11 +246,7 @@ function emitPerfEntry(scope: string, event: string, fields: Record<string, stri
 
 export function logPerf(log: (...a: any[]) => void, scope: string, event: string, fields?: PerfFields): void {
   const cleaned = cleanPerfFields(fields);
-  if (Object.keys(cleaned).length === 0) {
-    log(`[perf:${scope}] ${event}`);
-  } else {
-    log(`[perf:${scope}] ${event}`, cleaned);
-  }
+  void log;
   emitPerfEntry(scope, event, cleaned);
 }
 

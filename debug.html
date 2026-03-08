@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Extension Diagnostics</title>
+    <style>
+      :root {
+        --bg: #f3f0e9;
+        --panel: #fffaf2;
+        --ink: #1e1d18;
+        --muted: #6f6756;
+        --line: #d8cbb4;
+        --accent: #a34f1d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(163, 79, 29, 0.12), transparent 28%),
+          linear-gradient(180deg, #f7f3ec 0%, var(--bg) 100%);
+      }
+
+      main {
+        max-width: 1320px;
+        margin: 0 auto;
+        padding: 28px 24px 40px;
+      }
+
+      .hero {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        margin-bottom: 20px;
+      }
+
+      .hero h1 {
+        margin: 0 0 8px;
+        font-size: 30px;
+        line-height: 1.1;
+      }
+
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .pill {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(163, 79, 29, 0.12);
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--panel);
+        color: var(--ink);
+        padding: 10px 14px;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      .updated {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        background: rgba(255, 250, 242, 0.92);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(76, 46, 16, 0.05);
+      }
+
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 15px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .card pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .events {
+        margin-top: 16px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      th,
+      td {
+        padding: 10px 8px;
+        border-top: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      @media (max-width: 900px) {
+        .hero {
+          flex-direction: column;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .actions {
+          width: 100%;
+          justify-content: space-between;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div>
+          <span class="pill" id="debug-build-badge">Diagnostics</span>
+          <h1>Recording Diagnostics</h1>
+          <p>Live extension metrics for capture, captions, post-stop processing, and Drive upload.</p>
+          <div class="updated" id="debug-updated-at">Loading diagnostics...</div>
+        </div>
+        <div class="actions">
+          <button id="download-debug-json">Download JSON</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Summary</h2>
+          <pre id="debug-summary">Loading diagnostics...</pre>
+        </article>
+        <article class="card">
+          <h2>Recorder</h2>
+          <pre id="debug-recorder"></pre>
+        </article>
+        <article class="card">
+          <h2>Upload</h2>
+          <pre id="debug-upload"></pre>
+        </article>
+        <article class="card">
+          <h2>Captions</h2>
+          <pre id="debug-captions"></pre>
+        </article>
+        <article class="card">
+          <h2>Runtime</h2>
+          <pre id="debug-runtime"></pre>
+        </article>
+      </section>
+
+      <section class="card events">
+        <h2>Recent Events</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Source</th>
+              <th>Scope</th>
+              <th>Event</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="debug-events-body"></tbody>
+        </table>
+      </section>
+    </main>
+    <script src="debug.js"></script>
+  </body>
+</html>
