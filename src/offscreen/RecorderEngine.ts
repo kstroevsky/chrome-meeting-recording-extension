@@ -9,12 +9,12 @@
 import { AudioPlaybackBridge, MixedAudioMixer } from './RecorderAudio';
 import {
   captureTabStreamFromId,
-  getDefaultSelfVideoBitrate,
   inferActiveTabSuffix,
   maybeGetMicStream,
   maybeGetSelfVideoStream,
 } from './RecorderCapture';
 import {
+  getDefaultSelfVideoBitrate,
   getAudioMime,
   getChunkTimesliceMs,
   getVideoMime,
@@ -33,7 +33,6 @@ import {
 import { TIMEOUTS } from '../shared/timeouts';
 
 type RecordingStateExtra = Record<string, any> | undefined;
-type SelfVideoQuality = RecordingRunConfig['selfVideoQuality'];
 
 type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
 
@@ -112,7 +111,6 @@ export class RecorderEngine {
   private suffix = 'google-meet';
   private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
   private recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
-  private selfVideoQuality: SelfVideoQuality = DEFAULT_RECORDING_RUN_CONFIG.selfVideoQuality;
 
   private playback: AudioPlaybackBridge | null = null;
   private mixedAudio: MixedAudioMixer | null = null;
@@ -148,7 +146,6 @@ export class RecorderEngine {
     const runId = this.runId;
     this.micMode = options.micMode;
     this.recordSelfVideo = options.recordSelfVideo;
-    this.selfVideoQuality = options.selfVideoQuality;
     const runStartedAt = nowMs();
 
     try {
@@ -459,7 +456,7 @@ export class RecorderEngine {
   }
 
   private async tryStartSelfVideoRecorder(runId: number, runStartedAt: number): Promise<void> {
-    const selfVideo = await maybeGetSelfVideoStream(this.recordSelfVideo, this.selfVideoQuality, this.deps);
+    const selfVideo = await maybeGetSelfVideoStream(this.recordSelfVideo, this.deps);
     if (
       !selfVideo?.getVideoTracks().length ||
       this.runId !== runId ||
@@ -477,23 +474,18 @@ export class RecorderEngine {
     }
 
     this.selfVideoStream = selfVideo;
-    const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate(this.selfVideoQuality);
+    const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate();
     const mime = getVideoOnlyMime();
     let started = false;
     const timesliceMs = getChunkTimesliceMs(this.micMode, this.recordSelfVideo);
     const track = selfVideo.getVideoTracks()[0];
     const settings = track?.getSettings?.();
     logPerf(this.deps.log, 'recorder', 'self_video_stream_acquired', {
-      quality: this.selfVideoQuality,
       width: settings?.width,
       height: settings?.height,
       frameRate: settings?.frameRate,
     });
-    const videoBitsPerSecond = resolveSelfVideoBitrate(
-      this.selfVideoQuality,
-      defaultVideoBitsPerSecond,
-      settings
-    );
+    const videoBitsPerSecond = resolveSelfVideoBitrate(defaultVideoBitsPerSecond, settings);
     try {
       if (track && 'contentHint' in track) (track as any).contentHint = 'motion';
     } catch {}
@@ -568,11 +560,7 @@ export class RecorderEngine {
           timesliceMs,
           videoBitsPerSecond,
         });
-        this.deps.log('Self video MediaRecorder started', {
-          quality: this.selfVideoQuality,
-          mime,
-          videoBitsPerSecond,
-        });
+        this.deps.log('Self video MediaRecorder started', { mime, videoBitsPerSecond });
         resolve();
       };
 
@@ -650,7 +638,6 @@ export class RecorderEngine {
     this.suffix = 'google-meet';
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
-    this.selfVideoQuality = DEFAULT_RECORDING_RUN_CONFIG.selfVideoQuality;
     this.finalizedArtifacts = [];
     this.stopPromise = null;
     this.resolveStop = null;

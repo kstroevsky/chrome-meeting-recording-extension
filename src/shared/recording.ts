@@ -9,20 +9,17 @@ export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'u
 export type RecordingStream = 'tab' | 'mic' | 'selfVideo';
 export type StorageMode = 'local' | 'drive';
 export type MicMode = 'off' | 'mixed' | 'separate';
-export type SelfVideoQuality = 'standard' | 'high';
 
 export type RecordingRunConfig = {
   storageMode: StorageMode;
   micMode: MicMode;
   recordSelfVideo: boolean;
-  selfVideoQuality: SelfVideoQuality;
 };
 
 export const DEFAULT_RECORDING_RUN_CONFIG: Readonly<RecordingRunConfig> = {
   storageMode: 'drive',
   micMode: 'separate',
   recordSelfVideo: true,
-  selfVideoQuality: 'standard',
 };
 
 export type UploadSummaryEntry = {
@@ -45,40 +42,30 @@ export type RecordingSessionSnapshot = {
 };
 
 export const RECORDING_SESSION_STORAGE_KEY = 'recordingSession';
+const NON_IDLE_PHASES: RecordingPhase[] = ['starting', 'recording', 'stopping', 'uploading', 'failed'];
+const VALID_STORAGE_MODES: StorageMode[] = ['local', 'drive'];
+const VALID_MIC_MODES: MicMode[] = ['off', 'mixed', 'separate'];
+
+function isRecord<T extends object>(value: unknown): value is Partial<T> {
+  return !!value && typeof value === 'object';
+}
 
 export function normalizePhase(value: unknown): RecordingPhase {
-  switch (value) {
-    case 'starting':
-    case 'recording':
-    case 'stopping':
-    case 'uploading':
-    case 'failed':
-      return value;
-    default:
-      return 'idle';
-  }
+  return typeof value === 'string' && NON_IDLE_PHASES.includes(value as RecordingPhase)
+    ? value as RecordingPhase
+    : 'idle';
 }
 
 export function normalizeStorageMode(value: unknown): StorageMode {
-  return value === 'local' || value === 'drive'
-    ? value
+  return typeof value === 'string' && VALID_STORAGE_MODES.includes(value as StorageMode)
+    ? value as StorageMode
     : DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 }
 
 export function normalizeMicMode(value: unknown): MicMode {
-  switch (value) {
-    case 'mixed':
-    case 'separate':
-      return value;
-    default:
-      return DEFAULT_RECORDING_RUN_CONFIG.micMode;
-  }
-}
-
-export function normalizeSelfVideoQuality(value: unknown): SelfVideoQuality {
-  return value === 'high' || value === 'standard'
-    ? value
-    : DEFAULT_RECORDING_RUN_CONFIG.selfVideoQuality;
+  return typeof value === 'string' && VALID_MIC_MODES.includes(value as MicMode)
+    ? value as MicMode
+    : DEFAULT_RECORDING_RUN_CONFIG.micMode;
 }
 
 export function createDefaultRunConfig(): RecordingRunConfig {
@@ -86,8 +73,8 @@ export function createDefaultRunConfig(): RecordingRunConfig {
 }
 
 export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
-  if (!value || typeof value !== 'object') return null;
-  const candidate = value as Partial<RecordingRunConfig>;
+  if (!isRecord<RecordingRunConfig>(value)) return null;
+  const candidate = value;
 
   return {
     storageMode: normalizeStorageMode(candidate.storageMode),
@@ -96,30 +83,37 @@ export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
       typeof candidate.recordSelfVideo === 'boolean'
         ? candidate.recordSelfVideo
         : DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo,
-    selfVideoQuality: normalizeSelfVideoQuality(candidate.selfVideoQuality),
+  };
+}
+
+export function getRunConfigOrDefault(value: unknown): RecordingRunConfig {
+  return normalizeRunConfig(value) ?? createDefaultRunConfig();
+}
+
+function normalizeUploadSummaryEntry(entry: unknown): UploadSummaryEntry | null {
+  if (!isRecord<UploadSummaryEntry>(entry)) return null;
+
+  const stream =
+    entry.stream === 'mic' || entry.stream === 'selfVideo' ? entry.stream : 'tab';
+  const filename = typeof entry.filename === 'string' ? entry.filename.trim() : '';
+  if (!filename) return null;
+  const error = typeof entry.error === 'string' ? entry.error.trim() : '';
+
+  return {
+    stream,
+    filename,
+    error: error || undefined,
   };
 }
 
 export function normalizeUploadSummary(value: unknown): UploadSummary | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const candidate = value as Partial<UploadSummary>;
+  if (!isRecord<UploadSummary>(value)) return undefined;
+  const candidate = value;
 
   const normalizeEntries = (entries: unknown): UploadSummaryEntry[] => {
     if (!Array.isArray(entries)) return [];
     return entries
-      .map((entry) => {
-        if (!entry || typeof entry !== 'object') return null;
-        const record = entry as Partial<UploadSummaryEntry>;
-        const stream =
-          record.stream === 'mic' || record.stream === 'selfVideo' ? record.stream : 'tab';
-        const filename = typeof record.filename === 'string' ? record.filename.trim() : '';
-        if (!filename) return null;
-        return {
-          stream,
-          filename,
-          error: typeof record.error === 'string' && record.error.trim() ? record.error : undefined,
-        } satisfies UploadSummaryEntry;
-      })
+      .map((entry) => normalizeUploadSummaryEntry(entry))
       .filter((entry): entry is NonNullable<typeof entry> => entry != null);
   };
 
@@ -138,8 +132,8 @@ export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
 }
 
 export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapshot {
-  if (!value || typeof value !== 'object') return createIdleSession();
-  const candidate = value as Partial<RecordingSessionSnapshot>;
+  if (!isRecord<RecordingSessionSnapshot>(value)) return createIdleSession();
+  const candidate = value;
   const phase = normalizePhase(candidate.phase);
   const runConfig = phase === 'idle' ? null : normalizeRunConfig(candidate.runConfig);
 

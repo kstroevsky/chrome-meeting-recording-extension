@@ -6,9 +6,8 @@
  */
 
 import {
-  createDefaultRunConfig,
-  normalizeMicMode,
-  normalizeRunConfig,
+  DEFAULT_RECORDING_RUN_CONFIG,
+  getRunConfigOrDefault,
   type RecordingRunConfig,
 } from '../shared/recording';
 import type { PopupElements } from './popupView';
@@ -28,23 +27,15 @@ export function applyRunConfigToForm(
   if (elements.recordSelfVideoCheckbox) {
     elements.recordSelfVideoCheckbox.checked = config.recordSelfVideo;
   }
-  if (elements.selfVideoHighQualityCheckbox) {
-    elements.selfVideoHighQualityCheckbox.checked = config.selfVideoQuality === 'high';
-  }
 }
 
 export function buildRunConfigFromForm(elements: PopupElements): RecordingRunConfig {
-  const defaults = createDefaultRunConfig();
-  const recordSelfVideo = elements.recordSelfVideoCheckbox?.checked ?? defaults.recordSelfVideo;
-  const selfVideoQuality =
-    recordSelfVideo && elements.selfVideoHighQualityCheckbox?.checked
-      ? 'high'
-      : defaults.selfVideoQuality;
+  const recordSelfVideo =
+    elements.recordSelfVideoCheckbox?.checked ?? DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
 
-  return normalizeRunConfig({
+  return getRunConfigOrDefault({
     storageMode: elements.storageModeSelect?.value,
-    micMode: normalizeMicMode(elements.micModeSelect?.value),
+    micMode: elements.micModeSelect?.value,
     recordSelfVideo,
-    selfVideoQuality,
-  }) ?? defaults;
+  });
 }

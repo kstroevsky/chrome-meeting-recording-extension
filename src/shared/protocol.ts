@@ -6,7 +6,12 @@
  */
 
 import type { MeetingProviderInfo } from './provider';
-import type { RecordingRunConfig, RecordingSessionSnapshot, RecordingPhase, UploadSummary } from './recording';
+import type {
+  RecordingRunConfig,
+  RecordingSessionSnapshot,
+  RecordingPhase,
+  UploadSummary,
+} from './recording';
 
 export type RpcId = string;
 
@@ -99,44 +104,31 @@ export type PerfEventMessage = {
   };
 };
 
+const POPUP_TO_BG_TYPES = ['START_RECORDING', 'STOP_RECORDING', 'GET_RECORDING_STATUS', 'GET_DRIVE_TOKEN'] as const;
+const POPUP_TO_CONTENT_TYPES = ['GET_TRANSCRIPT', 'RESET_TRANSCRIPT', 'GET_PROVIDER_INFO'] as const;
+const OFFSCREEN_TO_BG_TYPES = ['OFFSCREEN_READY', 'OFFSCREEN_STATE', 'OFFSCREEN_SAVE'] as const;
+
 function getType(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
   const type = (value as { type?: unknown }).type;
   return typeof type === 'string' ? type : null;
 }
 
+function hasKnownType(value: unknown, allowed: readonly string[]): boolean {
+  const type = getType(value);
+  return type != null && allowed.includes(type);
+}
+
 export function isPopupToBgMessage(value: unknown): value is PopupToBg {
-  switch (getType(value)) {
-    case 'START_RECORDING':
-    case 'STOP_RECORDING':
-    case 'GET_RECORDING_STATUS':
-    case 'GET_DRIVE_TOKEN':
-      return true;
-    default:
-      return false;
-  }
+  return hasKnownType(value, POPUP_TO_BG_TYPES);
 }
 
 export function isPopupToContentMessage(value: unknown): value is PopupToContent {
-  switch (getType(value)) {
-    case 'GET_TRANSCRIPT':
-    case 'RESET_TRANSCRIPT':
-    case 'GET_PROVIDER_INFO':
-      return true;
-    default:
-      return false;
-  }
+  return hasKnownType(value, POPUP_TO_CONTENT_TYPES);
 }
 
 export function isOffscreenToBgMessage(value: unknown): value is OffscreenToBg {
-  switch (getType(value)) {
-    case 'OFFSCREEN_READY':
-    case 'OFFSCREEN_STATE':
-    case 'OFFSCREEN_SAVE':
-      return true;
-    default:
-      return false;
-  }
+  return hasKnownType(value, OFFSCREEN_TO_BG_TYPES);
 }
 
 export function isBgToOffscreenRuntimeMessage(value: unknown): value is BgToOffscreenRuntime {

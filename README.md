@@ -71,7 +71,6 @@ Open a Google Meet, click the extension icon:
  - **Microphone Mode** — choose `Off`, `Mix into tab recording`, or `Save separately`.
  - **Storage Mode Dropdown** — Choose whether to save the final recording directly on Local Disk (OPFS) or straight to Google Drive (Cloud).
  - **Record my camera separately** — optional checkbox to save your camera stream as a separate recording file.
- - **High quality webcam (720p)** — optional quality toggle for the separate camera recording.
  - **Start Recording (tab) / Stop & Download** – creates a `.webm` file streamed continuously to your chosen storage mode.
 
 ## Install & build (detailed)
@@ -126,7 +125,9 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
       - **Microphone Mode**: `Off` skips microphone capture, `Mix into tab recording` blends your mic into the main tab file, and `Save separately` creates an additional `google-meet-mic-<meeting-id>-<timestamp>.webm`.
       - **Start Recording**: Starts a recording of the current tab (video + system audio) using the selected storage, microphone, and optional self-video settings.
       - **Record my camera separately**: If checked, starts an additional camera-only recorder and saves `google-meet-self-video-<meeting-id>-<timestamp>.webm`. If camera permission is missing, a camera setup tab opens.
-      - **High quality webcam (720p)**: Uses a higher camera profile and bitrate for the separate webcam file.
+        - When the extension opens the webcam itself, it prefers `1920x1080` at `30fps`.
+        - The actual recorded resolution still depends on Chrome, Meet camera usage, and the camera hardware. If Meet already owns the webcam, Chrome may deliver a lower shared resolution.
+        - The offscreen recorder logs the requested and delivered camera settings so resolution mismatches are visible during debugging.
       - **Stop & Download**: Finalizes and downloads `google-meet-recording-<meeting-id>-<timestamp>.webm.`
 
 > The extension shows a “REC” badge while recording. All files are saved locally via Chrome’s Downloads API.

@@ -98,7 +98,6 @@ type RecordingRunConfig = {
   storageMode: 'local' | 'drive';
   micMode: 'off' | 'mixed' | 'separate';
   recordSelfVideo: boolean;
-  selfVideoQuality: 'standard' | 'high';
 };
 ```
 
@@ -204,6 +203,12 @@ Recorder responsibilities:
 - stream chunks into `StorageTarget`
 - resolve only when final writes are drained and artifacts are sealed
 
+Self-video profiles:
+- single best-effort camera profile
+  - prefers `1920x1080` at `30fps` when the extension opens the webcam itself
+  - actual delivered settings still depend on Chrome, Meet camera usage, and camera hardware
+  - recorder diagnostics log both the requested profile and the delivered track settings
+
 #### Microphone Modes
 - `off`
   - no microphone capture
@@ -285,7 +290,6 @@ Current popup controls:
 - microphone mode select
 - storage mode select
 - self-video enable
-- self-video quality toggle
 - start recording
 - stop recording
 - diagnostics page link in dev builds

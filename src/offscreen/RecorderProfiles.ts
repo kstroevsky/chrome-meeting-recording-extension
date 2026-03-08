@@ -5,31 +5,43 @@
  */
 
 import { PERF_FLAGS, clamp } from '../shared/perf';
-import type { MicMode, RecordingRunConfig } from '../shared/recording';
+import type { MicMode } from '../shared/recording';
 
 const CHUNK_TIMESLICE_MS = 2000;
 const EXTENDED_CHUNK_TIMESLICE_MS = 4000;
+const SELF_VIDEO_MIN_BITS_PER_SECOND = 1_000_000;
+
+export const SELF_VIDEO_PROFILE = Object.freeze({
+  width: 1920,
+  height: 1080,
+  frameRate: 30,
+  aspectRatio: 16 / 9,
+  defaultBitsPerSecond: 6_000_000,
+});
+
+export const SELF_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+  resizeMode: 'crop-and-scale' as any,
+  aspectRatio: { ideal: SELF_VIDEO_PROFILE.aspectRatio },
+  width: { ideal: SELF_VIDEO_PROFILE.width, max: SELF_VIDEO_PROFILE.width },
+  height: { ideal: SELF_VIDEO_PROFILE.height, max: SELF_VIDEO_PROFILE.height },
+  frameRate: { ideal: SELF_VIDEO_PROFILE.frameRate, max: SELF_VIDEO_PROFILE.frameRate },
+} as any;
+
+function getSupportedMime(...candidates: string[]): string {
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate))
+    ?? candidates[candidates.length - 1];
+}
 
 export function getVideoMime(): string {
-  if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
-    return 'video/webm;codecs=vp8,opus';
-  }
-  return MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-    ? 'video/webm;codecs=vp9,opus'
-    : 'video/webm';
+  return getSupportedMime('video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm');
 }
 
 export function getVideoOnlyMime(): string {
-  if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) return 'video/webm;codecs=vp8';
-  return MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-    ? 'video/webm;codecs=vp9'
-    : 'video/webm';
+  return getSupportedMime('video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm');
 }
 
 export function getAudioMime(): string {
-  return MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : 'audio/webm';
+  return getSupportedMime('audio/webm;codecs=opus', 'audio/webm');
 }
 
 export function getChunkTimesliceMs(micMode: MicMode, recordSelfVideo: boolean): number {
@@ -39,8 +51,19 @@ export function getChunkTimesliceMs(micMode: MicMode, recordSelfVideo: boolean):
   return CHUNK_TIMESLICE_MS;
 }
 
+export function getDefaultSelfVideoBitrate(): number {
+  return SELF_VIDEO_PROFILE.defaultBitsPerSecond;
+}
+
+export function matchesSelfVideoProfile(settings?: MediaTrackSettings): boolean {
+  return settings?.width === SELF_VIDEO_PROFILE.width && settings?.height === SELF_VIDEO_PROFILE.height;
+}
+
+export function formatSelfVideoProfile(): string {
+  return `${SELF_VIDEO_PROFILE.width}x${SELF_VIDEO_PROFILE.height}`;
+}
+
 export function resolveSelfVideoBitrate(
-  quality: RecordingRunConfig['selfVideoQuality'],
   fallbackBitsPerSecond: number,
   settings?: MediaTrackSettings
 ): number {
@@ -51,7 +74,6 @@ export function resolveSelfVideoBitrate(
   const frameRate = settings?.frameRate;
   if (!width || !height || !frameRate) return fallbackBitsPerSecond;
 
-  const estimated = Math.round(width * height * frameRate * (quality === 'high' ? 0.1 : 0.075));
-  const minBitsPerSecond = quality === 'high' ? 1_000_000 : 500_000;
-  return clamp(estimated, minBitsPerSecond, fallbackBitsPerSecond);
+  const estimated = Math.round(width * height * frameRate * 0.1);
+  return clamp(estimated, SELF_VIDEO_MIN_BITS_PER_SECOND, fallbackBitsPerSecond);
 }

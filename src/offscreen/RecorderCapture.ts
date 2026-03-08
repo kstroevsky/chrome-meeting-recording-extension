@@ -5,20 +5,74 @@
  */
 
 import { withTimeout } from '../shared/async';
-import type { MicMode, RecordingRunConfig } from '../shared/recording';
+import type { MicMode } from '../shared/recording';
 import { TIMEOUTS } from '../shared/timeouts';
 import { queryActiveTab } from '../platform/chrome/tabs';
 import { describeMediaError } from './RecorderSupport';
+import {
+  formatSelfVideoProfile,
+  matchesSelfVideoProfile,
+  SELF_VIDEO_CONSTRAINTS,
+  SELF_VIDEO_PROFILE,
+} from './RecorderProfiles';
 
 type RecorderCaptureDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
 };
 
-type SelfVideoProfile = {
-  constraints: MediaTrackConstraints;
-  defaultVideoBitsPerSecond: number;
+type SelfVideoDiagnostics = {
+  ok: boolean;
+  requestedWidth: number;
+  requestedHeight: number;
+  requestedFrameRate: number;
+  width: number | undefined;
+  height: number | undefined;
+  frameRate: number | undefined;
+  deviceId: string | undefined;
+  capabilityWidth: MediaTrackCapabilities['width'] | undefined;
+  capabilityHeight: MediaTrackCapabilities['height'] | undefined;
+  capabilityFrameRate: MediaTrackCapabilities['frameRate'] | undefined;
+  muted: boolean | undefined;
+  enabled: boolean | undefined;
 };
+
+function readTrackCapabilities(track?: MediaStreamTrack): MediaTrackCapabilities | undefined {
+  try {
+    return typeof track?.getCapabilities === 'function'
+      ? track.getCapabilities()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildSelfVideoDiagnostics(track?: MediaStreamTrack): {
+  diagnostics: SelfVideoDiagnostics;
+  settings: MediaTrackSettings | undefined;
+} {
+  const settings = track?.getSettings?.();
+  const capabilities = readTrackCapabilities(track);
+
+  return {
+    diagnostics: {
+      ok: !!track,
+      requestedWidth: SELF_VIDEO_PROFILE.width,
+      requestedHeight: SELF_VIDEO_PROFILE.height,
+      requestedFrameRate: SELF_VIDEO_PROFILE.frameRate,
+      width: settings?.width,
+      height: settings?.height,
+      frameRate: settings?.frameRate,
+      deviceId: settings?.deviceId,
+      capabilityWidth: capabilities?.width,
+      capabilityHeight: capabilities?.height,
+      capabilityFrameRate: capabilities?.frameRate,
+      muted: track?.muted,
+      enabled: track?.enabled,
+    },
+    settings,
+  };
+}
 
 function makeTabCaptureConstraints(
   streamId: string,
@@ -38,28 +92,6 @@ function makeTabCaptureConstraints(
         maxFrameRate: 30,
       },
     } as any,
-  };
-}
-
-function getSelfVideoProfile(quality: RecordingRunConfig['selfVideoQuality']): SelfVideoProfile {
-  if (quality === 'high') {
-    return {
-      constraints: {
-        width: { ideal: 1280, max: 1280 },
-        height: { ideal: 720, max: 720 },
-        frameRate: { ideal: 30, max: 30 },
-      },
-      defaultVideoBitsPerSecond: 2_500_000,
-    };
-  }
-
-  return {
-    constraints: {
-      width: { ideal: 960, max: 960 },
-      height: { ideal: 540, max: 540 },
-      frameRate: { ideal: 24, max: 24 },
-    },
-    defaultVideoBitsPerSecond: 1_200_000,
   };
 }
 
@@ -119,34 +151,29 @@ export async function maybeGetMicStream(
 
 export async function maybeGetSelfVideoStream(
   enabled: boolean,
-  quality: RecordingRunConfig['selfVideoQuality'],
   deps: RecorderCaptureDeps
 ): Promise<MediaStream | null> {
   if (!enabled) return null;
-  const profile = getSelfVideoProfile(quality);
 
   try {
     const stream = await withTimeout(
       navigator.mediaDevices.getUserMedia({
-        video: profile.constraints,
+        video: SELF_VIDEO_CONSTRAINTS,
         audio: false,
       }),
       TIMEOUTS.GUM_MS,
       'self video getUserMedia'
     );
-
     const track = stream.getVideoTracks()[0];
-    const settings = track?.getSettings?.();
-    deps.log('self video stream acquired:', {
-      ok: !!track,
-      quality,
-      width: settings?.width,
-      height: settings?.height,
-      frameRate: settings?.frameRate,
-      deviceId: settings?.deviceId,
-      muted: track?.muted,
-      enabled: track?.enabled,
-    });
+    const { diagnostics, settings } = buildSelfVideoDiagnostics(track);
+
+    deps.log('self video stream acquired:', diagnostics);
+
+    if (!matchesSelfVideoProfile(settings)) {
+      deps.warn(
+        `self video preferred ${formatSelfVideoProfile()} but browser delivered ${settings?.width ?? 'unknown'}x${settings?.height ?? 'unknown'}`
+      );
+    }
     return stream;
   } catch (error) {
     deps.warn(
@@ -155,12 +182,6 @@ export async function maybeGetSelfVideoStream(
     );
     return null;
   }
-}
-
-export function getDefaultSelfVideoBitrate(
-  quality: RecordingRunConfig['selfVideoQuality']
-): number {
-  return getSelfVideoProfile(quality).defaultVideoBitsPerSecond;
 }
 
 export async function inferActiveTabSuffix(): Promise<string> {

@@ -24,7 +24,7 @@ import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
 import {
   createDefaultRunConfig,
-  normalizeRunConfig,
+  getRunConfigOrDefault,
   normalizeSessionSnapshot,
   type RecordingPhase,
   type RecordingRunConfig,
@@ -53,7 +53,6 @@ export class PopupController {
     this.wireTranscriptDownload();
     this.wireStartStop();
     this.wireMic();
-    this.wireSelfVideoQualityToggle();
     this.wireDiagnosticsLink();
     void this.refreshInitialUi();
   }
@@ -81,10 +80,7 @@ export class PopupController {
     } else {
       const run = describeRunConfig(this.activeRunConfig);
       const suffix = run ? ` ${run}` : '';
-      const errorSuffix = phase === 'failed' && this.lastPhase === 'failed'
-        ? ''
-        : '';
-      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${suffix}${errorSuffix}`;
+      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${suffix}`;
     }
     if (!this.statusTimer) {
       this.setStatus(this.persistentStatus);
@@ -115,7 +111,7 @@ export class PopupController {
     const prevPhase = this.lastPhase;
     const runConfig = snapshot.phase === 'idle'
       ? createDefaultRunConfig()
-      : normalizeRunConfig(snapshot.runConfig);
+      : getRunConfigOrDefault(snapshot.runConfig);
     this.setActiveRunConfig(runConfig);
     this.setUI(snapshot.phase);
 
@@ -180,20 +176,6 @@ export class PopupController {
   private wireMic() {
     if (!this.el.micBtn) return;
     this.mic.bindButton(this.el.micBtn);
-  }
-
-  private wireSelfVideoQualityToggle() {
-    const { recordSelfVideoCheckbox, selfVideoHighQualityCheckbox } = this.el;
-    if (!recordSelfVideoCheckbox || !selfVideoHighQualityCheckbox) return;
-
-    const refresh = () => {
-      if (!recordSelfVideoCheckbox.disabled) {
-        selfVideoHighQualityCheckbox.disabled = !recordSelfVideoCheckbox.checked;
-      }
-    };
-
-    recordSelfVideoCheckbox.addEventListener('change', refresh);
-    refresh();
   }
 
   private wireDiagnosticsLink() {
@@ -262,8 +244,7 @@ export class PopupController {
         await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
         const runConfig = buildRunConfigFromForm(this.el);
-        const micMode = runConfig.micMode;
-        const recordSelfVideo = runConfig.recordSelfVideo;
+        const { micMode, recordSelfVideo } = runConfig;
 
         const micReady = await this.mic.ensureReadyForRecording(micMode);
         if (!micReady) {

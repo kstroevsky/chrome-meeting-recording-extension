@@ -15,7 +15,6 @@ export type PopupElements = {
   stopBtn: HTMLButtonElement | null;
   storageModeSelect: HTMLSelectElement | null;
   recordSelfVideoCheckbox: HTMLInputElement | null;
-  selfVideoHighQualityCheckbox: HTMLInputElement | null;
   openDiagnosticsBtn: HTMLButtonElement | null;
   recordingStatusEl: HTMLElement | null;
 };
@@ -35,7 +34,6 @@ export function setControlsForPhase(elements: PopupElements, phase: RecordingPha
     micModeSelect,
     storageModeSelect,
     recordSelfVideoCheckbox,
-    selfVideoHighQualityCheckbox,
   } = elements;
 
   if (!startBtn || !stopBtn) return;
@@ -47,9 +45,6 @@ export function setControlsForPhase(elements: PopupElements, phase: RecordingPha
   if (micModeSelect) micModeSelect.disabled = busy;
   if (storageModeSelect) storageModeSelect.disabled = busy;
   if (recordSelfVideoCheckbox) recordSelfVideoCheckbox.disabled = busy;
-  if (selfVideoHighQualityCheckbox) {
-    selfVideoHighQualityCheckbox.disabled = busy || !recordSelfVideoCheckbox?.checked;
-  }
 }
 
 export function setStatusText(elements: PopupElements, text: string): void {
@@ -68,11 +63,7 @@ export function describeRunConfig(config: RecordingRunConfig | null): string {
       : config.micMode === 'separate'
         ? 'Microphone: Saved as a separate audio file.'
         : 'Microphone: Off.';
-  const camera = config.recordSelfVideo
-    ? config.selfVideoQuality === 'high'
-      ? 'Camera: On (High quality).'
-      : 'Camera: On (Standard quality).'
-    : 'Camera: Off.';
+  const camera = config.recordSelfVideo ? 'Camera: On.' : 'Camera: Off.';
   return `${mode} ${mic} ${camera}`.trim();
 }
 
