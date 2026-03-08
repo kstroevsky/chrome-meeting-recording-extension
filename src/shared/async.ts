@@ -1,5 +1,3 @@
-export const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
-
 export async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let t: ReturnType<typeof setTimeout> | null = null;
 

@@ -27,7 +27,9 @@ Responsibilities:
 - Handles Drive token requests (`GET_DRIVE_TOKEN`) through `fetchDriveTokenWithFallback`.
 - Maintains keepalive while phase is `recording` or `uploading`.
 - Handles local-file save requests (`OFFSCREEN_SAVE`) through `chrome.downloads.download`.
-- Preserves state across service worker restarts via `chrome.storage.session` phase rehydration.
+- Preserves state across service worker restarts via `chrome.storage.session` rehydration:
+  - phase (`idle`, `recording`, `uploading`)
+  - active run config (`storageMode`, `recordSelfVideo`, `selfVideoQuality`)
 
 Drive auth behavior:
 - Silent auth first: `chrome.identity.getAuthToken({ interactive: false })`.
@@ -111,6 +113,7 @@ Responsibilities:
 - Downloads transcript from content script data.
 - Handles microphone priming flow.
 - Reflects current phase and upload summary.
+- Rehydrates active run config on popup reopen from `GET_RECORDING_STATUS`.
 
 Important property:
 - Popup is not part of the recording/upload control plane. It can be closed safely while upload continues.
@@ -384,6 +387,9 @@ MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hi
   - Stream chunks to OPFS (`LocalFileTarget`).
   - After stop, upload the sealed files to Drive (`RecordingFinalizer` + `DriveTarget`).
   - Fall back per-file to local download if upload fails.
+- If OPFS target creation fails for a stream:
+  - `RecorderEngine` falls back to `InMemoryStorageTarget` for that stream.
+  - The run still finalizes and is saved/uploaded from RAM-backed file data.
 
 ### Deterministic Per-Run Drive Foldering
 `RecordingFinalizer` derives one per-recording folder name from the first sealed filename after stop. The same value is reused for tab, mic, and optional self-video uploads from that run.
@@ -402,6 +408,19 @@ MV3 service workers cannot use `MediaRecorder` directly. Offscreen provides a hi
 
 ### Popup Closure Safety
 Recording and upload state live in background/offscreen. The popup is just a client. Closing the popup does not stop recording or upload.
+
+### Popup State Rehydration
+`GET_RECORDING_STATUS` now returns both phase and active run config while work is active. When popup is reopened mid-run, controls are locked to the real run settings so UI cannot drift from the actual recording configuration.
+
+### Message Surface (Current Minimal Set)
+The recording control plane intentionally uses a small message surface:
+- Background -> Offscreen RPC: `OFFSCREEN_START`, `OFFSCREEN_STOP`
+- Runtime reconnection message: `OFFSCREEN_CONNECT`
+- Offscreen -> Background events: `OFFSCREEN_READY`, `RECORDING_STATE`, `OFFSCREEN_SAVE`
+
+Removed during cleanup because they had no active callers:
+- `OFFSCREEN_STATUS` RPC
+- `OFFSCREEN_PING` runtime message
 
 ### Caption Selector Fragility
 Caption scraping depends on Meet DOM selectors (for example `.ygicle`, `.NWpY1d`). These may change when Meet frontend updates.

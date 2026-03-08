@@ -29,6 +29,11 @@ export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
 
 export type RecordingPhase = 'idle' | 'recording' | 'uploading';
 export type RecordingStream = 'tab' | 'mic' | 'selfVideo';
+export type RecordingRunConfig = {
+  storageMode: 'local' | 'drive';
+  recordSelfVideo: boolean;
+  selfVideoQuality: 'standard' | 'high';
+};
 
 export type UploadSummaryEntry = {
   stream: RecordingStream;
@@ -49,8 +54,7 @@ export type BgToOffscreenRpc =
       recordSelfVideo?: boolean;
       selfVideoQuality?: 'standard' | 'high';
     }>
-  | RpcRequest<{ type: 'OFFSCREEN_STOP' }>
-  | RpcRequest<{ type: 'OFFSCREEN_STATUS' }>;
+  | RpcRequest<{ type: 'OFFSCREEN_STOP' }>;
 
 export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string };
@@ -81,12 +85,12 @@ export type BgToPopup =
       type: 'RECORDING_STATE';
       phase: RecordingPhase;
       uploadSummary?: UploadSummary;
+      runConfig?: RecordingRunConfig;
     }
   | { type: 'RECORDING_SAVED'; filename?: string }
   | { type: 'RECORDING_SAVE_ERROR'; filename?: string; error: string };
 
 export type BgToOffscreenRuntime =
-  | { type: 'OFFSCREEN_PING' }
   | { type: 'OFFSCREEN_CONNECT' };
 
 export function makeId(): string {

@@ -15,12 +15,26 @@
 import { OffscreenManager } from './background/OffscreenManager';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
 import { makeLogger } from './shared/logger';
-import type { RecordingPhase } from './shared/protocol';
+import type { RecordingPhase, RecordingRunConfig } from './shared/protocol';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
+const SESSION_PHASE_KEY = 'phase';
+const SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+let activeRunConfig: RecordingRunConfig | null = null;
+
+function normalizeRunConfig(value: any): RecordingRunConfig | null {
+  if (!value || typeof value !== 'object') return null;
+  const storageMode = value.storageMode === 'drive' ? 'drive' : value.storageMode === 'local' ? 'local' : null;
+  if (!storageMode) return null;
+  return {
+    storageMode,
+    recordSelfVideo: !!value.recordSelfVideo,
+    selfVideoQuality: value.selfVideoQuality === 'high' ? 'high' : 'standard',
+  };
+}
 
 function startKeepAlive() {
   if (keepAliveTimer) return;
@@ -35,13 +49,25 @@ function stopKeepAlive() {
 
 offscreen.onPhaseChanged = (phase: RecordingPhase) => {
   phase === 'idle' ? stopKeepAlive() : startKeepAlive();
+  if (phase === 'idle') {
+    activeRunConfig = null;
+    offscreen.setRunConfig(null);
+  }
+  (chrome.storage as any)?.session?.set?.({
+    [SESSION_PHASE_KEY]: phase,
+    [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
+  }).catch?.((e: any) => {
+    L.warn('storage.session.set failed (phase/run config):', e);
+  });
 };
 
 (async () => {
   try {
-    const res = await chrome.storage.session.get(['phase']);
+    const res = await chrome.storage.session.get([SESSION_PHASE_KEY, SESSION_RUN_CONFIG_KEY]);
     const phase = (res?.phase === 'recording' || res?.phase === 'uploading') ? res.phase : 'idle';
+    activeRunConfig = phase === 'idle' ? null : normalizeRunConfig(res?.[SESSION_RUN_CONFIG_KEY]);
     offscreen.hydratePhase(phase);
+    offscreen.setRunConfig(activeRunConfig);
     if (phase !== 'idle') {
       L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
@@ -107,19 +133,34 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
 
       try {
         const streamId = await getStreamIdForTab(tabId);
-        const storageMode = msg.storageMode;
+        const runConfig: RecordingRunConfig = {
+          storageMode: msg.storageMode === 'drive' ? 'drive' : 'local',
+          recordSelfVideo: !!msg.recordSelfVideo,
+          selfVideoQuality: msg.selfVideoQuality === 'high' ? 'high' : 'standard',
+        };
         const recordSelfVideo = !!msg.recordSelfVideo;
         const selfVideoQuality = msg.selfVideoQuality === 'high' ? 'high' : 'standard';
         const r = await offscreen.rpc<{ ok: boolean; error?: string }>({
           type: 'OFFSCREEN_START',
           streamId,
-          storageMode,
+          storageMode: runConfig.storageMode,
           recordSelfVideo,
           selfVideoQuality,
         } as any);
 
         L.log('rpc(OFFSCREEN_START) response', r);
-        sendResponse(r?.ok ? { ok: true } : { ok: false, error: r?.error || 'Failed to start' });
+        if (r?.ok) {
+          activeRunConfig = runConfig;
+          offscreen.setRunConfig(activeRunConfig);
+          (chrome.storage as any)?.session?.set?.({
+            [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
+          }).catch?.((e: any) => {
+            L.warn('storage.session.set failed (start run config):', e);
+          });
+          sendResponse({ ok: true });
+        } else {
+          sendResponse({ ok: false, error: r?.error || 'Failed to start' });
+        }
       } catch (e: any) {
         L.error('OFFSCREEN_START failed', e);
         sendResponse({ ok: false, error: `OFFSCREEN_START failed: ${e?.message || e}` });
@@ -143,7 +184,11 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
     }
 
     if (msg?.type === 'GET_RECORDING_STATUS') {
-      sendResponse({ phase: offscreen.getRecordingStatus() });
+      const phase = offscreen.getRecordingStatus();
+      sendResponse({
+        phase,
+        runConfig: phase === 'idle' ? undefined : (activeRunConfig ?? undefined),
+      });
       return;
     }
   })().catch((err) => {

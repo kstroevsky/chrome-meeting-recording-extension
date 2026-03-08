@@ -180,19 +180,6 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         return { ok: true };
       },
 
-      OFFSCREEN_STATUS: async () => {
-        let phase = currentPhase;
-        try {
-          const res = await (chrome.storage as any)?.session?.get?.(['phase']);
-          if (res?.phase === 'idle' || res?.phase === 'recording' || res?.phase === 'uploading') {
-            phase = res.phase;
-          }
-        } catch (e) {
-          L.warn('storage.session.get failed — status may be stale:', e);
-        }
-        return { phase };
-      },
-
       REVOKE_BLOB_URL: async (msg: Extract<BgToOffscreenOneWay, { type: 'REVOKE_BLOB_URL' }>) => {
         const { blobUrl, opfsFilename } = msg;
         if (typeof blobUrl === 'string') engine.revokeBlobUrl(blobUrl);
@@ -217,10 +204,6 @@ getPort();
 
 chrome.runtime.onMessage.addListener((msg: BgToOffscreenRuntime, _sender, sendResponse) => {
   try {
-    if ((msg as any)?.type === 'OFFSCREEN_PING') {
-      sendResponse({ ok: true, via: 'onMessage' });
-      return true;
-    }
     if ((msg as any)?.type === 'OFFSCREEN_CONNECT') {
       connectPort();
       sendResponse({ ok: true });

@@ -8,7 +8,7 @@
 
 import { CameraPermissionService } from './CameraPermissionService';
 import { MicPermissionService } from './MicPermissionService';
-import type { RecordingPhase, UploadSummary } from '../shared/protocol';
+import type { RecordingPhase, RecordingRunConfig, UploadSummary } from '../shared/protocol';
 
 type Elements = {
   saveBtn: HTMLButtonElement | null;
@@ -21,7 +21,7 @@ type Elements = {
   recordingStatusEl: HTMLElement | null;
 };
 
-const UPLOADING_STATUS = 'Uploading to Google Drive... you can close this popup.';
+const UPLOADING_STATUS = 'Finalizing and saving files... you can close this popup.';
 
 export class PopupController {
   private readonly el: Elements;
@@ -32,6 +32,7 @@ export class PopupController {
   private shownUploadSummary = '';
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
+  private activeRunConfig: RecordingRunConfig | null = null;
 
   constructor(el: Elements) {
     this.el = el;
@@ -77,9 +78,53 @@ export class PopupController {
   }
 
   private syncPhaseStatus(phase: RecordingPhase) {
-    this.persistentStatus = phase === 'uploading' ? UPLOADING_STATUS : '';
+    if (phase === 'idle') {
+      this.persistentStatus = '';
+    } else {
+      const run = this.describeRunConfig(this.activeRunConfig);
+      this.persistentStatus =
+        phase === 'recording'
+          ? `Recording in progress. ${run}`
+          : `${UPLOADING_STATUS} ${run}`;
+    }
     if (!this.statusTimer) {
       this.setStatus(this.persistentStatus);
+    }
+  }
+
+  private describeRunConfig(config: RecordingRunConfig | null): string {
+    if (!config) return '';
+    const mode = config.storageMode === 'drive' ? 'Mode: Drive.' : 'Mode: Local.';
+    const camera = config.recordSelfVideo
+      ? config.selfVideoQuality === 'high'
+        ? 'Camera: On (High quality).'
+        : 'Camera: On (Standard quality).'
+      : 'Camera: Off.';
+    return `${mode} ${camera}`;
+  }
+
+  private parseRunConfig(raw: any): RecordingRunConfig | null {
+    if (!raw || typeof raw !== 'object') return null;
+    if (raw.storageMode !== 'drive' && raw.storageMode !== 'local') return null;
+    return {
+      storageMode: raw.storageMode,
+      recordSelfVideo: !!raw.recordSelfVideo,
+      selfVideoQuality: raw.selfVideoQuality === 'high' ? 'high' : 'standard',
+    };
+  }
+
+  private setActiveRunConfig(config: RecordingRunConfig | null) {
+    this.activeRunConfig = config;
+    if (!config) return;
+
+    if (this.el.storageModeSelect) {
+      this.el.storageModeSelect.value = config.storageMode;
+    }
+    if (this.el.recordSelfVideoCheckbox) {
+      this.el.recordSelfVideoCheckbox.checked = config.recordSelfVideo;
+    }
+    if (this.el.selfVideoHighQualityCheckbox) {
+      this.el.selfVideoHighQualityCheckbox.checked = config.selfVideoQuality === 'high';
     }
   }
 
@@ -102,8 +147,14 @@ export class PopupController {
     try {
       const st = await chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATUS' });
       const phase = st?.phase === 'recording' || st?.phase === 'uploading' ? st.phase : 'idle';
+      if (phase === 'idle') {
+        this.setActiveRunConfig(null);
+      } else {
+        this.setActiveRunConfig(this.parseRunConfig(st?.runConfig));
+      }
       this.setUI(phase);
     } catch {
+      this.setActiveRunConfig(null);
       this.setUI('idle');
     }
   }
@@ -113,6 +164,12 @@ export class PopupController {
       if (msg?.type === 'RECORDING_STATE') {
         const prevPhase = this.lastPhase;
         const phase = msg.phase === 'recording' || msg.phase === 'uploading' ? msg.phase : 'idle';
+        if (phase === 'idle') {
+          this.setActiveRunConfig(null);
+        } else {
+          const runConfig = this.parseRunConfig(msg.runConfig);
+          if (runConfig) this.setActiveRunConfig(runConfig);
+        }
         this.setUI(phase);
         this.handleUploadSummary(prevPhase, phase, msg.uploadSummary as UploadSummary | undefined);
       }
@@ -230,6 +287,11 @@ export class PopupController {
         const recordSelfVideo = !!this.el.recordSelfVideoCheckbox?.checked;
         const selfVideoQuality =
           recordSelfVideo && this.el.selfVideoHighQualityCheckbox?.checked ? 'high' : 'standard';
+        const runConfig: RecordingRunConfig = {
+          storageMode,
+          recordSelfVideo,
+          selfVideoQuality,
+        };
 
         if (recordSelfVideo) {
           const cameraReady = await this.camera.ensureReadyForRecording();
@@ -251,10 +313,12 @@ export class PopupController {
         if (!resp) throw new Error('No response from background');
         if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
 
+        this.setActiveRunConfig(runConfig);
         this.setUI('recording');
         this.toast('Recording started');
       } catch (e: any) {
         console.error('[popup] START_RECORDING error', e);
+        this.setActiveRunConfig(null);
         this.setUI('idle');
         alert(`Failed to start recording:\n${e?.message || e}`);
       } finally {
@@ -271,7 +335,7 @@ export class PopupController {
         const resp = await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
         if (!resp) throw new Error('No response from background');
         if (resp.ok === false) throw new Error(resp.error || 'Failed to stop');
-        this.toast('Stopping... finalizing local files...');
+        this.toast('Stopping... finalizing local files. You can close this popup.');
       } catch (e: any) {
         console.error('[popup] STOP_RECORDING error', e);
         alert(`Failed to stop recording:\n${e?.message || e}`);

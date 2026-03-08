@@ -27,7 +27,6 @@ export type RecordingFinalizerDeps = {
 export type FinalizeArtifactsOptions = {
   artifacts: CompletedRecordingArtifact[];
   storageMode: 'local' | 'drive';
-  driveRecordingFolderName?: string | null;
 };
 
 /**
@@ -42,9 +41,7 @@ export class RecordingFinalizer {
     if (!orderedArtifacts.length) return undefined;
 
     if (options.storageMode === 'drive') {
-      const recordingFolderName =
-        options.driveRecordingFolderName?.trim() ||
-        inferDriveRecordingFolderName(orderedArtifacts[0].artifact.filename);
+      const recordingFolderName = inferDriveRecordingFolderName(orderedArtifacts[0].artifact.filename);
       return await this.uploadArtifactsToDrive(orderedArtifacts, recordingFolderName);
     }
 

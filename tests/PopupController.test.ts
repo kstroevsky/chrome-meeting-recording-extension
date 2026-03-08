@@ -52,7 +52,14 @@ describe('PopupController', () => {
   });
 
   it('initializes UI correctly from existing uploading state', async () => {
-    mockSendMessage.mockResolvedValueOnce({ phase: 'uploading' });
+    mockSendMessage.mockResolvedValueOnce({
+      phase: 'uploading',
+      runConfig: {
+        storageMode: 'drive',
+        recordSelfVideo: true,
+        selfVideoQuality: 'high',
+      },
+    });
     controller.init();
     await new Promise(process.nextTick);
 
@@ -60,7 +67,11 @@ describe('PopupController', () => {
     expect(elements.startBtn.disabled).toBe(true);
     expect(elements.stopBtn.disabled).toBe(true);
     expect(elements.storageModeSelect.disabled).toBe(true);
-    expect(elements.recordingStatusEl.textContent).toContain('Uploading to Google Drive');
+    expect(elements.storageModeSelect.value).toBe('drive');
+    expect(elements.recordSelfVideoCheckbox.checked).toBe(true);
+    expect(elements.selfVideoHighQualityCheckbox.checked).toBe(true);
+    expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
+    expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
   });
 
   it('handles START_RECORDING click', async () => {
@@ -105,11 +116,17 @@ describe('PopupController', () => {
     controller.init();
     await new Promise(process.nextTick);
 
+    (controller as any).setActiveRunConfig({
+      storageMode: 'drive',
+      recordSelfVideo: true,
+      selfVideoQuality: 'standard',
+    });
     (controller as any).setUI('uploading');
 
     expect(elements.startBtn.disabled).toBe(true);
     expect(elements.stopBtn.disabled).toBe(true);
-    expect(elements.recordingStatusEl.textContent).toContain('Uploading to Google Drive');
+    expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
+    expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
   });
 
   it('shows final upload summary when some files fell back to local download', async () => {

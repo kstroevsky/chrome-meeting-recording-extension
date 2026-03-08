@@ -7,7 +7,12 @@
 import { withTimeout } from '../shared/async';
 import { makeLogger } from '../shared/logger';
 import { createPortRpcClient } from '../shared/rpc';
-import type { BgToOffscreenRpc, OffscreenToBg, RecordingPhase } from '../shared/protocol';
+import type {
+  BgToOffscreenRpc,
+  OffscreenToBg,
+  RecordingPhase,
+  RecordingRunConfig,
+} from '../shared/protocol';
 import { TIMEOUTS } from '../shared/timeouts';
 
 const L = makeLogger('background');
@@ -16,6 +21,7 @@ export class OffscreenManager {
   private port: chrome.runtime.Port | null = null;
   private ready = false;
   private lastKnownPhase: RecordingPhase = 'idle';
+  private activeRunConfig: RecordingRunConfig | null = null;
   private readyPromise: Promise<void> | null = null;
   private resolveReady: (() => void) | null = null;
 
@@ -46,6 +52,10 @@ export class OffscreenManager {
   hydratePhase(phase: RecordingPhase) {
     this.lastKnownPhase = phase;
     this.setBadge(phase);
+  }
+
+  setRunConfig(config: RecordingRunConfig | null) {
+    this.activeRunConfig = config;
   }
 
   getRecordingStatus(): RecordingPhase {
@@ -111,6 +121,7 @@ export class OffscreenManager {
         type: 'RECORDING_STATE',
         phase,
         uploadSummary: msg.uploadSummary,
+        runConfig: phase === 'idle' ? undefined : (this.activeRunConfig ?? undefined),
       }).catch(() => {});
       this.onPhaseChanged?.(phase);
       return;
