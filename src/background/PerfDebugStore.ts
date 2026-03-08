@@ -1,6 +1,5 @@
 import {
   PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
-  PERF_EVENT_BUFFER_LIMIT,
   type PerfDebugSnapshot,
   type PerfDebugSummary,
   type PerfEventEntry,
@@ -66,9 +65,18 @@ function createEmptySummary(): PerfDebugSummary {
       sampleCount: 0,
       state: 'idle',
       activeRecorders: 0,
+      hardwareConcurrency: null,
+      deviceMemoryGb: null,
       lastHeapUsedMb: null,
+      lastTotalHeapMb: null,
       maxHeapUsedMb: null,
       lastHeapLimitMb: null,
+      lastEventLoopLagMs: null,
+      avgEventLoopLagMs: null,
+      maxEventLoopLagMs: null,
+      longTaskCount: 0,
+      lastLongTaskMs: null,
+      maxLongTaskMs: null,
     },
   };
 }
@@ -86,7 +94,7 @@ function createEmptySnapshot(settings: PerfSettings): PerfDebugSnapshot {
 
 export class PerfDebugStore {
   private snapshot: PerfDebugSnapshot;
-  private persistScheduled = false;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     initialSettings: PerfSettings,
@@ -102,7 +110,7 @@ export class PerfDebugStore {
       settings: snapshot.settings ?? this.snapshot.settings,
       updatedAt: typeof snapshot.updatedAt === 'number' ? snapshot.updatedAt : null,
       droppedEvents: typeof snapshot.droppedEvents === 'number' ? snapshot.droppedEvents : 0,
-      entries: Array.isArray(snapshot.entries) ? snapshot.entries.slice(-PERF_EVENT_BUFFER_LIMIT) : [],
+      entries: Array.isArray(snapshot.entries) ? snapshot.entries : [],
       summary: snapshot.summary ?? createEmptySummary(),
     };
   }
@@ -115,23 +123,18 @@ export class PerfDebugStore {
     } else {
       this.snapshot.enabled = settings.debugMode;
     }
-    this.persist();
+    this.persist(0);
   }
 
   setPhase(phase: PerfPhase): void {
     this.snapshot.summary.currentPhase = phase;
     this.snapshot.summary.runtime.state = phase;
     this.snapshot.updatedAt = Date.now();
-    this.persist();
+    this.persist(0);
   }
 
   record(entry: PerfEventEntry): void {
     if (!this.snapshot.enabled) return;
-
-    if (this.snapshot.entries.length >= PERF_EVENT_BUFFER_LIMIT) {
-      this.snapshot.entries.shift();
-      this.snapshot.droppedEvents += 1;
-    }
     this.snapshot.entries.push(entry);
     this.snapshot.updatedAt = entry.ts;
 
@@ -187,6 +190,11 @@ export class PerfDebugStore {
       })),
       summary: JSON.parse(JSON.stringify(this.snapshot.summary)) as PerfDebugSummary,
     };
+  }
+
+  clear(): void {
+    this.snapshot = createEmptySnapshot(this.snapshot.settings);
+    this.removePersistedSnapshot();
   }
 
   private applyRecorderStarted(entry: PerfEventEntry): void {
@@ -325,6 +333,12 @@ export class PerfDebugStore {
     const activeRecorders = toNumber(entry.fields.activeRecorders);
     if (activeRecorders != null) runtime.activeRecorders = activeRecorders;
 
+    const hardwareConcurrency = toNumber(entry.fields.hardwareConcurrency);
+    if (hardwareConcurrency != null) runtime.hardwareConcurrency = hardwareConcurrency;
+
+    const deviceMemoryGb = toNumber(entry.fields.deviceMemoryGb);
+    if (deviceMemoryGb != null) runtime.deviceMemoryGb = deviceMemoryGb;
+
     const heapUsedMb = toNumber(entry.fields.usedJSHeapSizeMb);
     if (heapUsedMb != null) {
       runtime.lastHeapUsedMb = heapUsedMb;
@@ -333,20 +347,67 @@ export class PerfDebugStore {
         : Math.max(runtime.maxHeapUsedMb, heapUsedMb);
     }
 
+    const totalHeapMb = toNumber(entry.fields.totalJSHeapSizeMb);
+    if (totalHeapMb != null) runtime.lastTotalHeapMb = totalHeapMb;
+
     const heapLimitMb = toNumber(entry.fields.jsHeapSizeLimitMb);
     if (heapLimitMb != null) runtime.lastHeapLimitMb = heapLimitMb;
+
+    const eventLoopLagMs = toNumber(entry.fields.eventLoopLagMs);
+    if (eventLoopLagMs != null) {
+      runtime.lastEventLoopLagMs = eventLoopLagMs;
+      const prevAvg = runtime.avgEventLoopLagMs ?? eventLoopLagMs;
+      runtime.avgEventLoopLagMs = round(((prevAvg * (runtime.sampleCount - 1)) + eventLoopLagMs) / runtime.sampleCount);
+      runtime.maxEventLoopLagMs = runtime.maxEventLoopLagMs == null
+        ? eventLoopLagMs
+        : Math.max(runtime.maxEventLoopLagMs, eventLoopLagMs);
+    }
+
+    const longTaskCount = toNumber(entry.fields.longTaskCount);
+    if (longTaskCount != null) runtime.longTaskCount = longTaskCount;
+
+    const lastLongTaskMs = toNumber(entry.fields.lastLongTaskMs);
+    if (lastLongTaskMs != null) runtime.lastLongTaskMs = lastLongTaskMs;
+
+    const maxLongTaskMs = toNumber(entry.fields.maxLongTaskMs);
+    if (maxLongTaskMs != null) {
+      runtime.maxLongTaskMs = runtime.maxLongTaskMs == null
+        ? maxLongTaskMs
+        : Math.max(runtime.maxLongTaskMs, maxLongTaskMs);
+    }
   }
 
-  private persist(): void {
-    if (this.persistScheduled) return;
+  private persist(delayMs = 400): void {
     if (!chrome.storage?.session?.set) return;
+    if (delayMs === 0) {
+      if (this.persistTimer) {
+        clearTimeout(this.persistTimer);
+        this.persistTimer = null;
+      }
+      this.persistNow();
+      return;
+    }
 
-    this.persistScheduled = true;
-    queueMicrotask(() => {
-      this.persistScheduled = false;
-      chrome.storage.session
-        .set({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: this.getSnapshot() })
-        .catch?.((error: any) => this.warn('Failed to persist perf debug snapshot', error));
-    });
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistNow();
+    }, delayMs);
+  }
+
+  private persistNow(): void {
+    chrome.storage.session
+      .set({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: this.getSnapshot() })
+      .catch?.((error: any) => this.warn('Failed to persist perf debug snapshot', error));
+  }
+
+  private removePersistedSnapshot(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    if (!chrome.storage?.session?.remove) return;
+    const removal = chrome.storage.session.remove(PERF_DEBUG_SNAPSHOT_STORAGE_KEY);
+    removal?.catch?.((error: any) => this.warn('Failed to clear perf debug snapshot', error));
   }
 }

@@ -19,6 +19,7 @@ export type PerfSettings = PerfFlags & {
 export const PERF_SETTINGS_STORAGE_KEY = 'perfSettings';
 export const PERF_DEBUG_SNAPSHOT_STORAGE_KEY = 'perfDebugSnapshot';
 export const PERF_EVENT_BUFFER_LIMIT = 120;
+export const PERF_EVENT_MAX_AGE_MS = 15 * 60 * 1000;
 
 const DEFAULT_PERF_SETTINGS: PerfSettings = {
   audioPlaybackBridgeMode: 'always',
@@ -90,9 +91,18 @@ export type PerfDebugSummary = {
     sampleCount: number;
     state: PerfPhase;
     activeRecorders: number;
+    hardwareConcurrency: number | null;
+    deviceMemoryGb: number | null;
     lastHeapUsedMb: number | null;
+    lastTotalHeapMb: number | null;
     maxHeapUsedMb: number | null;
     lastHeapLimitMb: number | null;
+    lastEventLoopLagMs: number | null;
+    avgEventLoopLagMs: number | null;
+    maxEventLoopLagMs: number | null;
+    longTaskCount: number;
+    lastLongTaskMs: number | null;
+    maxLongTaskMs: number | null;
   };
 };
 

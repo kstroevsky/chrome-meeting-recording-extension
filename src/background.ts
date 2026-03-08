@@ -32,6 +32,7 @@ const SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 let activeRunConfig: RecordingRunConfig | null = null;
+let activeDebugDashboards = 0;
 const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), L.warn);
 
 function normalizeRunConfig(value: any): RecordingRunConfig | null {
@@ -56,6 +57,12 @@ function stopKeepAlive() {
   keepAliveTimer = null;
 }
 
+function maybeClearPerfDiagnostics() {
+  if (activeDebugDashboards > 0) return;
+  if (offscreen.getRecordingStatus() !== 'idle') return;
+  perfDebugStore.clear();
+}
+
 offscreen.onPhaseChanged = (phase: RecordingPhase) => {
   phase === 'idle' ? stopKeepAlive() : startKeepAlive();
   if (phase === 'idle') {
@@ -63,6 +70,9 @@ offscreen.onPhaseChanged = (phase: RecordingPhase) => {
     offscreen.setRunConfig(null);
   }
   perfDebugStore.setPhase(phase);
+  if (phase === 'idle') {
+    maybeClearPerfDiagnostics();
+  }
   (chrome.storage as any)?.session?.set?.({
     [SESSION_PHASE_KEY]: phase,
     [SESSION_RUN_CONFIG_KEY]: activeRunConfig,
@@ -91,6 +101,9 @@ offscreen.onPhaseChanged = (phase: RecordingPhase) => {
     offscreen.hydratePhase(phase);
     offscreen.setRunConfig(activeRunConfig);
     perfDebugStore.setPhase(phase);
+    if (phase === 'idle') {
+      maybeClearPerfDiagnostics();
+    }
     if (phase !== 'idle') {
       L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
@@ -102,8 +115,18 @@ offscreen.onPhaseChanged = (phase: RecordingPhase) => {
 })();
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'offscreen') return;
-  offscreen.attachPort(port);
+  if (port.name === 'offscreen') {
+    offscreen.attachPort(port);
+    return;
+  }
+
+  if (port.name !== 'debug-dashboard') return;
+
+  activeDebugDashboards += 1;
+  port.onDisconnect.addListener(() => {
+    activeDebugDashboards = Math.max(0, activeDebugDashboards - 1);
+    maybeClearPerfDiagnostics();
+  });
 });
 
 function getStreamIdForTab(tabId: number): Promise<string> {

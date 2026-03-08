@@ -8,8 +8,11 @@ const dashboard = new DebugDashboard({
   uploadEl: document.getElementById('debug-upload'),
   captionsEl: document.getElementById('debug-captions'),
   runtimeEl: document.getElementById('debug-runtime'),
+  systemEl: document.getElementById('debug-system'),
+  eventsScrollEl: document.getElementById('debug-events-scroll'),
   eventsBodyEl: document.getElementById('debug-events-body') as HTMLTableSectionElement | null,
   downloadBtn: document.getElementById('download-debug-json') as HTMLButtonElement | null,
 });
 
 dashboard.init();
+window.addEventListener('beforeunload', () => dashboard.destroy(), { once: true });

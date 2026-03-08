@@ -125,6 +125,14 @@
         margin-top: 16px;
       }
 
+      .events-scroll {
+        max-height: min(90vh, 900px);
+        overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-gutter: stable;
+        border-top: 1px solid var(--line);
+      }
+
       table {
         width: 100%;
         border-collapse: collapse;
@@ -142,6 +150,9 @@
       th {
         color: var(--muted);
         font-weight: 600;
+        position: sticky;
+        top: 0;
+        background: rgba(255, 250, 242, 0.98);
       }
 
       @media (max-width: 900px) {
@@ -195,22 +206,28 @@
           <h2>Runtime</h2>
           <pre id="debug-runtime"></pre>
         </article>
+        <article class="card">
+          <h2>System</h2>
+          <pre id="debug-system">Loading system info...</pre>
+        </article>
       </section>
 
       <section class="card events">
         <h2>Recent Events</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Source</th>
-              <th>Scope</th>
-              <th>Event</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody id="debug-events-body"></tbody>
-        </table>
+        <div class="events-scroll" id="debug-events-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Source</th>
+                <th>Scope</th>
+                <th>Event</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="debug-events-body"></tbody>
+          </table>
+        </div>
       </section>
     </main>
     <script src="debug.js"></script>

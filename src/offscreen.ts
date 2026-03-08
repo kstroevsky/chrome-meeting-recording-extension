@@ -25,9 +25,10 @@ import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
-import { configurePerfRuntime, debugPerf, isPerfDebugMode, roundMs, type PerfEventEntry } from './shared/perf';
+import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
 
 const L = makeLogger('offscreen');
+const RUNTIME_SAMPLE_INTERVAL_MS = 2_000;
 
 // Global safety nets so failures do not disappear into the hidden offscreen page.
 window.addEventListener('error', (e) => {
@@ -56,6 +57,30 @@ let reconnectEnabled = true;
 let currentStorageMode: 'local' | 'drive' = 'local';
 let currentPhase: RecordingPhase = 'idle';
 let finalizeRunPromise: Promise<void> | null = null;
+let expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
+let runtimeSampleCount = 0;
+let cumulativeEventLoopLagMs = 0;
+let maxEventLoopLagMs = 0;
+let longTaskCount = 0;
+let lastLongTaskMs: number | null = null;
+let maxLongTaskMs = 0;
+
+if (typeof PerformanceObserver !== 'undefined') {
+  try {
+    const supportedEntryTypes = (PerformanceObserver as any).supportedEntryTypes as string[] | undefined;
+    if (Array.isArray(supportedEntryTypes) && supportedEntryTypes.includes('longtask')) {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const durationMs = roundMs(entry.duration);
+          longTaskCount += 1;
+          lastLongTaskMs = durationMs;
+          maxLongTaskMs = Math.max(maxLongTaskMs, durationMs);
+        }
+      });
+      observer.observe({ entryTypes: ['longtask'] as any });
+    }
+  } catch {}
+}
 
 function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   try { portRef?.disconnect(); } catch {}
@@ -89,6 +114,9 @@ function respond(reqId: string, payload: any) {
 }
 
 function pushState(phase: RecordingPhase, extra?: Record<string, any>) {
+  if (phase !== currentPhase && phase !== 'idle') {
+    expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
+  }
   currentPhase = phase;
   try {
     (chrome.storage as any)?.session?.set?.({ phase }).catch?.((e: any) => {
@@ -160,18 +188,33 @@ const engine = new RecorderEngine({
 
 function sampleRuntimeMetrics() {
   if (!isPerfDebugMode() || currentPhase === 'idle') return;
+  const now = nowMs();
+  const eventLoopLagMs = Math.max(0, roundMs(now - expectedRuntimeSampleAt));
+  runtimeSampleCount += 1;
+  cumulativeEventLoopLagMs += eventLoopLagMs;
+  maxEventLoopLagMs = Math.max(maxEventLoopLagMs, eventLoopLagMs);
+  expectedRuntimeSampleAt = now + RUNTIME_SAMPLE_INTERVAL_MS;
   const perfMemory = (performance as any)?.memory;
+  const nav = navigator as Navigator & { deviceMemory?: number };
   debugPerf(L.log, 'runtime', 'sample', {
     phase: currentPhase,
     recorderState: engine.getDebugState(),
     activeRecorders: engine.getActiveRecorderCount(),
+    hardwareConcurrency: typeof nav.hardwareConcurrency === 'number' ? nav.hardwareConcurrency : undefined,
+    deviceMemoryGb: typeof nav.deviceMemory === 'number' ? nav.deviceMemory : undefined,
     usedJSHeapSizeMb: perfMemory?.usedJSHeapSize != null ? roundMs(perfMemory.usedJSHeapSize / 1024 / 1024) : undefined,
     totalJSHeapSizeMb: perfMemory?.totalJSHeapSize != null ? roundMs(perfMemory.totalJSHeapSize / 1024 / 1024) : undefined,
     jsHeapSizeLimitMb: perfMemory?.jsHeapSizeLimit != null ? roundMs(perfMemory.jsHeapSizeLimit / 1024 / 1024) : undefined,
+    eventLoopLagMs,
+    avgEventLoopLagMs: runtimeSampleCount > 0 ? roundMs(cumulativeEventLoopLagMs / runtimeSampleCount) : undefined,
+    maxEventLoopLagMs: roundMs(maxEventLoopLagMs),
+    longTaskCount,
+    lastLongTaskMs: lastLongTaskMs ?? undefined,
+    maxLongTaskMs: longTaskCount > 0 ? roundMs(maxLongTaskMs) : undefined,
   });
 }
 
-setInterval(sampleRuntimeMetrics, 2_000);
+setInterval(sampleRuntimeMetrics, RUNTIME_SAMPLE_INTERVAL_MS);
 
 function wirePortHandlers(port: chrome.runtime.Port) {
   createPortRpcServer(
