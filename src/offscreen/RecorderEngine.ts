@@ -22,6 +22,7 @@ import { withTimeout } from '../shared/async';
 import { TIMEOUTS } from '../shared/timeouts';
 
 type RecordingStateExtra = Record<string, any> | undefined;
+type SelfVideoQuality = 'standard' | 'high';
 
 export interface StorageTarget {
   /** Called for each MediaRecorder ondataavailable chunk. May be called concurrently. */
@@ -56,7 +57,10 @@ export type RecorderEngineDeps = {
 };
 
 type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
-type StartOptions = { recordSelfVideo?: boolean };
+type StartOptions = {
+  recordSelfVideo?: boolean;
+  selfVideoQuality?: SelfVideoQuality;
+};
 
 function describeMediaError(err: unknown): string {
   const e = err as any;
@@ -95,6 +99,7 @@ export class RecorderEngine {
 
   private suffix = 'google-meet';
   private recordSelfVideo = false;
+  private selfVideoQuality: SelfVideoQuality = 'standard';
 
   private playback: AudioPlaybackBridge | null = null;
 
@@ -115,6 +120,7 @@ export class RecorderEngine {
     this.state = 'starting';
     this.resetRunState();
     this.recordSelfVideo = !!options.recordSelfVideo;
+    this.selfVideoQuality = options.selfVideoQuality === 'high' ? 'high' : 'standard';
 
     const baseStream = await this.captureWithStreamId(streamId);
     this.tabStream = baseStream;
@@ -242,18 +248,42 @@ export class RecorderEngine {
   // -------------------------
 
   private getVideoMime(): string {
-    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus'))
-      return 'video/webm;codecs=vp9,opus';
-    return MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
-      ? 'video/webm;codecs=vp8,opus'
+    // Prefer VP8 first to reduce CPU load while running multiple encoders.
+    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus'))
+      return 'video/webm;codecs=vp8,opus';
+    return MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+      ? 'video/webm;codecs=vp9,opus'
       : 'video/webm';
   }
 
   private getVideoOnlyMime(): string {
-    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) return 'video/webm;codecs=vp9';
-    return MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
-      ? 'video/webm;codecs=vp8'
+    // VP8 is usually less CPU intensive for real-time multi-stream recording.
+    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) return 'video/webm;codecs=vp8';
+    return MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
       : 'video/webm';
+  }
+
+  private getSelfVideoProfile(): { constraints: MediaTrackConstraints; videoBitsPerSecond: number } {
+    if (this.selfVideoQuality === 'high') {
+      return {
+        constraints: {
+          width: { ideal: 1280, max: 1280 },
+          height: { ideal: 720, max: 720 },
+          frameRate: { ideal: 30, max: 30 },
+        },
+        videoBitsPerSecond: 2_500_000,
+      };
+    }
+
+    return {
+      constraints: {
+        width: { ideal: 960, max: 960 },
+        height: { ideal: 540, max: 540 },
+        frameRate: { ideal: 24, max: 24 },
+      },
+      videoBitsPerSecond: 1_200_000,
+    };
   }
 
   private getAudioMime(): string {
@@ -349,7 +379,7 @@ export class RecorderEngine {
       };
 
       // Start with timeslice to ensure continuous chunking
-      recorder.start(1000);
+      recorder.start(2000);
     });
   }
 
@@ -430,7 +460,7 @@ export class RecorderEngine {
         resolve();
       };
 
-      recorder.start(1000);
+      recorder.start(2000);
     });
   }
 
@@ -445,10 +475,19 @@ export class RecorderEngine {
 
     this.selfVideoStream = selfVideo;
     this.selfVideoChunks = [];
+    const profile = this.getSelfVideoProfile();
 
     const mime = this.getVideoOnlyMime();
     let started = false;
-    const recorder = new MediaRecorder(selfVideo, { mimeType: mime, videoBitsPerSecond: 1_000_000 });
+    const track = selfVideo.getVideoTracks()[0];
+    try {
+      if (track && 'contentHint' in track) (track as any).contentHint = 'motion';
+    } catch {}
+
+    const recorder = new MediaRecorder(selfVideo, {
+      mimeType: mime,
+      videoBitsPerSecond: profile.videoBitsPerSecond,
+    });
     this.selfVideoRecorder = recorder;
 
     const filename = `google-meet-self-video-${this.suffix}-${Date.now()}.webm`;
@@ -514,11 +553,15 @@ export class RecorderEngine {
         clearTimeout(startTimeout);
         started = true;
         this.onRecorderStarted();
-        this.deps.log('Self video MediaRecorder started');
+        this.deps.log('Self video MediaRecorder started', {
+          quality: this.selfVideoQuality,
+          mime,
+          videoBitsPerSecond: profile.videoBitsPerSecond,
+        });
         resolve();
       };
 
-      recorder.start(1000);
+      recorder.start(2000);
     });
   }
 
@@ -550,15 +593,12 @@ export class RecorderEngine {
 
   private async maybeGetSelfVideoStream(): Promise<MediaStream | null> {
     if (!this.recordSelfVideo) return null;
+    const profile = this.getSelfVideoProfile();
 
     try {
       const stream = await withTimeout(
         navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30, max: 30 },
-          },
+          video: profile.constraints,
           audio: false,
         }),
         TIMEOUTS.GUM_MS,
@@ -566,7 +606,17 @@ export class RecorderEngine {
       );
 
       const t = stream.getVideoTracks()[0];
-      this.deps.log('self video stream acquired:', !!t, 'muted:', t?.muted, 'enabled:', t?.enabled);
+      const settings = t?.getSettings?.();
+      this.deps.log('self video stream acquired:', {
+        ok: !!t,
+        quality: this.selfVideoQuality,
+        width: settings?.width,
+        height: settings?.height,
+        frameRate: settings?.frameRate,
+        deviceId: settings?.deviceId,
+        muted: t?.muted,
+        enabled: t?.enabled,
+      });
       return stream;
     } catch (e) {
       this.deps.warn(
@@ -631,6 +681,7 @@ export class RecorderEngine {
     this.playback = null;
     this.suffix = 'google-meet';
     this.recordSelfVideo = false;
+    this.selfVideoQuality = 'standard';
   }
 
   private async inferSuffixFromActiveTab(): Promise<string> {

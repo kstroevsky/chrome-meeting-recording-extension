@@ -8,6 +8,7 @@ type Elements = {
   stopBtn: HTMLButtonElement | null;
   storageModeSelect: HTMLSelectElement | null;
   recordSelfVideoCheckbox: HTMLInputElement | null;
+  selfVideoHighQualityCheckbox: HTMLInputElement | null;
 };
 
 export class PopupController {
@@ -25,16 +26,26 @@ export class PopupController {
     this.wireTranscriptDownload();
     this.wireStartStop();
     this.wireMic();
+    this.wireSelfVideoQualityToggle();
     void this.refreshInitialUi();
   }
 
   private setUI(recording: boolean) {
-    const { startBtn, stopBtn, storageModeSelect, recordSelfVideoCheckbox } = this.el;
+    const {
+      startBtn,
+      stopBtn,
+      storageModeSelect,
+      recordSelfVideoCheckbox,
+      selfVideoHighQualityCheckbox,
+    } = this.el;
     if (!startBtn || !stopBtn) return;
     startBtn.disabled = recording;
     stopBtn.disabled = !recording;
     if (storageModeSelect) storageModeSelect.disabled = recording;
     if (recordSelfVideoCheckbox) recordSelfVideoCheckbox.disabled = recording;
+    if (selfVideoHighQualityCheckbox) {
+      selfVideoHighQualityCheckbox.disabled = recording || !recordSelfVideoCheckbox?.checked;
+    }
   }
 
   private toast(msg: string) {
@@ -63,6 +74,20 @@ export class PopupController {
   private wireMic() {
     if (!this.el.micBtn) return;
     this.mic.bindButton(this.el.micBtn);
+  }
+
+  private wireSelfVideoQualityToggle() {
+    const { recordSelfVideoCheckbox, selfVideoHighQualityCheckbox } = this.el;
+    if (!recordSelfVideoCheckbox || !selfVideoHighQualityCheckbox) return;
+
+    const refresh = () => {
+      if (!recordSelfVideoCheckbox.disabled) {
+        selfVideoHighQualityCheckbox.disabled = !recordSelfVideoCheckbox.checked;
+      }
+    };
+
+    recordSelfVideoCheckbox.addEventListener('change', refresh);
+    refresh();
   }
 
   private wireTranscriptDownload() {
@@ -119,6 +144,8 @@ export class PopupController {
 
         const storageMode = (this.el.storageModeSelect?.value === 'drive') ? 'drive' : 'local';
         const recordSelfVideo = !!this.el.recordSelfVideoCheckbox?.checked;
+        const selfVideoQuality =
+          recordSelfVideo && this.el.selfVideoHighQualityCheckbox?.checked ? 'high' : 'standard';
         if (recordSelfVideo) {
           const cameraReady = await this.camera.ensureReadyForRecording();
           if (!cameraReady) {
@@ -135,6 +162,7 @@ export class PopupController {
           tabId: tab.id,
           storageMode,
           recordSelfVideo,
+          selfVideoQuality,
         });
         if (!resp) throw new Error('No response from background');
         if (resp.ok === false) throw new Error(resp.error || 'Failed to start');

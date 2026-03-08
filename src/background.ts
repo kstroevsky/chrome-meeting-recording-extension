@@ -118,11 +118,13 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
         const streamId = await getStreamIdForTab(tabId);
         const storageMode = msg.storageMode;
         const recordSelfVideo = !!msg.recordSelfVideo;
+        const selfVideoQuality = msg.selfVideoQuality === 'high' ? 'high' : 'standard';
         const r = await offscreen.rpc<{ ok: boolean; error?: string }>({
           type: 'OFFSCREEN_START',
           streamId,
           storageMode,
           recordSelfVideo,
+          selfVideoQuality,
         } as any);
 
         L.log('rpc(OFFSCREEN_START) response', r);

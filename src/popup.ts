@@ -25,6 +25,7 @@ const controller = new PopupController({
   stopBtn: document.getElementById('stop-rec') as HTMLButtonElement | null,
   storageModeSelect: document.getElementById('storage-mode') as HTMLSelectElement | null,
   recordSelfVideoCheckbox: document.getElementById('record-self-video') as HTMLInputElement | null,
+  selfVideoHighQualityCheckbox: document.getElementById('self-video-high-quality') as HTMLInputElement | null,
 });
 
 controller.init();

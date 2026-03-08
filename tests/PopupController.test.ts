@@ -1,7 +1,9 @@
 import { PopupController } from '../src/popup/PopupController';
 import { MicPermissionService } from '../src/popup/MicPermissionService';
+import { CameraPermissionService } from '../src/popup/CameraPermissionService';
 
 jest.mock('../src/popup/MicPermissionService');
+jest.mock('../src/popup/CameraPermissionService');
 
 describe('PopupController', () => {
   let controller: PopupController;
@@ -16,9 +18,11 @@ describe('PopupController', () => {
       startBtn: document.createElement('button'),
       stopBtn: document.createElement('button'),
       storageModeSelect: document.createElement('select'),
-      recordSelfVideoCheckbox: document.createElement('input')
+      recordSelfVideoCheckbox: document.createElement('input'),
+      selfVideoHighQualityCheckbox: document.createElement('input')
     };
     elements.recordSelfVideoCheckbox.type = 'checkbox';
+    elements.selfVideoHighQualityCheckbox.type = 'checkbox';
     
     const optLocal = document.createElement('option');
     optLocal.value = 'local';
@@ -33,7 +37,10 @@ describe('PopupController', () => {
     mockTabsQuery = chrome.tabs.query as jest.Mock;
     mockTabsQuery.mockResolvedValue([{ id: 101, url: 'https://meet.google.com/abc-defg' }]);
 
+    (CameraPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(true);
+
     controller = new PopupController(elements);
+
     // Suppress console error output for tests evaluating thrown exceptions
     jest.spyOn(console, 'error').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -56,6 +63,7 @@ describe('PopupController', () => {
     expect(elements.stopBtn.disabled).toBe(false);
     expect(elements.storageModeSelect.disabled).toBe(true);
     expect(elements.recordSelfVideoCheckbox.disabled).toBe(true);
+    expect(elements.selfVideoHighQualityCheckbox.disabled).toBe(true);
   });
 
   it('handles START_RECORDING click', async () => {
@@ -64,6 +72,7 @@ describe('PopupController', () => {
 
     elements.storageModeSelect.selectedIndex = 1;
     elements.recordSelfVideoCheckbox.checked = true;
+    elements.selfVideoHighQualityCheckbox.checked = true;
 
     // Simulate click
     elements.startBtn.click();
@@ -78,7 +87,8 @@ describe('PopupController', () => {
       type: 'START_RECORDING',
       tabId: 101,
       storageMode: 'drive',
-      recordSelfVideo: true
+      recordSelfVideo: true,
+      selfVideoQuality: 'high'
     });
 
     expect(elements.startBtn.disabled).toBe(true);

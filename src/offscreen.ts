@@ -159,9 +159,10 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         currentStorageMode = msg.storageMode === 'drive' ? 'drive' : 'local';
         currentDriveRecordingFolderName = null;
         const recordSelfVideo = !!msg.recordSelfVideo;
+        const selfVideoQuality = msg.selfVideoQuality === 'high' ? 'high' : 'standard';
 
         try {
-          await engine.startFromStreamId(streamId, { recordSelfVideo });
+          await engine.startFromStreamId(streamId, { recordSelfVideo, selfVideoQuality });
           return { ok: true };
         } catch (e: any) {
           return { ok: false, error: `${e?.name || 'Error'}: ${e?.message || e}` };

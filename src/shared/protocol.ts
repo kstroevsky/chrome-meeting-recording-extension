@@ -49,6 +49,7 @@ export type BgToOffscreenRpc =
       streamId: string;
       storageMode?: 'local' | 'drive';
       recordSelfVideo?: boolean;
+      selfVideoQuality?: 'standard' | 'high';
     }> // Begin capturing + recording
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>                   // Finalize and save the recording
   | RpcRequest<{ type: 'OFFSCREEN_STATUS' }>;                // Query whether recording is active
@@ -83,6 +84,7 @@ export type PopupToBg =
       tabId: number;
       storageMode?: 'local' | 'drive';
       recordSelfVideo?: boolean;
+      selfVideoQuality?: 'standard' | 'high';
     } // User pressed Record; tabId identifies the Meet tab
   | { type: 'STOP_RECORDING' }                 // User pressed Stop
   | { type: 'GET_RECORDING_STATUS' }          // Popup opened; check if already recording
