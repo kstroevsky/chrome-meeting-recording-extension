@@ -5,21 +5,26 @@
  * resumable upload protocol. Recording itself never writes to Drive directly.
  */
 
-import { DRIVE_UPLOAD_URL } from './drive/constants';
+import {
+  DRIVE_MAX_RETRIES,
+  DRIVE_REQUEST_TIMEOUT_MS,
+  DRIVE_RETRY_BASE_DELAY_MS,
+  DRIVE_UPLOAD_CHUNK_BYTES,
+  DRIVE_UPLOAD_URL,
+} from './drive/constants';
 import { type DriveFolderHierarchy, DriveFolderResolver } from './drive/DriveFolderResolver';
 import { formatDriveError, readDriveErrorDetail } from './drive/errors';
-import { fetchWithAuthRetry, type TokenProvider } from './drive/request';
-
-const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
-const REQUEST_TIMEOUT_MS = 180_000;
-const MAX_RETRIES = 5;
-const RETRY_BASE_DELAY_MS = 1_000;
+import {
+  createCachedTokenProvider,
+  fetchWithAuthRetry,
+  type TokenProvider,
+} from './drive/request';
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const ac = new AbortController();
-  const timeout = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => ac.abort(), DRIVE_REQUEST_TIMEOUT_MS);
   try {
     return await fetch(url, { ...init, signal: ac.signal });
   } finally {
@@ -33,23 +38,32 @@ function isTransientFetchError(err: unknown): boolean {
 }
 
 function backoffMs(attempt: number): number {
-  return RETRY_BASE_DELAY_MS * Math.min(8, 2 ** Math.max(0, attempt - 1));
+  return DRIVE_RETRY_BASE_DELAY_MS * Math.min(8, 2 ** Math.max(0, attempt - 1));
 }
 
 export type DriveTargetOptions = DriveFolderHierarchy;
 
+/**
+ * Per-file Drive uploader.
+ *
+ * One instance uploads exactly one sealed artifact. It reuses a cached token
+ * across folder lookup, session creation, and chunk uploads, and refreshes that
+ * token only when Google explicitly rejects it.
+ */
 export class DriveTarget {
   private sessionUri: string | null = null;
+  private readonly getUploadToken: TokenProvider;
   private readonly folderResolver: DriveFolderResolver;
   private used = false;
 
   constructor(
     private readonly filename: string,
-    private readonly getToken: TokenProvider,
+    getToken: TokenProvider,
     private readonly onDone: (filename: string) => void,
     private readonly options: DriveTargetOptions = {}
   ) {
-    this.folderResolver = new DriveFolderResolver(getToken);
+    this.getUploadToken = createCachedTokenProvider(getToken);
+    this.folderResolver = new DriveFolderResolver(this.getUploadToken);
   }
 
   async upload(file: Blob): Promise<void> {
@@ -63,7 +77,7 @@ export class DriveTarget {
     let start = 0;
 
     while (start < total) {
-      const endExclusive = Math.min(start + UPLOAD_CHUNK_BYTES, total);
+      const endExclusive = Math.min(start + DRIVE_UPLOAD_CHUNK_BYTES, total);
       const body = file.slice(start, endExclusive, 'video/webm');
       const isFinal = endExclusive >= total;
       start = await this.uploadChunk(start, body, total, isFinal);
@@ -80,7 +94,7 @@ export class DriveTarget {
     };
     if (parentFolderId) metadata.parents = [parentFolderId];
 
-    const res = await fetchWithAuthRetry(this.getToken, (token) =>
+    const res = await fetchWithAuthRetry(this.getUploadToken, (token) =>
       fetchWithTimeout(DRIVE_UPLOAD_URL, {
         method: 'POST',
         headers: {
@@ -108,9 +122,9 @@ export class DriveTarget {
     let attempts = 0;
     let lastStatus: number | null = null;
 
-    while (attempts < MAX_RETRIES) {
+    while (attempts < DRIVE_MAX_RETRIES) {
       attempts += 1;
-      const token = await this.getToken();
+      const token = await this.getUploadToken();
       const end = chunkStart + chunkBody.size - 1;
 
       let res: Response;
@@ -145,6 +159,7 @@ export class DriveTarget {
       }
 
       if ((res.status === 401 || res.status === 403) && attempts < 2) {
+        await this.getUploadToken({ refresh: true });
         continue;
       }
 

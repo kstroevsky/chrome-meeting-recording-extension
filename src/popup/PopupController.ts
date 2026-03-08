@@ -1,3 +1,11 @@
+/**
+ * @file popup/PopupController.ts
+ *
+ * Stateful popup controller. The popup is intentionally thin and disposable:
+ * it initiates actions, reflects current recording/uploading state, and can be
+ * closed/reopened at any time without owning the recording lifecycle.
+ */
+
 import { CameraPermissionService } from './CameraPermissionService';
 import { MicPermissionService } from './MicPermissionService';
 import type { RecordingPhase, UploadSummary } from '../shared/protocol';

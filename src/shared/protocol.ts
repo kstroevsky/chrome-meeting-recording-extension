@@ -2,6 +2,24 @@
  * @file shared/protocol.ts
  *
  * Single source of truth for ALL inter-context messages in this extension.
+ *
+ * Chrome extensions are multi-process: popup, background service worker,
+ * offscreen document, and content script all run in separate contexts and only
+ * communicate through message passing. Keeping the transport contracts here
+ * lets the compiler catch drift when the recording lifecycle changes.
+ *
+ * Transport summary:
+ *   Popup ↔ Background:     chrome.runtime.sendMessage / sendResponse
+ *   Background ↔ Offscreen: chrome.runtime.Port named 'offscreen'
+ *   Background → Popup:     chrome.runtime.sendMessage (broadcast; popup may be closed)
+ *
+ * Current recording lifecycle:
+ *   idle -> recording -> uploading -> idle
+ *
+ * Important behavioral note:
+ *   In Drive mode, upload happens only after capture has stopped. The popup is
+ *   therefore a pure observer of state and can be closed safely while upload
+ *   continues in background/offscreen contexts.
  */
 
 export type RpcId = string;

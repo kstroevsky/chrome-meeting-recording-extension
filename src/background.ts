@@ -1,6 +1,16 @@
 /**
  * @context  Background Service Worker (MV3)
  * @role     Orchestrator for popup, offscreen, downloads, and auth.
+ * @lifetime Event-driven. Chrome may suspend and restart this worker at will.
+ *
+ * Responsibilities:
+ *   - Accept user commands from popup (start/stop/status)
+ *   - Own tabCapture.getMediaStreamId and chrome.downloads access
+ *   - Keep the extension alive while work is active (`recording` or `uploading`)
+ *   - Re-attach to the offscreen document after service worker restarts
+ *
+ * The worker does not handle media directly. Capture, encoding, OPFS writes,
+ * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 import { OffscreenManager } from './background/OffscreenManager';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';

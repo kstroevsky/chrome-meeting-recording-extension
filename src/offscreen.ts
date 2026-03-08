@@ -1,6 +1,16 @@
 /**
  * @context  Offscreen Document (MV3)
- * @role     Recording studio and post-stop uploader.
+ * @role     Recording studio and post-stop persistence coordinator.
+ * @lifetime Created on demand by background. This context owns every media API
+ *           that cannot run inside the MV3 service worker: getUserMedia,
+ *           MediaRecorder, AudioContext, and OPFS file handles.
+ *
+ * Runtime model:
+ *   - During recording, all streams write only to local storage targets.
+ *   - After stop, this context seals those files and either:
+ *       * asks background to download them (local mode), or
+ *       * uploads them to Drive sequentially, falling back to download per file.
+ *   - Popup state is observational only; uploads continue even if popup closes.
  */
 import { makeLogger } from './shared/logger';
 import { createPortRpcServer } from './shared/rpc';
@@ -9,31 +19,16 @@ import type {
   BgToOffscreenRpc,
   BgToOffscreenRuntime,
   RecordingPhase,
-  RecordingStream,
   RpcResponse,
-  UploadSummary,
 } from './shared/protocol';
-import {
-  RecorderEngine,
-  type CompletedRecordingArtifact,
-  type SealedStorageFile,
-} from './offscreen/RecorderEngine';
+import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
-import { DriveTarget } from './offscreen/DriveTarget';
-import { DRIVE_ROOT_FOLDER_NAME } from './offscreen/drive/constants';
-import { inferDriveRecordingFolderName } from './offscreen/drive/folderNaming';
+import { describeRuntimeError } from './offscreen/errors';
+import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 
 const L = makeLogger('offscreen');
-const STREAM_ORDER: RecordingStream[] = ['tab', 'mic', 'selfVideo'];
 
-function describeRuntimeError(err: unknown): string {
-  const e = err as any;
-  const name = e?.name || 'Error';
-  const message = e?.message || String(e);
-  const code = e?.code != null ? ` code=${e.code}` : '';
-  return `${name}: ${message}${code}`;
-}
-
+// Global safety nets so failures do not disappear into the hidden offscreen page.
 window.addEventListener('error', (e) => {
   console.error('[offscreen] window.onerror', (e as any)?.message, (e as any)?.error);
 });
@@ -45,7 +40,6 @@ L.log('script loaded');
 let portRef: chrome.runtime.Port | null = null;
 let reconnectEnabled = true;
 let currentStorageMode: 'local' | 'drive' = 'local';
-let currentDriveRecordingFolderName: string | null = null;
 let currentPhase: RecordingPhase = 'idle';
 let finalizeRunPromise: Promise<void> | null = null;
 
@@ -94,7 +88,7 @@ function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
   getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl, opfsFilename });
 }
 
-async function getDriveToken(): Promise<string> {
+async function getDriveToken(_options?: { refresh?: boolean }): Promise<string> {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type: 'GET_DRIVE_TOKEN' }, (res) => {
       if (!res) return reject(new Error('No response to GET_DRIVE_TOKEN'));
@@ -104,97 +98,27 @@ async function getDriveToken(): Promise<string> {
   });
 }
 
-function sortArtifacts(artifacts: CompletedRecordingArtifact[]): CompletedRecordingArtifact[] {
-  return [...artifacts].sort(
-    (a, b) => STREAM_ORDER.indexOf(a.stream) - STREAM_ORDER.indexOf(b.stream)
-  );
-}
-
-function saveArtifactLocally(artifact: SealedStorageFile) {
-  const blobUrl = URL.createObjectURL(artifact.file);
-  requestSave(artifact.filename, blobUrl, artifact.opfsFilename);
-}
-
-async function cleanupArtifact(artifact: SealedStorageFile) {
-  try {
-    await artifact.cleanup();
-    if (artifact.opfsFilename) {
-      L.log('Cleaned up OPFS file', artifact.opfsFilename);
-    }
-  } catch (e) {
-    L.warn('Failed to cleanup artifact', artifact.filename, describeRuntimeError(e));
-  }
-}
-
-async function uploadArtifactsToDrive(
-  artifacts: CompletedRecordingArtifact[],
-  recordingFolderName: string
-): Promise<UploadSummary> {
-  const summary: UploadSummary = {
-    uploaded: [],
-    localFallbacks: [],
-  };
-
-  for (const entry of sortArtifacts(artifacts)) {
-    const { artifact, stream } = entry;
-    const driveTarget = new DriveTarget(
-      artifact.filename,
-      getDriveToken,
-      (filename) => L.log('Drive target complete:', filename),
-      {
-        rootFolderName: DRIVE_ROOT_FOLDER_NAME,
-        recordingFolderName,
-      }
-    );
-
-    try {
-      await driveTarget.upload(artifact.file);
-      summary.uploaded.push({ stream, filename: artifact.filename });
-      await cleanupArtifact(artifact);
-    } catch (e) {
-      const error = describeRuntimeError(e);
-      L.warn('Drive upload failed; falling back to local download', artifact.filename, error);
-      summary.localFallbacks.push({ stream, filename: artifact.filename, error });
-      saveArtifactLocally(artifact);
-    }
-  }
-
-  return summary;
-}
+const finalizer = new RecordingFinalizer({
+  log: L.log,
+  warn: L.warn,
+  requestSave,
+  getDriveToken,
+});
 
 async function finalizeCurrentRecordingRun(): Promise<void> {
   if (finalizeRunPromise) return finalizeRunPromise;
 
   finalizeRunPromise = (async () => {
     const artifacts = await engine.stop();
-    const orderedArtifacts = sortArtifacts(artifacts);
+    const summary = await finalizer.finalize({
+      artifacts,
+      storageMode: currentStorageMode,
+    });
 
-    if (currentStorageMode === 'drive' && orderedArtifacts.length > 0) {
-      const firstFilename = orderedArtifacts[0]?.artifact.filename;
-      if (!currentDriveRecordingFolderName && firstFilename) {
-        currentDriveRecordingFolderName = inferDriveRecordingFolderName(firstFilename);
-      }
-
-      pushState('uploading');
-      const summary = await uploadArtifactsToDrive(
-        orderedArtifacts,
-        currentDriveRecordingFolderName ?? `google-meet-${Date.now()}`
-      );
-      pushState('idle', { uploadSummary: summary });
-      currentDriveRecordingFolderName = null;
-      return;
-    }
-
-    for (const entry of orderedArtifacts) {
-      saveArtifactLocally(entry.artifact);
-    }
-
-    pushState('idle');
-    currentDriveRecordingFolderName = null;
+    pushState('idle', summary ? { uploadSummary: summary } : undefined);
   })()
     .catch((e) => {
       L.error('Stop/finalize pipeline failed', describeRuntimeError(e));
-      currentDriveRecordingFolderName = null;
       pushState('idle');
     })
     .finally(() => {
@@ -232,7 +156,6 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         }
 
         currentStorageMode = msg.storageMode === 'drive' ? 'drive' : 'local';
-        currentDriveRecordingFolderName = null;
         const recordSelfVideo = !!msg.recordSelfVideo;
         const selfVideoQuality = msg.selfVideoQuality === 'high' ? 'high' : 'standard';
 
@@ -250,6 +173,9 @@ function wirePortHandlers(port: chrome.runtime.Port) {
           return { ok: false, error: 'Stop requested but recorder is not active' };
         }
 
+        if (currentStorageMode === 'drive') {
+          pushState('uploading');
+        }
         void finalizeCurrentRecordingRun();
         return { ok: true };
       },

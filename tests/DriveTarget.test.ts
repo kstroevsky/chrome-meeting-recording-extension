@@ -50,6 +50,7 @@ describe('DriveTarget', () => {
     await target.upload(new Blob(['1234'], { type: 'video/webm' }));
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockGetToken).toHaveBeenCalledTimes(1);
     expect(mockFetch.mock.calls[0][0]).toBe(
       'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true'
     );
@@ -71,9 +72,29 @@ describe('DriveTarget', () => {
     await target.upload(bigFile);
 
     expect(mockFetch).toHaveBeenCalledTimes(4);
+    expect(mockGetToken).toHaveBeenCalledTimes(1);
     expect(mockFetch.mock.calls[1][1].headers['Content-Range']).toBe(`bytes 0-${2 * 1024 * 1024 - 1}/${bigFile.size}`);
     expect(mockFetch.mock.calls[2][1].headers['Content-Range']).toBe(`bytes ${2 * 1024 * 1024}-${4 * 1024 * 1024 - 1}/${bigFile.size}`);
     expect(mockFetch.mock.calls[3][1].headers['Content-Range']).toBe(`bytes ${4 * 1024 * 1024}-${bigFile.size - 1}/${bigFile.size}`);
+  });
+
+  it('refreshes the cached token when Google rejects the current one', async () => {
+    mockGetToken
+      .mockResolvedValueOnce('stale-token')
+      .mockResolvedValueOnce('fresh-token');
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ Location: 'https://session-uri' }),
+    });
+    mockFetch
+      .mockResolvedValueOnce({ status: 401 })
+      .mockResolvedValueOnce({ status: 200 });
+
+    await target.upload(new Blob(['1234'], { type: 'video/webm' }));
+
+    expect(mockGetToken).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe('Bearer stale-token');
+    expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe('Bearer fresh-token');
   });
 
   it('recovers from AbortError by probing committed range and slicing the retry body', async () => {
