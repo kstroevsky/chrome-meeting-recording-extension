@@ -24,6 +24,10 @@ async function toText(payload: unknown): Promise<string> {
   return String(payload ?? '');
 }
 
+async function flushAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function makeTrack(kind: 'audio' | 'video', settings?: Record<string, unknown>) {
   return {
     kind,
@@ -53,7 +57,6 @@ function makeRunConfig(overrides: Partial<RecordingRunConfig> = {}): RecordingRu
     storageMode: 'local',
     micMode: 'off',
     recordSelfVideo: false,
-    selfVideoQuality: 'standard',
     ...overrides,
   };
 }
@@ -281,8 +284,8 @@ describe('RecorderEngine', () => {
     await engine.startFromStreamId('stream-id', makeRunConfig({
       micMode: 'separate',
       recordSelfVideo: true,
-      selfVideoQuality: 'high',
     }));
+    await flushAsyncWork();
 
     const artifacts = await engine.stop();
     const byStream = Object.fromEntries(
@@ -461,8 +464,8 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig({
       recordSelfVideo: true,
-      selfVideoQuality: 'high',
     }));
+    await flushAsyncWork();
 
     const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
     expect(selfVideoRecorder?.options.videoBitsPerSecond).toBe(1_000_000);

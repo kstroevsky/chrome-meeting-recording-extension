@@ -17,7 +17,6 @@ describe('PopupController', () => {
       storageMode: 'local',
       micMode: 'off',
       recordSelfVideo: false,
-      selfVideoQuality: 'standard',
       ...overrides,
     });
     (global as any).__TEST_RUN_CONFIG__ = makeRunConfig;
@@ -30,12 +29,10 @@ describe('PopupController', () => {
       stopBtn: document.createElement('button'),
       storageModeSelect: document.createElement('select'),
       recordSelfVideoCheckbox: document.createElement('input'),
-      selfVideoHighQualityCheckbox: document.createElement('input'),
       openDiagnosticsBtn: document.createElement('button'),
       recordingStatusEl: document.createElement('div'),
     };
     elements.recordSelfVideoCheckbox.type = 'checkbox';
-    elements.selfVideoHighQualityCheckbox.type = 'checkbox';
 
     const optLocal = document.createElement('option');
     optLocal.value = 'local';
@@ -85,7 +82,6 @@ describe('PopupController', () => {
           storageMode: 'drive',
           micMode: 'mixed',
           recordSelfVideo: true,
-          selfVideoQuality: 'high',
         },
         updatedAt: Date.now(),
       },
@@ -100,7 +96,6 @@ describe('PopupController', () => {
     expect(elements.storageModeSelect.value).toBe('drive');
     expect(elements.micModeSelect.value).toBe('mixed');
     expect(elements.recordSelfVideoCheckbox.checked).toBe(true);
-    expect(elements.selfVideoHighQualityCheckbox.checked).toBe(true);
     expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
     expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
   });
@@ -118,7 +113,6 @@ describe('PopupController', () => {
           storageMode: 'drive',
           micMode: 'mixed',
           recordSelfVideo: true,
-          selfVideoQuality: 'high',
         }),
         updatedAt: Date.now(),
       },
@@ -127,7 +121,6 @@ describe('PopupController', () => {
     elements.storageModeSelect.selectedIndex = 1;
     elements.micModeSelect.value = 'mixed';
     elements.recordSelfVideoCheckbox.checked = true;
-    elements.selfVideoHighQualityCheckbox.checked = true;
 
     elements.startBtn.click();
     await new Promise(process.nextTick);
@@ -141,12 +134,44 @@ describe('PopupController', () => {
         storageMode: 'drive',
         micMode: 'mixed',
         recordSelfVideo: true,
-        selfVideoQuality: 'high',
       },
     });
 
     expect(elements.startBtn.disabled).toBe(true);
     expect(elements.stopBtn.disabled).toBe(false);
+  });
+
+  it('preserves micMode=off when starting from the popup form', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    mockSendMessage.mockClear();
+    (chrome.tabs.sendMessage as jest.Mock).mockClear();
+    mockSendMessage.mockResolvedValueOnce({
+      ok: true,
+      session: {
+        phase: 'recording',
+        runConfig: (global as any).__TEST_RUN_CONFIG__(),
+        updatedAt: Date.now(),
+      },
+    });
+
+    elements.storageModeSelect.value = 'local';
+    elements.micModeSelect.value = 'off';
+    elements.recordSelfVideoCheckbox.checked = false;
+
+    elements.startBtn.click();
+    await new Promise(process.nextTick);
+
+    expect(MicPermissionService.prototype.ensureReadyForRecording).toHaveBeenCalledWith('off');
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'START_RECORDING',
+      tabId: 101,
+      runConfig: {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      },
+    });
   });
 
   it('handles STOP_RECORDING click', async () => {
@@ -184,7 +209,6 @@ describe('PopupController', () => {
       storageMode: 'drive',
       micMode: 'separate',
       recordSelfVideo: true,
-      selfVideoQuality: 'standard',
     });
     (controller as any).setUI('uploading');
 
