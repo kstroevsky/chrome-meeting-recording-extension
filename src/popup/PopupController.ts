@@ -33,6 +33,10 @@ import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
 import {
+  buildDefaultRunConfigFromSettings,
+  loadExtensionSettingsFromStorage,
+} from '../shared/extensionSettings';
+import {
   createDefaultRunConfig,
   getRunConfigOrDefault,
   normalizeSessionSnapshot,
@@ -52,17 +56,19 @@ export class PopupController {
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
   private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
+  private idleDefaultRunConfig: RecordingRunConfig = createDefaultRunConfig();
 
   constructor(el: PopupElements) {
     this.el = el;
   }
 
   init() {
-    this.setActiveRunConfig(createDefaultRunConfig());
+    this.setActiveRunConfig({ ...this.idleDefaultRunConfig });
     this.wireRecordingStateListener();
     this.wireTranscriptDownload();
     this.wireStartStop();
     this.wireMic();
+    this.wireSettingsLink();
     this.wireDiagnosticsLink();
     void this.refreshInitialUi();
   }
@@ -120,7 +126,7 @@ export class PopupController {
   private applySession(snapshot: RecordingSessionSnapshot) {
     const prevPhase = this.lastPhase;
     const runConfig = snapshot.phase === 'idle'
-      ? createDefaultRunConfig()
+      ? { ...this.idleDefaultRunConfig }
       : getRunConfigOrDefault(snapshot.runConfig);
     this.setActiveRunConfig(runConfig);
     this.setUI(snapshot.phase);
@@ -134,10 +140,17 @@ export class PopupController {
 
   private async refreshInitialUi() {
     try {
+      const settings = await loadExtensionSettingsFromStorage();
+      this.idleDefaultRunConfig = buildDefaultRunConfigFromSettings(settings);
+    } catch {
+      this.idleDefaultRunConfig = createDefaultRunConfig();
+    }
+
+    try {
       const res = await sendToBackground({ type: 'GET_RECORDING_STATUS' });
       this.applySession(normalizeSessionSnapshot(res.session));
     } catch {
-      this.setActiveRunConfig(createDefaultRunConfig());
+      this.setActiveRunConfig({ ...this.idleDefaultRunConfig });
       this.setUI('idle');
     }
   }
@@ -184,6 +197,15 @@ export class PopupController {
   private wireMic() {
     if (!this.el.micBtn) return;
     this.mic.bindButton(this.el.micBtn);
+  }
+
+  private wireSettingsLink() {
+    const { openSettingsBtn } = this.el;
+    if (!openSettingsBtn) return;
+
+    openSettingsBtn.addEventListener('click', async () => {
+      await createRuntimeTab('settings.html');
+    });
   }
 
   private wireDiagnosticsLink() {

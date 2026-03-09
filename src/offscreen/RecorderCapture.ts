@@ -6,18 +6,19 @@
 
 import { withTimeout } from '../shared/async';
 import type { MicMode } from '../shared/recording';
-import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
+import {
+  getMicrophoneCaptureSettings,
+  getTabCaptureSettings,
+} from '../shared/extensionSettings';
 import { TIMEOUTS } from '../shared/timeouts';
 import { queryActiveTab } from '../platform/chrome/tabs';
 import { describeMediaError } from './RecorderSupport';
 import {
   formatSelfVideoProfile,
+  getSelfVideoConstraints,
+  getSelfVideoProfile,
   matchesSelfVideoProfile,
-  SELF_VIDEO_CONSTRAINTS,
-  SELF_VIDEO_PROFILE,
 } from './RecorderProfiles';
-
-const { capture } = EXTENSION_DEFAULTS;
 
 type RecorderCaptureDeps = {
   log: (...a: any[]) => void;
@@ -56,13 +57,14 @@ function buildSelfVideoDiagnostics(track?: MediaStreamTrack): {
 } {
   const settings = track?.getSettings?.();
   const capabilities = readTrackCapabilities(track);
+  const profile = getSelfVideoProfile();
 
   return {
     diagnostics: {
       ok: !!track,
-      requestedWidth: SELF_VIDEO_PROFILE.width,
-      requestedHeight: SELF_VIDEO_PROFILE.height,
-      requestedFrameRate: SELF_VIDEO_PROFILE.frameRate,
+      requestedWidth: profile.width,
+      requestedHeight: profile.height,
+      requestedFrameRate: profile.frameRate,
       width: settings?.width,
       height: settings?.height,
       frameRate: settings?.frameRate,
@@ -82,6 +84,7 @@ function makeTabCaptureConstraints(
   source: 'tab' | 'desktop'
 ): MediaStreamConstraints {
   const mandatory = { chromeMediaSource: source, chromeMediaSourceId: streamId } as any;
+  const tab = getTabCaptureSettings();
   return {
     audio: {
       mandatory,
@@ -90,9 +93,9 @@ function makeTabCaptureConstraints(
     video: {
       mandatory: {
         ...mandatory,
-        maxWidth: capture.tab.maxWidth,
-        maxHeight: capture.tab.maxHeight,
-        maxFrameRate: capture.tab.maxFrameRate,
+        maxWidth: tab.maxWidth,
+        maxHeight: tab.maxHeight,
+        maxFrameRate: tab.maxFrameRate,
       },
     } as any,
   };
@@ -126,11 +129,12 @@ export async function maybeGetMicStream(
   deps: RecorderCaptureDeps
 ): Promise<MediaStream | null> {
   if (micMode === 'off') return null;
+  const microphone = getMicrophoneCaptureSettings();
 
   try {
     const mic = await withTimeout(
       navigator.mediaDevices.getUserMedia({
-        audio: capture.microphone,
+        audio: microphone,
       }),
       TIMEOUTS.GUM_MS,
       'mic getUserMedia'
@@ -153,11 +157,12 @@ export async function maybeGetSelfVideoStream(
   deps: RecorderCaptureDeps
 ): Promise<MediaStream | null> {
   if (!enabled) return null;
+  const constraints = getSelfVideoConstraints();
 
   try {
     const stream = await withTimeout(
       navigator.mediaDevices.getUserMedia({
-        video: SELF_VIDEO_CONSTRAINTS,
+        video: constraints,
         audio: false,
       }),
       TIMEOUTS.GUM_MS,

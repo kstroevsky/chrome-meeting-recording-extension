@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Recorder Settings</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 16px;
+      max-width: 820px;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 22px;
+    }
+    .section {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .section h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    .field-grid {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 10px 12px;
+      align-items: center;
+    }
+    label {
+      font-size: 13px;
+    }
+    input[type="number"], select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    #status {
+      min-height: 1.2em;
+      font-size: 12px;
+      color: #145a00;
+    }
+  </style>
+</head>
+<body>
+  <h1>Recorder Settings</h1>
+
+  <section class="section">
+    <h2>Basic</h2>
+    <div class="field-grid">
+      <label for="recording-mode">Default recording mode</label>
+      <select id="recording-mode">
+        <option value="opfs">OPFS (Local Disk)</option>
+        <option value="drive">Google Drive</option>
+      </select>
+
+      <label for="mic-mode">Default microphone mode</label>
+      <select id="mic-mode">
+        <option value="off">Do not record microphone</option>
+        <option value="mixed">Mix microphone into tab recording</option>
+        <option value="separate">Save microphone separately</option>
+      </select>
+
+      <label for="separate-camera">Record camera separately by default</label>
+      <input id="separate-camera" type="checkbox" />
+
+      <label for="self-video-width-format">Self-video width format</label>
+      <select id="self-video-width-format">
+        <option value="1080">1080</option>
+        <option value="720">720</option>
+        <option value="480">480</option>
+        <option value="360">360</option>
+      </select>
+
+      <label for="self-video-height-format">Self-video height format</label>
+      <select id="self-video-height-format">
+        <option value="1080">1080</option>
+        <option value="720">720</option>
+        <option value="480">480</option>
+        <option value="360">360</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Professional</h2>
+    <div class="field-grid">
+      <label for="self-video-bitrate">Self-video bitrate (bits/s)</label>
+      <input id="self-video-bitrate" type="number" min="100000" step="1000" />
+
+      <label for="self-video-frame-rate">Self-video frame rate (FPS)</label>
+      <input id="self-video-frame-rate" type="number" min="1" max="120" />
+
+      <label for="self-video-min-adaptive-bitrate">Minimum adaptive bitrate (bits/s)</label>
+      <input id="self-video-min-adaptive-bitrate" type="number" min="100000" step="1000" />
+
+      <label for="tab-max-width">Tab capture max width</label>
+      <input id="tab-max-width" type="number" min="320" max="7680" />
+
+      <label for="tab-max-height">Tab capture max height</label>
+      <input id="tab-max-height" type="number" min="180" max="4320" />
+
+      <label for="tab-max-frame-rate">Tab capture max frame rate (FPS)</label>
+      <input id="tab-max-frame-rate" type="number" min="1" max="120" />
+
+      <label for="mic-echo-cancellation">Microphone echo cancellation</label>
+      <input id="mic-echo-cancellation" type="checkbox" />
+
+      <label for="mic-noise-suppression">Microphone noise suppression</label>
+      <input id="mic-noise-suppression" type="checkbox" />
+
+      <label for="mic-auto-gain">Microphone auto gain control</label>
+      <input id="mic-auto-gain" type="checkbox" />
+
+      <label for="chunk-default-timeslice">Default chunk timeslice (ms)</label>
+      <input id="chunk-default-timeslice" type="number" min="250" max="60000" />
+
+      <label for="chunk-extended-timeslice">Extended chunk timeslice (ms)</label>
+      <input id="chunk-extended-timeslice" type="number" min="250" max="60000" />
+    </div>
+  </section>
+
+  <div class="actions">
+    <button id="save-settings">Save</button>
+    <button id="reset-settings" type="button">Reset to defaults</button>
+    <span id="status"></span>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>
+

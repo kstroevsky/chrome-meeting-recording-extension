@@ -28,6 +28,7 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
+import { loadExtensionSettingsFromStorage } from './shared/extensionSettings';
 import {
   DEFAULT_RECORDING_RUN_CONFIG,
   normalizeRunConfig,
@@ -228,6 +229,7 @@ function wirePortHandlers(port: chrome.runtime.Port) {
           return { ok: false, error: `Recorder is busy (${currentPhase})` };
         }
 
+        await loadExtensionSettingsFromStorage();
         currentRunConfig = runConfig;
         currentStorageMode = runConfig.storageMode;
         pushState('starting');

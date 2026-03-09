@@ -74,6 +74,7 @@ module.exports = (_env, argv) => {
       offscreen: './src/offscreen.ts',
       micsetup: './src/micsetup.ts',
       camsetup: './src/camsetup.ts',
+      settings: './src/settings.ts',
     },
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -107,6 +108,7 @@ module.exports = (_env, argv) => {
           { from: path.join(STATIC_DIR, 'offscreen.html'), to: 'offscreen.html', noErrorOnMissing: true },
           { from: path.join(STATIC_DIR, 'micsetup.html'), to: 'micsetup.html' },
           { from: path.join(STATIC_DIR, 'camsetup.html'), to: 'camsetup.html' },
+          { from: path.join(STATIC_DIR, 'settings.html'), to: 'settings.html' },
         ]
       })
     ]
