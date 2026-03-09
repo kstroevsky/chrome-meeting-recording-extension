@@ -6,17 +6,17 @@
 
 import { PERF_FLAGS, clamp } from '../shared/perf';
 import type { MicMode } from '../shared/recording';
+import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 
-const CHUNK_TIMESLICE_MS = 2000;
-const EXTENDED_CHUNK_TIMESLICE_MS = 4000;
-const SELF_VIDEO_MIN_BITS_PER_SECOND = 1_000_000;
+const { chunking, capture } = EXTENSION_DEFAULTS;
+const SELF_VIDEO_MIN_BITS_PER_SECOND = capture.selfVideo.minAdaptiveBitsPerSecond;
 
 export const SELF_VIDEO_PROFILE = Object.freeze({
-  width: 1920,
-  height: 1080,
-  frameRate: 30,
-  aspectRatio: 16 / 9,
-  defaultBitsPerSecond: 6_000_000,
+  width: capture.selfVideo.width,
+  height: capture.selfVideo.height,
+  frameRate: capture.selfVideo.frameRate,
+  aspectRatio: capture.selfVideo.aspectRatio,
+  defaultBitsPerSecond: capture.selfVideo.defaultBitsPerSecond,
 });
 
 export const SELF_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
@@ -46,9 +46,9 @@ export function getAudioMime(): string {
 
 export function getChunkTimesliceMs(micMode: MicMode, recordSelfVideo: boolean): number {
   if (PERF_FLAGS.extendedTimeslice && (micMode !== 'off' || recordSelfVideo)) {
-    return EXTENDED_CHUNK_TIMESLICE_MS;
+    return chunking.extendedTimesliceMs;
   }
-  return CHUNK_TIMESLICE_MS;
+  return chunking.defaultTimesliceMs;
 }
 
 export function getDefaultSelfVideoBitrate(): number {

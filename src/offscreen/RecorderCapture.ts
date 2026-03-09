@@ -6,6 +6,7 @@
 
 import { withTimeout } from '../shared/async';
 import type { MicMode } from '../shared/recording';
+import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 import { TIMEOUTS } from '../shared/timeouts';
 import { queryActiveTab } from '../platform/chrome/tabs';
 import { describeMediaError } from './RecorderSupport';
@@ -15,6 +16,8 @@ import {
   SELF_VIDEO_CONSTRAINTS,
   SELF_VIDEO_PROFILE,
 } from './RecorderProfiles';
+
+const { capture } = EXTENSION_DEFAULTS;
 
 type RecorderCaptureDeps = {
   log: (...a: any[]) => void;
@@ -87,9 +90,9 @@ function makeTabCaptureConstraints(
     video: {
       mandatory: {
         ...mandatory,
-        maxWidth: 1920,
-        maxHeight: 1080,
-        maxFrameRate: 30,
+        maxWidth: capture.tab.maxWidth,
+        maxHeight: capture.tab.maxHeight,
+        maxFrameRate: capture.tab.maxFrameRate,
       },
     } as any,
   };
@@ -127,11 +130,7 @@ export async function maybeGetMicStream(
   try {
     const mic = await withTimeout(
       navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: capture.microphone,
       }),
       TIMEOUTS.GUM_MS,
       'mic getUserMedia'

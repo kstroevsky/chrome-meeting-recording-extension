@@ -34,7 +34,7 @@ export type {
   UploadSummary,
   UploadSummaryEntry,
 } from './recordingTypes';
-export { DEFAULT_RECORDING_RUN_CONFIG, RECORDING_SESSION_STORAGE_KEY } from './recordingConstants';
+export { DEFAULT_RECORDING_RUN_CONFIG, EXTENSION_DEFAULTS, RECORDING_SESSION_STORAGE_KEY } from './recordingConstants';
 
 function hasAllowedString<T extends string>(value: unknown, allowedValues: readonly T[]): value is T {
   return typeof value === 'string' && allowedValues.includes(value as T);
