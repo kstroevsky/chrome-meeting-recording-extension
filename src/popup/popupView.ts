@@ -19,6 +19,7 @@ export type PopupElements = {
   recordingStatusEl: HTMLElement | null;
 };
 
+/** Enables or disables popup controls to reflect the current recording phase. */
 export function setControlsForPhase(elements: PopupElements, phase: RecordingPhase): void {
   const {
     startBtn,
@@ -39,6 +40,7 @@ export function setControlsForPhase(elements: PopupElements, phase: RecordingPha
   if (recordSelfVideoCheckbox) recordSelfVideoCheckbox.disabled = busy;
 }
 
+/** Replaces the popup status line with the latest human-readable status text. */
 export function setStatusText(elements: PopupElements, text: string): void {
   if (elements.recordingStatusEl) {
     elements.recordingStatusEl.textContent = text;

@@ -7,6 +7,7 @@ const { CleanWebpackPlugin } = require('clean-webpack-plugin')
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
 const STATIC_DIR = 'static'
+const PUBLIC_DIR = 'public'
 
 function parseDotEnv(rawContent) {
   const parsed = {}
@@ -109,6 +110,7 @@ module.exports = (_env, argv) => {
           { from: path.join(STATIC_DIR, 'micsetup.html'), to: 'micsetup.html' },
           { from: path.join(STATIC_DIR, 'camsetup.html'), to: 'camsetup.html' },
           { from: path.join(STATIC_DIR, 'settings.html'), to: 'settings.html' },
+          { from: PUBLIC_DIR, to: '.', noErrorOnMissing: true },
         ]
       })
     ]

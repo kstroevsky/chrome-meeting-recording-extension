@@ -58,10 +58,12 @@ export class PopupController {
   private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
   private idleDefaultRunConfig: RecordingRunConfig = createDefaultRunConfig();
 
+  /** Binds popup DOM elements to the controller that owns interaction logic. */
   constructor(el: PopupElements) {
     this.el = el;
   }
 
+  /** Wires every popup interaction and kicks off the initial status refresh. */
   init() {
     this.setActiveRunConfig({ ...this.idleDefaultRunConfig });
     this.wireRecordingStateListener();
@@ -73,6 +75,7 @@ export class PopupController {
     void this.refreshInitialUi();
   }
 
+  /** Clears transient timers when the popup is torn down. */
   destroy() {
     if (this.statusTimer) {
       clearTimeout(this.statusTimer);
@@ -80,16 +83,19 @@ export class PopupController {
     }
   }
 
+  /** Applies control enabled/disabled state and persistent text for a phase change. */
   private setUI(phase: RecordingPhase) {
     setControlsForPhase(this.el, phase);
     this.lastPhase = phase;
     this.syncPhaseStatus(phase);
   }
 
+  /** Writes one line of status text into the popup. */
   private setStatus(text: string) {
     setStatusText(this.el, text);
   }
 
+  /** Recomputes the persistent phase text shown when no toast is active. */
   private syncPhaseStatus(phase: RecordingPhase) {
     if (phase === 'idle') {
       this.persistentStatus = '';
@@ -103,11 +109,13 @@ export class PopupController {
     }
   }
 
+  /** Stores the active run config and reflects it into the popup controls. */
   private setActiveRunConfig(config: RecordingRunConfig | null) {
     this.activeRunConfig = config;
     applyRunConfigToForm(this.el, config);
   }
 
+  /** Shows a temporary toast before restoring the persistent phase status. */
   private toast(msg: string) {
     if (this.statusTimer) {
       clearTimeout(this.statusTimer);
@@ -123,6 +131,7 @@ export class PopupController {
     if (isTestRuntime()) console.log('[popup]', msg);
   }
 
+  /** Applies a canonical session snapshot coming from background into the popup UI. */
   private applySession(snapshot: RecordingSessionSnapshot) {
     const prevPhase = this.lastPhase;
     const runConfig = snapshot.phase === 'idle'
@@ -138,6 +147,7 @@ export class PopupController {
     this.handleUploadSummary(prevPhase, snapshot.phase, snapshot.uploadSummary);
   }
 
+  /** Loads settings-derived defaults and then hydrates the live background session state. */
   private async refreshInitialUi() {
     try {
       const settings = await loadExtensionSettingsFromStorage();
@@ -155,6 +165,7 @@ export class PopupController {
     }
   }
 
+  /** Subscribes the popup to background session and save notifications. */
   private wireRecordingStateListener() {
     chrome.runtime.onMessage.addListener((msg: BgToPopup) => {
       if (msg?.type === 'RECORDING_STATE') {
@@ -172,6 +183,7 @@ export class PopupController {
     });
   }
 
+  /** Shows at most one upload summary for each completed finalize result. */
   private handleUploadSummary(
     prevPhase: RecordingPhase,
     phase: RecordingPhase,
@@ -194,11 +206,13 @@ export class PopupController {
     }
   }
 
+  /** Connects the microphone permission button to its service helper. */
   private wireMic() {
     if (!this.el.micBtn) return;
     this.mic.bindButton(this.el.micBtn);
   }
 
+  /** Opens the dedicated settings page from the popup gear button. */
   private wireSettingsLink() {
     const { openSettingsBtn } = this.el;
     if (!openSettingsBtn) return;
@@ -208,6 +222,7 @@ export class PopupController {
     });
   }
 
+  /** Opens diagnostics in dev builds and hides the button elsewhere. */
   private wireDiagnosticsLink() {
     const { openDiagnosticsBtn } = this.el;
     if (!openDiagnosticsBtn) return;
@@ -223,6 +238,7 @@ export class PopupController {
     });
   }
 
+  /** Downloads the accumulated transcript from the active meeting tab. */
   private wireTranscriptDownload() {
     const { saveBtn } = this.el;
     if (!saveBtn) return;
@@ -258,6 +274,7 @@ export class PopupController {
     });
   }
 
+  /** Wires the popup's start/stop controls into the background recording flow. */
   private wireStartStop() {
     const { startBtn, stopBtn } = this.el;
     if (!startBtn || !stopBtn) return;

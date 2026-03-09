@@ -41,6 +41,7 @@ type SelfVideoDiagnostics = {
   enabled: boolean | undefined;
 };
 
+/** Reads track capabilities when supported without crashing older browser implementations. */
 function readTrackCapabilities(track?: MediaStreamTrack): MediaTrackCapabilities | undefined {
   try {
     return typeof track?.getCapabilities === 'function'
@@ -51,6 +52,7 @@ function readTrackCapabilities(track?: MediaStreamTrack): MediaTrackCapabilities
   }
 }
 
+/** Builds structured diagnostics for the requested and delivered self-video track profile. */
 function buildSelfVideoDiagnostics(track?: MediaStreamTrack): {
   diagnostics: SelfVideoDiagnostics;
   settings: MediaTrackSettings | undefined;
@@ -79,6 +81,7 @@ function buildSelfVideoDiagnostics(track?: MediaStreamTrack): {
   };
 }
 
+/** Builds Chrome tab-capture constraints from the current settings-derived limits. */
 function makeTabCaptureConstraints(
   streamId: string,
   source: 'tab' | 'desktop'
@@ -101,6 +104,7 @@ function makeTabCaptureConstraints(
   };
 }
 
+/** Acquires the tab stream from the background-provided stream id with desktop fallback. */
 export async function captureTabStreamFromId(
   streamId: string,
   deps: RecorderCaptureDeps
@@ -124,6 +128,7 @@ export async function captureTabStreamFromId(
   );
 }
 
+/** Requests a microphone stream when the active run configuration needs one. */
 export async function maybeGetMicStream(
   micMode: MicMode,
   deps: RecorderCaptureDeps
@@ -152,6 +157,7 @@ export async function maybeGetMicStream(
   }
 }
 
+/** Requests the user's camera stream and logs how closely it matched the preset. */
 export async function maybeGetSelfVideoStream(
   enabled: boolean,
   deps: RecorderCaptureDeps
@@ -188,6 +194,7 @@ export async function maybeGetSelfVideoStream(
   }
 }
 
+/** Derives a stable filename suffix from the active tab URL when possible. */
 export async function inferActiveTabSuffix(): Promise<string> {
   const url = (await queryActiveTab())?.url || null;
 

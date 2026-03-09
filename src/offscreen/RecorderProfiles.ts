@@ -22,6 +22,7 @@ export const SELF_VIDEO_PROFILE = Object.freeze({
   defaultBitsPerSecond: DEFAULT_SELF_VIDEO_PROFILE.defaultBitsPerSecond,
 });
 
+/** Converts a requested self-video profile into strict getUserMedia constraints. */
 function buildConstraints(profile: {
   width: number;
   height: number;
@@ -37,10 +38,12 @@ function buildConstraints(profile: {
   } as any;
 }
 
+/** Reads the current self-video profile from normalized extension settings. */
 function getCurrentSelfVideoProfile() {
   return getSelfVideoProfileSettings();
 }
 
+/** Returns the active self-video profile used for logging and recorder setup. */
 export function getSelfVideoProfile() {
   const profile = getCurrentSelfVideoProfile();
   return Object.freeze({
@@ -52,33 +55,40 @@ export function getSelfVideoProfile() {
   });
 }
 
+/** Returns the active camera constraints derived from the selected preset and frame rate. */
 export function getSelfVideoConstraints(): MediaTrackConstraints {
   return buildConstraints(getCurrentSelfVideoProfile());
 }
 
 export const SELF_VIDEO_CONSTRAINTS: MediaTrackConstraints = buildConstraints(SELF_VIDEO_PROFILE);
 
+/** Returns the minimum bitrate floor used by adaptive self-video bitrate logic. */
 function getCurrentSelfVideoMinBitrate(): number {
   return getCurrentSelfVideoProfile().minAdaptiveBitsPerSecond;
 }
 
+/** Picks the first browser-supported MediaRecorder MIME from the candidate list. */
 function getSupportedMime(...candidates: string[]): string {
   return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate))
     ?? candidates[candidates.length - 1];
 }
 
+/** Returns the preferred MIME for tab recordings with video and audio. */
 export function getVideoMime(): string {
   return getSupportedMime('video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm');
 }
 
+/** Returns the preferred MIME for video-only self-camera recordings. */
 export function getVideoOnlyMime(): string {
   return getSupportedMime('video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm');
 }
 
+/** Returns the preferred MIME for audio-only microphone recordings. */
 export function getAudioMime(): string {
   return getSupportedMime('audio/webm;codecs=opus', 'audio/webm');
 }
 
+/** Returns the recorder timeslice for the current run shape and perf flags. */
 export function getChunkTimesliceMs(micMode: MicMode, recordSelfVideo: boolean): number {
   const chunking = getChunkingSettings();
   if (PERF_FLAGS.extendedTimeslice && (micMode !== 'off' || recordSelfVideo)) {
@@ -87,20 +97,24 @@ export function getChunkTimesliceMs(micMode: MicMode, recordSelfVideo: boolean):
   return chunking.defaultTimesliceMs;
 }
 
+/** Returns the configured default bitrate ceiling for self-video recordings. */
 export function getDefaultSelfVideoBitrate(): number {
   return getCurrentSelfVideoProfile().defaultBitsPerSecond;
 }
 
+/** Checks whether the delivered camera track matches the requested preset size. */
 export function matchesSelfVideoProfile(settings?: MediaTrackSettings): boolean {
   const profile = getCurrentSelfVideoProfile();
   return settings?.width === profile.width && settings?.height === profile.height;
 }
 
+/** Formats the current self-video preset for diagnostics and warnings. */
 export function formatSelfVideoProfile(): string {
   const profile = getCurrentSelfVideoProfile();
   return `${profile.width}x${profile.height}`;
 }
 
+/** Adapts camera bitrate to the delivered track while respecting configured bounds. */
 export function resolveSelfVideoBitrate(
   fallbackBitsPerSecond: number,
   settings?: MediaTrackSettings

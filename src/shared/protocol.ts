@@ -112,26 +112,32 @@ export type PerfEventMessage = {
   };
 };
 
+/** Checks whether a runtime message belongs to the popup -> background command set. */
 export function isPopupToBgMessage(value: unknown): value is PopupToBg {
   return hasKnownMessageType(value, POPUP_TO_BG_MESSAGE_TYPES);
 }
 
+/** Checks whether a tab message belongs to the popup -> content command set. */
 export function isPopupToContentMessage(value: unknown): value is PopupToContent {
   return hasKnownMessageType(value, POPUP_TO_CONTENT_MESSAGE_TYPES);
 }
 
+/** Checks whether a port/runtime message belongs to the offscreen -> background set. */
 export function isOffscreenToBgMessage(value: unknown): value is OffscreenToBg {
   return hasKnownMessageType(value, OFFSCREEN_TO_BG_MESSAGE_TYPES);
 }
 
+/** Checks whether a runtime nudge is asking the offscreen page to reconnect its port. */
 export function isBgToOffscreenRuntimeMessage(value: unknown): value is BgToOffscreenRuntime {
   return getMessageType(value) === BG_TO_OFFSCREEN_RUNTIME_CONNECT;
 }
 
+/** Checks whether a message is a structured performance event emitted by another context. */
 export function isPerfEventMessage(value: unknown): value is PerfEventMessage {
   return getMessageType(value) === PERF_EVENT_MESSAGE_TYPE;
 }
 
+/** Creates a lightweight random request id for port-based RPC messages. */
 export function makeId(): string {
   return Math.random().toString(36).slice(2);
 }

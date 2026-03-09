@@ -48,6 +48,7 @@ window.addEventListener('unhandledrejection', (e: any) => {
 });
 L.log('script loaded');
 
+/** Forwards structured perf events to background without blocking the recorder runtime. */
 function sendPerfEvent(entry: PerfEventEntry) {
   void trySendRuntimeMessage({ type: 'PERF_EVENT', entry });
 }
@@ -88,6 +89,7 @@ if (typeof PerformanceObserver !== 'undefined') {
   } catch {}
 }
 
+/** Opens or reopens the background port and replays the current offscreen state. */
 function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   try { portRef?.disconnect(); } catch {}
   const port = connectRuntimePort('offscreen');
@@ -110,15 +112,18 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   return port;
 }
 
+/** Returns the current live background port, reconnecting if necessary. */
 function getPort(): chrome.runtime.Port {
   return portRef ?? connectPort();
 }
 
+/** Sends a one-shot RPC response back through the background port. */
 function respond(reqId: string, payload: any) {
   const msg: RpcResponse<unknown> = { __respFor: reqId, payload };
   getPort().postMessage(msg);
 }
 
+/** Pushes the current offscreen phase to background and keeps sampling cadence aligned. */
 function pushState(phase: RecordingPhase, extra?: Record<string, any>) {
   if (phase !== currentPhase && phase !== 'idle') {
     expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
@@ -127,10 +132,12 @@ function pushState(phase: RecordingPhase, extra?: Record<string, any>) {
   getPort().postMessage({ type: 'OFFSCREEN_STATE', phase, ...(extra ?? {}) });
 }
 
+/** Requests a background-side local download for a finalized artifact. */
 function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
   getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl, opfsFilename });
 }
 
+/** Fetches a Drive token from background so offscreen never touches identity APIs directly. */
 async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
   const res = await sendToBackground({ type: 'GET_DRIVE_TOKEN', refresh: options?.refresh === true });
   if (!res.ok) throw new Error(`Token fetch failed: ${res.error}`);
@@ -144,6 +151,7 @@ const finalizer = new RecordingFinalizer({
   getDriveToken,
 });
 
+/** Runs the full stop -> seal -> save/upload pipeline for the current recording run. */
 async function finalizeCurrentRecordingRun(): Promise<void> {
   if (finalizeRunPromise) return finalizeRunPromise;
 
@@ -186,6 +194,7 @@ const engine = new RecorderEngine({
   },
 });
 
+/** Emits runtime diagnostics only while the recorder is busy and debug mode is enabled. */
 function sampleRuntimeMetrics() {
   if (!isPerfDebugMode() || currentPhase === 'idle') return;
   const now = nowMs();
@@ -216,6 +225,7 @@ function sampleRuntimeMetrics() {
 
 setInterval(sampleRuntimeMetrics, RUNTIME_SAMPLE_INTERVAL_MS);
 
+/** Registers RPC and one-way port handlers for background -> offscreen commands. */
 function wirePortHandlers(port: chrome.runtime.Port) {
   createPortRpcServer(
     port,

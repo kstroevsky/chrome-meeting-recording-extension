@@ -61,20 +61,24 @@ export type RecorderEngineDeps = {
   openTarget?: (filename: string) => Promise<StorageTarget>;
 };
 
+/** RAM-backed fallback target used when OPFS is unavailable for a stream. */
 class InMemoryStorageTarget implements StorageTarget {
   private readonly chunks: Blob[] = [];
   private closed = false;
 
+  /** Stores filename and MIME so a final File can be assembled on close. */
   constructor(
     private readonly filename: string,
     private readonly mimeType: string,
   ) {}
 
+  /** Buffers a recorder chunk in memory until the stream is finalized. */
   async write(chunk: Blob): Promise<void> {
     if (this.closed) throw new Error('In-memory target is closed');
     this.chunks.push(chunk);
   }
 
+  /** Seals buffered chunks into a File-like artifact for downstream finalization. */
   async close(): Promise<SealedStorageFile | null> {
     if (this.closed) return null;
     this.closed = true;
@@ -118,22 +122,27 @@ export class RecorderEngine {
   private resolveStop: ((artifacts: CompletedRecordingArtifact[]) => void) | null = null;
   private finalizedArtifacts: CompletedRecordingArtifact[] = [];
 
+  /** Creates a recorder engine bound to runtime logging, phase, and storage callbacks. */
   constructor(deps: RecorderEngineDeps) {
     this.deps = deps;
   }
 
+  /** Returns true while a recording run is starting, active, or stopping. */
   isRecording(): boolean {
     return this.state === 'recording' || this.state === 'starting' || this.state === 'stopping';
   }
 
+  /** Exposes how many MediaRecorder instances are currently active for diagnostics. */
   getActiveRecorderCount(): number {
     return this.activeRecorders;
   }
 
+  /** Returns the engine's internal state machine phase for diagnostics sampling. */
   getDebugState(): EngineState {
     return this.state;
   }
 
+  /** Starts a full recording run from a background-provided tab capture stream id. */
   async startFromStreamId(streamId: string, options: RecordingRunConfig): Promise<void> {
     if (this.isRecording()) {
       this.deps.log('Already recording; ignoring start');
@@ -195,6 +204,7 @@ export class RecorderEngine {
     }
   }
 
+  /** Stops every active recorder and resolves once all sealed artifacts are ready. */
   stop(): Promise<CompletedRecordingArtifact[]> {
     if (!this.tabRecorder || !this.isRecording()) {
       this.deps.warn('Stop called but not recording');
@@ -220,14 +230,17 @@ export class RecorderEngine {
     return this.stopPromise;
   }
 
+  /** Revokes a locally created blob URL once download or upload work is complete. */
   revokeBlobUrl(blobUrl: string) {
     try { URL.revokeObjectURL(blobUrl); } catch {}
   }
 
+  /** Enforces the invariant that the captured tab stream must contain video. */
   private assertVideoTrack(stream: MediaStream) {
     if (!stream.getVideoTracks().length) throw new Error('No video track in captured stream');
   }
 
+  /** Stops the run if Chrome ends the captured tab's video track unexpectedly. */
   private attachTabEndedHandler(stream: MediaStream) {
     stream.getVideoTracks()[0]?.addEventListener('ended', () => {
       this.deps.log('Video track ended');
@@ -237,6 +250,7 @@ export class RecorderEngine {
     });
   }
 
+  /** Acquires a microphone stream and rejects stale streams from an old run. */
   private async requireMicStream(runId: number): Promise<MediaStream> {
     const mic = await maybeGetMicStream(this.micMode, this.deps);
     if (!mic?.getAudioTracks().length) {
@@ -249,6 +263,7 @@ export class RecorderEngine {
     return mic;
   }
 
+  /** Restores speaker playback when Chrome suppresses local tab audio during capture. */
   private async ensureAudiblePlaybackIfSuppressed(stream: MediaStream) {
     const rawAudio = stream.getAudioTracks()[0];
 
@@ -285,6 +300,7 @@ export class RecorderEngine {
     }
   }
 
+  /** Starts the main tab recorder and streams chunks into the selected storage target. */
   private async startTabRecorder(recordingStream: MediaStream, runStartedAt: number): Promise<void> {
     const mime = getVideoMime();
     let started = false;
@@ -367,6 +383,7 @@ export class RecorderEngine {
     });
   }
 
+  /** Starts the separate microphone recorder when the run config requires it. */
   private async tryStartMicRecorder(
     runId: number,
     runStartedAt: number,
@@ -455,6 +472,7 @@ export class RecorderEngine {
     });
   }
 
+  /** Starts the separate self-video recorder when camera capture is enabled. */
   private async tryStartSelfVideoRecorder(runId: number, runStartedAt: number): Promise<void> {
     const selfVideo = await maybeGetSelfVideoStream(this.recordSelfVideo, this.deps);
     if (
@@ -568,6 +586,7 @@ export class RecorderEngine {
     });
   }
 
+  /** Opens the preferred storage target and falls back to RAM buffering on failure. */
   private async openStorageTarget(filename: string, mimeType: string): Promise<StorageTarget> {
     if (!this.deps.openTarget) return new InMemoryStorageTarget(filename, mimeType);
 
@@ -582,11 +601,13 @@ export class RecorderEngine {
     }
   }
 
+  /** Tracks recorder starts and emits `recording` once the first recorder is live. */
   private onRecorderStarted() {
     if (this.activeRecorders === 0) this.deps.notifyPhase('recording');
     this.activeRecorders += 1;
   }
 
+  /** Finalizes run state once the last active recorder has stopped. */
   private onRecorderStopped() {
     this.activeRecorders = Math.max(0, this.activeRecorders - 1);
 
@@ -614,10 +635,12 @@ export class RecorderEngine {
     }
   }
 
+  /** Best-effort helper that stops every track in a stream without surfacing cleanup errors. */
   private safeStopStream(stream: MediaStream | null) {
     try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
   }
 
+  /** Clears all per-run state before a new start or after a failed setup. */
   private resetRunState() {
     this.activeRecorders = 0;
     this.tabRecorder = null;

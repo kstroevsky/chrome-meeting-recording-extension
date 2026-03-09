@@ -36,26 +36,32 @@ export type {
 } from './recordingTypes';
 export { DEFAULT_RECORDING_RUN_CONFIG, EXTENSION_DEFAULTS, RECORDING_SESSION_STORAGE_KEY } from './recordingConstants';
 
+/** Returns true when a string exactly matches one of the allowed recording option values. */
 function hasAllowedString<T extends string>(value: unknown, allowedValues: readonly T[]): value is T {
   return typeof value === 'string' && allowedValues.includes(value as T);
 }
 
+/** Normalizes an arbitrary phase-like value into the canonical recording phase union. */
 export function normalizePhase(value: unknown): RecordingPhase {
   return hasAllowedString(value, NON_IDLE_RECORDING_PHASES) ? value : 'idle';
 }
 
+/** Normalizes persisted storage mode values to the supported runtime storage modes. */
 export function normalizeStorageMode(value: unknown): StorageMode {
   return hasAllowedString(value, VALID_STORAGE_MODES) ? value : DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 }
 
+/** Normalizes persisted microphone mode values to the supported microphone modes. */
 export function normalizeMicMode(value: unknown): MicMode {
   return hasAllowedString(value, VALID_MIC_MODES) ? value : DEFAULT_RECORDING_RUN_CONFIG.micMode;
 }
 
+/** Returns a detached clone of the default run configuration. */
 export function createDefaultRunConfig(): RecordingRunConfig {
   return { ...DEFAULT_RECORDING_RUN_CONFIG };
 }
 
+/** Normalizes any run-config-like object into the strict runtime shape. */
 export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
   if (!isRecord(value)) return null;
   const candidate = value as Partial<RecordingRunConfig>;
@@ -67,13 +73,15 @@ export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
       typeof candidate.recordSelfVideo === 'boolean'
         ? candidate.recordSelfVideo
         : DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo,
-  };
+      };
 }
 
+/** Returns a normalized run config or a cloned default when the input is invalid. */
 export function getRunConfigOrDefault(value: unknown): RecordingRunConfig {
   return normalizeRunConfig(value) ?? createDefaultRunConfig();
 }
 
+/** Normalizes one upload summary entry and drops malformed or empty rows. */
 function normalizeUploadSummaryEntry(entry: unknown): UploadSummaryEntry | null {
   if (!isRecord(entry)) return null;
   const candidate = entry as Partial<UploadSummaryEntry>;
@@ -91,6 +99,7 @@ function normalizeUploadSummaryEntry(entry: unknown): UploadSummaryEntry | null 
   };
 }
 
+/** Normalizes persisted upload summary data and filters unusable entries. */
 export function normalizeUploadSummary(value: unknown): UploadSummary | undefined {
   if (!isRecord(value)) return undefined;
   const candidate = value as Partial<UploadSummary>;
@@ -108,6 +117,7 @@ export function normalizeUploadSummary(value: unknown): UploadSummary | undefine
   };
 }
 
+/** Creates the canonical idle session snapshot used as the safe fallback state. */
 export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
   return {
     phase: 'idle',
@@ -116,6 +126,7 @@ export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
   };
 }
 
+/** Normalizes a persisted session snapshot while preserving only supported fields. */
 export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapshot {
   if (!isRecord(value)) return createIdleSession();
   const candidate = value as Partial<RecordingSessionSnapshot>;
@@ -131,6 +142,7 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
   };
 }
 
+/** Returns true when the phase should disable popup controls and keep background alive. */
 export function isBusyPhase(phase: RecordingPhase): boolean {
   return (BUSY_RECORDING_PHASES as readonly RecordingPhase[]).includes(phase);
 }

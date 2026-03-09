@@ -76,17 +76,20 @@ const session = new RecordingSession(
   }
 );
 
+/** Keeps the MV3 service worker alive while recording or upload work is active. */
 function startKeepAlive() {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => pokeRuntime(), 20_000);
 }
 
+/** Stops the keep-alive loop once no busy work remains. */
 function stopKeepAlive() {
   if (!keepAliveTimer) return;
   clearInterval(keepAliveTimer);
   keepAliveTimer = null;
 }
 
+/** Clears stored diagnostics only when the session is idle and no dashboard is attached. */
 function maybeClearPerfDiagnostics() {
   if (!sessionHydrated) return;
   if (activeDebugDashboards > 0) return;
@@ -176,6 +179,7 @@ chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
   });
 });
 
+/** Wraps tab-capture stream-id acquisition for easier testing and logging. */
 function getStreamIdForTab(tabId: number): Promise<string> {
   return getMediaStreamIdForTab(tabId);
 }
@@ -295,14 +299,17 @@ chrome.runtime.onSuspend?.addListener(async () => {
   await offscreen.stopIfPossibleOnSuspend();
 });
 
+/** Builds a success command result from the latest canonical session snapshot. */
 function successResult(): CommandResult {
   return { ok: true, session: session.getSnapshot() };
 }
 
+/** Builds a failure command result while preserving the latest canonical session snapshot. */
 function failureResult(error: string): CommandResult {
   return { ok: false, error, session: session.getSnapshot() };
 }
 
+/** Reconstructs in-session state persisted by pre-refactor versions of the extension. */
 function hydrateLegacySession(value: Record<string, unknown> | undefined): RecordingSessionSnapshot | undefined {
   const legacyPhase =
     value?.[LEGACY_SESSION_PHASE_KEY] === 'starting'

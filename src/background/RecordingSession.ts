@@ -21,20 +21,24 @@ type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<void> | 
 export class RecordingSession {
   private snapshot: RecordingSessionSnapshot = createIdleSession();
 
+  /** Builds the canonical session state machine around persistence and change notifications. */
   constructor(
     private readonly persist: SessionPersistor,
     private readonly onChanged?: SessionChangeListener
   ) {}
 
+  /** Hydrates the in-memory session from previously persisted snapshot data. */
   hydrate(value: unknown): RecordingSessionSnapshot {
     this.snapshot = normalizeSessionSnapshot(value);
     return this.commit();
   }
 
+  /** Returns a defensive clone of the current session snapshot. */
   getSnapshot(): RecordingSessionSnapshot {
     return cloneSession(this.snapshot);
   }
 
+  /** Starts a new session in the `starting` phase with the chosen run configuration. */
   start(runConfig: RecordingRunConfig): RecordingSessionSnapshot {
     this.snapshot = {
       phase: 'starting',
@@ -44,18 +48,22 @@ export class RecordingSession {
     return this.commit();
   }
 
+  /** Marks the session as actively stopping recorder instances. */
   markStopping(): RecordingSessionSnapshot {
     return this.transition('stopping');
   }
 
+  /** Marks the session as actively recording. */
   markRecording(): RecordingSessionSnapshot {
     return this.transition('recording');
   }
 
+  /** Marks the session as uploading sealed artifacts after capture stops. */
   markUploading(): RecordingSessionSnapshot {
     return this.transition('uploading');
   }
 
+  /** Clears run state and moves the session back to idle. */
   markIdle(uploadSummary?: UploadSummary): RecordingSessionSnapshot {
     this.snapshot = {
       phase: 'idle',
@@ -66,6 +74,7 @@ export class RecordingSession {
     return this.commit();
   }
 
+  /** Records a terminal failure while preserving the last active run configuration. */
   fail(error: string): RecordingSessionSnapshot {
     this.snapshot = {
       phase: 'failed',
@@ -76,6 +85,7 @@ export class RecordingSession {
     return this.commit();
   }
 
+  /** Applies an offscreen phase update onto the canonical background-owned snapshot. */
   applyOffscreenPhase(update: {
     phase: unknown;
     uploadSummary?: unknown;
@@ -103,6 +113,7 @@ export class RecordingSession {
     return this.commit();
   }
 
+  /** Performs simple phase-only transitions while preserving the active run config. */
   private transition(phase: RecordingSessionSnapshot['phase']): RecordingSessionSnapshot {
     this.snapshot = {
       phase,
@@ -112,6 +123,7 @@ export class RecordingSession {
     return this.commit();
   }
 
+  /** Persists and broadcasts the latest session snapshot. */
   private commit(): RecordingSessionSnapshot {
     const snapshot = this.getSnapshot();
     this.persist(snapshot);
@@ -120,6 +132,7 @@ export class RecordingSession {
   }
 }
 
+/** Deep-clones the session snapshot so callers cannot mutate shared state. */
 function cloneSession(snapshot: RecordingSessionSnapshot): RecordingSessionSnapshot {
   return {
     phase: snapshot.phase,

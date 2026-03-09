@@ -204,10 +204,16 @@ Recorder responsibilities:
 - resolve only when final writes are drained and artifacts are sealed
 
 Self-video profiles:
-- single best-effort camera profile
-  - prefers `1920x1080` at `30fps` when the extension opens the webcam itself
+- preset-based best-effort camera profile
+  - settings page offers `640x360`, `854x480`, `1280x720`, and `1920x1080`
+  - default preset is `1920x1080` at `30fps` when the extension opens the webcam itself
   - actual delivered settings still depend on Chrome, Meet camera usage, and camera hardware
   - recorder diagnostics log both the requested profile and the delivered track settings
+
+Tab capture profiles:
+- preset-based max capture size
+  - settings page offers `640x360`, `854x480`, `1280x720`, and `1920x1080`
+  - recorder still consumes numeric `maxWidth` / `maxHeight` values derived from the selected preset
 
 #### Microphone Modes
 - `off`
@@ -292,6 +298,7 @@ Current popup controls:
 - microphone mode select
 - storage mode select
 - self-video enable
+- settings gear button
 - start recording
 - stop recording
 - diagnostics page link in dev builds
@@ -303,6 +310,21 @@ Current popup controls:
 - disables controls for all busy phases
 - shows upload summaries and local fallback errors
 - includes run configuration in status text so popup reopen shows the real session configuration
+
+### 7.1 Settings Page
+Files:
+- `static/settings.html`
+- `src/settings.ts`
+- `src/shared/extensionSettings.ts`
+
+Purpose:
+- configure default run behavior and advanced recorder parameters outside the disposable popup
+
+Current settings behavior:
+- camera and tab capture sizes are chosen through preset selectors instead of raw width/height inputs
+- every settings field exposes a click-to-open tooltip with a short operational explanation
+- legacy stored width/height settings are normalized into the nearest supported preset on load
+- the popup gear icon opens this page in a regular extension tab
 
 ### 8. Meeting Provider Adapter Boundary
 Files:
@@ -746,6 +768,8 @@ flowchart TD
 | `src/popup/popupMessages.ts` | user-facing popup copy constants/builders |
 | `src/popup/MicPermissionService.ts` | microphone permission flow |
 | `src/popup/CameraPermissionService.ts` | camera permission flow |
+| `src/settings.ts` | settings page controller |
+| `src/shared/extensionSettings.ts` | preset-based settings normalization and runtime accessors |
 | `src/micsetup.ts` | dedicated mic setup page |
 | `src/camsetup.ts` | dedicated camera setup page |
 
@@ -799,7 +823,7 @@ Note:
 - `oauth2.client_id` in source control is a placeholder.
 - Webpack injects the real value from `.env` / shell env key `GOOGLE_OAUTH_CLIENT_ID` into `dist/manifest.json` at build time.
 - If the env var is missing, build keeps the placeholder and logs a warning; Drive auth will fail until configured.
-- Source HTML shells and the source manifest live under `static/`, while the emitted extension layout in `dist/` remains flat.
+- Source HTML shells and the source manifest live under `static/`, shared popup assets live under `public/`, and the emitted extension layout in `dist/` remains flat.
 
 Important permissions:
 - `activeTab`

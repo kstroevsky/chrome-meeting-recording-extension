@@ -43,8 +43,10 @@ export type FinalizeArtifactsOptions = {
  * only manages lifecycle and RPC.
  */
 export class RecordingFinalizer {
+  /** Binds finalize-time storage behavior to the offscreen runtime's side-effect callbacks. */
   constructor(private readonly deps: RecordingFinalizerDeps) {}
 
+  /** Persists sealed artifacts locally or uploads them to Drive after recording stops. */
   async finalize(options: FinalizeArtifactsOptions): Promise<UploadSummary | undefined> {
     const orderedArtifacts = this.sortArtifacts(options.artifacts);
     if (!orderedArtifacts.length) return undefined;
@@ -60,17 +62,20 @@ export class RecordingFinalizer {
     return undefined;
   }
 
+  /** Orders artifacts so local saves and Drive uploads stay deterministic across runs. */
   private sortArtifacts(artifacts: CompletedRecordingArtifact[]): CompletedRecordingArtifact[] {
     return [...artifacts].sort(
       (a, b) => STREAM_UPLOAD_ORDER.indexOf(a.stream) - STREAM_UPLOAD_ORDER.indexOf(b.stream)
     );
   }
 
+  /** Creates a blob URL and delegates the actual local download to background. */
   private saveArtifactLocally(artifact: SealedStorageFile) {
     const blobUrl = URL.createObjectURL(artifact.file);
     this.deps.requestSave(artifact.filename, blobUrl, artifact.opfsFilename);
   }
 
+  /** Removes temporary local artifacts once Drive has accepted the upload. */
   private async cleanupArtifact(artifact: SealedStorageFile) {
     try {
       await artifact.cleanup();
@@ -82,6 +87,7 @@ export class RecordingFinalizer {
     }
   }
 
+  /** Uploads artifacts to Drive with shared setup and per-file local fallback. */
   private async uploadArtifactsToDrive(
     artifacts: CompletedRecordingArtifact[],
     recordingFolderName: string
@@ -199,6 +205,7 @@ export class RecordingFinalizer {
     return summary;
   }
 
+  /** Runs async work with bounded concurrency while preserving input order in the results. */
   private async runWithConcurrency<TItem, TResult>(
     items: TItem[],
     concurrency: number,
