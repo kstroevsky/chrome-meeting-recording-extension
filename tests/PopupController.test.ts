@@ -2,7 +2,6 @@ import { CameraPermissionService } from '../src/popup/CameraPermissionService';
 import { MicPermissionService } from '../src/popup/MicPermissionService';
 import { PopupController } from '../src/popup/PopupController';
 import type { RecordingRunConfig } from '../src/shared/recording';
-import type { MeetingProviderInfo } from '../src/shared/provider';
 
 jest.mock('../src/popup/MicPermissionService');
 jest.mock('../src/popup/CameraPermissionService');
@@ -19,7 +18,6 @@ describe('PopupController', () => {
       storageMode: 'local',
       micMode: 'off',
       recordSelfVideo: false,
-      selfVideoResolutionMode: 'best-effort',
       ...overrides,
     });
     (global as any).__TEST_RUN_CONFIG__ = makeRunConfig;
@@ -64,14 +62,6 @@ describe('PopupController', () => {
     mockTabSendMessage = chrome.tabs.sendMessage as jest.Mock;
     mockTabSendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
       if (message.type === 'RESET_TRANSCRIPT') return { ok: true };
-      if (message.type === 'GET_PROVIDER_INFO') {
-        return {
-          providerId: 'google-meet',
-          meetingId: 'abc-defg',
-          supportsCaptions: true,
-          localCameraEnabled: null,
-        } satisfies MeetingProviderInfo;
-      }
       return undefined;
     });
 
@@ -99,7 +89,6 @@ describe('PopupController', () => {
           storageMode: 'drive',
           micMode: 'mixed',
           recordSelfVideo: true,
-          selfVideoResolutionMode: 'best-effort',
         },
         updatedAt: Date.now(),
       },
@@ -145,7 +134,6 @@ describe('PopupController', () => {
 
     expect(mockTabsQuery).toHaveBeenCalled();
     expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(101, { type: 'RESET_TRANSCRIPT' });
-    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(101, { type: 'GET_PROVIDER_INFO' });
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
       type: 'START_RECORDING',
       tabId: 101,
@@ -153,7 +141,6 @@ describe('PopupController', () => {
         storageMode: 'drive',
         micMode: 'mixed',
         recordSelfVideo: true,
-        selfVideoResolutionMode: 'best-effort',
       },
     });
 
@@ -190,56 +177,23 @@ describe('PopupController', () => {
         storageMode: 'local',
         micMode: 'off',
         recordSelfVideo: false,
-        selfVideoResolutionMode: 'best-effort',
       },
     });
   });
 
-  it('uses strict-preferred self video mode when Meet camera is off', async () => {
+  it('shows the first recording warning in popup status', async () => {
     controller.init();
     await new Promise(process.nextTick);
-    mockSendMessage.mockClear();
-    mockTabSendMessage.mockClear();
-    mockSendMessage.mockResolvedValueOnce({
-      ok: true,
-      session: {
-        phase: 'recording',
-        runConfig: (global as any).__TEST_RUN_CONFIG__({
-          recordSelfVideo: true,
-          selfVideoResolutionMode: 'strict-preferred',
-        }),
-        updatedAt: Date.now(),
-      },
-    });
-    mockTabSendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
-      if (message.type === 'RESET_TRANSCRIPT') return { ok: true };
-      if (message.type === 'GET_PROVIDER_INFO') {
-        return {
-          providerId: 'google-meet',
-          meetingId: 'abc-defg',
-          supportsCaptions: true,
-          localCameraEnabled: false,
-        } satisfies MeetingProviderInfo;
-      }
-      return undefined;
+    (controller as any).applySession({
+      phase: 'recording',
+      runConfig: (global as any).__TEST_RUN_CONFIG__({ recordSelfVideo: true }),
+      warnings: ['Tab recording requested 640x360@24fps, but recorder input is 1920x1080@24fps.'],
+      updatedAt: Date.now(),
     });
 
-    elements.storageModeSelect.value = 'local';
-    elements.micModeSelect.value = 'off';
-    elements.recordSelfVideoCheckbox.checked = true;
-    elements.startBtn.click();
-    await new Promise(process.nextTick);
-
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
-      type: 'START_RECORDING',
-      tabId: 101,
-      runConfig: {
-        storageMode: 'local',
-        micMode: 'off',
-        recordSelfVideo: true,
-        selfVideoResolutionMode: 'strict-preferred',
-      },
-    });
+    expect(elements.recordingStatusEl.textContent).toContain(
+      'Warning: Tab recording requested 640x360@24fps'
+    );
   });
 
   it('handles STOP_RECORDING click', async () => {
@@ -277,7 +231,6 @@ describe('PopupController', () => {
       storageMode: 'drive',
       micMode: 'separate',
       recordSelfVideo: true,
-      selfVideoResolutionMode: 'best-effort',
     });
     (controller as any).setUI('uploading');
 

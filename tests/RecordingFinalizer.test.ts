@@ -22,6 +22,7 @@ describe('RecordingFinalizer', () => {
       warn: jest.fn(),
       requestSave: jest.fn(),
       getDriveToken: jest.fn().mockResolvedValue('token'),
+      reportWarning: jest.fn(),
     };
     finalizer = new RecordingFinalizer(deps);
     (URL as any).createObjectURL = jest.fn((blob: Blob) => `blob:${blob.size}`);
@@ -49,6 +50,69 @@ describe('RecordingFinalizer', () => {
     expect(summary).toBeUndefined();
     expect(deps.requestSave).toHaveBeenNthCalledWith(1, 'tab.webm', 'blob:4', 'tab.webm');
     expect(deps.requestSave).toHaveBeenNthCalledWith(2, 'mic.webm', 'blob:4', 'mic.webm');
+  });
+
+  it('replaces the tab artifact with a postprocessed file before local save when required', async () => {
+    const original = makeArtifact('tab.webm');
+    const processed = {
+      filename: 'tab.webm',
+      file: new File(['processed'], 'tab.webm', { type: 'video/webm' }),
+      opfsFilename: 'tab-processed.webm',
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    deps.postprocessTabArtifact = jest.fn().mockResolvedValue(processed);
+
+    const summary = await finalizer.finalize({
+      storageMode: 'local',
+      artifacts: [
+        {
+          stream: 'tab',
+          artifact: original,
+          finalize: {
+            outputTarget: { width: 640, height: 360, frameRate: 24 },
+            liveResized: false,
+            requiresPostprocess: true,
+          },
+        },
+      ],
+    });
+
+    expect(summary).toBeUndefined();
+    expect(deps.postprocessTabArtifact).toHaveBeenCalledWith(
+      original,
+      {
+        outputTarget: { width: 640, height: 360, frameRate: 24 },
+        liveResized: false,
+        requiresPostprocess: true,
+      }
+    );
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:9', 'tab-processed.webm');
+  });
+
+  it('keeps the original tab artifact and reports a warning when fallback postprocess fails', async () => {
+    const original = makeArtifact('tab.webm');
+    deps.postprocessTabArtifact = jest.fn().mockRejectedValue(new Error('transcode failed'));
+
+    const summary = await finalizer.finalize({
+      storageMode: 'local',
+      artifacts: [
+        {
+          stream: 'tab',
+          artifact: original,
+          finalize: {
+            outputTarget: { width: 640, height: 360, frameRate: 24 },
+            liveResized: false,
+            requiresPostprocess: true,
+          },
+        },
+      ],
+    });
+
+    expect(summary).toBeUndefined();
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:4', 'tab.webm');
+    expect(deps.reportWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Saving the original tab file instead.')
+    );
   });
 
   it('continues Drive uploads after one file falls back locally', async () => {

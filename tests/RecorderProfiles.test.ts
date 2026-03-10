@@ -53,16 +53,10 @@ describe('RecorderProfiles', () => {
     expect(resolveSelfVideoBitrate(6_000_000, undefined)).toBe(6_000_000);
   });
 
-  it('builds strict self-video constraint fallbacks only when requested', () => {
-    expect(getSelfVideoConstraintRequests('best-effort')).toEqual([
-      {
-        label: 'best-effort',
-        constraints: SELF_VIDEO_CONSTRAINTS,
-      },
-    ]);
-    expect(getSelfVideoConstraintRequests('strict-preferred')).toEqual([
+  it('builds a deterministic self-video constraint fallback ladder', () => {
+    expect(getSelfVideoConstraintRequests()).toEqual([
       expect.objectContaining({
-        label: 'strict-exact',
+        label: 'exact-size-and-fps',
         constraints: expect.objectContaining({
           width: { exact: 1920 },
           height: { exact: 1080 },
@@ -70,7 +64,7 @@ describe('RecorderProfiles', () => {
         }),
       }),
       expect.objectContaining({
-        label: 'strict-size',
+        label: 'exact-size',
         constraints: expect.objectContaining({
           width: { exact: 1920 },
           height: { exact: 1080 },

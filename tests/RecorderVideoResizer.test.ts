@@ -152,4 +152,59 @@ describe('RecorderVideoResizer', () => {
     expect(video.pause).toHaveBeenCalledTimes(1);
     expect(video.srcObject).toBeNull();
   });
+
+  it('keeps the canvas transform when only frame rate must be reduced', async () => {
+    const sourceAudioTrack = makeTrack('audio');
+    const sourceVideoTrack = makeTrack('video', { width: 1920, height: 1080, frameRate: 30 });
+    const sourceStream = makeStream([sourceAudioTrack, sourceVideoTrack]);
+    const outputVideoTrack = makeTrack('video', { width: 1920, height: 1080, frameRate: 24 });
+    const captureStream = makeStream([outputVideoTrack]);
+    const video = {
+      srcObject: null,
+      muted: false,
+      playsInline: false,
+      autoplay: false,
+      hidden: false,
+      style: {},
+      videoWidth: 1920,
+      videoHeight: 1080,
+      play: jest.fn().mockResolvedValue(undefined),
+      pause: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+    } as any;
+    const canvas = {
+      width: 0,
+      height: 0,
+      hidden: false,
+      style: {},
+      getContext: jest.fn(() => ({
+        drawImage: jest.fn(),
+        imageSmoothingEnabled: false,
+        imageSmoothingQuality: 'low',
+      })),
+      captureStream: jest.fn(() => captureStream),
+    } as any;
+
+    const result = await createResizedVideoStream(sourceStream, {
+      width: 1920,
+      height: 1080,
+      frameRate: 24,
+    }, {
+      document: {
+        createElement: jest.fn((tagName: 'video' | 'canvas') => (tagName === 'video' ? video : canvas)),
+      },
+      createMediaStream: jest.fn((tracks: MediaStreamTrack[]) => makeStream(tracks as any[])),
+      requestAnimationFrame: jest.fn((_callback: FrameRequestCallback) => 1),
+      cancelAnimationFrame: jest.fn(),
+    });
+
+    expect(result.resized).toBe(true);
+    expect(result.output).toEqual({
+      width: 1920,
+      height: 1080,
+      frameRate: 24,
+    });
+    expect(canvas.captureStream).toHaveBeenCalledWith(24);
+  });
 });

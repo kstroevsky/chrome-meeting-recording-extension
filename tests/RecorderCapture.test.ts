@@ -73,7 +73,7 @@ describe('RecorderCapture', () => {
     );
   });
 
-  it('requests a best-effort 1080p webcam stream and logs delivered settings', async () => {
+  it('requests the deterministic camera constraint ladder and logs delivered settings', async () => {
     const stream = makeStream(
       makeVideoTrack(
         { width: 1280, height: 720, frameRate: 30, deviceId: 'camera-1' },
@@ -82,20 +82,23 @@ describe('RecorderCapture', () => {
     );
     (navigator.mediaDevices.getUserMedia as jest.Mock).mockResolvedValue(stream);
 
-    const result = await maybeGetSelfVideoStream(true, deps, 'best-effort');
+    const result = await maybeGetSelfVideoStream(true, deps);
 
     expect(result).toBe(stream);
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         audio: false,
-        video: SELF_VIDEO_CONSTRAINTS,
+        video: expect.objectContaining({
+          width: { exact: 1920 },
+          height: { exact: 1080 },
+          frameRate: { exact: 30 },
+        }),
       })
     );
     expect(deps.log).toHaveBeenCalledWith('self video stream acquired:', {
       ok: true,
-      requestedMode: 'best-effort',
-      requestStrategy: 'best-effort',
+      requestStrategy: 'exact-size-and-fps',
       requestedWidth: SELF_VIDEO_PROFILE.width,
       requestedHeight: SELF_VIDEO_PROFILE.height,
       requestedFrameRate: SELF_VIDEO_PROFILE.frameRate,
@@ -114,7 +117,7 @@ describe('RecorderCapture', () => {
     );
   });
 
-  it('tries strict self-video constraints first when Meet camera is off, then falls back', async () => {
+  it('falls back through exact-size and best-effort camera constraints', async () => {
     const stream = makeStream(
       makeVideoTrack(
         { width: 1920, height: 1080, frameRate: 30, deviceId: 'camera-1' },
@@ -126,7 +129,7 @@ describe('RecorderCapture', () => {
       .mockRejectedValueOnce(new Error('exact fps unsupported'))
       .mockResolvedValue(stream);
 
-    const result = await maybeGetSelfVideoStream(true, deps, 'strict-preferred');
+    const result = await maybeGetSelfVideoStream(true, deps);
 
     expect(result).toBe(stream);
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenNthCalledWith(
@@ -161,20 +164,17 @@ describe('RecorderCapture', () => {
     expect(deps.log).toHaveBeenCalledWith(
       'self video getUserMedia attempt failed; retrying with fallback',
       expect.objectContaining({
-        requestedMode: 'strict-preferred',
-        requestStrategy: 'strict-exact',
+        requestStrategy: 'exact-size-and-fps',
       })
     );
     expect(deps.log).toHaveBeenCalledWith(
       'self video getUserMedia attempt failed; retrying with fallback',
       expect.objectContaining({
-        requestedMode: 'strict-preferred',
-        requestStrategy: 'strict-size',
+        requestStrategy: 'exact-size',
       })
     );
     expect(deps.log).toHaveBeenCalledWith('self video stream acquired:', {
       ok: true,
-      requestedMode: 'strict-preferred',
       requestStrategy: 'best-effort',
       requestedWidth: SELF_VIDEO_PROFILE.width,
       requestedHeight: SELF_VIDEO_PROFILE.height,
@@ -194,7 +194,7 @@ describe('RecorderCapture', () => {
   it('returns null when webcam acquisition fails', async () => {
     (navigator.mediaDevices.getUserMedia as jest.Mock).mockRejectedValue(new Error('no camera'));
 
-    const result = await maybeGetSelfVideoStream(true, deps, 'best-effort');
+    const result = await maybeGetSelfVideoStream(true, deps);
 
     expect(result).toBeNull();
     expect(deps.warn).toHaveBeenCalledWith(
