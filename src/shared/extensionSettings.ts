@@ -334,7 +334,6 @@ export function buildDefaultRunConfigFromSettings(
     storageMode: toStorageMode(settings.basic.recordingMode),
     micMode: settings.basic.microphoneRecordingMode,
     recordSelfVideo: settings.basic.separateCameraCapture,
-    selfVideoResolutionMode: 'best-effort',
   };
 }
 

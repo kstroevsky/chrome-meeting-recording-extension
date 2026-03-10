@@ -59,17 +59,14 @@ export type PopupToBgResponse<T extends PopupToBg> =
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
 export type PopupResetTranscript = { type: 'RESET_TRANSCRIPT' };
-export type PopupGetProviderInfo = { type: 'GET_PROVIDER_INFO' };
 
 export type PopupToContent =
   | PopupGetTranscript
-  | PopupResetTranscript
-  | PopupGetProviderInfo;
+  | PopupResetTranscript;
 
 export type PopupToContentResponse<T extends PopupToContent> =
   T extends PopupGetTranscript ? { transcript: string; provider: MeetingProviderInfo } :
   T extends PopupResetTranscript ? { ok: true } :
-  T extends PopupGetProviderInfo ? MeetingProviderInfo :
   never;
 
 export type BgToPopup =
@@ -98,6 +95,7 @@ export type OffscreenToBg =
       phase: RecordingPhase;
       uploadSummary?: UploadSummary;
       error?: string;
+      warnings?: string[];
     }
   | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string };
 

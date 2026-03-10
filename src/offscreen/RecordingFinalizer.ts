@@ -16,6 +16,7 @@ import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { createCachedTokenProvider, type TokenProvider } from './drive/request';
 import { describeRuntimeError } from './errors';
 import type { CompletedRecordingArtifact, SealedStorageFile } from './RecorderEngine';
+import { postprocessTabArtifact } from './TabArtifactPostprocessor';
 import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'selfVideo'];
@@ -31,6 +32,11 @@ export type RecordingFinalizerDeps = {
   warn: (...a: any[]) => void;
   requestSave: (filename: string, blobUrl: string, opfsFilename?: string) => void;
   getDriveToken: TokenProvider;
+  reportWarning?: (warning: string) => void;
+  postprocessTabArtifact?: (
+    artifact: SealedStorageFile,
+    finalize: NonNullable<CompletedRecordingArtifact['finalize']>
+  ) => Promise<SealedStorageFile>;
 };
 
 export type FinalizeArtifactsOptions = {
@@ -48,7 +54,7 @@ export class RecordingFinalizer {
 
   /** Persists sealed artifacts locally or uploads them to Drive after recording stops. */
   async finalize(options: FinalizeArtifactsOptions): Promise<UploadSummary | undefined> {
-    const orderedArtifacts = this.sortArtifacts(options.artifacts);
+    const orderedArtifacts = await this.prepareArtifacts(this.sortArtifacts(options.artifacts));
     if (!orderedArtifacts.length) return undefined;
 
     if (options.storageMode === 'drive') {
@@ -60,6 +66,43 @@ export class RecordingFinalizer {
       this.saveArtifactLocally(entry.artifact);
     }
     return undefined;
+  }
+
+  /** Applies any artifact-level fallback processing before save/upload begins. */
+  private async prepareArtifacts(artifacts: CompletedRecordingArtifact[]): Promise<CompletedRecordingArtifact[]> {
+    const prepared: CompletedRecordingArtifact[] = [];
+
+    for (const entry of artifacts) {
+      if (entry.stream !== 'tab' || !entry.finalize?.requiresPostprocess) {
+        prepared.push(entry);
+        continue;
+      }
+
+      try {
+        const processedArtifact = await (
+          this.deps.postprocessTabArtifact
+          ?? ((artifact, finalize) => postprocessTabArtifact(artifact, finalize, this.deps))
+        )(entry.artifact, entry.finalize);
+        prepared.push({
+          ...entry,
+          artifact: processedArtifact,
+          finalize: {
+            ...entry.finalize,
+            liveResized: false,
+            requiresPostprocess: false,
+          },
+        });
+      } catch (error) {
+        const message = describeRuntimeError(error);
+        this.deps.warn('Tab postprocess downscale failed; saving original artifact instead', entry.artifact.filename, message);
+        this.deps.reportWarning?.(
+          `Tab post-processing downscale failed after recording. Saving the original tab file instead. (${message})`
+        );
+        prepared.push(entry);
+      }
+    }
+
+    return prepared;
   }
 
   /** Orders artifacts so local saves and Drive uploads stay deterministic across runs. */

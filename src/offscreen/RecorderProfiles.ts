@@ -5,7 +5,7 @@
  */
 
 import { PERF_FLAGS, clamp } from '../shared/perf';
-import type { MicMode, SelfVideoResolutionMode } from '../shared/recording';
+import type { MicMode } from '../shared/recording';
 import {
   DEFAULT_EXTENSION_SETTINGS,
   getChunkingSettings,
@@ -93,34 +93,23 @@ export function getSelfVideoConstraints(): MediaTrackConstraints {
 export const SELF_VIDEO_CONSTRAINTS: MediaTrackConstraints = buildConstraints(SELF_VIDEO_PROFILE);
 
 export type SelfVideoConstraintRequest = {
-  label: 'best-effort' | 'strict-exact' | 'strict-size';
+  label: 'exact-size-and-fps' | 'exact-size' | 'best-effort';
   constraints: MediaTrackConstraints;
 };
 
-/** Returns ordered self-video getUserMedia attempts for the selected resolution mode. */
-export function getSelfVideoConstraintRequests(
-  mode: SelfVideoResolutionMode = 'best-effort'
-): SelfVideoConstraintRequest[] {
+/** Returns the deterministic self-video getUserMedia fallback ladder. */
+export function getSelfVideoConstraintRequests(): SelfVideoConstraintRequest[] {
   const profile = getCurrentSelfVideoProfile();
 
-  if (mode === 'strict-preferred') {
-    return [
-      {
-        label: 'strict-exact',
-        constraints: buildStrictExactConstraints(profile),
-      },
-      {
-        label: 'strict-size',
-        constraints: buildStrictSizeConstraints(profile),
-      },
-      {
-        label: 'best-effort',
-        constraints: buildConstraints(profile),
-      },
-    ];
-  }
-
   return [
+    {
+      label: 'exact-size-and-fps',
+      constraints: buildStrictExactConstraints(profile),
+    },
+    {
+      label: 'exact-size',
+      constraints: buildStrictSizeConstraints(profile),
+    },
     {
       label: 'best-effort',
       constraints: buildConstraints(profile),

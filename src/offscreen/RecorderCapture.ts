@@ -5,7 +5,7 @@
  */
 
 import { withTimeout } from '../shared/async';
-import type { MicMode, SelfVideoResolutionMode } from '../shared/recording';
+import type { MicMode } from '../shared/recording';
 import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 import {
   getMicrophoneCaptureSettings,
@@ -28,7 +28,6 @@ type RecorderCaptureDeps = {
 
 type SelfVideoDiagnostics = {
   ok: boolean;
-  requestedMode: SelfVideoResolutionMode;
   requestStrategy: string;
   requestedWidth: number;
   requestedHeight: number;
@@ -58,7 +57,6 @@ function readTrackCapabilities(track?: MediaStreamTrack): MediaTrackCapabilities
 /** Builds structured diagnostics for the requested and delivered self-video track profile. */
 function buildSelfVideoDiagnostics(
   track: MediaStreamTrack | undefined,
-  requestedMode: SelfVideoResolutionMode,
   requestStrategy: string
 ): {
   diagnostics: SelfVideoDiagnostics;
@@ -71,7 +69,6 @@ function buildSelfVideoDiagnostics(
   return {
     diagnostics: {
       ok: !!track,
-      requestedMode,
       requestStrategy,
       requestedWidth: profile.width,
       requestedHeight: profile.height,
@@ -173,11 +170,10 @@ export async function maybeGetMicStream(
 /** Requests the user's camera stream and logs how closely it matched the preset. */
 export async function maybeGetSelfVideoStream(
   enabled: boolean,
-  deps: RecorderCaptureDeps,
-  resolutionMode: SelfVideoResolutionMode = 'best-effort'
+  deps: RecorderCaptureDeps
 ): Promise<MediaStream | null> {
   if (!enabled) return null;
-  const requests = getSelfVideoConstraintRequests(resolutionMode);
+  const requests = getSelfVideoConstraintRequests();
 
   for (const request of requests) {
     try {
@@ -190,7 +186,7 @@ export async function maybeGetSelfVideoStream(
         'self video getUserMedia'
       );
       const track = stream.getVideoTracks()[0];
-      const { diagnostics, settings } = buildSelfVideoDiagnostics(track, resolutionMode, request.label);
+      const { diagnostics, settings } = buildSelfVideoDiagnostics(track, request.label);
 
       deps.log('self video stream acquired:', diagnostics);
 
@@ -206,7 +202,6 @@ export async function maybeGetSelfVideoStream(
         deps.log(
           'self video getUserMedia attempt failed; retrying with fallback',
           {
-            requestedMode: resolutionMode,
             requestStrategy: request.label,
             error: formattedError,
           }

@@ -85,10 +85,15 @@ export function readStreamVideoMetrics(stream: MediaStream): StreamVideoMetrics 
 
 /** Returns true when a measured source is already at or below the requested output target. */
 function isAtOrBelowTarget(metrics: StreamVideoMetrics, target: VideoResizeTarget): boolean {
+  const frameRateFits =
+    typeof metrics.frameRate !== 'number'
+    || metrics.frameRate <= target.frameRate + 0.5;
+
   return !!metrics.width
     && !!metrics.height
     && metrics.width <= target.width
-    && metrics.height <= target.height;
+    && metrics.height <= target.height
+    && frameRateFits;
 }
 
 /** Configures a media-backed video element for offscreen rendering only. */

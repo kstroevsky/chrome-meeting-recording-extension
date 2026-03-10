@@ -11,7 +11,6 @@ import {
   NON_IDLE_RECORDING_PHASES,
   RECORDING_SESSION_STORAGE_KEY,
   VALID_MIC_MODES,
-  VALID_SELF_VIDEO_RESOLUTION_MODES,
   VALID_STORAGE_MODES,
 } from './recordingConstants';
 import type {
@@ -19,7 +18,6 @@ import type {
   RecordingPhase,
   RecordingRunConfig,
   RecordingSessionSnapshot,
-  SelfVideoResolutionMode,
   StorageMode,
   UploadSummary,
   UploadSummaryEntry,
@@ -32,7 +30,6 @@ export type {
   RecordingRunConfig,
   RecordingSessionSnapshot,
   RecordingStream,
-  SelfVideoResolutionMode,
   StorageMode,
   UploadSummary,
   UploadSummaryEntry,
@@ -59,13 +56,6 @@ export function normalizeMicMode(value: unknown): MicMode {
   return hasAllowedString(value, VALID_MIC_MODES) ? value : DEFAULT_RECORDING_RUN_CONFIG.micMode;
 }
 
-/** Normalizes persisted self-video resolution mode values to the supported runtime modes. */
-export function normalizeSelfVideoResolutionMode(value: unknown): SelfVideoResolutionMode {
-  return hasAllowedString(value, VALID_SELF_VIDEO_RESOLUTION_MODES)
-    ? value
-    : DEFAULT_RECORDING_RUN_CONFIG.selfVideoResolutionMode;
-}
-
 /** Returns a detached clone of the default run configuration. */
 export function createDefaultRunConfig(): RecordingRunConfig {
   return { ...DEFAULT_RECORDING_RUN_CONFIG };
@@ -83,7 +73,6 @@ export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
       typeof candidate.recordSelfVideo === 'boolean'
         ? candidate.recordSelfVideo
         : DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo,
-    selfVideoResolutionMode: normalizeSelfVideoResolutionMode(candidate.selfVideoResolutionMode),
   };
 }
 
@@ -128,6 +117,22 @@ export function normalizeUploadSummary(value: unknown): UploadSummary | undefine
   };
 }
 
+/** Normalizes session warnings into trimmed, unique strings. */
+export function normalizeWarnings(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const seen = new Set<string>();
+  const normalized = value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) return false;
+      seen.add(entry);
+      return true;
+    });
+
+  return normalized.length ? normalized : undefined;
+}
+
 /** Creates the canonical idle session snapshot used as the safe fallback state. */
 export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
   return {
@@ -149,6 +154,7 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     runConfig,
     uploadSummary: normalizeUploadSummary(candidate.uploadSummary),
     error: typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error : undefined,
+    warnings: normalizeWarnings(candidate.warnings),
     updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
   };
 }

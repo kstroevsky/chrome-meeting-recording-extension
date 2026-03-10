@@ -9,7 +9,7 @@ Current note: when `drive` storage mode is selected the finalized files are uplo
 
 **Transcript saver** – parses Google Meet’s live captions and downloads a timestamped .txt file.
 
-**Tab recorder** – captures Google Meet tab video + audio into a .webm via MediaRecorder.
+**Tab recorder** – captures Google Meet tab video + audio into a .webm via MediaRecorder, with the selected tab preset enforced on the final saved file.
 
 **Direct-to-Disk / Cloud Storage Flow** — stream recording chunks directly to Origin Private File System (OPFS) during capture to prevent memory crashes on 2-hour+ meetings, then finalize to local download or Drive upload. Memory is strictly bounded to a 5MB buffer!
 Current note: Drive uploads happen during finalization after stop, not as live in-meeting cloud streaming.
@@ -127,11 +127,12 @@ This compiles TypeScript via `ts-loader` and copies the HTML/manifest to `dist/`
         - Once granted, the label changes to `Microphone Enabled`.
       - **Microphone Mode**: `Off` skips microphone capture, `Mix into tab recording` blends your mic into the main tab file, and `Save separately` creates an additional `google-meet-mic-<meeting-id>-<timestamp>.webm`.
       - **Start Recording**: Starts a recording of the current tab (video + system audio) using the selected storage, microphone, and optional self-video settings.
+        - The extension captures the tab at a stable ceiling, tries live downscale for performance, and if that live path cannot deliver the requested preset it downscales the finalized tab file before save/upload.
       - **Record my camera separately**: If checked, starts an additional camera-only recorder and saves `google-meet-self-video-<meeting-id>-<timestamp>.webm`. If camera permission is missing, a camera setup tab opens.
-        - When the extension opens the webcam itself, it prefers `1920x1080` at `30fps`.
-        - The actual recorded resolution still depends on Chrome, Meet camera usage, and the camera hardware. If Meet already owns the webcam, Chrome may deliver a lower shared resolution.
-        - The offscreen recorder logs the requested and delivered camera settings so resolution mismatches are visible during debugging.
-      - **Stop Recording** (older wording: `Stop & Download`): Finalizes the recording, then downloads it locally or uploads it to Drive depending on the selected storage mode.
+        - Camera quality is controlled only by the extension settings; Meet's own video setting does not change the separate camera file.
+        - The extension always tries the same fallback ladder for camera capture: exact preset size/FPS, then exact size with bounded FPS, then best-effort preset constraints.
+        - The actual recorded resolution still depends on Chrome, camera sharing, and hardware limits. If the browser delivers a lower profile, the popup/debug status shows a warning instead of hiding the mismatch.
+      - **Stop Recording** (older wording: `Stop & Download`): Releases the extension-owned camera immediately, then finalizes the recording and downloads it locally or uploads it to Drive depending on the selected storage mode.
 
 > The extension shows a “REC” badge while recording. All files are saved locally via Chrome’s Downloads API.
 Current note: in `drive` mode the popup may pass through an `uploading` phase after stop before returning to idle.
@@ -174,6 +175,7 @@ Current note: in `drive` mode the popup may pass through an `uploading` phase af
 │  │  ├─ RecorderProfiles.ts
 │  │  ├─ RecorderSupport.ts
 │  │  ├─ RecordingFinalizer.ts
+│  │  ├─ TabArtifactPostprocessor.ts
 │  │  ├─ errors.ts
 │  │  └─ drive/                     # Drive upload helpers
 │  ├─ popup/

@@ -26,7 +26,12 @@ import {
   setStatusText,
   type PopupElements,
 } from './popupView';
-import { describeRunConfig, formatUploadFallbackMessage, STATUS_BY_PHASE } from './popupStatus';
+import {
+  describeRecordingWarnings,
+  describeRunConfig,
+  formatUploadFallbackMessage,
+  STATUS_BY_PHASE,
+} from './popupStatus';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
@@ -43,7 +48,6 @@ import {
   type RecordingPhase,
   type RecordingRunConfig,
   type RecordingSessionSnapshot,
-  type SelfVideoResolutionMode,
   type UploadSummary,
 } from '../shared/recording';
 
@@ -57,6 +61,7 @@ export class PopupController {
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
   private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
+  private activeWarnings: string[] = [];
   private idleDefaultRunConfig: RecordingRunConfig = createDefaultRunConfig();
 
   /** Binds popup DOM elements to the controller that owns interaction logic. */
@@ -98,12 +103,14 @@ export class PopupController {
 
   /** Recomputes the persistent phase text shown when no toast is active. */
   private syncPhaseStatus(phase: RecordingPhase) {
+    const warning = describeRecordingWarnings(this.activeWarnings);
     if (phase === 'idle') {
-      this.persistentStatus = '';
+      this.persistentStatus = warning;
     } else {
       const run = describeRunConfig(this.activeRunConfig);
-      const suffix = run ? ` ${run}` : '';
-      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${suffix}`;
+      const runSuffix = run ? ` ${run}` : '';
+      const warningSuffix = warning ? ` ${warning}` : '';
+      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${runSuffix}${warningSuffix}`;
     }
     if (!this.statusTimer) {
       this.setStatus(this.persistentStatus);
@@ -114,6 +121,11 @@ export class PopupController {
   private setActiveRunConfig(config: RecordingRunConfig | null) {
     this.activeRunConfig = config;
     applyRunConfigToForm(this.el, config);
+  }
+
+  /** Stores active recording warnings so they can be shown in the popup status line. */
+  private setActiveWarnings(warnings?: string[]) {
+    this.activeWarnings = warnings ? [...warnings] : [];
   }
 
   /** Shows a temporary toast before restoring the persistent phase status. */
@@ -139,6 +151,7 @@ export class PopupController {
       ? { ...this.idleDefaultRunConfig }
       : getRunConfigOrDefault(snapshot.runConfig);
     this.setActiveRunConfig(runConfig);
+    this.setActiveWarnings(snapshot.warnings);
     this.setUI(snapshot.phase);
 
     if (snapshot.phase === 'failed' && snapshot.error) {
@@ -291,7 +304,7 @@ export class PopupController {
 
         await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
-        let runConfig = buildRunConfigFromForm(this.el);
+        const runConfig = buildRunConfigFromForm(this.el);
         const { micMode, recordSelfVideo } = runConfig;
 
         const micReady = await this.mic.ensureReadyForRecording(micMode);
@@ -303,11 +316,6 @@ export class PopupController {
             throw new Error(CAMERA_PERMISSION_ERROR);
           }
         }
-
-        runConfig = {
-          ...runConfig,
-          selfVideoResolutionMode: await this.resolveSelfVideoResolutionMode(tab.id, recordSelfVideo),
-        };
 
         const resp = await sendToBackground({
           type: 'START_RECORDING',
@@ -345,29 +353,5 @@ export class PopupController {
         this.inFlight = false;
       }
     });
-  }
-
-  /** Chooses the self-video constraint mode based on the current Meet camera state when available. */
-  private async resolveSelfVideoResolutionMode(
-    tabId: number,
-    recordSelfVideo: boolean
-  ): Promise<SelfVideoResolutionMode> {
-    if (!recordSelfVideo) return 'best-effort';
-
-    try {
-      const provider = await sendToContent(tabId, { type: 'GET_PROVIDER_INFO' });
-      if (provider?.providerId === 'google-meet' && provider.localCameraEnabled === false) {
-        console.log('[popup] Meet camera is off; using strict-preferred self video mode');
-        return 'strict-preferred';
-      }
-
-      if (provider?.providerId === 'google-meet' && provider.localCameraEnabled == null) {
-        console.log('[popup] Meet camera state unavailable; using best-effort self video mode');
-      }
-    } catch (error) {
-      console.log('[popup] Failed to read Meet camera state; using best-effort self video mode', error);
-    }
-
-    return 'best-effort';
   }
 }

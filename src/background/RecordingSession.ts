@@ -10,6 +10,7 @@ import {
   normalizePhase,
   normalizeSessionSnapshot,
   normalizeUploadSummary,
+  normalizeWarnings,
   type RecordingRunConfig,
   type RecordingSessionSnapshot,
   type UploadSummary,
@@ -43,6 +44,7 @@ export class RecordingSession {
     this.snapshot = {
       phase: 'starting',
       runConfig,
+      warnings: undefined,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -64,11 +66,12 @@ export class RecordingSession {
   }
 
   /** Clears run state and moves the session back to idle. */
-  markIdle(uploadSummary?: UploadSummary): RecordingSessionSnapshot {
+  markIdle(uploadSummary?: UploadSummary, warnings?: string[]): RecordingSessionSnapshot {
     this.snapshot = {
       phase: 'idle',
       runConfig: null,
       uploadSummary: normalizeUploadSummary(uploadSummary),
+      warnings: normalizeWarnings(warnings),
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -80,6 +83,7 @@ export class RecordingSession {
       phase: 'failed',
       runConfig: this.snapshot.runConfig,
       error,
+      warnings: this.snapshot.warnings,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -90,16 +94,19 @@ export class RecordingSession {
     phase: unknown;
     uploadSummary?: unknown;
     error?: unknown;
+    warnings?: unknown;
   }): RecordingSessionSnapshot {
     const phase = normalizePhase(update.phase);
     const error = typeof update.error === 'string' && update.error.trim() ? update.error : undefined;
     const uploadSummary = normalizeUploadSummary(update.uploadSummary);
+    const warnings = normalizeWarnings(update.warnings);
 
     if (phase === 'idle') {
-      return this.markIdle(uploadSummary);
+      return this.markIdle(uploadSummary, warnings);
     }
 
     if (phase === 'failed') {
+      this.snapshot.warnings = warnings;
       return this.fail(error ?? 'Recording runtime failed');
     }
 
@@ -107,6 +114,7 @@ export class RecordingSession {
       phase,
       runConfig: this.snapshot.runConfig,
       error,
+      warnings,
       uploadSummary: undefined,
       updatedAt: Date.now(),
     };
@@ -118,6 +126,7 @@ export class RecordingSession {
     this.snapshot = {
       phase,
       runConfig: this.snapshot.runConfig,
+      warnings: this.snapshot.warnings,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -144,6 +153,7 @@ function cloneSession(snapshot: RecordingSessionSnapshot): RecordingSessionSnaps
         }
       : undefined,
     error: snapshot.error,
+    warnings: snapshot.warnings ? [...snapshot.warnings] : undefined,
     updatedAt: snapshot.updatedAt,
   };
 }

@@ -29,6 +29,12 @@ export function describeRunConfig(config: RecordingRunConfig | null): string {
   return `${mode} ${mic} ${camera}`.trim();
 }
 
+/** Formats the first active warning for compact popup display. */
+export function describeRecordingWarnings(warnings?: string[]): string {
+  const first = warnings?.find((warning) => warning.trim());
+  return first ? `Warning: ${first}` : '';
+}
+
 /** Builds the post-upload alert when some files fell back to local downloads. */
 export function formatUploadFallbackMessage(summary: UploadSummary): string | null {
   if (!summary.localFallbacks.length) return null;

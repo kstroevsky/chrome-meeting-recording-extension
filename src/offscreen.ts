@@ -63,6 +63,7 @@ let reconnectEnabled = true;
 let currentStorageMode: 'local' | 'drive' = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 let currentPhase: RecordingPhase = 'idle';
 let currentRunConfig: RecordingRunConfig | null = null;
+let currentWarnings: string[] = [];
 let finalizeRunPromise: Promise<void> | null = null;
 let expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
 let runtimeSampleCount = 0;
@@ -105,7 +106,11 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   });
 
   port.postMessage({ type: 'OFFSCREEN_READY' });
-  port.postMessage({ type: 'OFFSCREEN_STATE', phase: currentPhase });
+  port.postMessage({
+    type: 'OFFSCREEN_STATE',
+    phase: currentPhase,
+    ...(currentWarnings.length ? { warnings: currentWarnings } : {}),
+  });
   L.log('READY signaled via Port');
 
   portRef = port;
@@ -129,7 +134,25 @@ function pushState(phase: RecordingPhase, extra?: Record<string, any>) {
     expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
   }
   currentPhase = phase;
-  getPort().postMessage({ type: 'OFFSCREEN_STATE', phase, ...(extra ?? {}) });
+  getPort().postMessage({
+    type: 'OFFSCREEN_STATE',
+    phase,
+    ...(currentWarnings.length ? { warnings: currentWarnings } : {}),
+    ...(extra ?? {}),
+  });
+}
+
+/** Clears any per-run warnings before a new recording attempt starts. */
+function clearWarnings() {
+  currentWarnings = [];
+}
+
+/** Appends a unique warning and immediately republishes the latest recorder state. */
+function reportWarning(warning: string) {
+  const normalized = warning.trim();
+  if (!normalized || currentWarnings.includes(normalized)) return;
+  currentWarnings = [...currentWarnings, normalized];
+  pushState(currentPhase);
 }
 
 /** Requests a background-side local download for a finalized artifact. */
@@ -149,6 +172,7 @@ const finalizer = new RecordingFinalizer({
   warn: L.warn,
   requestSave,
   getDriveToken,
+  reportWarning,
 });
 
 /** Runs the full stop -> seal -> save/upload pipeline for the current recording run. */
@@ -184,6 +208,7 @@ const engine = new RecorderEngine({
   warn: L.warn,
   error: L.error,
   notifyPhase: pushState,
+  reportWarning,
   openTarget: async (filename: string) => {
     try {
       return await LocalFileTarget.create(filename);
@@ -242,6 +267,7 @@ function wirePortHandlers(port: chrome.runtime.Port) {
         await loadExtensionSettingsFromStorage();
         currentRunConfig = runConfig;
         currentStorageMode = runConfig.storageMode;
+        clearWarnings();
         pushState('starting');
 
         try {

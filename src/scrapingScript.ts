@@ -306,10 +306,6 @@ class TranscriptCollector {
         sendResponse({ ok: true });
         return true;
       }
-      if (msg.type === 'GET_PROVIDER_INFO') {
-        sendResponse(this.provider.getProviderInfo(window.location, document));
-        return true;
-      }
       return false;
     });
   }

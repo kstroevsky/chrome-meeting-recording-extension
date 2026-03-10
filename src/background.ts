@@ -19,7 +19,7 @@ import { RecordingSession } from './background/RecordingSession';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
 import { downloadFile } from './platform/chrome/downloads';
 import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
-import { getMediaStreamIdForTab } from './platform/chrome/tabs';
+import { getCapturedTabs, getMediaStreamIdForTab } from './platform/chrome/tabs';
 import { pokeRuntime } from './platform/chrome/runtime';
 import { makeLogger } from './shared/logger';
 import { broadcastToPopup } from './shared/messages';
@@ -184,6 +184,16 @@ function getStreamIdForTab(tabId: number): Promise<string> {
   return getMediaStreamIdForTab(tabId);
 }
 
+async function findTabCaptureConflict(tabId: number): Promise<chrome.tabCapture.CaptureInfo | null> {
+  try {
+    const captures = await getCapturedTabs();
+    return captures.find((capture) => capture.tabId === tabId && capture.status !== 'stopped' && capture.status !== 'error') ?? null;
+  } catch (error) {
+    L.warn('tabCapture.getCapturedTabs preflight failed; continuing without conflict check', error);
+    return null;
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
   if (isPerfEventMessage(msg)) {
     perfDebugStore.record(msg.entry as PerfEventEntry);
@@ -219,6 +229,16 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.Mess
       const runConfig = normalizeRunConfig(msg.runConfig);
       if (!runConfig) {
         sendResponse(failureResult('Missing or invalid run configuration'));
+        return;
+      }
+
+      const captureConflict = await findTabCaptureConflict(msg.tabId);
+      if (captureConflict) {
+        sendResponse(
+          failureResult(
+            `This tab already has an active tab capture (${captureConflict.status}). Stop the existing capture and try again.`
+          )
+        );
         return;
       }
 
