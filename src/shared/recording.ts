@@ -11,6 +11,7 @@ import {
   NON_IDLE_RECORDING_PHASES,
   RECORDING_SESSION_STORAGE_KEY,
   VALID_MIC_MODES,
+  VALID_SELF_VIDEO_RESOLUTION_MODES,
   VALID_STORAGE_MODES,
 } from './recordingConstants';
 import type {
@@ -18,6 +19,7 @@ import type {
   RecordingPhase,
   RecordingRunConfig,
   RecordingSessionSnapshot,
+  SelfVideoResolutionMode,
   StorageMode,
   UploadSummary,
   UploadSummaryEntry,
@@ -30,6 +32,7 @@ export type {
   RecordingRunConfig,
   RecordingSessionSnapshot,
   RecordingStream,
+  SelfVideoResolutionMode,
   StorageMode,
   UploadSummary,
   UploadSummaryEntry,
@@ -56,6 +59,13 @@ export function normalizeMicMode(value: unknown): MicMode {
   return hasAllowedString(value, VALID_MIC_MODES) ? value : DEFAULT_RECORDING_RUN_CONFIG.micMode;
 }
 
+/** Normalizes persisted self-video resolution mode values to the supported runtime modes. */
+export function normalizeSelfVideoResolutionMode(value: unknown): SelfVideoResolutionMode {
+  return hasAllowedString(value, VALID_SELF_VIDEO_RESOLUTION_MODES)
+    ? value
+    : DEFAULT_RECORDING_RUN_CONFIG.selfVideoResolutionMode;
+}
+
 /** Returns a detached clone of the default run configuration. */
 export function createDefaultRunConfig(): RecordingRunConfig {
   return { ...DEFAULT_RECORDING_RUN_CONFIG };
@@ -73,7 +83,8 @@ export function normalizeRunConfig(value: unknown): RecordingRunConfig | null {
       typeof candidate.recordSelfVideo === 'boolean'
         ? candidate.recordSelfVideo
         : DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo,
-      };
+    selfVideoResolutionMode: normalizeSelfVideoResolutionMode(candidate.selfVideoResolutionMode),
+  };
 }
 
 /** Returns a normalized run config or a cloned default when the input is invalid. */

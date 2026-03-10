@@ -3,6 +3,7 @@ import {
   createDefaultRunConfig,
   getRunConfigOrDefault,
   normalizeMicMode,
+  normalizeSelfVideoResolutionMode,
   normalizeUploadSummary,
 } from '../src/shared/recording';
 
@@ -17,6 +18,11 @@ describe('shared/recording helpers', () => {
     expect(fallback).toEqual(DEFAULT_RECORDING_RUN_CONFIG);
     expect(fallback).not.toBe(DEFAULT_RECORDING_RUN_CONFIG);
     expect(createDefaultRunConfig()).toEqual(DEFAULT_RECORDING_RUN_CONFIG);
+  });
+
+  it('defaults unknown self-video resolution modes back to best-effort', () => {
+    expect(normalizeSelfVideoResolutionMode('strict-preferred')).toBe('strict-preferred');
+    expect(normalizeSelfVideoResolutionMode('invalid')).toBe('best-effort');
   });
 
   it('filters invalid upload summary entries and trims filenames', () => {

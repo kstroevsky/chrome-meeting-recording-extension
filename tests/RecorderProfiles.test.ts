@@ -1,6 +1,7 @@
 import {
   formatSelfVideoProfile,
   getChunkTimesliceMs,
+  getSelfVideoConstraintRequests,
   getDefaultSelfVideoBitrate,
   matchesSelfVideoProfile,
   resolveSelfVideoBitrate,
@@ -50,5 +51,36 @@ describe('RecorderProfiles', () => {
     expect(resolveSelfVideoBitrate(6_000_000, { width: 640, height: 360, frameRate: 15 })).toBe(1_000_000);
     expect(resolveSelfVideoBitrate(6_000_000, { width: 3840, height: 2160, frameRate: 60 })).toBe(6_000_000);
     expect(resolveSelfVideoBitrate(6_000_000, undefined)).toBe(6_000_000);
+  });
+
+  it('builds strict self-video constraint fallbacks only when requested', () => {
+    expect(getSelfVideoConstraintRequests('best-effort')).toEqual([
+      {
+        label: 'best-effort',
+        constraints: SELF_VIDEO_CONSTRAINTS,
+      },
+    ]);
+    expect(getSelfVideoConstraintRequests('strict-preferred')).toEqual([
+      expect.objectContaining({
+        label: 'strict-exact',
+        constraints: expect.objectContaining({
+          width: { exact: 1920 },
+          height: { exact: 1080 },
+          frameRate: { exact: 30 },
+        }),
+      }),
+      expect.objectContaining({
+        label: 'strict-size',
+        constraints: expect.objectContaining({
+          width: { exact: 1920 },
+          height: { exact: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+        }),
+      }),
+      {
+        label: 'best-effort',
+        constraints: SELF_VIDEO_CONSTRAINTS,
+      },
+    ]);
   });
 });

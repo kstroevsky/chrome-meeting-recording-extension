@@ -43,6 +43,7 @@ import {
   type RecordingPhase,
   type RecordingRunConfig,
   type RecordingSessionSnapshot,
+  type SelfVideoResolutionMode,
   type UploadSummary,
 } from '../shared/recording';
 
@@ -290,7 +291,7 @@ export class PopupController {
 
         await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
-        const runConfig = buildRunConfigFromForm(this.el);
+        let runConfig = buildRunConfigFromForm(this.el);
         const { micMode, recordSelfVideo } = runConfig;
 
         const micReady = await this.mic.ensureReadyForRecording(micMode);
@@ -302,6 +303,11 @@ export class PopupController {
             throw new Error(CAMERA_PERMISSION_ERROR);
           }
         }
+
+        runConfig = {
+          ...runConfig,
+          selfVideoResolutionMode: await this.resolveSelfVideoResolutionMode(tab.id, recordSelfVideo),
+        };
 
         const resp = await sendToBackground({
           type: 'START_RECORDING',
@@ -339,5 +345,29 @@ export class PopupController {
         this.inFlight = false;
       }
     });
+  }
+
+  /** Chooses the self-video constraint mode based on the current Meet camera state when available. */
+  private async resolveSelfVideoResolutionMode(
+    tabId: number,
+    recordSelfVideo: boolean
+  ): Promise<SelfVideoResolutionMode> {
+    if (!recordSelfVideo) return 'best-effort';
+
+    try {
+      const provider = await sendToContent(tabId, { type: 'GET_PROVIDER_INFO' });
+      if (provider?.providerId === 'google-meet' && provider.localCameraEnabled === false) {
+        console.log('[popup] Meet camera is off; using strict-preferred self video mode');
+        return 'strict-preferred';
+      }
+
+      if (provider?.providerId === 'google-meet' && provider.localCameraEnabled == null) {
+        console.log('[popup] Meet camera state unavailable; using best-effort self video mode');
+      }
+    } catch (error) {
+      console.log('[popup] Failed to read Meet camera state; using best-effort self video mode', error);
+    }
+
+    return 'best-effort';
   }
 }

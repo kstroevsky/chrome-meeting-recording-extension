@@ -2,6 +2,7 @@ import { CameraPermissionService } from '../src/popup/CameraPermissionService';
 import { MicPermissionService } from '../src/popup/MicPermissionService';
 import { PopupController } from '../src/popup/PopupController';
 import type { RecordingRunConfig } from '../src/shared/recording';
+import type { MeetingProviderInfo } from '../src/shared/provider';
 
 jest.mock('../src/popup/MicPermissionService');
 jest.mock('../src/popup/CameraPermissionService');
@@ -11,12 +12,14 @@ describe('PopupController', () => {
   let elements: any;
   let mockSendMessage: jest.Mock;
   let mockTabsQuery: jest.Mock;
+  let mockTabSendMessage: jest.Mock;
 
   beforeEach(() => {
     const makeRunConfig = (overrides: Partial<RecordingRunConfig> = {}): RecordingRunConfig => ({
       storageMode: 'local',
       micMode: 'off',
       recordSelfVideo: false,
+      selfVideoResolutionMode: 'best-effort',
       ...overrides,
     });
     (global as any).__TEST_RUN_CONFIG__ = makeRunConfig;
@@ -29,6 +32,7 @@ describe('PopupController', () => {
       stopBtn: document.createElement('button'),
       storageModeSelect: document.createElement('select'),
       recordSelfVideoCheckbox: document.createElement('input'),
+      openSettingsBtn: document.createElement('button'),
       openDiagnosticsBtn: document.createElement('button'),
       recordingStatusEl: document.createElement('div'),
     };
@@ -57,6 +61,19 @@ describe('PopupController', () => {
 
     mockTabsQuery = chrome.tabs.query as jest.Mock;
     mockTabsQuery.mockResolvedValue([{ id: 101, url: 'https://meet.google.com/abc-defg' }]);
+    mockTabSendMessage = chrome.tabs.sendMessage as jest.Mock;
+    mockTabSendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+      if (message.type === 'RESET_TRANSCRIPT') return { ok: true };
+      if (message.type === 'GET_PROVIDER_INFO') {
+        return {
+          providerId: 'google-meet',
+          meetingId: 'abc-defg',
+          supportsCaptions: true,
+          localCameraEnabled: null,
+        } satisfies MeetingProviderInfo;
+      }
+      return undefined;
+    });
 
     (CameraPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(true);
     (MicPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(true);
@@ -82,6 +99,7 @@ describe('PopupController', () => {
           storageMode: 'drive',
           micMode: 'mixed',
           recordSelfVideo: true,
+          selfVideoResolutionMode: 'best-effort',
         },
         updatedAt: Date.now(),
       },
@@ -127,6 +145,7 @@ describe('PopupController', () => {
 
     expect(mockTabsQuery).toHaveBeenCalled();
     expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(101, { type: 'RESET_TRANSCRIPT' });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(101, { type: 'GET_PROVIDER_INFO' });
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
       type: 'START_RECORDING',
       tabId: 101,
@@ -134,6 +153,7 @@ describe('PopupController', () => {
         storageMode: 'drive',
         micMode: 'mixed',
         recordSelfVideo: true,
+        selfVideoResolutionMode: 'best-effort',
       },
     });
 
@@ -170,6 +190,54 @@ describe('PopupController', () => {
         storageMode: 'local',
         micMode: 'off',
         recordSelfVideo: false,
+        selfVideoResolutionMode: 'best-effort',
+      },
+    });
+  });
+
+  it('uses strict-preferred self video mode when Meet camera is off', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    mockSendMessage.mockClear();
+    mockTabSendMessage.mockClear();
+    mockSendMessage.mockResolvedValueOnce({
+      ok: true,
+      session: {
+        phase: 'recording',
+        runConfig: (global as any).__TEST_RUN_CONFIG__({
+          recordSelfVideo: true,
+          selfVideoResolutionMode: 'strict-preferred',
+        }),
+        updatedAt: Date.now(),
+      },
+    });
+    mockTabSendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+      if (message.type === 'RESET_TRANSCRIPT') return { ok: true };
+      if (message.type === 'GET_PROVIDER_INFO') {
+        return {
+          providerId: 'google-meet',
+          meetingId: 'abc-defg',
+          supportsCaptions: true,
+          localCameraEnabled: false,
+        } satisfies MeetingProviderInfo;
+      }
+      return undefined;
+    });
+
+    elements.storageModeSelect.value = 'local';
+    elements.micModeSelect.value = 'off';
+    elements.recordSelfVideoCheckbox.checked = true;
+    elements.startBtn.click();
+    await new Promise(process.nextTick);
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'START_RECORDING',
+      tabId: 101,
+      runConfig: {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: true,
+        selfVideoResolutionMode: 'strict-preferred',
       },
     });
   });
@@ -209,6 +277,7 @@ describe('PopupController', () => {
       storageMode: 'drive',
       micMode: 'separate',
       recordSelfVideo: true,
+      selfVideoResolutionMode: 'best-effort',
     });
     (controller as any).setUI('uploading');
 
@@ -216,6 +285,18 @@ describe('PopupController', () => {
     expect(elements.stopBtn.disabled).toBe(true);
     expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
     expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
+  });
+
+  it('opens the settings page from the gear button', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+
+    elements.openSettingsBtn.click();
+    await new Promise(process.nextTick);
+
+    expect(chrome.tabs.create).toHaveBeenCalledWith({
+      url: 'chrome-extension://mock-id/settings.html',
+    });
   });
 
   it('shows final upload summary when some files fell back to local download', async () => {

@@ -22,13 +22,17 @@ import {
   resolveSelfVideoBitrate,
 } from './RecorderProfiles';
 import { describeMediaError } from './RecorderSupport';
+import { createResizedVideoStream, readStreamVideoMetrics } from './RecorderVideoResizer';
+import { getTabOutputSettings } from '../shared/extensionSettings';
 import { PERF_FLAGS, debugPerf, logPerf, nowMs, roundMs } from '../shared/perf';
+import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 import {
   DEFAULT_RECORDING_RUN_CONFIG,
   type MicMode,
   type RecordingPhase,
   type RecordingRunConfig,
   type RecordingStream,
+  type SelfVideoResolutionMode,
 } from '../shared/recording';
 import { TIMEOUTS } from '../shared/timeouts';
 
@@ -111,10 +115,12 @@ export class RecorderEngine {
   private tabRecordingStream: MediaStream | null = null;
   private micStream: MediaStream | null = null;
   private selfVideoStream: MediaStream | null = null;
+  private cleanupResizedTabStream: (() => void) | null = null;
 
   private suffix = 'google-meet';
   private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
   private recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
+  private selfVideoResolutionMode: SelfVideoResolutionMode = DEFAULT_RECORDING_RUN_CONFIG.selfVideoResolutionMode;
 
   private playback: AudioPlaybackBridge | null = null;
   private mixedAudio: MixedAudioMixer | null = null;
@@ -155,12 +161,14 @@ export class RecorderEngine {
     const runId = this.runId;
     this.micMode = options.micMode;
     this.recordSelfVideo = options.recordSelfVideo;
+    this.selfVideoResolutionMode = options.selfVideoResolutionMode;
     const runStartedAt = nowMs();
 
     try {
       const baseStream = await captureTabStreamFromId(streamId, this.deps);
       this.tabCaptureStream = baseStream;
       this.assertVideoTrack(baseStream);
+      this.deps.log('tab source stream acquired:', readStreamVideoMetrics(baseStream));
       await this.ensureAudiblePlaybackIfSuppressed(baseStream);
       this.suffix = await inferActiveTabSuffix().catch(() => 'google-meet');
       this.attachTabEndedHandler(baseStream);
@@ -176,6 +184,7 @@ export class RecorderEngine {
         this.mixedAudio = new MixedAudioMixer(this.deps);
         tabRecorderStream = await this.mixedAudio.create(baseStream, micForRun!);
       }
+      tabRecorderStream = await this.prepareTabRecorderStream(tabRecorderStream);
       this.tabRecordingStream = tabRecorderStream;
 
       const tabStarted = this.startTabRecorder(tabRecorderStream, runStartedAt);
@@ -248,6 +257,73 @@ export class RecorderEngine {
       if (this.micRecorder && this.isRecording()) { try { this.micRecorder.stop(); } catch {} }
       if (this.selfVideoRecorder && this.isRecording()) { try { this.selfVideoRecorder.stop(); } catch {} }
     });
+  }
+
+  /** Downscales the tab recorder input only when the selected output preset is below the capture ceiling. */
+  private async prepareTabRecorderStream(sourceStream: MediaStream): Promise<MediaStream> {
+    const tabOutput = getTabOutputSettings();
+    const target = {
+      width: tabOutput.maxWidth,
+      height: tabOutput.maxHeight,
+      frameRate: Math.min(
+        tabOutput.maxFrameRate,
+        EXTENSION_DEFAULTS.capture.tab.maxFrameRate
+      ),
+    };
+    const shouldAttemptResize =
+      target.width < EXTENSION_DEFAULTS.capture.tab.maxWidth
+      || target.height < EXTENSION_DEFAULTS.capture.tab.maxHeight;
+
+    if (!shouldAttemptResize) {
+      this.logTabRecorderInput(false, sourceStream, sourceStream, target);
+      return sourceStream;
+    }
+
+    try {
+      const resized = await createResizedVideoStream(sourceStream, target);
+      this.cleanupResizedTabStream = resized.cleanup;
+      this.logTabRecorderInput(resized.resized, sourceStream, resized.stream, target, resized.source, resized.output);
+      return resized.stream;
+    } catch (error) {
+      this.cleanupTabResizer();
+      this.deps.warn(
+        'Tab live resize setup failed; continuing with the original stream',
+        describeMediaError(error)
+      );
+      this.logTabRecorderInput(false, sourceStream, sourceStream, target);
+      return sourceStream;
+    }
+  }
+
+  /** Logs the delivered tab source and final recorder-input stream dimensions for diagnostics. */
+  private logTabRecorderInput(
+    resized: boolean,
+    sourceStream: MediaStream,
+    outputStream: MediaStream,
+    target: { width: number; height: number; frameRate: number },
+    sourceMetrics = readStreamVideoMetrics(sourceStream),
+    outputMetrics = readStreamVideoMetrics(outputStream)
+  ): void {
+    this.deps.log('tab recorder input stream:', {
+      resized,
+      sourceWidth: sourceMetrics.width,
+      sourceHeight: sourceMetrics.height,
+      sourceFrameRate: sourceMetrics.frameRate,
+      width: outputMetrics.width,
+      height: outputMetrics.height,
+      frameRate: outputMetrics.frameRate,
+      targetWidth: target.width,
+      targetHeight: target.height,
+      targetFrameRate: target.frameRate,
+    });
+  }
+
+  /** Tears down the live tab-resize pipeline without touching the original capture stream. */
+  private cleanupTabResizer(): void {
+    try {
+      this.cleanupResizedTabStream?.();
+    } catch {}
+    this.cleanupResizedTabStream = null;
   }
 
   /** Acquires a microphone stream and rejects stale streams from an old run. */
@@ -344,6 +420,7 @@ export class RecorderEngine {
 
     recorder.onerror = (e: any) => {
       this.deps.error('Tab MediaRecorder error', e);
+      this.cleanupTabResizer();
       this.safeStopStream(this.tabCaptureStream);
       this.safeStopStream(this.tabRecordingStream);
       if (this.micRecorder && this.micRecorder.state !== 'inactive') {
@@ -474,7 +551,11 @@ export class RecorderEngine {
 
   /** Starts the separate self-video recorder when camera capture is enabled. */
   private async tryStartSelfVideoRecorder(runId: number, runStartedAt: number): Promise<void> {
-    const selfVideo = await maybeGetSelfVideoStream(this.recordSelfVideo, this.deps);
+    const selfVideo = await maybeGetSelfVideoStream(
+      this.recordSelfVideo,
+      this.deps,
+      this.selfVideoResolutionMode
+    );
     if (
       !selfVideo?.getVideoTracks().length ||
       this.runId !== runId ||
@@ -499,6 +580,7 @@ export class RecorderEngine {
     const track = selfVideo.getVideoTracks()[0];
     const settings = track?.getSettings?.();
     logPerf(this.deps.log, 'recorder', 'self_video_stream_acquired', {
+      resolutionMode: this.selfVideoResolutionMode,
       width: settings?.width,
       height: settings?.height,
       frameRate: settings?.frameRate,
@@ -614,6 +696,7 @@ export class RecorderEngine {
     if (this.activeRecorders === 0) {
       const artifacts = [...this.finalizedArtifacts];
       this.state = 'idle';
+      this.cleanupTabResizer();
       this.safeStopStream(this.tabCaptureStream);
       this.safeStopStream(this.tabRecordingStream);
       this.safeStopStream(this.micStream);
@@ -646,6 +729,7 @@ export class RecorderEngine {
     this.tabRecorder = null;
     this.micRecorder = null;
     this.selfVideoRecorder = null;
+    this.cleanupTabResizer();
     this.safeStopStream(this.tabCaptureStream);
     this.safeStopStream(this.tabRecordingStream);
     this.safeStopStream(this.micStream);
@@ -661,6 +745,7 @@ export class RecorderEngine {
     this.suffix = 'google-meet';
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
+    this.selfVideoResolutionMode = DEFAULT_RECORDING_RUN_CONFIG.selfVideoResolutionMode;
     this.finalizedArtifacts = [];
     this.stopPromise = null;
     this.resolveStop = null;

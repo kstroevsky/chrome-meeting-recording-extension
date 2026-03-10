@@ -334,6 +334,7 @@ export function buildDefaultRunConfigFromSettings(
     storageMode: toStorageMode(settings.basic.recordingMode),
     micMode: settings.basic.microphoneRecordingMode,
     recordSelfVideo: settings.basic.separateCameraCapture,
+    selfVideoResolutionMode: 'best-effort',
   };
 }
 
@@ -353,8 +354,8 @@ export function getSelfVideoProfileSettings(
   };
 }
 
-/** Returns numeric tab-capture constraints derived from the selected resolution preset. */
-export function getTabCaptureSettings(
+/** Returns the numeric tab-output target derived from the selected resolution preset. */
+export function getTabOutputSettings(
   settings: Readonly<ExtensionSettings> = runtimeSettings
 ): TabCaptureSettings {
   const dimensions = getResolutionPresetDimensions(settings.professional.tabResolutionPreset);
@@ -363,6 +364,13 @@ export function getTabCaptureSettings(
     maxHeight: dimensions.height,
     maxFrameRate: settings.professional.tabMaxFrameRate,
   };
+}
+
+/** Preserves the legacy helper name for callers that still expect tab sizing settings. */
+export function getTabCaptureSettings(
+  settings: Readonly<ExtensionSettings> = runtimeSettings
+): TabCaptureSettings {
+  return getTabOutputSettings(settings);
 }
 
 /** Returns microphone capture constraints used when a mic stream is requested. */

@@ -259,7 +259,7 @@
           <label for="self-video-resolution-preset">Camera resolution</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain camera resolution" aria-controls="tooltip-self-video-resolution" aria-expanded="false">?</button>
-            <span id="tooltip-self-video-resolution" class="tooltip-bubble" role="tooltip" hidden>Select the preferred camera capture size. Chrome can still deliver a lower resolution if the device or page cannot supply it.</span>
+            <span id="tooltip-self-video-resolution" class="tooltip-bubble" role="tooltip" hidden>Select the preferred camera capture size. When Meet camera is off, separate camera recording can enforce this preset more strongly. Otherwise Chrome can still deliver a lower resolution.</span>
           </span>
         </div>
         <select id="self-video-resolution-preset">
@@ -305,7 +305,7 @@
           <label for="tab-resolution-preset">Tab resolution</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab resolution" aria-controls="tooltip-tab-resolution" aria-expanded="false">?</button>
-            <span id="tooltip-tab-resolution" class="tooltip-bubble" role="tooltip" hidden>Sets the maximum size requested for the captured tab video. Lower values reduce file size and capture load.</span>
+            <span id="tooltip-tab-resolution" class="tooltip-bubble" role="tooltip" hidden>Sets the final recorded tab size. The extension captures the tab at a higher ceiling first, then downscales live when this preset is smaller.</span>
           </span>
         </div>
         <select id="tab-resolution-preset">
@@ -319,7 +319,7 @@
           <label for="tab-max-frame-rate">Tab capture max frame rate (FPS)</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab frame rate" aria-controls="tooltip-tab-max-frame-rate" aria-expanded="false">?</button>
-            <span id="tooltip-tab-max-frame-rate" class="tooltip-bubble" role="tooltip" hidden>Caps the requested tab video frame rate. Lower values reduce CPU use and output size.</span>
+            <span id="tooltip-tab-max-frame-rate" class="tooltip-bubble" role="tooltip" hidden>Caps the preferred tab frame rate. Chrome tab capture tops out at 30 FPS, and lower values can reduce CPU use and file size.</span>
           </span>
         </div>
         <input id="tab-max-frame-rate" type="number" min="1" max="120" />

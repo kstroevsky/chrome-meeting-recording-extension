@@ -192,6 +192,9 @@ File: `src/offscreen/RecorderEngine.ts`
   - MIME selection
   - chunk timeslice policy
   - adaptive self-video bitrate policy
+- `src/offscreen/RecorderVideoResizer.ts`
+  - live tab downscale before `MediaRecorder`
+  - hidden `video -> canvas` pipeline for deterministic output size
 - `src/offscreen/RecorderSupport.ts`
   - media error formatting
 
@@ -211,9 +214,11 @@ Self-video profiles:
   - recorder diagnostics log both the requested profile and the delivered track settings
 
 Tab capture profiles:
-- preset-based max capture size
+- preset-based recorded output size
   - settings page offers `640x360`, `854x480`, `1280x720`, and `1920x1080`
-  - recorder still consumes numeric `maxWidth` / `maxHeight` values derived from the selected preset
+  - tab acquisition still requests a stable high ceiling up to `1920x1080`
+  - when the selected preset is smaller than the delivered tab stream, the offscreen document downsizes the video live before `MediaRecorder` starts
+  - visual detail still depends on what Meet rendered into the tab before the extension captured it
 
 #### Microphone Modes
 - `off`

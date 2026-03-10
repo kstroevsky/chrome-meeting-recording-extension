@@ -5,7 +5,7 @@
  */
 
 import { PERF_FLAGS, clamp } from '../shared/perf';
-import type { MicMode } from '../shared/recording';
+import type { MicMode, SelfVideoResolutionMode } from '../shared/recording';
 import {
   DEFAULT_EXTENSION_SETTINGS,
   getChunkingSettings,
@@ -38,6 +38,36 @@ function buildConstraints(profile: {
   } as any;
 }
 
+/** Converts a requested self-video profile into strict exact-dimensions constraints. */
+function buildStrictExactConstraints(profile: {
+  width: number;
+  height: number;
+  frameRate: number;
+}): MediaTrackConstraints {
+  return {
+    resizeMode: 'crop-and-scale' as any,
+    width: { exact: profile.width },
+    height: { exact: profile.height },
+    frameRate: { exact: profile.frameRate },
+  } as any;
+}
+
+/** Converts a requested self-video profile into strict width/height constraints with flexible FPS. */
+function buildStrictSizeConstraints(profile: {
+  width: number;
+  height: number;
+  frameRate: number;
+  aspectRatio: number;
+}): MediaTrackConstraints {
+  return {
+    resizeMode: 'crop-and-scale' as any,
+    aspectRatio: { ideal: profile.aspectRatio },
+    width: { exact: profile.width },
+    height: { exact: profile.height },
+    frameRate: { ideal: profile.frameRate, max: profile.frameRate },
+  } as any;
+}
+
 /** Reads the current self-video profile from normalized extension settings. */
 function getCurrentSelfVideoProfile() {
   return getSelfVideoProfileSettings();
@@ -61,6 +91,42 @@ export function getSelfVideoConstraints(): MediaTrackConstraints {
 }
 
 export const SELF_VIDEO_CONSTRAINTS: MediaTrackConstraints = buildConstraints(SELF_VIDEO_PROFILE);
+
+export type SelfVideoConstraintRequest = {
+  label: 'best-effort' | 'strict-exact' | 'strict-size';
+  constraints: MediaTrackConstraints;
+};
+
+/** Returns ordered self-video getUserMedia attempts for the selected resolution mode. */
+export function getSelfVideoConstraintRequests(
+  mode: SelfVideoResolutionMode = 'best-effort'
+): SelfVideoConstraintRequest[] {
+  const profile = getCurrentSelfVideoProfile();
+
+  if (mode === 'strict-preferred') {
+    return [
+      {
+        label: 'strict-exact',
+        constraints: buildStrictExactConstraints(profile),
+      },
+      {
+        label: 'strict-size',
+        constraints: buildStrictSizeConstraints(profile),
+      },
+      {
+        label: 'best-effort',
+        constraints: buildConstraints(profile),
+      },
+    ];
+  }
+
+  return [
+    {
+      label: 'best-effort',
+      constraints: buildConstraints(profile),
+    },
+  ];
+}
 
 /** Returns the minimum bitrate floor used by adaptive self-video bitrate logic. */
 function getCurrentSelfVideoMinBitrate(): number {

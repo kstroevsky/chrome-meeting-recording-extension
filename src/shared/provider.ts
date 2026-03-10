@@ -10,4 +10,5 @@ export type MeetingProviderInfo = {
   providerId: MeetingProviderId;
   meetingId: string | null;
   supportsCaptions: boolean;
+  localCameraEnabled?: boolean | null;
 };

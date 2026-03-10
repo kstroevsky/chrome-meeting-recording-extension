@@ -9,11 +9,13 @@ export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'u
 export type RecordingStream = 'tab' | 'mic' | 'selfVideo';
 export type StorageMode = 'local' | 'drive';
 export type MicMode = 'off' | 'mixed' | 'separate';
+export type SelfVideoResolutionMode = 'best-effort' | 'strict-preferred';
 
 export type RecordingRunConfig = {
   storageMode: StorageMode;
   micMode: MicMode;
   recordSelfVideo: boolean;
+  selfVideoResolutionMode: SelfVideoResolutionMode;
 };
 
 export type UploadSummaryEntry = {

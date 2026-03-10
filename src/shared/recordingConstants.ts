@@ -5,7 +5,13 @@
  * helpers.
  */
 
-import type { MicMode, RecordingPhase, RecordingRunConfig, StorageMode } from './recordingTypes';
+import type {
+  MicMode,
+  RecordingPhase,
+  RecordingRunConfig,
+  SelfVideoResolutionMode,
+  StorageMode,
+} from './recordingTypes';
 
 type RecordingModeDefault = 'opfs' | 'drive';
 
@@ -18,6 +24,7 @@ const CONFIGURABLE_RUN_DEFAULTS = Object.freeze({
 
 const DEFAULT_STORAGE_MODE: StorageMode =
   CONFIGURABLE_RUN_DEFAULTS.recordingMode === 'opfs' ? 'local' : 'drive';
+const DEFAULT_SELF_VIDEO_RESOLUTION_MODE: SelfVideoResolutionMode = 'best-effort';
 
 // Single control point for extension default behavior.
 export const EXTENSION_DEFAULTS = Object.freeze({
@@ -26,6 +33,7 @@ export const EXTENSION_DEFAULTS = Object.freeze({
     storageMode: DEFAULT_STORAGE_MODE,
     micMode: CONFIGURABLE_RUN_DEFAULTS.microphoneRecordingMode,
     recordSelfVideo: CONFIGURABLE_RUN_DEFAULTS.separateCameraCapture,
+    selfVideoResolutionMode: DEFAULT_SELF_VIDEO_RESOLUTION_MODE,
   }) satisfies Readonly<RecordingRunConfig>,
   capture: Object.freeze({
     tab: Object.freeze({
@@ -61,3 +69,4 @@ export const BUSY_RECORDING_PHASES = ['starting', 'recording', 'stopping', 'uplo
 export const NON_IDLE_RECORDING_PHASES = ['starting', 'recording', 'stopping', 'uploading', 'failed'] as const satisfies readonly RecordingPhase[];
 export const VALID_STORAGE_MODES = ['local', 'drive'] as const satisfies readonly StorageMode[];
 export const VALID_MIC_MODES = ['off', 'mixed', 'separate'] as const satisfies readonly MicMode[];
+export const VALID_SELF_VIDEO_RESOLUTION_MODES = ['best-effort', 'strict-preferred'] as const satisfies readonly SelfVideoResolutionMode[];

@@ -297,7 +297,7 @@ class TranscriptCollector {
       if (msg.type === 'GET_TRANSCRIPT') {
         sendResponse({
           transcript: this.getTranscriptText(),
-          provider: this.provider.getProviderInfo(window.location),
+          provider: this.provider.getProviderInfo(window.location, document),
         });
         return true;
       }
@@ -307,7 +307,7 @@ class TranscriptCollector {
         return true;
       }
       if (msg.type === 'GET_PROVIDER_INFO') {
-        sendResponse(this.provider.getProviderInfo(window.location));
+        sendResponse(this.provider.getProviderInfo(window.location, document));
         return true;
       }
       return false;
