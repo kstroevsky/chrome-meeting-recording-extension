@@ -5,12 +5,13 @@
  */
 
 import { PERF_FLAGS, clamp } from '../shared/perf';
-import type { MicMode } from '../shared/recording';
 import {
   DEFAULT_EXTENSION_SETTINGS,
   getChunkingSettings,
   getSelfVideoProfileSettings,
 } from '../shared/extensionSettings';
+
+export type RecorderChunkStream = 'tab' | 'mic' | 'selfVideo';
 
 const DEFAULT_SELF_VIDEO_PROFILE = getSelfVideoProfileSettings(DEFAULT_EXTENSION_SETTINGS);
 
@@ -143,10 +144,19 @@ export function getAudioMime(): string {
   return getSupportedMime('audio/webm;codecs=opus', 'audio/webm');
 }
 
-/** Returns the recorder timeslice for the current run shape and perf flags. */
-export function getChunkTimesliceMs(micMode: MicMode, recordSelfVideo: boolean): number {
+/**
+ * Returns the recorder timeslice for one stream.
+ *
+ * Reliability rule: keep the main tab recorder on the shorter cadence so more
+ * data is persisted sooner. The secondary self-video recorder can safely use
+ * the longer cadence to reduce OPFS write churn. The mic recorder stays on the
+ * shorter cadence unless the perf flag explicitly opts into larger chunks.
+ */
+export function getChunkTimesliceMs(stream: RecorderChunkStream): number {
   const chunking = getChunkingSettings();
-  if (PERF_FLAGS.extendedTimeslice && (micMode !== 'off' || recordSelfVideo)) {
+  if (stream === 'tab') return chunking.extendedTimesliceMs;
+  if (stream === 'selfVideo') return chunking.extendedTimesliceMs;
+  if (PERF_FLAGS.extendedTimeslice) {
     return chunking.extendedTimesliceMs;
   }
   return chunking.defaultTimesliceMs;

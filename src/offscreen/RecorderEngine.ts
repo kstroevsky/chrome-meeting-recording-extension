@@ -541,7 +541,7 @@ export class RecorderEngine {
   private async startTabRecorder(recordingStream: MediaStream, runStartedAt: number): Promise<void> {
     const mime = getVideoMime();
     let started = false;
-    const timesliceMs = getChunkTimesliceMs(this.micMode, this.recordSelfVideo);
+    const timesliceMs = getChunkTimesliceMs('tab');
 
     const recorder = new MediaRecorder(recordingStream, {
       mimeType: mime,
@@ -648,7 +648,7 @@ export class RecorderEngine {
     this.micStream = mic;
     const mime = getAudioMime();
     let started = false;
-    const timesliceMs = getChunkTimesliceMs(this.micMode, this.recordSelfVideo);
+    const timesliceMs = getChunkTimesliceMs('mic');
     const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
     this.micRecorder = recorder;
 
@@ -739,7 +739,7 @@ export class RecorderEngine {
     const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate();
     const mime = getVideoOnlyMime();
     let started = false;
-    const timesliceMs = getChunkTimesliceMs(this.micMode, this.recordSelfVideo);
+    const timesliceMs = getChunkTimesliceMs('selfVideo');
     const track = selfVideo.getVideoTracks()[0];
     const settings = track?.getSettings?.();
     logPerf(this.deps.log, 'recorder', 'self_video_stream_acquired', {

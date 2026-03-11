@@ -78,6 +78,7 @@ export type ChunkingSettings = {
 
 const LEGACY_VIDEO_FORMAT_OPTIONS = [1080, 720, 480, 360] as const satisfies readonly LegacyVideoFormat[];
 const DEFAULT_RESOLUTION_PRESET: ResolutionPreset = '1920x1080';
+const MAX_SELF_VIDEO_BITRATE = EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond;
 
 export const RESOLUTION_PRESET_DIMENSIONS = Object.freeze({
   '640x360': Object.freeze({ width: 640, height: 360 }),
@@ -259,7 +260,7 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
       professionalCandidate.selfVideoBitrate,
       DEFAULT_EXTENSION_SETTINGS.professional.selfVideoBitrate,
       100_000,
-      50_000_000
+      MAX_SELF_VIDEO_BITRATE
     ),
     selfVideoFrameRate: normalizePositiveInt(
       professionalCandidate.selfVideoFrameRate,

@@ -92,4 +92,16 @@ describe('extensionSettings', () => {
 
     expect(settings.professional.tabResolutionPreset).toBe('1920x1080');
   });
+
+  it('caps persisted self-video bitrate settings at the new 3 Mbps ceiling', () => {
+    const settings = normalizeExtensionSettings({
+      professional: {
+        selfVideoBitrate: 6_000_000,
+        selfVideoMinAdaptiveBitrate: 6_000_000,
+      },
+    });
+
+    expect(settings.professional.selfVideoBitrate).toBe(3_000_000);
+    expect(settings.professional.selfVideoMinAdaptiveBitrate).toBe(3_000_000);
+  });
 });

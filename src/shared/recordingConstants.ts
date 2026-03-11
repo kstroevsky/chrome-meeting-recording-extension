@@ -43,7 +43,7 @@ export const EXTENSION_DEFAULTS = Object.freeze({
       height: 1080,
       frameRate: 30,
       aspectRatio: 16 / 9,
-      defaultBitsPerSecond: 6_000_000,
+      defaultBitsPerSecond: 3_000_000,
       minAdaptiveBitsPerSecond: 1_000_000,
     }),
     microphone: Object.freeze({

@@ -17,7 +17,7 @@ describe('settings page', () => {
       selfVideoResolutionPreset: '1280x720',
     },
     professional: {
-      selfVideoBitrate: 6_000_000,
+      selfVideoBitrate: 3_000_000,
       selfVideoFrameRate: 30,
       selfVideoMinAdaptiveBitrate: 1_000_000,
       tabResolutionPreset: '854x480',
@@ -73,7 +73,7 @@ describe('settings page', () => {
         selfVideoResolutionPreset: '640x360',
       },
       professional: {
-        selfVideoBitrate: 6000000,
+        selfVideoBitrate: 3000000,
         selfVideoFrameRate: 30,
         selfVideoMinAdaptiveBitrate: 1000000,
         tabResolutionPreset: '1920x1080',

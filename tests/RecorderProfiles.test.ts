@@ -21,7 +21,7 @@ describe('RecorderProfiles', () => {
       height: 1080,
       frameRate: 30,
       aspectRatio: 16 / 9,
-      defaultBitsPerSecond: 6_000_000,
+      defaultBitsPerSecond: 3_000_000,
     });
     expect(SELF_VIDEO_CONSTRAINTS).toEqual(
       expect.objectContaining({
@@ -32,25 +32,31 @@ describe('RecorderProfiles', () => {
       })
     );
     expect(formatSelfVideoProfile()).toBe('1920x1080');
-    expect(getDefaultSelfVideoBitrate()).toBe(6_000_000);
+    expect(getDefaultSelfVideoBitrate()).toBe(3_000_000);
     expect(matchesSelfVideoProfile({ width: 1920, height: 1080 })).toBe(true);
     expect(matchesSelfVideoProfile({ width: 1280, height: 720 })).toBe(false);
   });
 
-  it('extends the chunk timeslice only when the feature flag and extra streams are active', () => {
+  it('keeps tab chunks conservative while letting self-video use the longer cadence', () => {
+    expect(getChunkTimesliceMs('tab')).toBe(2000);
+    expect(getChunkTimesliceMs('mic')).toBe(2000);
+    expect(getChunkTimesliceMs('selfVideo')).toBe(4000);
+  });
+
+  it('extends only the microphone chunks when the perf flag is enabled', () => {
     PERF_FLAGS.extendedTimeslice = true;
 
-    expect(getChunkTimesliceMs('off', false)).toBe(2000);
-    expect(getChunkTimesliceMs('mixed', false)).toBe(4000);
-    expect(getChunkTimesliceMs('off', true)).toBe(4000);
+    expect(getChunkTimesliceMs('tab')).toBe(2000);
+    expect(getChunkTimesliceMs('mic')).toBe(4000);
+    expect(getChunkTimesliceMs('selfVideo')).toBe(4000);
   });
 
   it('adapts self-video bitrate within the allowed ceiling when profiling is enabled', () => {
     PERF_FLAGS.adaptiveSelfVideoProfile = true;
 
-    expect(resolveSelfVideoBitrate(6_000_000, { width: 640, height: 360, frameRate: 15 })).toBe(1_000_000);
-    expect(resolveSelfVideoBitrate(6_000_000, { width: 3840, height: 2160, frameRate: 60 })).toBe(6_000_000);
-    expect(resolveSelfVideoBitrate(6_000_000, undefined)).toBe(6_000_000);
+    expect(resolveSelfVideoBitrate(3_000_000, { width: 640, height: 360, frameRate: 15 })).toBe(1_000_000);
+    expect(resolveSelfVideoBitrate(3_000_000, { width: 3840, height: 2160, frameRate: 60 })).toBe(3_000_000);
+    expect(resolveSelfVideoBitrate(3_000_000, undefined)).toBe(3_000_000);
   });
 
   it('builds a deterministic self-video constraint fallback ladder', () => {

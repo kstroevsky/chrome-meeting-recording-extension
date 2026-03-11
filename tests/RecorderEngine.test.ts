@@ -675,7 +675,7 @@ describe('RecorderEngine', () => {
     });
   });
 
-  it('uses the extended timeslice only when the feature flag is enabled', async () => {
+  it('keeps the tab recorder on the default cadence when the mic recorder uses extended chunks', async () => {
     PERF_FLAGS.extendedTimeslice = true;
 
     const baseStream = makeStream({
@@ -695,7 +695,10 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
 
-    expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(4000);
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    const micRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'mic');
+    expect(tabRecorder?.timesliceMs).toBe(2000);
+    expect(micRecorder?.timesliceMs).toBe(4000);
   });
 
   it('keeps the default 2000 ms timeslice when the extended flag is off', async () => {
@@ -716,7 +719,38 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
 
-    expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(2000);
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    const micRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'mic');
+    expect(tabRecorder?.timesliceMs).toBe(2000);
+    expect(micRecorder?.timesliceMs).toBe(2000);
+  });
+
+  it('uses the longer timeslice for self-video without extending the main tab recorder', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const selfVideoStream = makeStream({
+      videoTracks: [makeTrack('video', { width: 640, height: 360, frameRate: 30 })],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.video && constraints.audio === false) {
+        return selfVideoStream;
+      }
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ recordSelfVideo: true }));
+    await flushAsyncWork();
+
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
+    expect(tabRecorder?.timesliceMs).toBe(2000);
+    expect(selfVideoRecorder?.timesliceMs).toBe(4000);
   });
 
   it('skips the audio playback bridge in auto mode when local tab audio is not suppressed', async () => {
