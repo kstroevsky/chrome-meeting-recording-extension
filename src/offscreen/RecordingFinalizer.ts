@@ -16,7 +16,7 @@ import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { createCachedTokenProvider, type TokenProvider } from './drive/request';
 import { describeRuntimeError } from './errors';
 import type { CompletedRecordingArtifact, SealedStorageFile } from './RecorderEngine';
-import { postprocessTabArtifact } from './TabArtifactPostprocessor';
+import { postprocessVideoArtifact, type VideoArtifactPostprocessPlan } from './TabArtifactPostprocessor';
 import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'selfVideo'];
@@ -33,9 +33,9 @@ export type RecordingFinalizerDeps = {
   requestSave: (filename: string, blobUrl: string, opfsFilename?: string) => void;
   getDriveToken: TokenProvider;
   reportWarning?: (warning: string) => void;
-  postprocessTabArtifact?: (
+  postprocessVideoArtifact?: (
     artifact: SealedStorageFile,
-    finalize: NonNullable<CompletedRecordingArtifact['finalize']>
+    plan: VideoArtifactPostprocessPlan
   ) => Promise<SealedStorageFile>;
 };
 
@@ -70,45 +70,92 @@ export class RecordingFinalizer {
 
   /** Applies any artifact-level fallback processing before save/upload begins. */
   private async prepareArtifacts(artifacts: CompletedRecordingArtifact[]): Promise<CompletedRecordingArtifact[]> {
-    const prepared: CompletedRecordingArtifact[] = [];
-
+    const grouped = new Map<RecordingStream, CompletedRecordingArtifact[]>();
     for (const entry of artifacts) {
-      if (entry.stream !== 'tab' || !entry.finalize?.requiresPostprocess) {
-        prepared.push(entry);
-        continue;
-      }
+      const existing = grouped.get(entry.stream) ?? [];
+      existing.push(entry);
+      grouped.set(entry.stream, existing);
+    }
 
-      try {
-        const processedArtifact = await (
-          this.deps.postprocessTabArtifact
-          ?? ((artifact, finalize) => postprocessTabArtifact(artifact, finalize, this.deps))
-        )(entry.artifact, entry.finalize);
-        prepared.push({
-          ...entry,
-          artifact: processedArtifact,
-          finalize: {
-            ...entry.finalize,
-            liveResized: false,
-            requiresPostprocess: false,
-          },
-        });
-      } catch (error) {
-        const message = describeRuntimeError(error);
-        this.deps.warn('Tab postprocess downscale failed; saving original artifact instead', entry.artifact.filename, message);
-        this.deps.reportWarning?.(
-          `Tab post-processing downscale failed after recording. Saving the original tab file instead. (${message})`
-        );
-        prepared.push(entry);
-      }
+    const prepared: CompletedRecordingArtifact[] = [];
+    for (const stream of STREAM_UPLOAD_ORDER) {
+      const entries = grouped.get(stream);
+      if (!entries?.length) continue;
+      prepared.push(await this.prepareStreamArtifacts(entries));
     }
 
     return prepared;
   }
 
+  /** Picks the final artifact for one logical recording stream and cleans up unused variants. */
+  private async prepareStreamArtifacts(entries: CompletedRecordingArtifact[]): Promise<CompletedRecordingArtifact> {
+    const master = entries.find((entry) => entry.role === 'master') ?? entries[0];
+    const delivery = entries.find((entry) => entry.role === 'delivery');
+
+    if (master.stream === 'mic') {
+      await this.cleanupUnusedArtifacts(entries, master);
+      return master;
+    }
+
+    const finalize = master.finalize;
+    if (!finalize) {
+      const chosen = delivery ?? master;
+      await this.cleanupUnusedArtifacts(entries, chosen);
+      return chosen;
+    }
+
+    const requiresResize = master.stream === 'tab' && finalize.resizeTabOutput;
+    if (!requiresResize && delivery && delivery.container === finalize.outputContainer) {
+      await this.cleanupUnusedArtifacts(entries, delivery);
+      return delivery;
+    }
+
+    const needsPostprocess =
+      finalize.outputContainer !== master.container
+      || requiresResize;
+
+    if (!needsPostprocess) {
+      await this.cleanupUnusedArtifacts(entries, master);
+      return master;
+    }
+
+    try {
+      const processedArtifact = await (
+        this.deps.postprocessVideoArtifact
+        ?? ((artifact, plan) => postprocessVideoArtifact(artifact, plan, this.deps))
+      )(master.artifact, {
+        stream: master.stream as Extract<typeof master.stream, 'tab' | 'selfVideo'>,
+        outputContainer: finalize.outputContainer,
+        outputTarget: finalize.resizeTabOutput ? finalize.outputTarget : undefined,
+      });
+      await this.cleanupUnusedArtifacts(entries, master);
+      return {
+        stream: master.stream,
+        artifact: processedArtifact,
+        container: finalize.outputContainer,
+        role: 'delivery',
+      };
+    } catch (error) {
+      const message = describeRuntimeError(error);
+      const label = master.stream === 'tab' ? 'tab' : 'camera';
+      this.deps.warn(`${label} postprocess failed; saving original artifact instead`, master.artifact.filename, message);
+      this.deps.reportWarning?.(
+        `Failed to deliver ${label} as the requested final format. Saving the original WebM recording instead. (${message})`
+      );
+      await this.cleanupUnusedArtifacts(entries, master);
+      return master;
+    }
+  }
+
   /** Orders artifacts so local saves and Drive uploads stay deterministic across runs. */
   private sortArtifacts(artifacts: CompletedRecordingArtifact[]): CompletedRecordingArtifact[] {
     return [...artifacts].sort(
-      (a, b) => STREAM_UPLOAD_ORDER.indexOf(a.stream) - STREAM_UPLOAD_ORDER.indexOf(b.stream)
+      (a, b) => {
+        const streamOrder = STREAM_UPLOAD_ORDER.indexOf(a.stream) - STREAM_UPLOAD_ORDER.indexOf(b.stream);
+        if (streamOrder !== 0) return streamOrder;
+        if (a.role === b.role) return 0;
+        return a.role === 'master' ? -1 : 1;
+      }
     );
   }
 
@@ -127,6 +174,17 @@ export class RecordingFinalizer {
       }
     } catch (e) {
       this.deps.warn('Failed to cleanup artifact', artifact.filename, describeRuntimeError(e));
+    }
+  }
+
+  /** Cleans up any artifacts for the same logical stream that were not selected for delivery. */
+  private async cleanupUnusedArtifacts(
+    entries: CompletedRecordingArtifact[],
+    chosen: CompletedRecordingArtifact
+  ): Promise<void> {
+    for (const entry of entries) {
+      if (entry === chosen) continue;
+      await this.cleanupArtifact(entry.artifact);
     }
   }
 

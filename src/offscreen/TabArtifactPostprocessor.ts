@@ -1,21 +1,34 @@
 /**
  * @file offscreen/TabArtifactPostprocessor.ts
  *
- * Best-effort fallback that replays a sealed tab artifact, downscales it
- * through the existing canvas-based resizer, and returns a replacement file
- * for the final save/upload step.
+ * Post-stop video delivery processing for tab and self-video artifacts. This
+ * can resize tab recordings and/or convert WebM masters into native MP4 when
+ * the runtime supports the requested MediaRecorder MIME.
  */
 
 import { withTimeout } from '../shared/async';
+import type { RecordingStream } from '../shared/recording';
 import { getChunkingSettings } from '../shared/extensionSettings';
 import { TIMEOUTS } from '../shared/timeouts';
-import type { RecordingArtifactFinalizePlan, SealedStorageFile } from './RecorderEngine';
 import { LocalFileTarget } from './LocalFileTarget';
-import { getVideoMime } from './RecorderProfiles';
+import {
+  getNativeSelfVideoMp4Mime,
+  getNativeTabMp4Mime,
+  getVideoMime,
+  getVideoOnlyMime,
+  type RecorderVideoContainer,
+} from './RecorderProfiles';
 import { describeMediaError } from './RecorderSupport';
-import { createResizedVideoStream, readStreamVideoMetrics } from './RecorderVideoResizer';
+import { createResizedVideoStream, readStreamVideoMetrics, type VideoResizeTarget } from './RecorderVideoResizer';
+import type { SealedStorageFile } from './RecorderEngine';
 
-type TabArtifactPostprocessorDeps = {
+export type VideoArtifactPostprocessPlan = {
+  stream: Extract<RecordingStream, 'tab' | 'selfVideo'>;
+  outputContainer: RecorderVideoContainer;
+  outputTarget?: VideoResizeTarget;
+};
+
+type VideoArtifactPostprocessorDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
 };
@@ -73,7 +86,7 @@ async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
       };
       const onError = () => {
         cleanup();
-        reject(new Error('Tab postprocess video metadata could not be loaded'));
+        reject(new Error('Video postprocess metadata could not be loaded'));
       };
       const cleanup = () => {
         video.removeEventListener('loadedmetadata', onLoadedMetadata);
@@ -84,7 +97,7 @@ async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
       video.addEventListener('error', onError);
     }),
     TIMEOUTS.GUM_MS,
-    'tab postprocess metadata'
+    'video postprocess metadata'
   );
 }
 
@@ -92,7 +105,7 @@ async function waitForRecorderStart(recorder: MediaRecorder): Promise<void> {
   await withTimeout(
     new Promise<void>((resolve, reject) => {
       const startTimeout = setTimeout(
-        () => reject(new Error('Tab postprocess MediaRecorder did not start (timeout)')),
+        () => reject(new Error('Video postprocess MediaRecorder did not start (timeout)')),
         TIMEOUTS.RECORDER_START_MS
       );
 
@@ -102,7 +115,7 @@ async function waitForRecorderStart(recorder: MediaRecorder): Promise<void> {
       };
     }),
     TIMEOUTS.RECORDER_START_MS + 100,
-    'tab postprocess recorder start'
+    'video postprocess recorder start'
   );
 }
 
@@ -130,17 +143,39 @@ function formatMetrics(width?: number, height?: number, frameRate?: number): str
   return `${resolution}${fps}`;
 }
 
+function replaceExtension(filename: string, extension: '.webm' | '.mp4'): string {
+  return filename.replace(/\.[^.]+$/u, extension);
+}
+
+function resolveOutputMime(plan: VideoArtifactPostprocessPlan): string {
+  if (plan.outputContainer === 'mp4') {
+    const mime = plan.stream === 'tab' ? getNativeTabMp4Mime() : getNativeSelfVideoMp4Mime();
+    if (!mime) {
+      throw new Error(
+        plan.stream === 'tab'
+          ? 'Tab MP4 delivery is not supported in this Chrome runtime'
+          : 'Camera MP4 delivery is not supported in this Chrome runtime'
+      );
+    }
+    return mime;
+  }
+
+  return plan.stream === 'selfVideo' ? getVideoOnlyMime() : getVideoMime();
+}
+
 /**
- * Replays one sealed tab artifact and returns a replacement artifact at the
- * requested final output target. Throws on any fallback-processing failure.
+ * Replays one sealed video artifact and returns a replacement file at the
+ * requested container and optional resize target.
  */
-export async function postprocessTabArtifact(
+export async function postprocessVideoArtifact(
   artifact: SealedStorageFile,
-  finalize: RecordingArtifactFinalizePlan,
-  deps: TabArtifactPostprocessorDeps
+  plan: VideoArtifactPostprocessPlan,
+  deps: VideoArtifactPostprocessorDeps
 ): Promise<SealedStorageFile> {
-  const mimeType = getVideoMime();
-  const tempFilename = `tab-postprocess-${Date.now()}-${Math.random().toString(36).slice(2)}.webm`;
+  const mimeType = resolveOutputMime(plan);
+  const extension = plan.outputContainer === 'mp4' ? '.mp4' : '.webm';
+  const finalFilename = replaceExtension(artifact.filename, extension);
+  const tempFilename = `video-postprocess-${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`;
   const inputUrl = URL.createObjectURL(artifact.file);
   const chunking = getChunkingSettings();
   let playbackVideo: HTMLVideoElement | null = null;
@@ -161,34 +196,38 @@ export async function postprocessTabArtifact(
       captureStream?: () => MediaStream;
     }).captureStream;
     if (typeof capturePlayback !== 'function') {
-      throw new Error('HTMLVideoElement.captureStream() is unavailable for tab postprocess');
+      throw new Error('HTMLVideoElement.captureStream() is unavailable for video postprocess');
     }
 
     playbackStream = capturePlayback.call(playbackVideo);
     if (!playbackStream.getVideoTracks().length) {
-      throw new Error('Playback capture did not produce a video track for tab postprocess');
+      throw new Error('Playback capture did not produce a video track for video postprocess');
     }
 
-    const resized = await createResizedVideoStream(playbackStream, finalize.outputTarget);
-    processedStream = resized.stream;
-    cleanupProcessedStream = resized.cleanup;
-    const processedMetrics = readStreamVideoMetrics(processedStream);
-    const target = finalize.outputTarget;
-    if (
-      processedMetrics.width !== target.width
-      || processedMetrics.height !== target.height
-      || (
-        typeof processedMetrics.frameRate === 'number'
-        && processedMetrics.frameRate > target.frameRate + 0.5
-      )
-    ) {
-      throw new Error(
-        `Tab postprocess produced ${formatMetrics(
-          processedMetrics.width,
-          processedMetrics.height,
-          processedMetrics.frameRate
-        )} instead of ${formatMetrics(target.width, target.height, target.frameRate)}`
-      );
+    if (plan.outputTarget) {
+      const resized = await createResizedVideoStream(playbackStream, plan.outputTarget);
+      processedStream = resized.stream;
+      cleanupProcessedStream = resized.cleanup;
+      const processedMetrics = readStreamVideoMetrics(processedStream);
+      const target = plan.outputTarget;
+      if (
+        processedMetrics.width !== target.width
+        || processedMetrics.height !== target.height
+        || (
+          typeof processedMetrics.frameRate === 'number'
+          && processedMetrics.frameRate > target.frameRate + 0.5
+        )
+      ) {
+        throw new Error(
+          `Video postprocess produced ${formatMetrics(
+            processedMetrics.width,
+            processedMetrics.height,
+            processedMetrics.frameRate
+          )} instead of ${formatMetrics(target.width, target.height, target.frameRate)}`
+        );
+      }
+    } else {
+      processedStream = playbackStream;
     }
 
     playbackVideo.pause();
@@ -205,14 +244,17 @@ export async function postprocessTabArtifact(
       outputTarget = new InMemoryStorageTarget(tempFilename, mimeType);
     }
 
-    const recorder = new MediaRecorder(processedStream, {
+    const recorderOptions: MediaRecorderOptions = {
       mimeType,
       videoBitsPerSecond: 1_500_000,
-      audioBitsPerSecond: 96_000,
-    });
+    };
+    if (processedStream.getAudioTracks().length > 0) {
+      recorderOptions.audioBitsPerSecond = 96_000;
+    }
+    const recorder = new MediaRecorder(processedStream, recorderOptions);
 
     let writeFailed = false;
-    const processedArtifact = await new Promise<SealedStorageFile>((resolve, reject) => {
+    const processedArtifactPromise = new Promise<SealedStorageFile>((resolve, reject) => {
       let settled = false;
       const fail = (error: unknown) => {
         if (settled) return;
@@ -225,12 +267,12 @@ export async function postprocessTabArtifact(
         try {
           const sealed = await outputTarget!.close();
           if (!sealed) {
-            reject(new Error('Tab postprocess produced no output artifact'));
+            reject(new Error('Video postprocess produced no output artifact'));
             return;
           }
           resolve({
             ...sealed,
-            filename: artifact.filename,
+            filename: finalFilename,
           });
         } catch (error) {
           reject(error);
@@ -241,12 +283,12 @@ export async function postprocessTabArtifact(
         if (!event.data?.size) return;
         void outputTarget!.write(event.data).catch((error) => {
           writeFailed = true;
-          fail(new Error(`Tab postprocess write failed: ${describeMediaError(error)}`));
+          fail(new Error(`Video postprocess write failed: ${describeMediaError(error)}`));
         });
       };
 
       recorder.onerror = (event: any) => {
-        fail(new Error(`Tab postprocess MediaRecorder failed: ${describeMediaError(event)}`));
+        fail(new Error(`Video postprocess MediaRecorder failed: ${describeMediaError(event)}`));
       };
 
       recorder.onstop = () => {
@@ -265,6 +307,7 @@ export async function postprocessTabArtifact(
     recorder.start(chunking.defaultTimesliceMs);
     await startPromise;
     await playbackVideo.play();
+    const processedArtifact = await processedArtifactPromise;
     while (recorder.state !== 'inactive') {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -273,17 +316,20 @@ export async function postprocessTabArtifact(
       await artifact.cleanup();
     } catch (error) {
       deps.warn(
-        'Failed to cleanup original tab artifact after postprocess',
+        'Failed to cleanup original artifact after postprocess',
         artifact.filename,
         describeMediaError(error)
       );
     }
 
-    deps.log('tab artifact postprocess complete:', {
-      filename: artifact.filename,
-      targetWidth: finalize.outputTarget.width,
-      targetHeight: finalize.outputTarget.height,
-      targetFrameRate: finalize.outputTarget.frameRate,
+    deps.log('video artifact postprocess complete:', {
+      sourceFilename: artifact.filename,
+      finalFilename,
+      outputContainer: plan.outputContainer,
+      targetWidth: plan.outputTarget?.width,
+      targetHeight: plan.outputTarget?.height,
+      targetFrameRate: plan.outputTarget?.frameRate,
+      stream: plan.stream,
     });
     return processedArtifact;
   } catch (error) {

@@ -42,6 +42,9 @@ export type ExtensionSettings = {
     selfVideoMinAdaptiveBitrate: number;
     tabResolutionPreset: ResolutionPreset;
     tabMaxFrameRate: number;
+    tabResizePostprocess: boolean;
+    tabMp4Output: boolean;
+    selfVideoMp4Output: boolean;
     microphoneEchoCancellation: boolean;
     microphoneNoiseSuppression: boolean;
     microphoneAutoGainControl: boolean;
@@ -74,6 +77,12 @@ export type MicrophoneCaptureSettings = {
 export type ChunkingSettings = {
   defaultTimesliceMs: number;
   extendedTimesliceMs: number;
+};
+
+export type VideoOutputSettings = {
+  tabResizePostprocess: boolean;
+  tabMp4Output: boolean;
+  selfVideoMp4Output: boolean;
 };
 
 const LEGACY_VIDEO_FORMAT_OPTIONS = [1080, 720, 480, 360] as const satisfies readonly LegacyVideoFormat[];
@@ -225,6 +234,9 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     selfVideoMinAdaptiveBitrate: EXTENSION_DEFAULTS.capture.selfVideo.minAdaptiveBitsPerSecond,
     tabResolutionPreset: DEFAULT_RESOLUTION_PRESET,
     tabMaxFrameRate: EXTENSION_DEFAULTS.capture.tab.maxFrameRate,
+    tabResizePostprocess: false,
+    tabMp4Output: false,
+    selfVideoMp4Output: false,
     microphoneEchoCancellation: EXTENSION_DEFAULTS.capture.microphone.echoCancellation,
     microphoneNoiseSuppression: EXTENSION_DEFAULTS.capture.microphone.noiseSuppression,
     microphoneAutoGainControl: EXTENSION_DEFAULTS.capture.microphone.autoGainControl,
@@ -281,6 +293,18 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
       1,
       120
     ),
+    tabResizePostprocess:
+      typeof professionalCandidate.tabResizePostprocess === 'boolean'
+        ? professionalCandidate.tabResizePostprocess
+        : DEFAULT_EXTENSION_SETTINGS.professional.tabResizePostprocess,
+    tabMp4Output:
+      typeof professionalCandidate.tabMp4Output === 'boolean'
+        ? professionalCandidate.tabMp4Output
+        : DEFAULT_EXTENSION_SETTINGS.professional.tabMp4Output,
+    selfVideoMp4Output:
+      typeof professionalCandidate.selfVideoMp4Output === 'boolean'
+        ? professionalCandidate.selfVideoMp4Output
+        : DEFAULT_EXTENSION_SETTINGS.professional.selfVideoMp4Output,
     microphoneEchoCancellation:
       typeof professionalCandidate.microphoneEchoCancellation === 'boolean'
         ? professionalCandidate.microphoneEchoCancellation
@@ -391,6 +415,17 @@ export function getChunkingSettings(
   return {
     defaultTimesliceMs: settings.professional.chunkDefaultTimesliceMs,
     extendedTimesliceMs: settings.professional.chunkExtendedTimesliceMs,
+  };
+}
+
+/** Returns delivery flags that influence resize and MP4 behavior. */
+export function getVideoOutputSettings(
+  settings: Readonly<ExtensionSettings> = runtimeSettings
+): VideoOutputSettings {
+  return {
+    tabResizePostprocess: settings.professional.tabResizePostprocess,
+    tabMp4Output: settings.professional.tabMp4Output,
+    selfVideoMp4Output: settings.professional.selfVideoMp4Output,
   };
 }
 

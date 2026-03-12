@@ -21,6 +21,9 @@ type SettingsElements = {
   selfVideoMinAdaptiveBitrate: HTMLInputElement | null;
   tabResolutionPreset: HTMLSelectElement | null;
   tabMaxFrameRate: HTMLInputElement | null;
+  tabResizePostprocess: HTMLInputElement | null;
+  tabMp4Output: HTMLInputElement | null;
+  selfVideoMp4Output: HTMLInputElement | null;
   micEchoCancellation: HTMLInputElement | null;
   micNoiseSuppression: HTMLInputElement | null;
   micAutoGain: HTMLInputElement | null;
@@ -47,6 +50,9 @@ const el: SettingsElements = {
   selfVideoMinAdaptiveBitrate: document.getElementById('self-video-min-adaptive-bitrate') as HTMLInputElement | null,
   tabResolutionPreset: document.getElementById('tab-resolution-preset') as HTMLSelectElement | null,
   tabMaxFrameRate: document.getElementById('tab-max-frame-rate') as HTMLInputElement | null,
+  tabResizePostprocess: document.getElementById('tab-resize-postprocess') as HTMLInputElement | null,
+  tabMp4Output: document.getElementById('tab-mp4-output') as HTMLInputElement | null,
+  selfVideoMp4Output: document.getElementById('self-video-mp4-output') as HTMLInputElement | null,
   micEchoCancellation: document.getElementById('mic-echo-cancellation') as HTMLInputElement | null,
   micNoiseSuppression: document.getElementById('mic-noise-suppression') as HTMLInputElement | null,
   micAutoGain: document.getElementById('mic-auto-gain') as HTMLInputElement | null,
@@ -81,6 +87,9 @@ function applySettings(settings: Readonly<ExtensionSettings>): void {
     el.tabResolutionPreset.value = settings.professional.tabResolutionPreset;
   }
   if (el.tabMaxFrameRate) el.tabMaxFrameRate.value = String(settings.professional.tabMaxFrameRate);
+  if (el.tabResizePostprocess) el.tabResizePostprocess.checked = settings.professional.tabResizePostprocess;
+  if (el.tabMp4Output) el.tabMp4Output.checked = settings.professional.tabMp4Output;
+  if (el.selfVideoMp4Output) el.selfVideoMp4Output.checked = settings.professional.selfVideoMp4Output;
   if (el.micEchoCancellation) el.micEchoCancellation.checked = settings.professional.microphoneEchoCancellation;
   if (el.micNoiseSuppression) el.micNoiseSuppression.checked = settings.professional.microphoneNoiseSuppression;
   if (el.micAutoGain) el.micAutoGain.checked = settings.professional.microphoneAutoGainControl;
@@ -103,6 +112,9 @@ function readSettingsFromForm(): unknown {
       selfVideoMinAdaptiveBitrate: Number(el.selfVideoMinAdaptiveBitrate?.value),
       tabResolutionPreset: el.tabResolutionPreset?.value,
       tabMaxFrameRate: Number(el.tabMaxFrameRate?.value),
+      tabResizePostprocess: !!el.tabResizePostprocess?.checked,
+      tabMp4Output: !!el.tabMp4Output?.checked,
+      selfVideoMp4Output: !!el.selfVideoMp4Output?.checked,
       microphoneEchoCancellation: !!el.micEchoCancellation?.checked,
       microphoneNoiseSuppression: !!el.micNoiseSuppression?.checked,
       microphoneAutoGainControl: !!el.micAutoGain?.checked,

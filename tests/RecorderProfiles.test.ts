@@ -3,6 +3,8 @@ import {
   getChunkTimesliceMs,
   getSelfVideoConstraintRequests,
   getDefaultSelfVideoBitrate,
+  getNativeSelfVideoMp4Mime,
+  getNativeTabMp4Mime,
   matchesSelfVideoProfile,
   resolveSelfVideoBitrate,
   SELF_VIDEO_CONSTRAINTS,
@@ -38,7 +40,7 @@ describe('RecorderProfiles', () => {
   });
 
   it('keeps tab chunks conservative while letting self-video use the longer cadence', () => {
-    expect(getChunkTimesliceMs('tab')).toBe(2000);
+    expect(getChunkTimesliceMs('tab')).toBe(4000);
     expect(getChunkTimesliceMs('mic')).toBe(2000);
     expect(getChunkTimesliceMs('selfVideo')).toBe(4000);
   });
@@ -46,9 +48,22 @@ describe('RecorderProfiles', () => {
   it('extends only the microphone chunks when the perf flag is enabled', () => {
     PERF_FLAGS.extendedTimeslice = true;
 
-    expect(getChunkTimesliceMs('tab')).toBe(2000);
+    expect(getChunkTimesliceMs('tab')).toBe(4000);
     expect(getChunkTimesliceMs('mic')).toBe(4000);
     expect(getChunkTimesliceMs('selfVideo')).toBe(4000);
+  });
+
+  it('exposes native MP4 helpers only when the runtime supports the relevant mimes', () => {
+    const original = MediaRecorder.isTypeSupported;
+    (MediaRecorder.isTypeSupported as any) = jest.fn((mime: string) =>
+      mime === 'video/mp4;codecs=avc1.42E01E,mp4a.40.2'
+      || mime === 'video/mp4;codecs=avc1.42E01E'
+    );
+
+    expect(getNativeTabMp4Mime()).toBe('video/mp4;codecs=avc1.42E01E,mp4a.40.2');
+    expect(getNativeSelfVideoMp4Mime()).toBe('video/mp4;codecs=avc1.42E01E');
+
+    (MediaRecorder.isTypeSupported as any) = original;
   });
 
   it('adapts self-video bitrate within the allowed ceiling when profiling is enabled', () => {

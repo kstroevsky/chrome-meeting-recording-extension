@@ -14,17 +14,20 @@ import {
   maybeGetSelfVideoStream,
 } from './RecorderCapture';
 import {
+  type RecorderVideoContainer,
   getDefaultSelfVideoBitrate,
   getAudioMime,
   getChunkTimesliceMs,
+  getNativeSelfVideoMp4Mime,
+  getNativeTabMp4Mime,
   getSelfVideoProfile,
   getVideoMime,
   getVideoOnlyMime,
   resolveSelfVideoBitrate,
 } from './RecorderProfiles';
 import { describeMediaError } from './RecorderSupport';
-import { createResizedVideoStream, readStreamVideoMetrics } from './RecorderVideoResizer';
-import { getTabOutputSettings } from '../shared/extensionSettings';
+import { readStreamVideoMetrics } from './RecorderVideoResizer';
+import { getTabOutputSettings, getVideoOutputSettings } from '../shared/extensionSettings';
 import { PERF_FLAGS, debugPerf, logPerf, nowMs, roundMs } from '../shared/perf';
 import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 import {
@@ -35,7 +38,7 @@ import {
   type RecordingStream,
 } from '../shared/recording';
 import { TIMEOUTS } from '../shared/timeouts';
-import type { StreamVideoMetrics, VideoResizeTarget } from './RecorderVideoResizer';
+import type { VideoResizeTarget } from './RecorderVideoResizer';
 
 type RecordingStateExtra = Record<string, any> | undefined;
 
@@ -44,6 +47,7 @@ type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
 type PreparedTabRecorderStream = {
   stream: MediaStream;
   finalize: RecordingArtifactFinalizePlan;
+  attemptLiveMp4Delivery: boolean;
 };
 
 export interface SealedStorageFile {
@@ -59,14 +63,18 @@ export interface StorageTarget {
 }
 
 export type RecordingArtifactFinalizePlan = {
-  outputTarget: VideoResizeTarget;
-  liveResized: boolean;
-  requiresPostprocess: boolean;
+  outputContainer: RecorderVideoContainer;
+  resizeTabOutput: boolean;
+  outputTarget?: VideoResizeTarget;
 };
+
+export type RecordingArtifactRole = 'master' | 'delivery';
 
 export type CompletedRecordingArtifact = {
   stream: RecordingStream;
   artifact: SealedStorageFile;
+  container: RecorderVideoContainer;
+  role: RecordingArtifactRole;
   finalize?: RecordingArtifactFinalizePlan;
 };
 
@@ -122,15 +130,17 @@ export class RecorderEngine {
   private runId = 0;
 
   private tabRecorder: MediaRecorder | null = null;
+  private tabDeliveryRecorder: MediaRecorder | null = null;
   private micRecorder: MediaRecorder | null = null;
   private selfVideoRecorder: MediaRecorder | null = null;
+  private selfVideoDeliveryRecorder: MediaRecorder | null = null;
 
   private tabCaptureStream: MediaStream | null = null;
   private tabRecordingStream: MediaStream | null = null;
   private micStream: MediaStream | null = null;
   private selfVideoStream: MediaStream | null = null;
-  private cleanupResizedTabStream: (() => void) | null = null;
   private tabFinalizePlan: RecordingArtifactFinalizePlan | null = null;
+  private selfVideoFinalizePlan: RecordingArtifactFinalizePlan | null = null;
 
   private suffix = 'google-meet';
   private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
@@ -203,6 +213,11 @@ export class RecorderEngine {
       this.tabRecordingStream = tabRecorderStream;
 
       const tabStarted = this.startTabRecorder(tabRecorderStream, runStartedAt);
+      if (preparedTabRecorder.attemptLiveMp4Delivery) {
+        void this.tryStartTabMp4Recorder(tabRecorderStream, runStartedAt).catch((e) =>
+          this.deps.warn('Tab MP4 recorder start failed (continuing with WebM master only)', describeMediaError(e))
+        );
+      }
       if (this.micMode === 'separate') {
         void this.tryStartMicRecorder(runId, runStartedAt, micForRun).catch((e) =>
           this.deps.warn('Mic recorder start failed', describeMediaError(e))
@@ -243,8 +258,10 @@ export class RecorderEngine {
     });
 
     try { this.tabRecorder.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); throw e; }
+    try { this.tabDeliveryRecorder?.stop(); } catch (e) { this.deps.error('Tab MP4 stop error', describeMediaError(e)); }
     try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', describeMediaError(e)); }
     try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', describeMediaError(e)); }
+    try { this.selfVideoDeliveryRecorder?.stop(); } catch (e) { this.deps.error('Self video MP4 stop error', describeMediaError(e)); }
     this.releaseSelfVideoCapture();
 
     this.playback?.stop();
@@ -270,8 +287,10 @@ export class RecorderEngine {
     stream.getVideoTracks()[0]?.addEventListener('ended', () => {
       this.deps.log('Video track ended');
       if (this.tabRecorder && this.isRecording()) { try { this.tabRecorder.stop(); } catch {} }
+      if (this.tabDeliveryRecorder && this.isRecording()) { try { this.tabDeliveryRecorder.stop(); } catch {} }
       if (this.micRecorder && this.isRecording()) { try { this.micRecorder.stop(); } catch {} }
       if (this.selfVideoRecorder && this.isRecording()) { try { this.selfVideoRecorder.stop(); } catch {} }
+      if (this.selfVideoDeliveryRecorder && this.isRecording()) { try { this.selfVideoDeliveryRecorder.stop(); } catch {} }
     });
   }
 
@@ -310,52 +329,6 @@ export class RecorderEngine {
     };
   }
 
-  /** Checks whether the delivered stream metrics already satisfy the requested target. */
-  private matchesVideoTarget(target: VideoResizeTarget, metrics: StreamVideoMetrics): boolean {
-    return metrics.width === target.width
-      && metrics.height === target.height
-      && (
-        typeof metrics.frameRate !== 'number'
-        || metrics.frameRate <= target.frameRate + 0.5
-      );
-  }
-
-  /** Reports when the final tab-recorder input differs from the requested preset. */
-  private maybeReportTabDeliveryWarning(
-    target: VideoResizeTarget,
-    sourceMetrics: StreamVideoMetrics,
-    outputMetrics: StreamVideoMetrics,
-    options: { resizeSetupFailed?: boolean; postprocessScheduled?: boolean } = {}
-  ): void {
-    const deliveredWidth = outputMetrics.width ?? sourceMetrics.width;
-    const deliveredHeight = outputMetrics.height ?? sourceMetrics.height;
-    const deliveredFrameRate = outputMetrics.frameRate ?? sourceMetrics.frameRate;
-    const requested = this.formatVideoMetrics(target.width, target.height, target.frameRate);
-    const delivered = this.formatVideoMetrics(deliveredWidth, deliveredHeight, deliveredFrameRate);
-    const sizeMismatch =
-      typeof deliveredWidth === 'number'
-      && typeof deliveredHeight === 'number'
-      && (deliveredWidth !== target.width || deliveredHeight !== target.height);
-    const frameRateMismatch =
-      typeof deliveredFrameRate === 'number'
-      && deliveredFrameRate > target.frameRate + 0.5;
-
-    if (options.resizeSetupFailed) {
-      this.reportWarning(
-        `Tab recording requested ${requested}, but live downscale setup failed. `
-        + `Recording will continue with ${delivered} and the saved file will be downscaled after stop.`
-      );
-      return;
-    }
-
-    if (sizeMismatch || frameRateMismatch) {
-      const suffix = options.postprocessScheduled
-        ? ` recording will continue with ${delivered} and the saved file will be downscaled after stop.`
-        : ` recorder input is ${delivered}.`;
-      this.reportWarning(`Tab recording requested ${requested}, but${suffix}`);
-    }
-  }
-
   /** Reports when the browser delivers a different camera profile than requested. */
   private maybeReportSelfVideoWarning(settings?: MediaTrackSettings): void {
     const profile = getSelfVideoProfile();
@@ -384,107 +357,35 @@ export class RecorderEngine {
     this.selfVideoStream = null;
   }
 
-  /** Prepares the live tab-recorder input and records whether post-stop downscale is required. */
+  /** Prepares the live tab master recording and records post-stop delivery requirements. */
   private async prepareTabRecorderStream(sourceStream: MediaStream): Promise<PreparedTabRecorderStream> {
-    const target = this.getTabOutputTarget();
-    const shouldAttemptResize =
-      target.width < EXTENSION_DEFAULTS.capture.tab.maxWidth
-      || target.height < EXTENSION_DEFAULTS.capture.tab.maxHeight
-      || target.frameRate < EXTENSION_DEFAULTS.capture.tab.maxFrameRate;
+    const output = getVideoOutputSettings();
     const sourceMetrics = readStreamVideoMetrics(sourceStream);
-
-    if (!shouldAttemptResize) {
-      this.logTabRecorderInput(false, sourceStream, sourceStream, target, sourceMetrics, sourceMetrics);
-      if (!this.matchesVideoTarget(target, sourceMetrics)) {
-        this.maybeReportTabDeliveryWarning(target, sourceMetrics, sourceMetrics, {
-          postprocessScheduled: true,
-        });
-      }
-      return {
-        stream: sourceStream,
-        finalize: {
-          outputTarget: target,
-          liveResized: false,
-          requiresPostprocess: !this.matchesVideoTarget(target, sourceMetrics),
-        },
-      };
-    }
-
-    try {
-      const resized = await createResizedVideoStream(sourceStream, target);
-      this.logTabRecorderInput(resized.resized, sourceStream, resized.stream, target, resized.source, resized.output);
-      if (this.matchesVideoTarget(target, resized.output)) {
-        this.cleanupResizedTabStream = resized.resized ? resized.cleanup : null;
-        return {
-          stream: resized.stream,
-          finalize: {
-            outputTarget: target,
-            liveResized: resized.resized,
-            requiresPostprocess: false,
-          },
-        };
-      }
-
-      resized.cleanup();
-      this.maybeReportTabDeliveryWarning(target, resized.source, resized.output, {
-        postprocessScheduled: true,
-      });
-      return {
-        stream: sourceStream,
-        finalize: {
-          outputTarget: target,
-          liveResized: false,
-          requiresPostprocess: true,
-        },
-      };
-    } catch (error) {
-      this.cleanupTabResizer();
-      this.deps.warn(
-        'Tab live resize setup failed; continuing with the original stream',
-        describeMediaError(error)
-      );
-      this.logTabRecorderInput(false, sourceStream, sourceStream, target, sourceMetrics, sourceMetrics);
-      this.maybeReportTabDeliveryWarning(target, sourceMetrics, sourceMetrics, { resizeSetupFailed: true });
-      return {
-        stream: sourceStream,
-        finalize: {
-          outputTarget: target,
-          liveResized: false,
-          requiresPostprocess: true,
-        },
-      };
-    }
-  }
-
-  /** Logs the delivered tab source and final recorder-input stream dimensions for diagnostics. */
-  private logTabRecorderInput(
-    resized: boolean,
-    sourceStream: MediaStream,
-    outputStream: MediaStream,
-    target: { width: number; height: number; frameRate: number },
-    sourceMetrics = readStreamVideoMetrics(sourceStream),
-    outputMetrics = readStreamVideoMetrics(outputStream)
-  ): void {
+    const target = output.tabResizePostprocess ? this.getTabOutputTarget() : undefined;
     this.deps.log('tab recorder input stream:', {
-      resized,
+      resized: false,
       sourceWidth: sourceMetrics.width,
       sourceHeight: sourceMetrics.height,
       sourceFrameRate: sourceMetrics.frameRate,
-      width: outputMetrics.width,
-      height: outputMetrics.height,
-      frameRate: outputMetrics.frameRate,
-      targetWidth: target.width,
-      targetHeight: target.height,
-      targetFrameRate: target.frameRate,
+      width: sourceMetrics.width,
+      height: sourceMetrics.height,
+      frameRate: sourceMetrics.frameRate,
+      targetWidth: target?.width,
+      targetHeight: target?.height,
+      targetFrameRate: target?.frameRate,
+      tabResizePostprocess: output.tabResizePostprocess,
+      tabMp4Output: output.tabMp4Output,
     });
-  }
 
-  /** Tears down the live tab-resize pipeline without touching the original capture stream. */
-  private cleanupTabResizer(): void {
-    try {
-      this.cleanupResizedTabStream?.();
-    } catch {}
-    this.cleanupResizedTabStream = null;
+    return {
+      stream: sourceStream,
+      finalize: {
+        outputContainer: output.tabMp4Output ? 'mp4' : 'webm',
+        resizeTabOutput: output.tabResizePostprocess,
+        outputTarget: target,
+      },
+      attemptLiveMp4Delivery: output.tabMp4Output && !output.tabResizePostprocess,
+    };
   }
 
   /** Acquires a microphone stream and rejects stale streams from an old run. */
@@ -560,6 +461,8 @@ export class RecorderEngine {
           this.finalizedArtifacts.push({
             stream: 'tab',
             artifact,
+            container: 'webm',
+            role: 'master',
             finalize: this.tabFinalizePlan ? { ...this.tabFinalizePlan } : undefined,
           });
         }
@@ -587,14 +490,19 @@ export class RecorderEngine {
 
     recorder.onerror = (e: any) => {
       this.deps.error('Tab MediaRecorder error', e);
-      this.cleanupTabResizer();
       this.safeStopStream(this.tabCaptureStream);
       this.safeStopStream(this.tabRecordingStream);
+      if (this.tabDeliveryRecorder && this.tabDeliveryRecorder.state !== 'inactive') {
+        try { this.tabDeliveryRecorder.stop(); } catch {}
+      }
       if (this.micRecorder && this.micRecorder.state !== 'inactive') {
         try { this.micRecorder.stop(); } catch {}
       }
       if (this.selfVideoRecorder && this.selfVideoRecorder.state !== 'inactive') {
         try { this.selfVideoRecorder.stop(); } catch {}
+      }
+      if (this.selfVideoDeliveryRecorder && this.selfVideoDeliveryRecorder.state !== 'inactive') {
+        try { this.selfVideoDeliveryRecorder.stop(); } catch {}
       }
       void finalize('Tab');
     };
@@ -624,6 +532,101 @@ export class RecorderEngine {
       };
 
       recorder.start(timesliceMs);
+    });
+  }
+
+  /** Starts an optional live native MP4 recorder for the tab stream without affecting the WebM master path. */
+  private async tryStartTabMp4Recorder(recordingStream: MediaStream, runStartedAt: number): Promise<void> {
+    const mime = getNativeTabMp4Mime();
+    if (!mime) {
+      this.reportWarning('Tab MP4 delivery is not supported in this Chrome runtime. The original WebM tab recording will be kept.');
+      return;
+    }
+
+    const recorder = new MediaRecorder(recordingStream, {
+      mimeType: mime,
+      videoBitsPerSecond: 1_500_000,
+      audioBitsPerSecond: 96_000,
+    });
+    this.tabDeliveryRecorder = recorder;
+
+    const filename = `google-meet-recording-${this.suffix}-${Date.now()}.mp4`;
+    const target = await this.openStorageTarget(filename, mime);
+    const timesliceMs = getChunkTimesliceMs('tab');
+    let started = false;
+    let failed = false;
+
+    const finalize = async () => {
+      try {
+        const artifact = await target.close();
+        if (artifact) {
+          if (!failed) {
+            this.finalizedArtifacts.push({
+              stream: 'tab',
+              artifact,
+              container: 'mp4',
+              role: 'delivery',
+            });
+          } else {
+            await artifact.cleanup().catch(() => {});
+          }
+        }
+      } catch (error) {
+        this.deps.warn('Tab MP4 finalize failed; WebM master will be used instead', describeMediaError(error));
+      } finally {
+        this.tabDeliveryRecorder = null;
+        if (started) this.onRecorderStopped();
+      }
+    };
+
+    recorder.ondataavailable = (event: BlobEvent) => {
+      if (!event.data?.size) return;
+      void target.write(event.data).catch((error) => {
+        failed = true;
+        this.deps.warn('Tab MP4 write failed; falling back to WebM master', describeMediaError(error));
+        try { recorder.stop(); } catch {}
+      });
+    };
+
+    recorder.onerror = (event: any) => {
+      failed = true;
+      this.deps.warn('Tab MP4 recorder failed; falling back to WebM master', describeMediaError(event));
+      if (recorder.state !== 'inactive') {
+        try { recorder.stop(); } catch {}
+      }
+    };
+
+    recorder.onstop = () => {
+      void finalize();
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      const startTimeout = setTimeout(
+        () => reject(new Error('Tab MP4 MediaRecorder did not start (timeout)')),
+        TIMEOUTS.RECORDER_START_MS
+      );
+
+      recorder.onstart = () => {
+        clearTimeout(startTimeout);
+        started = true;
+        this.onRecorderStarted();
+        logPerf(this.deps.log, 'recorder', 'recorder_started', {
+          stream: 'tab',
+          latencyMs: roundMs(nowMs() - runStartedAt),
+          mime,
+          timesliceMs,
+          role: 'delivery',
+        });
+        this.deps.log('Tab MP4 MediaRecorder started', { mime });
+        resolve();
+      };
+
+      recorder.start(timesliceMs);
+    }).catch(async (error) => {
+      this.tabDeliveryRecorder = null;
+      const artifact = await target.close().catch(() => null);
+      await artifact?.cleanup().catch(() => {});
+      throw error;
     });
   }
 
@@ -658,7 +661,14 @@ export class RecorderEngine {
     const finalize = async (label: string) => {
       try {
         const artifact = await target.close();
-        if (artifact) this.finalizedArtifacts.push({ stream: 'mic', artifact });
+        if (artifact) {
+          this.finalizedArtifacts.push({
+            stream: 'mic',
+            artifact,
+            container: 'webm',
+            role: 'master',
+          });
+        }
       } catch (e) {
         this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
       } finally {
@@ -736,6 +746,11 @@ export class RecorderEngine {
     }
 
     this.selfVideoStream = selfVideo;
+    const output = getVideoOutputSettings();
+    this.selfVideoFinalizePlan = {
+      outputContainer: output.selfVideoMp4Output ? 'mp4' : 'webm',
+      resizeTabOutput: false,
+    };
     const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate();
     const mime = getVideoOnlyMime();
     let started = false;
@@ -765,7 +780,15 @@ export class RecorderEngine {
     const finalize = async (label: string) => {
       try {
         const artifact = await target.close();
-        if (artifact) this.finalizedArtifacts.push({ stream: 'selfVideo', artifact });
+        if (artifact) {
+          this.finalizedArtifacts.push({
+            stream: 'selfVideo',
+            artifact,
+            container: 'webm',
+            role: 'master',
+            finalize: this.selfVideoFinalizePlan ? { ...this.selfVideoFinalizePlan } : undefined,
+          });
+        }
       } catch (e) {
         this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
       } finally {
@@ -779,6 +802,9 @@ export class RecorderEngine {
       this.deps.log('Self video track ended');
       if (this.selfVideoRecorder && this.selfVideoRecorder.state !== 'inactive') {
         try { this.selfVideoRecorder.stop(); } catch {}
+      }
+      if (this.selfVideoDeliveryRecorder && this.selfVideoDeliveryRecorder.state !== 'inactive') {
+        try { this.selfVideoDeliveryRecorder.stop(); } catch {}
       }
     });
 
@@ -798,6 +824,9 @@ export class RecorderEngine {
 
     recorder.onerror = (e: any) => {
       this.deps.error('Self video MediaRecorder error', e);
+      if (this.selfVideoDeliveryRecorder && this.selfVideoDeliveryRecorder.state !== 'inactive') {
+        try { this.selfVideoDeliveryRecorder.stop(); } catch {}
+      }
       this.releaseSelfVideoCapture();
       void finalize('Self video');
     };
@@ -829,6 +858,111 @@ export class RecorderEngine {
 
       recorder.start(timesliceMs);
     });
+
+    if (output.selfVideoMp4Output) {
+      void this.tryStartSelfVideoMp4Recorder(selfVideo, runStartedAt).catch((e) =>
+        this.deps.warn('Self video MP4 recorder start failed (continuing with WebM master only)', describeMediaError(e))
+      );
+    }
+  }
+
+  /** Starts an optional live native MP4 recorder for the self-video stream. */
+  private async tryStartSelfVideoMp4Recorder(selfVideo: MediaStream, runStartedAt: number): Promise<void> {
+    const mime = getNativeSelfVideoMp4Mime();
+    if (!mime) {
+      this.reportWarning('Camera MP4 delivery is not supported in this Chrome runtime. The original WebM camera recording will be kept.');
+      return;
+    }
+
+    const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate();
+    const track = selfVideo.getVideoTracks()[0];
+    const settings = track?.getSettings?.();
+    const videoBitsPerSecond = resolveSelfVideoBitrate(defaultVideoBitsPerSecond, settings);
+    const recorder = new MediaRecorder(selfVideo, {
+      mimeType: mime,
+      videoBitsPerSecond,
+    });
+    this.selfVideoDeliveryRecorder = recorder;
+
+    const filename = `google-meet-self-video-${this.suffix}-${Date.now()}.mp4`;
+    const target = await this.openStorageTarget(filename, mime);
+    const timesliceMs = getChunkTimesliceMs('selfVideo');
+    let started = false;
+    let failed = false;
+
+    const finalize = async () => {
+      try {
+        const artifact = await target.close();
+        if (artifact) {
+          if (!failed) {
+            this.finalizedArtifacts.push({
+              stream: 'selfVideo',
+              artifact,
+              container: 'mp4',
+              role: 'delivery',
+            });
+          } else {
+            await artifact.cleanup().catch(() => {});
+          }
+        }
+      } catch (error) {
+        this.deps.warn('Self video MP4 finalize failed; WebM master will be used instead', describeMediaError(error));
+      } finally {
+        this.selfVideoDeliveryRecorder = null;
+        if (started) this.onRecorderStopped();
+      }
+    };
+
+    recorder.ondataavailable = (event: BlobEvent) => {
+      if (!event.data?.size) return;
+      void target.write(event.data).catch((error) => {
+        failed = true;
+        this.deps.warn('Self video MP4 write failed; falling back to WebM master', describeMediaError(error));
+        try { recorder.stop(); } catch {}
+      });
+    };
+
+    recorder.onerror = (event: any) => {
+      failed = true;
+      this.deps.warn('Self video MP4 recorder failed; falling back to WebM master', describeMediaError(event));
+      if (recorder.state !== 'inactive') {
+        try { recorder.stop(); } catch {}
+      }
+    };
+
+    recorder.onstop = () => {
+      void finalize();
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      const startTimeout = setTimeout(
+        () => reject(new Error('Self video MP4 MediaRecorder did not start (timeout)')),
+        TIMEOUTS.RECORDER_START_MS
+      );
+
+      recorder.onstart = () => {
+        clearTimeout(startTimeout);
+        started = true;
+        this.onRecorderStarted();
+        logPerf(this.deps.log, 'recorder', 'recorder_started', {
+          stream: 'selfVideo',
+          latencyMs: roundMs(nowMs() - runStartedAt),
+          mime,
+          timesliceMs,
+          role: 'delivery',
+          videoBitsPerSecond,
+        });
+        this.deps.log('Self video MP4 MediaRecorder started', { mime, videoBitsPerSecond });
+        resolve();
+      };
+
+      recorder.start(timesliceMs);
+    }).catch(async (error) => {
+      this.selfVideoDeliveryRecorder = null;
+      const artifact = await target.close().catch(() => null);
+      await artifact?.cleanup().catch(() => {});
+      throw error;
+    });
   }
 
   /** Opens the preferred storage target and falls back to RAM buffering on failure. */
@@ -859,7 +993,6 @@ export class RecorderEngine {
     if (this.activeRecorders === 0) {
       const artifacts = [...this.finalizedArtifacts];
       this.state = 'idle';
-      this.cleanupTabResizer();
       this.safeStopStream(this.tabCaptureStream);
       this.safeStopStream(this.tabRecordingStream);
       this.safeStopStream(this.micStream);
@@ -873,6 +1006,7 @@ export class RecorderEngine {
       this.mixedAudio = null;
       this.finalizedArtifacts = [];
       this.tabFinalizePlan = null;
+      this.selfVideoFinalizePlan = null;
 
       const resolveStop = this.resolveStop;
       this.resolveStop = null;
@@ -890,9 +1024,10 @@ export class RecorderEngine {
   private resetRunState() {
     this.activeRecorders = 0;
     this.tabRecorder = null;
+    this.tabDeliveryRecorder = null;
     this.micRecorder = null;
     this.selfVideoRecorder = null;
-    this.cleanupTabResizer();
+    this.selfVideoDeliveryRecorder = null;
     this.safeStopStream(this.tabCaptureStream);
     this.safeStopStream(this.tabRecordingStream);
     this.safeStopStream(this.micStream);
@@ -909,6 +1044,7 @@ export class RecorderEngine {
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
     this.finalizedArtifacts = [];
     this.tabFinalizePlan = null;
+    this.selfVideoFinalizePlan = null;
     this.stopPromise = null;
     this.resolveStop = null;
   }

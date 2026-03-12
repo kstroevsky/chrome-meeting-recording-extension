@@ -12,6 +12,7 @@ import {
 } from '../shared/extensionSettings';
 
 export type RecorderChunkStream = 'tab' | 'mic' | 'selfVideo';
+export type RecorderVideoContainer = 'webm' | 'mp4';
 
 const DEFAULT_SELF_VIDEO_PROFILE = getSelfVideoProfileSettings(DEFAULT_EXTENSION_SETTINGS);
 
@@ -129,6 +130,11 @@ function getSupportedMime(...candidates: string[]): string {
     ?? candidates[candidates.length - 1];
 }
 
+/** Returns the first browser-supported MIME or null when no candidate is supported. */
+function getSupportedMimeOrNull(...candidates: string[]): string | null {
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? null;
+}
+
 /** Returns the preferred MIME for tab recordings with video and audio. */
 export function getVideoMime(): string {
   return getSupportedMime('video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm');
@@ -142,6 +148,24 @@ export function getVideoOnlyMime(): string {
 /** Returns the preferred MIME for audio-only microphone recordings. */
 export function getAudioMime(): string {
   return getSupportedMime('audio/webm;codecs=opus', 'audio/webm');
+}
+
+/** Returns a native MP4 MIME for tab capture when H.264/AAC recording is available. */
+export function getNativeTabMp4Mime(): string | null {
+  return getSupportedMimeOrNull(
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+    'video/mp4'
+  );
+}
+
+/** Returns a native MP4 MIME for separate camera capture when H.264 recording is available. */
+export function getNativeSelfVideoMp4Mime(): string | null {
+  return getSupportedMimeOrNull(
+    'video/mp4;codecs=avc1.42E01E',
+    'video/mp4;codecs="avc1.42E01E"',
+    'video/mp4'
+  );
 }
 
 /**

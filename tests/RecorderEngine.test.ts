@@ -150,63 +150,6 @@ describe('RecorderEngine', () => {
   let originalMediaStream: typeof MediaStream | undefined;
   let originalCreateElement: typeof document.createElement;
 
-  function installResizerDom(options: {
-    sourceWidth: number;
-    sourceHeight: number;
-    outputWidth: number;
-    outputHeight: number;
-    outputFrameRate: number;
-  }) {
-    const outputVideoTrack = makeTrack('video', {
-      width: options.outputWidth,
-      height: options.outputHeight,
-      frameRate: options.outputFrameRate,
-    });
-    const captureStream = makeStream({
-      videoTracks: [outputVideoTrack],
-    });
-    const drawImage = jest.fn();
-    const video = {
-      srcObject: null,
-      muted: false,
-      playsInline: false,
-      autoplay: false,
-      hidden: false,
-      style: {},
-      videoWidth: options.sourceWidth,
-      videoHeight: options.sourceHeight,
-      play: jest.fn().mockResolvedValue(undefined),
-      pause: jest.fn(),
-      addEventListener: jest.fn(),
-      removeEventListener: jest.fn(),
-    } as any;
-    const canvas = {
-      width: 0,
-      height: 0,
-      hidden: false,
-      style: {},
-      getContext: jest.fn(() => ({
-        drawImage,
-        imageSmoothingEnabled: false,
-        imageSmoothingQuality: 'low',
-      })),
-      captureStream: jest.fn(() => captureStream),
-    } as any;
-
-    document.createElement = jest.fn((tagName: string) => {
-      if (tagName === 'video') return video;
-      if (tagName === 'canvas') return canvas;
-      return originalCreateElement(tagName as any);
-    }) as any;
-
-    return {
-      canvas,
-      drawImage,
-      outputVideoTrack,
-      video,
-    };
-  }
-
   beforeEach(async () => {
     originalMediaRecorder = global.MediaRecorder as any;
     originalAudioContext = (global as any).AudioContext;
@@ -436,11 +379,12 @@ describe('RecorderEngine', () => {
     expect(await toText(artifacts[0].artifact.file)).toBe('tab');
   });
 
-  it('downscales the tab recorder input when the selected preset is smaller than the delivered stream', async () => {
+  it('records the original tab stream and marks tab resize postprocess when enabled', async () => {
     await saveExtensionSettingsToStorage({
       professional: {
         tabResolutionPreset: '640x360',
         tabMaxFrameRate: 24,
+        tabResizePostprocess: true,
       },
     });
 
@@ -449,13 +393,8 @@ describe('RecorderEngine', () => {
       audioTracks: [baseAudioTrack],
       videoTracks: [makeTrack('video', { width: 1920, height: 1080, frameRate: 30 })],
     });
-    const { canvas, outputVideoTrack, video } = installResizerDom({
-      sourceWidth: 1920,
-      sourceHeight: 1080,
-      outputWidth: 640,
-      outputHeight: 360,
-      outputFrameRate: 24,
-    });
+    const createElementSpy = jest.fn((tagName: string) => originalCreateElement(tagName as any));
+    document.createElement = createElementSpy as any;
 
     (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
       if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
@@ -467,24 +406,23 @@ describe('RecorderEngine', () => {
     await engine.startFromStreamId('stream-id', makeRunConfig());
 
     const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
-    expect(tabRecorder?.stream.getVideoTracks()).toEqual([outputVideoTrack]);
-    expect(tabRecorder?.stream.getAudioTracks()).toEqual([baseAudioTrack]);
-    expect(canvas.captureStream).toHaveBeenCalledWith(24);
-    expect(video.play).toHaveBeenCalledTimes(1);
+    expect(tabRecorder?.stream).toBe(baseStream);
+    expect(createElementSpy).not.toHaveBeenCalled();
 
     const artifacts = await engine.stop();
     expect(artifacts[0].finalize).toEqual({
+      outputContainer: 'webm',
+      resizeTabOutput: true,
       outputTarget: { width: 640, height: 360, frameRate: 24 },
-      liveResized: true,
-      requiresPostprocess: false,
     });
   });
 
-  it('preserves mixed microphone audio when the tab stream is downscaled', async () => {
+  it('preserves mixed microphone audio when tab resize postprocess is enabled', async () => {
     await saveExtensionSettingsToStorage({
       professional: {
         tabResolutionPreset: '640x360',
         tabMaxFrameRate: 24,
+        tabResizePostprocess: true,
       },
     });
 
@@ -509,13 +447,6 @@ describe('RecorderEngine', () => {
     const micStream = makeStream({
       audioTracks: [makeTrack('audio')],
     });
-    const { outputVideoTrack } = installResizerDom({
-      sourceWidth: 1920,
-      sourceHeight: 1080,
-      outputWidth: 640,
-      outputHeight: 360,
-      outputFrameRate: 24,
-    });
 
     (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
       if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
@@ -528,25 +459,23 @@ describe('RecorderEngine', () => {
     await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'mixed' }));
 
     const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
-    expect(tabRecorder?.stream.getVideoTracks()).toEqual([outputVideoTrack]);
     expect(tabRecorder?.stream.getAudioTracks()).toEqual([mixedAudioTrack]);
+    expect(tabRecorder?.stream.getVideoTracks()).toEqual(baseStream.getVideoTracks());
 
     await engine.stop();
   });
 
-  it('bypasses the resizer when the delivered source already fits the selected preset', async () => {
+  it('attempts a live tab MP4 delivery recorder when requested without resize', async () => {
     await saveExtensionSettingsToStorage({
       professional: {
-        tabResolutionPreset: '1280x720',
+        tabMp4Output: true,
       },
     });
 
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
-      videoTracks: [makeTrack('video', { width: 640, height: 360, frameRate: 30 })],
+      videoTracks: [makeTrack('video', { width: 1280, height: 720, frameRate: 30 })],
     });
-    const createElementSpy = jest.fn((tagName: string) => originalCreateElement(tagName as any));
-    document.createElement = createElementSpy as any;
 
     (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
       if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
@@ -557,99 +486,71 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig());
 
-    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
-    expect(tabRecorder?.stream).toBe(baseStream);
-    expect(createElementSpy).not.toHaveBeenCalled();
-
-    await engine.stop();
-  });
-
-  it('falls back to the original tab stream when live resize setup fails', async () => {
-    await saveExtensionSettingsToStorage({
-      professional: {
-        tabResolutionPreset: '640x360',
-      },
-    });
-
-    const baseStream = makeStream({
-      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
-      videoTracks: [makeTrack('video', { width: 1920, height: 1080, frameRate: 30 })],
-    });
-    const video = {
-      srcObject: null,
-      muted: false,
-      playsInline: false,
-      autoplay: false,
-      hidden: false,
-      style: {},
-      videoWidth: 1920,
-      videoHeight: 1080,
-      play: jest.fn().mockResolvedValue(undefined),
-      pause: jest.fn(),
-      addEventListener: jest.fn(),
-      removeEventListener: jest.fn(),
-    } as any;
-    document.createElement = jest.fn((tagName: string) => {
-      if (tagName === 'video') return video;
-      if (tagName === 'canvas') {
-        return {
-          width: 0,
-          height: 0,
-          hidden: false,
-          style: {},
-          getContext: jest.fn(() => null),
-          captureStream: jest.fn(),
-        };
-      }
-      return originalCreateElement(tagName as any);
-    }) as any;
-
-    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
-      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
-      throw new Error('Unexpected getUserMedia call');
-    });
-
-    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
-
-    await engine.startFromStreamId('stream-id', makeRunConfig());
-
-    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
-    expect(tabRecorder?.stream).toBe(baseStream);
-    expect(deps.warn).toHaveBeenCalledWith(
-      'Tab live resize setup failed; continuing with the original stream',
-      expect.any(String)
-    );
-    expect(deps.reportWarning).toHaveBeenCalledWith(
-      'Tab recording requested 640x360@30fps, but live downscale setup failed. Recording will continue with 1920x1080@30fps and the saved file will be downscaled after stop.'
+    const tabRecorders = FakeMediaRecorder.instances.filter((instance) => instance.kind === 'tab');
+    expect(tabRecorders).toHaveLength(2);
+    expect(tabRecorders.map((instance) => instance.options.mimeType)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('video/webm'),
+        expect.stringContaining('video/mp4'),
+      ])
     );
 
     const artifacts = await engine.stop();
-    expect(artifacts.map((entry) => entry.stream)).toEqual(['tab']);
-    expect(artifacts[0].finalize).toEqual({
-      outputTarget: { width: 640, height: 360, frameRate: 30 },
-      liveResized: false,
-      requiresPostprocess: true,
-    });
+    expect(artifacts.filter((entry) => entry.stream === 'tab').map((entry) => entry.container).sort()).toEqual(['mp4', 'webm']);
   });
 
-  it('records the original tab stream and schedules postprocess when live resize output still misses the target', async () => {
+  it('attempts a live self-video MP4 delivery recorder when requested', async () => {
+    await saveExtensionSettingsToStorage({
+      professional: {
+        selfVideoMp4Output: true,
+      },
+    });
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video', { width: 1280, height: 720, frameRate: 30 })],
+    });
+    const selfVideoStream = makeStream({
+      videoTracks: [makeTrack('video', { width: 1280, height: 720, frameRate: 30 })],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.video && constraints.audio === false) return selfVideoStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ recordSelfVideo: true }));
+    await flushAsyncWork();
+
+    const selfVideoRecorders = FakeMediaRecorder.instances.filter((instance) => instance.kind === 'selfVideo');
+    expect(selfVideoRecorders).toHaveLength(2);
+    expect(selfVideoRecorders.map((instance) => instance.options.mimeType)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('video/webm'),
+        expect.stringContaining('video/mp4'),
+      ])
+    );
+
+    const artifacts = await engine.stop();
+    expect(artifacts.filter((entry) => entry.stream === 'selfVideo').map((entry) => entry.container).sort()).toEqual(['mp4', 'webm']);
+  });
+
+  it('skips live tab MP4 delivery when resize postprocess is also enabled', async () => {
     await saveExtensionSettingsToStorage({
       professional: {
         tabResolutionPreset: '640x360',
         tabMaxFrameRate: 24,
+        tabResizePostprocess: true,
+        tabMp4Output: true,
       },
     });
 
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
       videoTracks: [makeTrack('video', { width: 1920, height: 1080, frameRate: 30 })],
-    });
-    installResizerDom({
-      sourceWidth: 1920,
-      sourceHeight: 1080,
-      outputWidth: 1280,
-      outputHeight: 720,
-      outputFrameRate: 24,
     });
 
     (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
@@ -661,17 +562,15 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig());
 
-    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
-    expect(tabRecorder?.stream).toBe(baseStream);
-    expect(deps.reportWarning).toHaveBeenCalledWith(
-      'Tab recording requested 640x360@24fps, but recording will continue with 1280x720@24fps and the saved file will be downscaled after stop.'
-    );
+    const tabRecorders = FakeMediaRecorder.instances.filter((instance) => instance.kind === 'tab');
+    expect(tabRecorders).toHaveLength(1);
+    expect(tabRecorders[0].options.mimeType).toContain('video/webm');
 
     const artifacts = await engine.stop();
     expect(artifacts[0].finalize).toEqual({
+      outputContainer: 'mp4',
+      resizeTabOutput: true,
       outputTarget: { width: 640, height: 360, frameRate: 24 },
-      liveResized: false,
-      requiresPostprocess: true,
     });
   });
 
@@ -697,7 +596,7 @@ describe('RecorderEngine', () => {
 
     const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
     const micRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'mic');
-    expect(tabRecorder?.timesliceMs).toBe(2000);
+    expect(tabRecorder?.timesliceMs).toBe(4000);
     expect(micRecorder?.timesliceMs).toBe(4000);
   });
 
@@ -721,7 +620,7 @@ describe('RecorderEngine', () => {
 
     const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
     const micRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'mic');
-    expect(tabRecorder?.timesliceMs).toBe(2000);
+    expect(tabRecorder?.timesliceMs).toBe(4000);
     expect(micRecorder?.timesliceMs).toBe(2000);
   });
 
@@ -749,7 +648,7 @@ describe('RecorderEngine', () => {
 
     const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
     const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
-    expect(tabRecorder?.timesliceMs).toBe(2000);
+    expect(tabRecorder?.timesliceMs).toBe(4000);
     expect(selfVideoRecorder?.timesliceMs).toBe(4000);
   });
 

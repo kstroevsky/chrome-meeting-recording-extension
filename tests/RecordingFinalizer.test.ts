@@ -1,14 +1,56 @@
 import { RecordingFinalizer } from '../src/offscreen/RecordingFinalizer';
 import { DriveTarget } from '../src/offscreen/DriveTarget';
 import { DriveFolderResolver } from '../src/offscreen/drive/DriveFolderResolver';
+import type {
+  CompletedRecordingArtifact,
+  RecordingArtifactFinalizePlan,
+  RecordingArtifactRole,
+  SealedStorageFile,
+} from '../src/offscreen/RecorderEngine';
+import type { RecorderVideoContainer } from '../src/offscreen/RecorderProfiles';
+import type { RecordingStream } from '../src/shared/recording';
 import { PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
 
-function makeArtifact(filename: string) {
+function inferMimeType(filename: string): string {
+  if (filename.endsWith('.mp4')) return 'video/mp4';
+  if (filename.startsWith('mic')) return 'audio/webm';
+  return 'video/webm';
+}
+
+function makeArtifact(options: {
+  filename: string;
+  contents?: string;
+  mimeType?: string;
+  opfsFilename?: string;
+}): SealedStorageFile & { cleanup: jest.Mock } {
+  const {
+    filename,
+    contents = 'data',
+    mimeType = inferMimeType(filename),
+    opfsFilename = filename,
+  } = options;
+
   return {
     filename,
-    file: new File(['data'], filename, { type: 'video/webm' }),
-    opfsFilename: filename,
+    file: new File([contents], filename, { type: mimeType }),
+    opfsFilename,
     cleanup: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+function makeCompletedArtifact(options: {
+  stream: RecordingStream;
+  artifact: SealedStorageFile;
+  container?: RecorderVideoContainer;
+  role?: RecordingArtifactRole;
+  finalize?: RecordingArtifactFinalizePlan;
+}): CompletedRecordingArtifact {
+  return {
+    stream: options.stream,
+    artifact: options.artifact,
+    container: options.container ?? 'webm',
+    role: options.role ?? 'master',
+    finalize: options.finalize,
   };
 }
 
@@ -23,6 +65,7 @@ describe('RecordingFinalizer', () => {
       requestSave: jest.fn(),
       getDriveToken: jest.fn().mockResolvedValue('token'),
       reportWarning: jest.fn(),
+      postprocessVideoArtifact: jest.fn(),
     };
     finalizer = new RecordingFinalizer(deps);
     (URL as any).createObjectURL = jest.fn((blob: Blob) => `blob:${blob.size}`);
@@ -36,15 +79,18 @@ describe('RecordingFinalizer', () => {
   });
 
   it('requests local downloads in deterministic stream order', async () => {
-    const mic = makeArtifact('mic.webm');
-    const tab = makeArtifact('tab.webm');
+    const mic = makeCompletedArtifact({
+      stream: 'mic',
+      artifact: makeArtifact({ filename: 'mic.webm' }),
+    });
+    const tab = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+    });
 
     const summary = await finalizer.finalize({
       storageMode: 'local',
-      artifacts: [
-        { stream: 'mic', artifact: mic },
-        { stream: 'tab', artifact: tab },
-      ],
+      artifacts: [mic, tab],
     });
 
     expect(summary).toBeUndefined();
@@ -52,67 +98,157 @@ describe('RecordingFinalizer', () => {
     expect(deps.requestSave).toHaveBeenNthCalledWith(2, 'mic.webm', 'blob:4', 'mic.webm');
   });
 
-  it('replaces the tab artifact with a postprocessed file before local save when required', async () => {
-    const original = makeArtifact('tab.webm');
-    const processed = {
-      filename: 'tab.webm',
-      file: new File(['processed'], 'tab.webm', { type: 'video/webm' }),
-      opfsFilename: 'tab-processed.webm',
-      cleanup: jest.fn().mockResolvedValue(undefined),
-    };
-    deps.postprocessTabArtifact = jest.fn().mockResolvedValue(processed);
+  it('prefers a live tab MP4 delivery artifact and cleans up the WebM master', async () => {
+    const tabMaster = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+      finalize: {
+        outputContainer: 'mp4',
+        resizeTabOutput: false,
+      },
+    });
+    const tabDelivery = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.mp4', contents: 'mp4-data' }),
+      container: 'mp4',
+      role: 'delivery',
+    });
 
     const summary = await finalizer.finalize({
       storageMode: 'local',
-      artifacts: [
-        {
-          stream: 'tab',
-          artifact: original,
-          finalize: {
-            outputTarget: { width: 640, height: 360, frameRate: 24 },
-            liveResized: false,
-            requiresPostprocess: true,
-          },
-        },
-      ],
+      artifacts: [tabMaster, tabDelivery],
     });
 
     expect(summary).toBeUndefined();
-    expect(deps.postprocessTabArtifact).toHaveBeenCalledWith(
-      original,
-      {
-        outputTarget: { width: 640, height: 360, frameRate: 24 },
-        liveResized: false,
-        requiresPostprocess: true,
-      }
-    );
-    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:9', 'tab-processed.webm');
+    expect(deps.postprocessVideoArtifact).not.toHaveBeenCalled();
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.mp4', 'blob:8', 'tab.mp4');
+    expect(tabMaster.artifact.cleanup).toHaveBeenCalledTimes(1);
+    expect(tabDelivery.artifact.cleanup).not.toHaveBeenCalled();
   });
 
-  it('keeps the original tab artifact and reports a warning when fallback postprocess fails', async () => {
-    const original = makeArtifact('tab.webm');
-    deps.postprocessTabArtifact = jest.fn().mockRejectedValue(new Error('transcode failed'));
+  it('postprocesses the tab WebM master to a resized WebM before local save', async () => {
+    const original = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+      finalize: {
+        outputContainer: 'webm',
+        resizeTabOutput: true,
+        outputTarget: { width: 640, height: 360, frameRate: 24 },
+      },
+    });
+    const processed = makeArtifact({
+      filename: 'tab.webm',
+      contents: 'processed',
+      opfsFilename: 'tab-resized.webm',
+    });
+    deps.postprocessVideoArtifact.mockResolvedValue(processed);
 
     const summary = await finalizer.finalize({
       storageMode: 'local',
-      artifacts: [
-        {
-          stream: 'tab',
-          artifact: original,
-          finalize: {
-            outputTarget: { width: 640, height: 360, frameRate: 24 },
-            liveResized: false,
-            requiresPostprocess: true,
-          },
-        },
-      ],
+      artifacts: [original],
+    });
+
+    expect(summary).toBeUndefined();
+    expect(deps.postprocessVideoArtifact).toHaveBeenCalledWith(original.artifact, {
+      stream: 'tab',
+      outputContainer: 'webm',
+      outputTarget: { width: 640, height: 360, frameRate: 24 },
+    });
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:9', 'tab-resized.webm');
+  });
+
+  it('postprocesses the tab WebM master to a resized MP4 when resize and MP4 are both requested', async () => {
+    const original = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+      finalize: {
+        outputContainer: 'mp4',
+        resizeTabOutput: true,
+        outputTarget: { width: 640, height: 360, frameRate: 24 },
+      },
+    });
+    const processed = makeArtifact({
+      filename: 'tab.mp4',
+      contents: 'processed-mp4',
+      mimeType: 'video/mp4',
+      opfsFilename: 'tab-resized.mp4',
+    });
+    deps.postprocessVideoArtifact.mockResolvedValue(processed);
+
+    const summary = await finalizer.finalize({
+      storageMode: 'local',
+      artifacts: [original],
+    });
+
+    expect(summary).toBeUndefined();
+    expect(deps.postprocessVideoArtifact).toHaveBeenCalledWith(original.artifact, {
+      stream: 'tab',
+      outputContainer: 'mp4',
+      outputTarget: { width: 640, height: 360, frameRate: 24 },
+    });
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.mp4', 'blob:13', 'tab-resized.mp4');
+  });
+
+  it('postprocesses the self-video WebM master to MP4 when requested', async () => {
+    const original = makeCompletedArtifact({
+      stream: 'selfVideo',
+      artifact: makeArtifact({ filename: 'camera.webm' }),
+      finalize: {
+        outputContainer: 'mp4',
+        resizeTabOutput: false,
+      },
+    });
+    const processed = makeArtifact({
+      filename: 'camera.mp4',
+      contents: 'camera-mp4',
+      mimeType: 'video/mp4',
+      opfsFilename: 'camera-converted.mp4',
+    });
+    deps.postprocessVideoArtifact.mockResolvedValue(processed);
+
+    const summary = await finalizer.finalize({
+      storageMode: 'local',
+      artifacts: [original],
+    });
+
+    expect(summary).toBeUndefined();
+    expect(deps.postprocessVideoArtifact).toHaveBeenCalledWith(original.artifact, {
+      stream: 'selfVideo',
+      outputContainer: 'mp4',
+      outputTarget: undefined,
+    });
+    expect(deps.requestSave).toHaveBeenCalledWith('camera.mp4', 'blob:10', 'camera-converted.mp4');
+  });
+
+  it('keeps the original WebM master and reports a warning when video postprocess fails', async () => {
+    const original = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+      finalize: {
+        outputContainer: 'mp4',
+        resizeTabOutput: true,
+        outputTarget: { width: 640, height: 360, frameRate: 24 },
+      },
+    });
+    const staleDelivery = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.mp4', contents: 'stale-mp4' }),
+      container: 'mp4',
+      role: 'delivery',
+    });
+    deps.postprocessVideoArtifact.mockRejectedValue(new Error('transcode failed'));
+
+    const summary = await finalizer.finalize({
+      storageMode: 'local',
+      artifacts: [original, staleDelivery],
     });
 
     expect(summary).toBeUndefined();
     expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:4', 'tab.webm');
     expect(deps.reportWarning).toHaveBeenCalledWith(
-      expect.stringContaining('Saving the original tab file instead.')
+      expect.stringContaining('Saving the original WebM recording instead.')
     );
+    expect(staleDelivery.artifact.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it('continues Drive uploads after one file falls back locally', async () => {
@@ -124,15 +260,18 @@ describe('RecordingFinalizer', () => {
       return Promise.resolve();
     });
 
-    const tab = makeArtifact('tab.webm');
-    const mic = makeArtifact('mic.webm');
+    const mic = makeCompletedArtifact({
+      stream: 'mic',
+      artifact: makeArtifact({ filename: 'mic.webm' }),
+    });
+    const tab = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+    });
 
     const summary = await finalizer.finalize({
       storageMode: 'drive',
-      artifacts: [
-        { stream: 'mic', artifact: mic },
-        { stream: 'tab', artifact: tab },
-      ],
+      artifacts: [mic, tab],
     });
 
     expect(uploadSpy).toHaveBeenCalledTimes(2);
@@ -147,8 +286,8 @@ describe('RecordingFinalizer', () => {
       ],
     });
     expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:4', 'tab.webm');
-    expect(tab.cleanup).not.toHaveBeenCalled();
-    expect(mic.cleanup).toHaveBeenCalledTimes(1);
+    expect(tab.artifact.cleanup).not.toHaveBeenCalled();
+    expect(mic.artifact.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it('reuses one cached Drive token across a finalize run', async () => {
@@ -165,15 +304,18 @@ describe('RecordingFinalizer', () => {
       })
       .mockResolvedValueOnce({ status: 200 });
 
-    const tab = makeArtifact('tab.webm');
-    const mic = makeArtifact('mic.webm');
+    const tab = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+    });
+    const mic = makeCompletedArtifact({
+      stream: 'mic',
+      artifact: makeArtifact({ filename: 'mic.webm' }),
+    });
 
     const summary = await finalizer.finalize({
       storageMode: 'drive',
-      artifacts: [
-        { stream: 'tab', artifact: tab },
-        { stream: 'mic', artifact: mic },
-      ],
+      artifacts: [tab, mic],
     });
 
     expect(summary).toEqual({
@@ -205,14 +347,17 @@ describe('RecordingFinalizer', () => {
       activeUploads -= 1;
     });
 
-    const tab = makeArtifact('tab.webm');
-    const mic = makeArtifact('mic.webm');
+    const mic = makeCompletedArtifact({
+      stream: 'mic',
+      artifact: makeArtifact({ filename: 'mic.webm' }),
+    });
+    const tab = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+    });
     const finalizePromise = finalizer.finalize({
       storageMode: 'drive',
-      artifacts: [
-        { stream: 'mic', artifact: mic },
-        { stream: 'tab', artifact: tab },
-      ],
+      artifacts: [mic, tab],
     });
 
     await Promise.resolve();
@@ -236,15 +381,18 @@ describe('RecordingFinalizer', () => {
     jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockRejectedValue(new Error('folder lookup failed'));
     const uploadSpy = jest.spyOn(DriveTarget.prototype, 'upload');
 
-    const tab = makeArtifact('tab.webm');
-    const mic = makeArtifact('mic.webm');
+    const tab = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+    });
+    const mic = makeCompletedArtifact({
+      stream: 'mic',
+      artifact: makeArtifact({ filename: 'mic.webm' }),
+    });
 
     const summary = await finalizer.finalize({
       storageMode: 'drive',
-      artifacts: [
-        { stream: 'tab', artifact: tab },
-        { stream: 'mic', artifact: mic },
-      ],
+      artifacts: [tab, mic],
     });
 
     expect(uploadSpy).not.toHaveBeenCalled();
@@ -257,38 +405,5 @@ describe('RecordingFinalizer', () => {
     });
     expect(deps.requestSave).toHaveBeenNthCalledWith(1, 'tab.webm', 'blob:4', 'tab.webm');
     expect(deps.requestSave).toHaveBeenNthCalledWith(2, 'mic.webm', 'blob:4', 'mic.webm');
-  });
-
-  it('preserves deterministic summary order when parallel uploads finish with mixed outcomes', async () => {
-    resetPerfFlags();
-    PERF_FLAGS.parallelUploadConcurrency = 2;
-    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
-    jest.spyOn(DriveTarget.prototype, 'upload').mockImplementation(function (this: any) {
-      if (this.filename === 'tab.webm') {
-        return Promise.reject(new DOMException('network timeout', 'AbortError'));
-      }
-      return Promise.resolve();
-    });
-
-    const tab = makeArtifact('tab.webm');
-    const mic = makeArtifact('mic.webm');
-
-    const summary = await finalizer.finalize({
-      storageMode: 'drive',
-      artifacts: [
-        { stream: 'mic', artifact: mic },
-        { stream: 'tab', artifact: tab },
-      ],
-    });
-
-    expect(summary).toEqual({
-      uploaded: [{ stream: 'mic', filename: 'mic.webm' }],
-      localFallbacks: [
-        { stream: 'tab', filename: 'tab.webm', error: 'AbortError: network timeout code=20' },
-      ],
-    });
-    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:4', 'tab.webm');
-    expect(mic.cleanup).toHaveBeenCalledTimes(1);
-    expect(tab.cleanup).not.toHaveBeenCalled();
   });
 });

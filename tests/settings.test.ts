@@ -22,6 +22,9 @@ describe('settings page', () => {
       selfVideoMinAdaptiveBitrate: 1_000_000,
       tabResolutionPreset: '854x480',
       tabMaxFrameRate: 24,
+      tabResizePostprocess: false,
+      tabMp4Output: false,
+      selfVideoMp4Output: false,
       microphoneEchoCancellation: true,
       microphoneNoiseSuppression: true,
       microphoneAutoGainControl: true,
@@ -62,6 +65,9 @@ describe('settings page', () => {
     (document.getElementById('separate-camera') as HTMLInputElement).checked = false;
     (document.getElementById('self-video-resolution-preset') as HTMLSelectElement).value = '640x360';
     (document.getElementById('tab-resolution-preset') as HTMLSelectElement).value = '1920x1080';
+    (document.getElementById('tab-resize-postprocess') as HTMLInputElement).checked = true;
+    (document.getElementById('tab-mp4-output') as HTMLInputElement).checked = true;
+    (document.getElementById('self-video-mp4-output') as HTMLInputElement).checked = true;
     (document.getElementById('save-settings') as HTMLButtonElement).click();
     await Promise.resolve();
 
@@ -78,6 +84,9 @@ describe('settings page', () => {
         selfVideoMinAdaptiveBitrate: 1000000,
         tabResolutionPreset: '1920x1080',
         tabMaxFrameRate: 24,
+        tabResizePostprocess: true,
+        tabMp4Output: true,
+        selfVideoMp4Output: true,
         microphoneEchoCancellation: true,
         microphoneNoiseSuppression: true,
         microphoneAutoGainControl: true,

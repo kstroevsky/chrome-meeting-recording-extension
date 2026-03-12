@@ -325,6 +325,33 @@
         <input id="tab-max-frame-rate" type="number" min="1" max="120" />
 
         <div class="field-label">
+          <label for="tab-resize-postprocess">Resize tab recording after capture</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain tab resize postprocess" aria-controls="tooltip-tab-resize-postprocess" aria-expanded="false">?</button>
+            <span id="tooltip-tab-resize-postprocess" class="tooltip-bubble" role="tooltip" hidden>When enabled, the extension keeps the original tab recording during the meeting and resizes the final saved tab file after capture stops.</span>
+          </span>
+        </div>
+        <input id="tab-resize-postprocess" type="checkbox" />
+
+        <div class="field-label">
+          <label for="tab-mp4-output">Save tab as MP4</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain tab MP4 output" aria-controls="tooltip-tab-mp4-output" aria-expanded="false">?</button>
+            <span id="tooltip-tab-mp4-output" class="tooltip-bubble" role="tooltip" hidden>Tries to deliver the final tab file as native MP4 (H.264/AAC) when Chrome supports it. If MP4 delivery fails, the original WebM is saved instead.</span>
+          </span>
+        </div>
+        <input id="tab-mp4-output" type="checkbox" />
+
+        <div class="field-label">
+          <label for="self-video-mp4-output">Save camera as MP4</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain camera MP4 output" aria-controls="tooltip-self-video-mp4-output" aria-expanded="false">?</button>
+            <span id="tooltip-self-video-mp4-output" class="tooltip-bubble" role="tooltip" hidden>Tries to deliver the separate camera file as native MP4 (H.264 video-only) when Chrome supports it. If MP4 delivery fails, the original WebM is saved instead.</span>
+          </span>
+        </div>
+        <input id="self-video-mp4-output" type="checkbox" />
+
+        <div class="field-label">
           <label for="mic-echo-cancellation">Microphone echo cancellation</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain echo cancellation" aria-controls="tooltip-mic-echo-cancellation" aria-expanded="false">?</button>

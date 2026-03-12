@@ -21,6 +21,9 @@ describe('extensionSettings', () => {
         maxHeight: 1080,
       })
     );
+    expect(DEFAULT_EXTENSION_SETTINGS.professional.tabResizePostprocess).toBe(false);
+    expect(DEFAULT_EXTENSION_SETTINGS.professional.tabMp4Output).toBe(false);
+    expect(DEFAULT_EXTENSION_SETTINGS.professional.selfVideoMp4Output).toBe(false);
   });
 
   it('accepts the new preset fields directly', () => {
@@ -30,11 +33,17 @@ describe('extensionSettings', () => {
       },
       professional: {
         tabResolutionPreset: '854x480',
+        tabResizePostprocess: true,
+        tabMp4Output: true,
+        selfVideoMp4Output: true,
       },
     });
 
     expect(settings.basic.selfVideoResolutionPreset).toBe('1280x720');
     expect(settings.professional.tabResolutionPreset).toBe('854x480');
+    expect(settings.professional.tabResizePostprocess).toBe(true);
+    expect(settings.professional.tabMp4Output).toBe(true);
+    expect(settings.professional.selfVideoMp4Output).toBe(true);
     expect(getSelfVideoProfileSettings(settings)).toEqual(
       expect.objectContaining({
         width: 1280,
