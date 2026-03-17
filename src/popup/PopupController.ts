@@ -26,12 +26,21 @@ import {
   setStatusText,
   type PopupElements,
 } from './popupView';
-import { describeRunConfig, formatUploadFallbackMessage, STATUS_BY_PHASE } from './popupStatus';
+import {
+  describeRecordingWarnings,
+  describeRunConfig,
+  formatUploadFallbackMessage,
+  STATUS_BY_PHASE,
+} from './popupStatus';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
+import {
+  buildDefaultRunConfigFromSettings,
+  loadExtensionSettingsFromStorage,
+} from '../shared/extensionSettings';
 import {
   createDefaultRunConfig,
   getRunConfigOrDefault,
@@ -52,21 +61,27 @@ export class PopupController {
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
   private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
+  private activeWarnings: string[] = [];
+  private idleDefaultRunConfig: RecordingRunConfig = createDefaultRunConfig();
 
+  /** Binds popup DOM elements to the controller that owns interaction logic. */
   constructor(el: PopupElements) {
     this.el = el;
   }
 
+  /** Wires every popup interaction and kicks off the initial status refresh. */
   init() {
-    this.setActiveRunConfig(createDefaultRunConfig());
+    this.setActiveRunConfig({ ...this.idleDefaultRunConfig });
     this.wireRecordingStateListener();
     this.wireTranscriptDownload();
     this.wireStartStop();
     this.wireMic();
+    this.wireSettingsLink();
     this.wireDiagnosticsLink();
     void this.refreshInitialUi();
   }
 
+  /** Clears transient timers when the popup is torn down. */
   destroy() {
     if (this.statusTimer) {
       clearTimeout(this.statusTimer);
@@ -74,34 +89,46 @@ export class PopupController {
     }
   }
 
+  /** Applies control enabled/disabled state and persistent text for a phase change. */
   private setUI(phase: RecordingPhase) {
     setControlsForPhase(this.el, phase);
     this.lastPhase = phase;
     this.syncPhaseStatus(phase);
   }
 
+  /** Writes one line of status text into the popup. */
   private setStatus(text: string) {
     setStatusText(this.el, text);
   }
 
+  /** Recomputes the persistent phase text shown when no toast is active. */
   private syncPhaseStatus(phase: RecordingPhase) {
+    const warning = describeRecordingWarnings(this.activeWarnings);
     if (phase === 'idle') {
-      this.persistentStatus = '';
+      this.persistentStatus = warning;
     } else {
       const run = describeRunConfig(this.activeRunConfig);
-      const suffix = run ? ` ${run}` : '';
-      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${suffix}`;
+      const runSuffix = run ? ` ${run}` : '';
+      const warningSuffix = warning ? ` ${warning}` : '';
+      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${runSuffix}${warningSuffix}`;
     }
     if (!this.statusTimer) {
       this.setStatus(this.persistentStatus);
     }
   }
 
+  /** Stores the active run config and reflects it into the popup controls. */
   private setActiveRunConfig(config: RecordingRunConfig | null) {
     this.activeRunConfig = config;
     applyRunConfigToForm(this.el, config);
   }
 
+  /** Stores active recording warnings so they can be shown in the popup status line. */
+  private setActiveWarnings(warnings?: string[]) {
+    this.activeWarnings = warnings ? [...warnings] : [];
+  }
+
+  /** Shows a temporary toast before restoring the persistent phase status. */
   private toast(msg: string) {
     if (this.statusTimer) {
       clearTimeout(this.statusTimer);
@@ -117,12 +144,14 @@ export class PopupController {
     if (isTestRuntime()) console.log('[popup]', msg);
   }
 
+  /** Applies a canonical session snapshot coming from background into the popup UI. */
   private applySession(snapshot: RecordingSessionSnapshot) {
     const prevPhase = this.lastPhase;
     const runConfig = snapshot.phase === 'idle'
-      ? createDefaultRunConfig()
+      ? { ...this.idleDefaultRunConfig }
       : getRunConfigOrDefault(snapshot.runConfig);
     this.setActiveRunConfig(runConfig);
+    this.setActiveWarnings(snapshot.warnings);
     this.setUI(snapshot.phase);
 
     if (snapshot.phase === 'failed' && snapshot.error) {
@@ -132,16 +161,25 @@ export class PopupController {
     this.handleUploadSummary(prevPhase, snapshot.phase, snapshot.uploadSummary);
   }
 
+  /** Loads settings-derived defaults and then hydrates the live background session state. */
   private async refreshInitialUi() {
+    try {
+      const settings = await loadExtensionSettingsFromStorage();
+      this.idleDefaultRunConfig = buildDefaultRunConfigFromSettings(settings);
+    } catch {
+      this.idleDefaultRunConfig = createDefaultRunConfig();
+    }
+
     try {
       const res = await sendToBackground({ type: 'GET_RECORDING_STATUS' });
       this.applySession(normalizeSessionSnapshot(res.session));
     } catch {
-      this.setActiveRunConfig(createDefaultRunConfig());
+      this.setActiveRunConfig({ ...this.idleDefaultRunConfig });
       this.setUI('idle');
     }
   }
 
+  /** Subscribes the popup to background session and save notifications. */
   private wireRecordingStateListener() {
     chrome.runtime.onMessage.addListener((msg: BgToPopup) => {
       if (msg?.type === 'RECORDING_STATE') {
@@ -159,6 +197,7 @@ export class PopupController {
     });
   }
 
+  /** Shows at most one upload summary for each completed finalize result. */
   private handleUploadSummary(
     prevPhase: RecordingPhase,
     phase: RecordingPhase,
@@ -181,11 +220,23 @@ export class PopupController {
     }
   }
 
+  /** Connects the microphone permission button to its service helper. */
   private wireMic() {
     if (!this.el.micBtn) return;
     this.mic.bindButton(this.el.micBtn);
   }
 
+  /** Opens the dedicated settings page from the popup gear button. */
+  private wireSettingsLink() {
+    const { openSettingsBtn } = this.el;
+    if (!openSettingsBtn) return;
+
+    openSettingsBtn.addEventListener('click', async () => {
+      await createRuntimeTab('settings.html');
+    });
+  }
+
+  /** Opens diagnostics in dev builds and hides the button elsewhere. */
   private wireDiagnosticsLink() {
     const { openDiagnosticsBtn } = this.el;
     if (!openDiagnosticsBtn) return;
@@ -201,6 +252,7 @@ export class PopupController {
     });
   }
 
+  /** Downloads the accumulated transcript from the active meeting tab. */
   private wireTranscriptDownload() {
     const { saveBtn } = this.el;
     if (!saveBtn) return;
@@ -236,6 +288,7 @@ export class PopupController {
     });
   }
 
+  /** Wires the popup's start/stop controls into the background recording flow. */
   private wireStartStop() {
     const { startBtn, stopBtn } = this.el;
     if (!startBtn || !stopBtn) return;

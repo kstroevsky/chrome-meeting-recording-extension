@@ -11,6 +11,7 @@ describe('PopupController', () => {
   let elements: any;
   let mockSendMessage: jest.Mock;
   let mockTabsQuery: jest.Mock;
+  let mockTabSendMessage: jest.Mock;
 
   beforeEach(() => {
     const makeRunConfig = (overrides: Partial<RecordingRunConfig> = {}): RecordingRunConfig => ({
@@ -29,6 +30,7 @@ describe('PopupController', () => {
       stopBtn: document.createElement('button'),
       storageModeSelect: document.createElement('select'),
       recordSelfVideoCheckbox: document.createElement('input'),
+      openSettingsBtn: document.createElement('button'),
       openDiagnosticsBtn: document.createElement('button'),
       recordingStatusEl: document.createElement('div'),
     };
@@ -57,6 +59,11 @@ describe('PopupController', () => {
 
     mockTabsQuery = chrome.tabs.query as jest.Mock;
     mockTabsQuery.mockResolvedValue([{ id: 101, url: 'https://meet.google.com/abc-defg' }]);
+    mockTabSendMessage = chrome.tabs.sendMessage as jest.Mock;
+    mockTabSendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+      if (message.type === 'RESET_TRANSCRIPT') return { ok: true };
+      return undefined;
+    });
 
     (CameraPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(true);
     (MicPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(true);
@@ -174,6 +181,21 @@ describe('PopupController', () => {
     });
   });
 
+  it('shows the first recording warning in popup status', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    (controller as any).applySession({
+      phase: 'recording',
+      runConfig: (global as any).__TEST_RUN_CONFIG__({ recordSelfVideo: true }),
+      warnings: ['Tab recording requested 640x360@24fps, but recorder input is 1920x1080@24fps.'],
+      updatedAt: Date.now(),
+    });
+
+    expect(elements.recordingStatusEl.textContent).toContain(
+      'Warning: Tab recording requested 640x360@24fps'
+    );
+  });
+
   it('handles STOP_RECORDING click', async () => {
     mockSendMessage.mockResolvedValueOnce({
       session: {
@@ -216,6 +238,18 @@ describe('PopupController', () => {
     expect(elements.stopBtn.disabled).toBe(true);
     expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
     expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
+  });
+
+  it('opens the settings page from the gear button', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+
+    elements.openSettingsBtn.click();
+    await new Promise(process.nextTick);
+
+    expect(chrome.tabs.create).toHaveBeenCalledWith({
+      url: 'chrome-extension://mock-id/settings.html',
+    });
   });
 
   it('shows final upload summary when some files fell back to local download', async () => {

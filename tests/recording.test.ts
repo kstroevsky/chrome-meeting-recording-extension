@@ -4,6 +4,7 @@ import {
   getRunConfigOrDefault,
   normalizeMicMode,
   normalizeUploadSummary,
+  normalizeWarnings,
 } from '../src/shared/recording';
 
 describe('shared/recording helpers', () => {
@@ -17,6 +18,11 @@ describe('shared/recording helpers', () => {
     expect(fallback).toEqual(DEFAULT_RECORDING_RUN_CONFIG);
     expect(fallback).not.toBe(DEFAULT_RECORDING_RUN_CONFIG);
     expect(createDefaultRunConfig()).toEqual(DEFAULT_RECORDING_RUN_CONFIG);
+  });
+
+  it('normalizes warning lists into trimmed unique entries', () => {
+    expect(normalizeWarnings(['  first ', '', 'first', 123, 'second'])).toEqual(['first', 'second']);
+    expect(normalizeWarnings('not-an-array')).toBeUndefined();
   });
 
   it('filters invalid upload summary entries and trims filenames', () => {

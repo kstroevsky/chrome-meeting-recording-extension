@@ -32,5 +32,6 @@ export type RecordingSessionSnapshot = {
   runConfig: RecordingRunConfig | null;
   uploadSummary?: UploadSummary;
   error?: string;
+  warnings?: string[];
   updatedAt: number;
 };

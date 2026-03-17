@@ -28,6 +28,7 @@ import { PERF_FLAGS, clamp, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Wraps Drive requests with a hard timeout so stalled uploads can retry cleanly. */
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), DRIVE_REQUEST_TIMEOUT_MS);
@@ -38,11 +39,13 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
+/** Treats fetch aborts and transient network errors as retryable upload failures. */
 function isTransientFetchError(err: unknown): boolean {
   const e = err as any;
   return e?.name === 'AbortError' || e?.name === 'TypeError';
 }
 
+/** Computes exponential backoff delay for resumable upload retries. */
 function backoffMs(attempt: number): number {
   return DRIVE_RETRY_BASE_DELAY_MS * Math.min(8, 2 ** Math.max(0, attempt - 1));
 }
@@ -82,6 +85,7 @@ export class DriveTarget {
   private readonly log: (...a: any[]) => void;
   private used = false;
 
+  /** Creates a one-shot Drive uploader for a single sealed recording artifact. */
   constructor(
     private readonly filename: string,
     getToken: TokenProvider,
@@ -98,6 +102,7 @@ export class DriveTarget {
     this.log = shared?.log ?? (() => {});
   }
 
+  /** Uploads the sealed artifact using Drive's resumable upload flow. */
   async upload(file: Blob): Promise<void> {
     if (this.used) throw new Error('Drive target already used');
     this.used = true;
@@ -143,6 +148,7 @@ export class DriveTarget {
     this.onDone(this.filename);
   }
 
+  /** Starts a resumable upload session and stores the returned session URI. */
   private async initSession(): Promise<void> {
     const parentFolderId = await this.folderResolver.resolveUploadParentId(this.hierarchy);
     const metadata: Record<string, any> = {
@@ -173,6 +179,7 @@ export class DriveTarget {
     this.sessionUri = uri;
   }
 
+  /** Uploads one chunk, recovering committed state when retries happen mid-chunk. */
   private async uploadChunk(start: number, body: Blob, total: number, isFinal: boolean): Promise<UploadChunkResult> {
     let chunkStart = start;
     let chunkBody = body;

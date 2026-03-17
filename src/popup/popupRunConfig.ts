@@ -12,6 +12,7 @@ import {
 } from '../shared/recording';
 import type { PopupElements } from './popupView';
 
+/** Mirrors a recording run config into the popup form controls. */
 export function applyRunConfigToForm(
   elements: PopupElements,
   config: RecordingRunConfig | null
@@ -29,6 +30,7 @@ export function applyRunConfigToForm(
   }
 }
 
+/** Reads the current popup controls into a normalized recording run config. */
 export function buildRunConfigFromForm(elements: PopupElements): RecordingRunConfig {
   const recordSelfVideo =
     elements.recordSelfVideoCheckbox?.checked ?? DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;

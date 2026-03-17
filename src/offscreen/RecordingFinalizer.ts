@@ -16,6 +16,8 @@ import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { createCachedTokenProvider, type TokenProvider } from './drive/request';
 import { describeRuntimeError } from './errors';
 import type { CompletedRecordingArtifact, SealedStorageFile } from './RecorderEngine';
+import { postprocessVideoArtifact, type VideoArtifactPostprocessPlan } from './TabArtifactPostprocessor';
+import type { RecorderRuntimeSettingsSnapshot } from '../shared/extensionSettings';
 import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'selfVideo'];
@@ -31,6 +33,12 @@ export type RecordingFinalizerDeps = {
   warn: (...a: any[]) => void;
   requestSave: (filename: string, blobUrl: string, opfsFilename?: string) => void;
   getDriveToken: TokenProvider;
+  reportWarning?: (warning: string) => void;
+  getRecorderSettings?: () => RecorderRuntimeSettingsSnapshot | null;
+  postprocessVideoArtifact?: (
+    artifact: SealedStorageFile,
+    plan: VideoArtifactPostprocessPlan
+  ) => Promise<SealedStorageFile>;
 };
 
 export type FinalizeArtifactsOptions = {
@@ -43,10 +51,12 @@ export type FinalizeArtifactsOptions = {
  * only manages lifecycle and RPC.
  */
 export class RecordingFinalizer {
+  /** Binds finalize-time storage behavior to the offscreen runtime's side-effect callbacks. */
   constructor(private readonly deps: RecordingFinalizerDeps) {}
 
+  /** Persists sealed artifacts locally or uploads them to Drive after recording stops. */
   async finalize(options: FinalizeArtifactsOptions): Promise<UploadSummary | undefined> {
-    const orderedArtifacts = this.sortArtifacts(options.artifacts);
+    const orderedArtifacts = await this.prepareArtifacts(this.sortArtifacts(options.artifacts));
     if (!orderedArtifacts.length) return undefined;
 
     if (options.storageMode === 'drive') {
@@ -60,17 +70,110 @@ export class RecordingFinalizer {
     return undefined;
   }
 
+  /** Applies any artifact-level fallback processing before save/upload begins. */
+  private async prepareArtifacts(artifacts: CompletedRecordingArtifact[]): Promise<CompletedRecordingArtifact[]> {
+    const grouped = new Map<RecordingStream, CompletedRecordingArtifact[]>();
+    for (const entry of artifacts) {
+      const existing = grouped.get(entry.stream) ?? [];
+      existing.push(entry);
+      grouped.set(entry.stream, existing);
+    }
+
+    const prepared: CompletedRecordingArtifact[] = [];
+    for (const stream of STREAM_UPLOAD_ORDER) {
+      const entries = grouped.get(stream);
+      if (!entries?.length) continue;
+      prepared.push(await this.prepareStreamArtifacts(entries));
+    }
+
+    return prepared;
+  }
+
+  /** Picks the final artifact for one logical recording stream and cleans up unused variants. */
+  private async prepareStreamArtifacts(entries: CompletedRecordingArtifact[]): Promise<CompletedRecordingArtifact> {
+    const master = entries.find((entry) => entry.role === 'master') ?? entries[0];
+    const delivery = entries.find((entry) => entry.role === 'delivery');
+
+    if (master.stream === 'mic') {
+      await this.cleanupUnusedArtifacts(entries, master);
+      return master;
+    }
+
+    const finalize = master.finalize;
+    if (!finalize) {
+      const chosen = delivery ?? master;
+      await this.cleanupUnusedArtifacts(entries, chosen);
+      return chosen;
+    }
+
+    const requiresResize = master.stream === 'tab' && finalize.resizeTabOutput;
+    if (!requiresResize && delivery && delivery.container === finalize.outputContainer) {
+      await this.cleanupUnusedArtifacts(entries, delivery);
+      return delivery;
+    }
+
+    const needsPostprocess =
+      finalize.outputContainer !== master.container
+      || requiresResize;
+
+    if (!needsPostprocess) {
+      await this.cleanupUnusedArtifacts(entries, master);
+      return master;
+    }
+
+    try {
+      const recorderSettings = this.deps.getRecorderSettings?.();
+      if (!recorderSettings) {
+        throw new Error('Recorder settings snapshot is unavailable during finalization');
+      }
+
+      const processedArtifact = await (
+        this.deps.postprocessVideoArtifact
+        ?? ((artifact, plan) => postprocessVideoArtifact(artifact, plan, this.deps))
+      )(master.artifact, {
+        stream: master.stream as Extract<typeof master.stream, 'tab' | 'selfVideo'>,
+        outputContainer: finalize.outputContainer,
+        outputTarget: finalize.resizeTabOutput ? finalize.outputTarget : undefined,
+        chunking: recorderSettings.chunking,
+      });
+      await this.cleanupUnusedArtifacts(entries, master);
+      return {
+        stream: master.stream,
+        artifact: processedArtifact,
+        container: finalize.outputContainer,
+        role: 'delivery',
+      };
+    } catch (error) {
+      const message = describeRuntimeError(error);
+      const label = master.stream === 'tab' ? 'tab' : 'camera';
+      this.deps.warn(`${label} postprocess failed; saving original artifact instead`, master.artifact.filename, message);
+      this.deps.reportWarning?.(
+        `Failed to deliver ${label} as the requested final format. Saving the original WebM recording instead. (${message})`
+      );
+      await this.cleanupUnusedArtifacts(entries, master);
+      return master;
+    }
+  }
+
+  /** Orders artifacts so local saves and Drive uploads stay deterministic across runs. */
   private sortArtifacts(artifacts: CompletedRecordingArtifact[]): CompletedRecordingArtifact[] {
     return [...artifacts].sort(
-      (a, b) => STREAM_UPLOAD_ORDER.indexOf(a.stream) - STREAM_UPLOAD_ORDER.indexOf(b.stream)
+      (a, b) => {
+        const streamOrder = STREAM_UPLOAD_ORDER.indexOf(a.stream) - STREAM_UPLOAD_ORDER.indexOf(b.stream);
+        if (streamOrder !== 0) return streamOrder;
+        if (a.role === b.role) return 0;
+        return a.role === 'master' ? -1 : 1;
+      }
     );
   }
 
+  /** Creates a blob URL and delegates the actual local download to background. */
   private saveArtifactLocally(artifact: SealedStorageFile) {
     const blobUrl = URL.createObjectURL(artifact.file);
     this.deps.requestSave(artifact.filename, blobUrl, artifact.opfsFilename);
   }
 
+  /** Removes temporary local artifacts once Drive has accepted the upload. */
   private async cleanupArtifact(artifact: SealedStorageFile) {
     try {
       await artifact.cleanup();
@@ -82,6 +185,18 @@ export class RecordingFinalizer {
     }
   }
 
+  /** Cleans up any artifacts for the same logical stream that were not selected for delivery. */
+  private async cleanupUnusedArtifacts(
+    entries: CompletedRecordingArtifact[],
+    chosen: CompletedRecordingArtifact
+  ): Promise<void> {
+    for (const entry of entries) {
+      if (entry === chosen) continue;
+      await this.cleanupArtifact(entry.artifact);
+    }
+  }
+
+  /** Uploads artifacts to Drive with shared setup and per-file local fallback. */
   private async uploadArtifactsToDrive(
     artifacts: CompletedRecordingArtifact[],
     recordingFolderName: string
@@ -199,6 +314,7 @@ export class RecordingFinalizer {
     return summary;
   }
 
+  /** Runs async work with bounded concurrency while preserving input order in the results. */
   private async runWithConcurrency<TItem, TResult>(
     items: TItem[],
     concurrency: number,

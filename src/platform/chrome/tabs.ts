@@ -34,3 +34,17 @@ export function getMediaStreamIdForTab(tabId: number): Promise<string> {
     }
   });
 }
+
+export function getCapturedTabs(): Promise<chrome.tabCapture.CaptureInfo[]> {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.tabCapture.getCapturedTabs((result) => {
+        const error = chrome.runtime.lastError?.message;
+        if (error) return reject(new Error(error));
+        resolve(result ?? []);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}

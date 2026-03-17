@@ -297,17 +297,13 @@ class TranscriptCollector {
       if (msg.type === 'GET_TRANSCRIPT') {
         sendResponse({
           transcript: this.getTranscriptText(),
-          provider: this.provider.getProviderInfo(window.location),
+          provider: this.provider.getProviderInfo(window.location, document),
         });
         return true;
       }
       if (msg.type === 'RESET_TRANSCRIPT') {
         this.reset();
         sendResponse({ ok: true });
-        return true;
-      }
-      if (msg.type === 'GET_PROVIDER_INFO') {
-        sendResponse(this.provider.getProviderInfo(window.location));
         return true;
       }
       return false;

@@ -19,10 +19,14 @@ import { RecordingSession } from './background/RecordingSession';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
 import { downloadFile } from './platform/chrome/downloads';
 import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
-import { getMediaStreamIdForTab } from './platform/chrome/tabs';
+import { getCapturedTabs, getMediaStreamIdForTab } from './platform/chrome/tabs';
 import { pokeRuntime } from './platform/chrome/runtime';
 import { makeLogger } from './shared/logger';
 import { broadcastToPopup } from './shared/messages';
+import {
+  buildRecorderRuntimeSettingsSnapshot,
+  loadExtensionSettingsFromStorage,
+} from './shared/extensionSettings';
 import {
   isPerfEventMessage,
   isPopupToBgMessage,
@@ -76,17 +80,20 @@ const session = new RecordingSession(
   }
 );
 
+/** Keeps the MV3 service worker alive while recording or upload work is active. */
 function startKeepAlive() {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => pokeRuntime(), 20_000);
 }
 
+/** Stops the keep-alive loop once no busy work remains. */
 function stopKeepAlive() {
   if (!keepAliveTimer) return;
   clearInterval(keepAliveTimer);
   keepAliveTimer = null;
 }
 
+/** Clears stored diagnostics only when the session is idle and no dashboard is attached. */
 function maybeClearPerfDiagnostics() {
   if (!sessionHydrated) return;
   if (activeDebugDashboards > 0) return;
@@ -176,8 +183,19 @@ chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
   });
 });
 
+/** Wraps tab-capture stream-id acquisition for easier testing and logging. */
 function getStreamIdForTab(tabId: number): Promise<string> {
   return getMediaStreamIdForTab(tabId);
+}
+
+async function findTabCaptureConflict(tabId: number): Promise<chrome.tabCapture.CaptureInfo | null> {
+  try {
+    const captures = await getCapturedTabs();
+    return captures.find((capture) => capture.tabId === tabId && capture.status !== 'stopped' && capture.status !== 'error') ?? null;
+  } catch (error) {
+    L.warn('tabCapture.getCapturedTabs preflight failed; continuing without conflict check', error);
+    return null;
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
@@ -218,9 +236,31 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.Mess
         return;
       }
 
+      const captureConflict = await findTabCaptureConflict(msg.tabId);
+      if (captureConflict) {
+        sendResponse(
+          failureResult(
+            `This tab already has an active tab capture (${captureConflict.status}). Stop the existing capture and try again.`
+          )
+        );
+        return;
+      }
+
+      let recorderSettings: ReturnType<typeof buildRecorderRuntimeSettingsSnapshot>;
+      try {
+        const extensionSettings = await loadExtensionSettingsFromStorage();
+        recorderSettings = buildRecorderRuntimeSettingsSnapshot(extensionSettings);
+      } catch (e: any) {
+        const error = `Failed to load recorder settings: ${e?.message || e}`;
+        L.error(error);
+        sendResponse(failureResult(error));
+        return;
+      }
+
       session.start(runConfig);
 
       L.log('Popup requested START_RECORDING for tabId', msg.tabId);
+      L.log('Recorder settings snapshot for OFFSCREEN_START', recorderSettings);
 
       try {
         await offscreen.ensureReady();
@@ -237,6 +277,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.Mess
           type: 'OFFSCREEN_START',
           streamId,
           runConfig,
+          recorderSettings,
         });
 
         L.log('rpc(OFFSCREEN_START) response', r);
@@ -295,14 +336,17 @@ chrome.runtime.onSuspend?.addListener(async () => {
   await offscreen.stopIfPossibleOnSuspend();
 });
 
+/** Builds a success command result from the latest canonical session snapshot. */
 function successResult(): CommandResult {
   return { ok: true, session: session.getSnapshot() };
 }
 
+/** Builds a failure command result while preserving the latest canonical session snapshot. */
 function failureResult(error: string): CommandResult {
   return { ok: false, error, session: session.getSnapshot() };
 }
 
+/** Reconstructs in-session state persisted by pre-refactor versions of the extension. */
 function hydrateLegacySession(value: Record<string, unknown> | undefined): RecordingSessionSnapshot | undefined {
   const legacyPhase =
     value?.[LEGACY_SESSION_PHASE_KEY] === 'starting'
