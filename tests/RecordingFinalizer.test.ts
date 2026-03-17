@@ -8,6 +8,10 @@ import type {
   SealedStorageFile,
 } from '../src/offscreen/RecorderEngine';
 import type { RecorderVideoContainer } from '../src/offscreen/RecorderProfiles';
+import {
+  buildRecorderRuntimeSettingsSnapshot,
+  DEFAULT_EXTENSION_SETTINGS,
+} from '../src/shared/extensionSettings';
 import type { RecordingStream } from '../src/shared/recording';
 import { PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
 
@@ -57,6 +61,7 @@ function makeCompletedArtifact(options: {
 describe('RecordingFinalizer', () => {
   let deps: any;
   let finalizer: RecordingFinalizer;
+  const recorderSettings = buildRecorderRuntimeSettingsSnapshot(DEFAULT_EXTENSION_SETTINGS);
 
   beforeEach(() => {
     deps = {
@@ -65,6 +70,7 @@ describe('RecordingFinalizer', () => {
       requestSave: jest.fn(),
       getDriveToken: jest.fn().mockResolvedValue('token'),
       reportWarning: jest.fn(),
+      getRecorderSettings: jest.fn(() => recorderSettings),
       postprocessVideoArtifact: jest.fn(),
     };
     finalizer = new RecordingFinalizer(deps);
@@ -153,6 +159,7 @@ describe('RecordingFinalizer', () => {
       stream: 'tab',
       outputContainer: 'webm',
       outputTarget: { width: 640, height: 360, frameRate: 24 },
+      chunking: recorderSettings.chunking,
     });
     expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:9', 'tab-resized.webm');
   });
@@ -185,6 +192,7 @@ describe('RecordingFinalizer', () => {
       stream: 'tab',
       outputContainer: 'mp4',
       outputTarget: { width: 640, height: 360, frameRate: 24 },
+      chunking: recorderSettings.chunking,
     });
     expect(deps.requestSave).toHaveBeenCalledWith('tab.mp4', 'blob:13', 'tab-resized.mp4');
   });
@@ -216,6 +224,7 @@ describe('RecordingFinalizer', () => {
       stream: 'selfVideo',
       outputContainer: 'mp4',
       outputTarget: undefined,
+      chunking: recorderSettings.chunking,
     });
     expect(deps.requestSave).toHaveBeenCalledWith('camera.mp4', 'blob:10', 'camera-converted.mp4');
   });

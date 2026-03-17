@@ -17,6 +17,7 @@ import { createCachedTokenProvider, type TokenProvider } from './drive/request';
 import { describeRuntimeError } from './errors';
 import type { CompletedRecordingArtifact, SealedStorageFile } from './RecorderEngine';
 import { postprocessVideoArtifact, type VideoArtifactPostprocessPlan } from './TabArtifactPostprocessor';
+import type { RecorderRuntimeSettingsSnapshot } from '../shared/extensionSettings';
 import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'selfVideo'];
@@ -33,6 +34,7 @@ export type RecordingFinalizerDeps = {
   requestSave: (filename: string, blobUrl: string, opfsFilename?: string) => void;
   getDriveToken: TokenProvider;
   reportWarning?: (warning: string) => void;
+  getRecorderSettings?: () => RecorderRuntimeSettingsSnapshot | null;
   postprocessVideoArtifact?: (
     artifact: SealedStorageFile,
     plan: VideoArtifactPostprocessPlan
@@ -120,6 +122,11 @@ export class RecordingFinalizer {
     }
 
     try {
+      const recorderSettings = this.deps.getRecorderSettings?.();
+      if (!recorderSettings) {
+        throw new Error('Recorder settings snapshot is unavailable during finalization');
+      }
+
       const processedArtifact = await (
         this.deps.postprocessVideoArtifact
         ?? ((artifact, plan) => postprocessVideoArtifact(artifact, plan, this.deps))
@@ -127,6 +134,7 @@ export class RecordingFinalizer {
         stream: master.stream as Extract<typeof master.stream, 'tab' | 'selfVideo'>,
         outputContainer: finalize.outputContainer,
         outputTarget: finalize.resizeTabOutput ? finalize.outputTarget : undefined,
+        chunking: recorderSettings.chunking,
       });
       await this.cleanupUnusedArtifacts(entries, master);
       return {

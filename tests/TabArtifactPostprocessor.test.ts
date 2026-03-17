@@ -1,5 +1,9 @@
 import { postprocessVideoArtifact } from '../src/offscreen/TabArtifactPostprocessor';
 import * as RecorderVideoResizer from '../src/offscreen/RecorderVideoResizer';
+import {
+  buildRecorderRuntimeSettingsSnapshot,
+  DEFAULT_EXTENSION_SETTINGS,
+} from '../src/shared/extensionSettings';
 
 async function toText(payload: unknown): Promise<string> {
   const asAny = payload as any;
@@ -171,6 +175,7 @@ describe('TabArtifactPostprocessor', () => {
         stream: 'tab',
         outputContainer: 'webm',
         outputTarget: { width: 640, height: 360, frameRate: 24 },
+        chunking: buildRecorderRuntimeSettingsSnapshot(DEFAULT_EXTENSION_SETTINGS).chunking,
       },
       {
         log: jest.fn(),

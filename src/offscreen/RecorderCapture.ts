@@ -9,7 +9,12 @@ import type { MicMode } from '../shared/recording';
 import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 import {
   getMicrophoneCaptureSettings,
+  getSelfVideoProfileSettings,
   getTabOutputSettings,
+  type ExtensionSettings,
+  MicrophoneCaptureSettings,
+  SelfVideoProfileSettings,
+  TabCaptureSettings,
 } from '../shared/extensionSettings';
 import { TIMEOUTS } from '../shared/timeouts';
 import { queryActiveTab } from '../platform/chrome/tabs';
@@ -17,7 +22,6 @@ import { describeMediaError } from './RecorderSupport';
 import {
   formatSelfVideoProfile,
   getSelfVideoConstraintRequests,
-  getSelfVideoProfile,
   matchesSelfVideoProfile,
 } from './RecorderProfiles';
 
@@ -56,6 +60,7 @@ function readTrackCapabilities(track?: MediaStreamTrack): MediaTrackCapabilities
 
 /** Builds structured diagnostics for the requested and delivered self-video track profile. */
 function buildSelfVideoDiagnostics(
+  profile: Readonly<SelfVideoProfileSettings>,
   track: MediaStreamTrack | undefined,
   requestStrategy: string
 ): {
@@ -64,7 +69,6 @@ function buildSelfVideoDiagnostics(
 } {
   const settings = track?.getSettings?.();
   const capabilities = readTrackCapabilities(track);
-  const profile = getSelfVideoProfile();
 
   return {
     diagnostics: {
@@ -90,10 +94,10 @@ function buildSelfVideoDiagnostics(
 /** Builds Chrome tab-capture constraints using a stable acquisition ceiling. */
 function makeTabCaptureConstraints(
   streamId: string,
-  source: 'tab' | 'desktop'
+  source: 'tab' | 'desktop',
+  tabOutput: Readonly<TabCaptureSettings>
 ): MediaStreamConstraints {
   const mandatory = { chromeMediaSource: source, chromeMediaSourceId: streamId } as any;
-  const tabOutput = getTabOutputSettings();
   const maxFrameRate = Math.min(
     tabOutput.maxFrameRate,
     EXTENSION_DEFAULTS.capture.tab.maxFrameRate
@@ -117,22 +121,26 @@ function makeTabCaptureConstraints(
 /** Acquires the tab stream from the background-provided stream id with desktop fallback. */
 export async function captureTabStreamFromId(
   streamId: string,
-  deps: RecorderCaptureDeps
+  tabOutputOrDeps: Readonly<TabCaptureSettings> | RecorderCaptureDeps,
+  deps?: RecorderCaptureDeps
 ): Promise<MediaStream> {
-  deps.log(`Attempting getUserMedia with streamId ${streamId} source=tab`);
+  const tabOutput = deps ? tabOutputOrDeps as Readonly<TabCaptureSettings> : getTabOutputSettings();
+  const captureDeps = (deps ?? tabOutputOrDeps) as RecorderCaptureDeps;
+
+  captureDeps.log(`Attempting getUserMedia with streamId ${streamId} source=tab`);
   try {
     return await withTimeout(
-      navigator.mediaDevices.getUserMedia(makeTabCaptureConstraints(streamId, 'tab')),
+      navigator.mediaDevices.getUserMedia(makeTabCaptureConstraints(streamId, 'tab', tabOutput)),
       TIMEOUTS.GUM_MS,
       'tab getUserMedia'
     );
   } catch (error: any) {
-    deps.warn('[gUM] failed for chromeMediaSource=tab:', error?.name || error, error?.message || error);
+    captureDeps.warn('[gUM] failed for chromeMediaSource=tab:', error?.name || error, error?.message || error);
   }
 
-  deps.log(`Attempting getUserMedia with streamId ${streamId} source=desktop`);
+  captureDeps.log(`Attempting getUserMedia with streamId ${streamId} source=desktop`);
   return await withTimeout(
-    navigator.mediaDevices.getUserMedia(makeTabCaptureConstraints(streamId, 'desktop')),
+    navigator.mediaDevices.getUserMedia(makeTabCaptureConstraints(streamId, 'desktop', tabOutput)),
     TIMEOUTS.GUM_MS,
     'desktop getUserMedia'
   );
@@ -141,10 +149,12 @@ export async function captureTabStreamFromId(
 /** Requests a microphone stream when the active run configuration needs one. */
 export async function maybeGetMicStream(
   micMode: MicMode,
-  deps: RecorderCaptureDeps
+  microphoneOrDeps: Readonly<MicrophoneCaptureSettings> | RecorderCaptureDeps,
+  deps?: RecorderCaptureDeps
 ): Promise<MediaStream | null> {
   if (micMode === 'off') return null;
-  const microphone = getMicrophoneCaptureSettings();
+  const microphone = deps ? microphoneOrDeps as Readonly<MicrophoneCaptureSettings> : getMicrophoneCaptureSettings();
+  const captureDeps = (deps ?? microphoneOrDeps) as RecorderCaptureDeps;
 
   try {
     const mic = await withTimeout(
@@ -156,13 +166,13 @@ export async function maybeGetMicStream(
     );
 
     const track = mic.getAudioTracks()[0];
-    deps.log('mic stream acquired:', !!track, 'muted:', track?.muted, 'enabled:', track?.enabled);
+    captureDeps.log('mic stream acquired:', !!track, 'muted:', track?.muted, 'enabled:', track?.enabled);
     return mic;
   } catch (error) {
     const label = micMode === 'mixed'
       ? 'mic getUserMedia failed (mixed mode requires microphone)'
       : 'mic getUserMedia failed (continuing without separate mic file)';
-    deps.warn(label, describeMediaError(error));
+    captureDeps.warn(label, describeMediaError(error));
     return null;
   }
 }
@@ -170,10 +180,13 @@ export async function maybeGetMicStream(
 /** Requests the user's camera stream and logs how closely it matched the preset. */
 export async function maybeGetSelfVideoStream(
   enabled: boolean,
-  deps: RecorderCaptureDeps
+  profileOrDeps: Readonly<SelfVideoProfileSettings> | RecorderCaptureDeps,
+  deps?: RecorderCaptureDeps
 ): Promise<MediaStream | null> {
   if (!enabled) return null;
-  const requests = getSelfVideoConstraintRequests();
+  const profile = deps ? profileOrDeps as Readonly<SelfVideoProfileSettings> : getSelfVideoProfileSettings();
+  const captureDeps = (deps ?? profileOrDeps) as RecorderCaptureDeps;
+  const requests = getSelfVideoConstraintRequests(profile);
 
   for (const request of requests) {
     try {
@@ -186,20 +199,20 @@ export async function maybeGetSelfVideoStream(
         'self video getUserMedia'
       );
       const track = stream.getVideoTracks()[0];
-      const { diagnostics, settings } = buildSelfVideoDiagnostics(track, request.label);
+      const { diagnostics, settings } = buildSelfVideoDiagnostics(profile, track, request.label);
 
-      deps.log('self video stream acquired:', diagnostics);
+      captureDeps.log('self video stream acquired:', diagnostics);
 
-      if (!matchesSelfVideoProfile(settings)) {
-        deps.warn(
-          `self video preferred ${formatSelfVideoProfile()} but browser delivered ${settings?.width ?? 'unknown'}x${settings?.height ?? 'unknown'}`
+      if (!matchesSelfVideoProfile(settings, profile)) {
+        captureDeps.warn(
+          `self video preferred ${formatSelfVideoProfile(profile)} but browser delivered ${settings?.width ?? 'unknown'}x${settings?.height ?? 'unknown'}`
         );
       }
       return stream;
     } catch (error) {
       const formattedError = describeMediaError(error);
       if (request !== requests[requests.length - 1]) {
-        deps.log(
+        captureDeps.log(
           'self video getUserMedia attempt failed; retrying with fallback',
           {
             requestStrategy: request.label,
@@ -209,7 +222,7 @@ export async function maybeGetSelfVideoStream(
         continue;
       }
 
-      deps.warn(
+      captureDeps.warn(
         'self video getUserMedia failed (continuing without self video):',
         formattedError
       );

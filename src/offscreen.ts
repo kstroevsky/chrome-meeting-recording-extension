@@ -28,7 +28,10 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
-import { loadExtensionSettingsFromStorage } from './shared/extensionSettings';
+import {
+  normalizeRecorderRuntimeSettingsSnapshot,
+  type RecorderRuntimeSettingsSnapshot,
+} from './shared/extensionSettings';
 import {
   DEFAULT_RECORDING_RUN_CONFIG,
   normalizeRunConfig,
@@ -63,6 +66,7 @@ let reconnectEnabled = true;
 let currentStorageMode: 'local' | 'drive' = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 let currentPhase: RecordingPhase = 'idle';
 let currentRunConfig: RecordingRunConfig | null = null;
+let currentRecorderSettings: RecorderRuntimeSettingsSnapshot | null = null;
 let currentWarnings: string[] = [];
 let finalizeRunPromise: Promise<void> | null = null;
 let expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
@@ -173,6 +177,7 @@ const finalizer = new RecordingFinalizer({
   requestSave,
   getDriveToken,
   reportWarning,
+  getRecorderSettings: () => currentRecorderSettings,
 });
 
 /** Runs the full stop -> seal -> save/upload pipeline for the current recording run. */
@@ -189,11 +194,13 @@ async function finalizeCurrentRecordingRun(): Promise<void> {
       storageMode: currentStorageMode,
     });
     currentRunConfig = null;
+    currentRecorderSettings = null;
     pushState('idle', summary ? { uploadSummary: summary } : undefined);
   })()
     .catch((e) => {
       L.error('Stop/finalize pipeline failed', describeRuntimeError(e));
       currentRunConfig = null;
+      currentRecorderSettings = null;
       pushState('failed', { error: describeRuntimeError(e) });
     })
     .finally(() => {
@@ -258,23 +265,27 @@ function wirePortHandlers(port: chrome.runtime.Port) {
       OFFSCREEN_START: async (msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_START' }>) => {
         const streamId = msg.streamId as string | undefined;
         const runConfig = normalizeRunConfig(msg.runConfig);
+        const recorderSettings = normalizeRecorderRuntimeSettingsSnapshot(msg.recorderSettings);
         if (!streamId) return { ok: false, error: 'Missing streamId' };
         if (!runConfig) return { ok: false, error: 'Missing run configuration' };
+        if (!recorderSettings) return { ok: false, error: 'Missing or invalid recorder settings snapshot' };
         if (currentPhase !== 'idle' || finalizeRunPromise) {
           return { ok: false, error: `Recorder is busy (${currentPhase})` };
         }
 
-        await loadExtensionSettingsFromStorage();
         currentRunConfig = runConfig;
+        currentRecorderSettings = recorderSettings;
         currentStorageMode = runConfig.storageMode;
         clearWarnings();
         pushState('starting');
+        L.log('Recorder settings snapshot received in OFFSCREEN_START', recorderSettings);
 
         try {
-          await engine.startFromStreamId(streamId, runConfig);
+          await engine.startFromStreamId(streamId, runConfig, recorderSettings);
           return { ok: true };
         } catch (e: any) {
           currentRunConfig = null;
+          currentRecorderSettings = null;
           const error = `${e?.name || 'Error'}: ${e?.message || e}`;
           pushState('failed', { error });
           return { ok: false, error };

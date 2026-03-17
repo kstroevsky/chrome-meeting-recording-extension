@@ -1,5 +1,8 @@
 import { RecorderEngine, type SealedStorageFile, type StorageTarget } from '../src/offscreen/RecorderEngine';
 import {
+  buildRecorderRuntimeSettingsSnapshot,
+  DEFAULT_EXTENSION_SETTINGS,
+  normalizeExtensionSettings,
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
 } from '../src/shared/extensionSettings';
@@ -63,6 +66,23 @@ function makeRunConfig(overrides: Partial<RecordingRunConfig> = {}): RecordingRu
     recordSelfVideo: false,
     ...overrides,
   };
+}
+
+function makeRecorderSettings(overrides: Record<string, any> = {}) {
+  return buildRecorderRuntimeSettingsSnapshot(
+    normalizeExtensionSettings({
+      ...DEFAULT_EXTENSION_SETTINGS,
+      ...overrides,
+      basic: {
+        ...DEFAULT_EXTENSION_SETTINGS.basic,
+        ...overrides.basic,
+      },
+      professional: {
+        ...DEFAULT_EXTENSION_SETTINGS.professional,
+        ...overrides.professional,
+      },
+    })
+  );
 }
 
 class BufferedTarget implements StorageTarget {
@@ -412,6 +432,45 @@ describe('RecorderEngine', () => {
     const artifacts = await engine.stop();
     expect(artifacts[0].finalize).toEqual({
       outputContainer: 'webm',
+      resizeTabOutput: true,
+      outputTarget: { width: 640, height: 360, frameRate: 24 },
+    });
+  });
+
+  it('uses the injected recorder settings snapshot instead of current storage defaults', async () => {
+    await saveExtensionSettingsToStorage({
+      professional: {
+        tabResizePostprocess: false,
+        tabMp4Output: false,
+      },
+    });
+
+    const injectedSettings = makeRecorderSettings({
+      professional: {
+        tabResolutionPreset: '640x360',
+        tabMaxFrameRate: 24,
+        tabResizePostprocess: true,
+        tabMp4Output: true,
+      },
+    });
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video', { width: 1920, height: 1080, frameRate: 30 })],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig(), injectedSettings);
+
+    const artifacts = await engine.stop();
+    expect(artifacts[0].finalize).toEqual({
+      outputContainer: 'mp4',
       resizeTabOutput: true,
       outputTarget: { width: 640, height: 360, frameRate: 24 },
     });

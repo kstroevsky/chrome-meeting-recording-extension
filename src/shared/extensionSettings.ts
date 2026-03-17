@@ -85,6 +85,20 @@ export type VideoOutputSettings = {
   selfVideoMp4Output: boolean;
 };
 
+export type RecorderRuntimeSettingsSnapshot = {
+  tab: {
+    output: TabCaptureSettings;
+    resizePostprocess: boolean;
+    mp4Output: boolean;
+  };
+  selfVideo: {
+    profile: SelfVideoProfileSettings;
+    mp4Output: boolean;
+  };
+  microphone: MicrophoneCaptureSettings;
+  chunking: ChunkingSettings;
+};
+
 const LEGACY_VIDEO_FORMAT_OPTIONS = [1080, 720, 480, 360] as const satisfies readonly LegacyVideoFormat[];
 const DEFAULT_RESOLUTION_PRESET: ResolutionPreset = '1920x1080';
 const MAX_SELF_VIDEO_BITRATE = EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond;
@@ -150,6 +164,25 @@ function cloneSettings(settings: ExtensionSettings): ExtensionSettings {
   return {
     basic: { ...settings.basic },
     professional: { ...settings.professional },
+  };
+}
+
+/** Clones a per-run recorder settings snapshot so callers can safely retain it. */
+function cloneRecorderRuntimeSettingsSnapshot(
+  snapshot: Readonly<RecorderRuntimeSettingsSnapshot>
+): RecorderRuntimeSettingsSnapshot {
+  return {
+    tab: {
+      output: { ...snapshot.tab.output },
+      resizePostprocess: snapshot.tab.resizePostprocess,
+      mp4Output: snapshot.tab.mp4Output,
+    },
+    selfVideo: {
+      profile: { ...snapshot.selfVideo.profile },
+      mp4Output: snapshot.selfVideo.mp4Output,
+    },
+    microphone: { ...snapshot.microphone },
+    chunking: { ...snapshot.chunking },
   };
 }
 
@@ -426,6 +459,149 @@ export function getVideoOutputSettings(
     tabResizePostprocess: settings.professional.tabResizePostprocess,
     tabMp4Output: settings.professional.tabMp4Output,
     selfVideoMp4Output: settings.professional.selfVideoMp4Output,
+  };
+}
+
+/** Builds the exact recorder configuration that background should freeze into OFFSCREEN_START. */
+export function buildRecorderRuntimeSettingsSnapshot(
+  settings: Readonly<ExtensionSettings> = runtimeSettings
+): RecorderRuntimeSettingsSnapshot {
+  return cloneRecorderRuntimeSettingsSnapshot({
+    tab: {
+      output: getTabOutputSettings(settings),
+      resizePostprocess: settings.professional.tabResizePostprocess,
+      mp4Output: settings.professional.tabMp4Output,
+    },
+    selfVideo: {
+      profile: getSelfVideoProfileSettings(settings),
+      mp4Output: settings.professional.selfVideoMp4Output,
+    },
+    microphone: getMicrophoneCaptureSettings(settings),
+    chunking: getChunkingSettings(settings),
+  });
+}
+
+function readBoundedPositiveInt(value: unknown, min: number, max: number): number | null {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) return null;
+  const rounded = Math.round(num);
+  if (rounded < min || rounded > max) return null;
+  return rounded;
+}
+
+function readBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+/** Validates a frozen recorder snapshot received over RPC without applying defaults. */
+export function normalizeRecorderRuntimeSettingsSnapshot(value: unknown): RecorderRuntimeSettingsSnapshot | null {
+  if (!isRecord(value)) return null;
+
+  const tabCandidate = isRecord(value.tab) ? value.tab : null;
+  const tabOutputCandidate = tabCandidate && isRecord(tabCandidate.output) ? tabCandidate.output : null;
+  const selfVideoCandidate = isRecord(value.selfVideo) ? value.selfVideo : null;
+  const selfVideoProfileCandidate =
+    selfVideoCandidate && isRecord(selfVideoCandidate.profile) ? selfVideoCandidate.profile : null;
+  const microphoneCandidate = isRecord(value.microphone) ? value.microphone : null;
+  const chunkingCandidate = isRecord(value.chunking) ? value.chunking : null;
+  if (
+    !tabCandidate
+    || !tabOutputCandidate
+    || !selfVideoCandidate
+    || !selfVideoProfileCandidate
+    || !microphoneCandidate
+    || !chunkingCandidate
+  ) {
+    return null;
+  }
+
+  const tabOutput: TabCaptureSettings | null = (() => {
+    const maxWidth = readBoundedPositiveInt(tabOutputCandidate.maxWidth, 1, 10_000);
+    const maxHeight = readBoundedPositiveInt(tabOutputCandidate.maxHeight, 1, 10_000);
+    const maxFrameRate = readBoundedPositiveInt(tabOutputCandidate.maxFrameRate, 1, 120);
+    if (!maxWidth || !maxHeight || !maxFrameRate) return null;
+    return { maxWidth, maxHeight, maxFrameRate };
+  })();
+  if (!tabOutput) return null;
+
+  const tabResizePostprocess = readBoolean(tabCandidate.resizePostprocess);
+  const tabMp4Output = readBoolean(tabCandidate.mp4Output);
+  if (tabResizePostprocess == null || tabMp4Output == null) return null;
+
+  const selfVideoProfile: SelfVideoProfileSettings | null = (() => {
+    const width = readBoundedPositiveInt(selfVideoProfileCandidate.width, 1, 10_000);
+    const height = readBoundedPositiveInt(selfVideoProfileCandidate.height, 1, 10_000);
+    const frameRate = readBoundedPositiveInt(selfVideoProfileCandidate.frameRate, 1, 120);
+    const defaultBitsPerSecond = readBoundedPositiveInt(selfVideoProfileCandidate.defaultBitsPerSecond, 100_000, 50_000_000);
+    const minAdaptiveBitsPerSecond =
+      readBoundedPositiveInt(selfVideoProfileCandidate.minAdaptiveBitsPerSecond, 100_000, 50_000_000);
+    const aspectRatio =
+      typeof selfVideoProfileCandidate.aspectRatio === 'number'
+      && Number.isFinite(selfVideoProfileCandidate.aspectRatio)
+      && selfVideoProfileCandidate.aspectRatio > 0
+        ? selfVideoProfileCandidate.aspectRatio
+        : null;
+    if (
+      !width
+      || !height
+      || !frameRate
+      || !defaultBitsPerSecond
+      || !minAdaptiveBitsPerSecond
+      || aspectRatio == null
+      || minAdaptiveBitsPerSecond > defaultBitsPerSecond
+    ) {
+      return null;
+    }
+    return {
+      width,
+      height,
+      frameRate,
+      aspectRatio,
+      defaultBitsPerSecond,
+      minAdaptiveBitsPerSecond,
+    };
+  })();
+  if (!selfVideoProfile) return null;
+
+  const selfVideoMp4Output = readBoolean(selfVideoCandidate.mp4Output);
+  if (selfVideoMp4Output == null) return null;
+
+  const microphone: MicrophoneCaptureSettings | null = (() => {
+    const echoCancellation = readBoolean(microphoneCandidate.echoCancellation);
+    const noiseSuppression = readBoolean(microphoneCandidate.noiseSuppression);
+    const autoGainControl = readBoolean(microphoneCandidate.autoGainControl);
+    if (echoCancellation == null || noiseSuppression == null || autoGainControl == null) return null;
+    return {
+      echoCancellation,
+      noiseSuppression,
+      autoGainControl,
+    };
+  })();
+  if (!microphone) return null;
+
+  const chunking: ChunkingSettings | null = (() => {
+    const defaultTimesliceMs = readBoundedPositiveInt(chunkingCandidate.defaultTimesliceMs, 250, 60_000);
+    const extendedTimesliceMs = readBoundedPositiveInt(chunkingCandidate.extendedTimesliceMs, 250, 60_000);
+    if (!defaultTimesliceMs || !extendedTimesliceMs || extendedTimesliceMs < defaultTimesliceMs) return null;
+    return {
+      defaultTimesliceMs,
+      extendedTimesliceMs,
+    };
+  })();
+  if (!chunking) return null;
+
+  return {
+    tab: {
+      output: tabOutput,
+      resizePostprocess: tabResizePostprocess,
+      mp4Output: tabMp4Output,
+    },
+    selfVideo: {
+      profile: selfVideoProfile,
+      mp4Output: selfVideoMp4Output,
+    },
+    microphone,
+    chunking,
   };
 }
 

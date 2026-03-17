@@ -8,7 +8,7 @@
 
 import { withTimeout } from '../shared/async';
 import type { RecordingStream } from '../shared/recording';
-import { getChunkingSettings } from '../shared/extensionSettings';
+import type { ChunkingSettings } from '../shared/extensionSettings';
 import { TIMEOUTS } from '../shared/timeouts';
 import { LocalFileTarget } from './LocalFileTarget';
 import {
@@ -26,6 +26,7 @@ export type VideoArtifactPostprocessPlan = {
   stream: Extract<RecordingStream, 'tab' | 'selfVideo'>;
   outputContainer: RecorderVideoContainer;
   outputTarget?: VideoResizeTarget;
+  chunking: ChunkingSettings;
 };
 
 type VideoArtifactPostprocessorDeps = {
@@ -177,7 +178,6 @@ export async function postprocessVideoArtifact(
   const finalFilename = replaceExtension(artifact.filename, extension);
   const tempFilename = `video-postprocess-${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`;
   const inputUrl = URL.createObjectURL(artifact.file);
-  const chunking = getChunkingSettings();
   let playbackVideo: HTMLVideoElement | null = null;
   let playbackStream: MediaStream | null = null;
   let processedStream: MediaStream | null = null;
@@ -304,7 +304,7 @@ export async function postprocessVideoArtifact(
     });
 
     const startPromise = waitForRecorderStart(recorder);
-    recorder.start(chunking.defaultTimesliceMs);
+    recorder.start(plan.chunking.defaultTimesliceMs);
     await startPromise;
     await playbackVideo.play();
     const processedArtifact = await processedArtifactPromise;

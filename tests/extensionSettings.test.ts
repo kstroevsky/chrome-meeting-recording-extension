@@ -1,7 +1,9 @@
 import {
+  buildRecorderRuntimeSettingsSnapshot,
   DEFAULT_EXTENSION_SETTINGS,
   getSelfVideoProfileSettings,
   getTabCaptureSettings,
+  normalizeRecorderRuntimeSettingsSnapshot,
   normalizeExtensionSettings,
 } from '../src/shared/extensionSettings';
 
@@ -112,5 +114,79 @@ describe('extensionSettings', () => {
 
     expect(settings.professional.selfVideoBitrate).toBe(3_000_000);
     expect(settings.professional.selfVideoMinAdaptiveBitrate).toBe(3_000_000);
+  });
+
+  it('builds a recorder runtime snapshot with the derived delivery and capture settings', () => {
+    const settings = normalizeExtensionSettings({
+      basic: {
+        selfVideoResolutionPreset: '1280x720',
+      },
+      professional: {
+        selfVideoFrameRate: 24,
+        selfVideoBitrate: 2_000_000,
+        selfVideoMinAdaptiveBitrate: 1_000_000,
+        tabResolutionPreset: '640x360',
+        tabMaxFrameRate: 20,
+        tabResizePostprocess: true,
+        tabMp4Output: true,
+        selfVideoMp4Output: true,
+        microphoneEchoCancellation: false,
+        microphoneNoiseSuppression: true,
+        microphoneAutoGainControl: false,
+        chunkDefaultTimesliceMs: 1500,
+        chunkExtendedTimesliceMs: 4500,
+      },
+    });
+
+    expect(buildRecorderRuntimeSettingsSnapshot(settings)).toEqual({
+      tab: {
+        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20 },
+        resizePostprocess: true,
+        mp4Output: true,
+      },
+      selfVideo: {
+        profile: {
+          width: 1280,
+          height: 720,
+          frameRate: 24,
+          aspectRatio: 1280 / 720,
+          defaultBitsPerSecond: 2_000_000,
+          minAdaptiveBitsPerSecond: 1_000_000,
+        },
+        mp4Output: true,
+      },
+      microphone: {
+        echoCancellation: false,
+        noiseSuppression: true,
+        autoGainControl: false,
+      },
+      chunking: {
+        defaultTimesliceMs: 1500,
+        extendedTimesliceMs: 4500,
+      },
+    });
+  });
+
+  it('accepts only valid recorder runtime snapshots without applying silent defaults', () => {
+    const snapshot = buildRecorderRuntimeSettingsSnapshot(
+      normalizeExtensionSettings({
+        professional: {
+          tabResizePostprocess: true,
+          tabMp4Output: true,
+          selfVideoMp4Output: true,
+        },
+      })
+    );
+
+    expect(normalizeRecorderRuntimeSettingsSnapshot(snapshot)).toEqual(snapshot);
+    expect(
+      normalizeRecorderRuntimeSettingsSnapshot({
+        ...snapshot,
+        tab: {
+          ...snapshot.tab,
+          resizePostprocess: 'yes',
+        },
+      })
+    ).toBeNull();
   });
 });
