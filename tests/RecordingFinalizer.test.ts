@@ -197,6 +197,26 @@ describe('RecordingFinalizer', () => {
     expect(deps.requestSave).toHaveBeenCalledWith('tab.mp4', 'blob:13', 'tab-resized.mp4');
   });
 
+  it('keeps the original tab WebM unchanged when the finalize plan already resolved to the original fallback', async () => {
+    const original = makeCompletedArtifact({
+      stream: 'tab',
+      artifact: makeArtifact({ filename: 'tab.webm' }),
+      finalize: {
+        outputContainer: 'webm',
+        resizeTabOutput: false,
+      },
+    });
+
+    const summary = await finalizer.finalize({
+      storageMode: 'local',
+      artifacts: [original],
+    });
+
+    expect(summary).toBeUndefined();
+    expect(deps.postprocessVideoArtifact).not.toHaveBeenCalled();
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', 'blob:4', 'tab.webm');
+  });
+
   it('postprocesses the self-video WebM master to MP4 when requested', async () => {
     const original = makeCompletedArtifact({
       stream: 'selfVideo',

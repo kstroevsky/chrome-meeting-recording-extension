@@ -54,14 +54,19 @@ describe('RecorderVideoResizer', () => {
       captureStream: jest.fn(() => captureStream),
     } as any;
     const createMediaStream = jest.fn((tracks: MediaStreamTrack[]) => makeStream(tracks as any[]));
-    const requestAnimationFrame = jest.fn((_callback: FrameRequestCallback) => 7);
+    let scheduledFrame: (() => void) | undefined;
+    const setTimeout = jest.fn((callback: () => void) => {
+      scheduledFrame = callback;
+      return 7 as any;
+    });
+    const clearTimeout = jest.fn();
     const deps: RecorderVideoResizerDeps = {
       document: {
         createElement: jest.fn((tagName: 'video' | 'canvas') => (tagName === 'video' ? video : canvas)),
       },
       createMediaStream,
-      requestAnimationFrame,
-      cancelAnimationFrame: jest.fn(),
+      setTimeout: setTimeout as any,
+      clearTimeout: clearTimeout as any,
     };
 
     const result = await createResizedVideoStream(sourceStream, {
@@ -82,14 +87,13 @@ describe('RecorderVideoResizer', () => {
     expect(createMediaStream).toHaveBeenCalledWith([outputVideoTrack, sourceAudioTrack]);
     expect(drawImage).toHaveBeenCalledTimes(1);
 
-    const frameCallback = requestAnimationFrame.mock.calls[0]?.[0] as FrameRequestCallback | undefined;
-    expect(frameCallback).toBeDefined();
-    frameCallback?.(0);
+    expect(scheduledFrame).toBeDefined();
+    scheduledFrame?.();
     expect(drawImage).toHaveBeenCalledTimes(2);
 
     result.cleanup();
 
-    expect((deps.cancelAnimationFrame as jest.Mock)).toHaveBeenCalledWith(7);
+    expect(clearTimeout).toHaveBeenCalledWith(7);
     expect(outputVideoTrack.stop).toHaveBeenCalledTimes(1);
     expect(video.pause).toHaveBeenCalledTimes(1);
     expect(video.srcObject).toBeNull();
@@ -195,8 +199,8 @@ describe('RecorderVideoResizer', () => {
         createElement: jest.fn((tagName: 'video' | 'canvas') => (tagName === 'video' ? video : canvas)),
       },
       createMediaStream: jest.fn((tracks: MediaStreamTrack[]) => makeStream(tracks as any[])),
-      requestAnimationFrame: jest.fn((_callback: FrameRequestCallback) => 1),
-      cancelAnimationFrame: jest.fn(),
+      setTimeout: jest.fn(() => 1 as any) as any,
+      clearTimeout: jest.fn() as any,
     });
 
     expect(result.resized).toBe(true);
@@ -206,5 +210,6 @@ describe('RecorderVideoResizer', () => {
       frameRate: 24,
     });
     expect(canvas.captureStream).toHaveBeenCalledWith(24);
+    result.cleanup();
   });
 });

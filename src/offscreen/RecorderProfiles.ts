@@ -150,8 +150,7 @@ export function getAudioMime(): string {
 export function getNativeTabMp4Mime(): string | null {
   return getSupportedMimeOrNull(
     'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
-    'video/mp4'
+    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"'
   );
 }
 

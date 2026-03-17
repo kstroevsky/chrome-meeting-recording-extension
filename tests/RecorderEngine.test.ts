@@ -176,6 +176,7 @@ describe('RecorderEngine', () => {
     originalMediaStream = (global as any).MediaStream;
     originalCreateElement = document.createElement.bind(document);
     (global as any).MediaRecorder = FakeMediaRecorder as any;
+    FakeMediaRecorder.isTypeSupported.mockReset().mockReturnValue(true);
     (global as any).MediaStream = class {
       constructor(public readonly tracks: any[] = []) {}
       getTracks() { return this.tracks; }
@@ -630,6 +631,52 @@ describe('RecorderEngine', () => {
       outputContainer: 'mp4',
       resizeTabOutput: true,
       outputTarget: { width: 640, height: 360, frameRate: 24 },
+    });
+  });
+
+  it('keeps the original tab WebM unchanged and warns when tab MP4 with audio is unsupported', async () => {
+    await saveExtensionSettingsToStorage({
+      professional: {
+        tabResolutionPreset: '640x360',
+        tabMaxFrameRate: 24,
+        tabResizePostprocess: true,
+        tabMp4Output: true,
+      },
+    });
+
+    FakeMediaRecorder.isTypeSupported.mockImplementation((mime: string) => (
+      mime.startsWith('video/webm')
+      || mime.startsWith('audio/webm')
+      || mime === 'video/mp4;codecs=avc1.42E01E'
+      || mime === 'video/mp4;codecs=\"avc1.42E01E\"'
+    ));
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video', { width: 1920, height: 1080, frameRate: 30 })],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig());
+
+    const tabRecorders = FakeMediaRecorder.instances.filter((instance) => instance.kind === 'tab');
+    expect(tabRecorders).toHaveLength(1);
+    expect(tabRecorders[0].options.mimeType).toContain('video/webm');
+    expect(deps.reportWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Tab MP4 delivery with audio is not supported in this Chrome runtime')
+    );
+
+    const artifacts = await engine.stop();
+    expect(artifacts[0].finalize).toEqual({
+      outputContainer: 'webm',
+      resizeTabOutput: false,
+      outputTarget: undefined,
     });
   });
 

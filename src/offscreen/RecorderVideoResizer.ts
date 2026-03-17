@@ -261,60 +261,25 @@ export async function createResizedVideoStream(
   );
 
   const outputMetrics = readStreamVideoMetrics(resizedCanvasStream);
-  const raf = deps.requestAnimationFrame ?? globalThis.requestAnimationFrame?.bind(globalThis);
-  const cancelRaf = deps.cancelAnimationFrame ?? globalThis.cancelAnimationFrame?.bind(globalThis);
   const scheduleTimeout = deps.setTimeout ?? globalThis.setTimeout.bind(globalThis);
   const clearScheduledTimeout = deps.clearTimeout ?? globalThis.clearTimeout.bind(globalThis);
 
   let stopped = false;
-  let frameHandle: number | ReturnType<typeof setTimeout> | null = null;
-  let frameMode: 'video' | 'animation' | 'timeout' | null = null;
+  let frameHandle: ReturnType<typeof setTimeout> | null = null;
+  const frameIntervalMs = Math.max(1, Math.round(1000 / Math.max(target.frameRate, 1)));
 
   const cancelScheduledFrame = () => {
-    if (frameHandle == null || !frameMode) return;
-
-    if (frameMode === 'video') {
-      try {
-        video.cancelVideoFrameCallback?.(frameHandle as number);
-      } catch {}
-    } else if (frameMode === 'animation') {
-      try {
-        cancelRaf?.(frameHandle as number);
-      } catch {}
-    } else {
-      clearScheduledTimeout(frameHandle as ReturnType<typeof setTimeout>);
-    }
-
+    if (frameHandle == null) return;
+    clearScheduledTimeout(frameHandle);
     frameHandle = null;
-    frameMode = null;
   };
 
   const scheduleNextFrame = () => {
     if (stopped) return;
-
-    if (typeof video.requestVideoFrameCallback === 'function') {
-      frameMode = 'video';
-      frameHandle = video.requestVideoFrameCallback(() => {
-        drawFrame();
-        scheduleNextFrame();
-      });
-      return;
-    }
-
-    if (raf) {
-      frameMode = 'animation';
-      frameHandle = raf(() => {
-        drawFrame();
-        scheduleNextFrame();
-      });
-      return;
-    }
-
-    frameMode = 'timeout';
     frameHandle = scheduleTimeout(() => {
       drawFrame();
       scheduleNextFrame();
-    }, Math.max(1, Math.round(1000 / Math.max(target.frameRate, 1))));
+    }, frameIntervalMs);
   };
 
   scheduleNextFrame();

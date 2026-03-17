@@ -373,6 +373,22 @@ export class RecorderEngine {
     const output = this.getRequiredRecorderSettings().tab;
     const sourceMetrics = readStreamVideoMetrics(sourceStream);
     const target = output.resizePostprocess ? this.getTabOutputTarget() : undefined;
+    const requestedOutputContainer: RecorderVideoContainer = output.mp4Output ? 'mp4' : 'webm';
+    const tabMp4Supported = output.mp4Output ? !!getNativeTabMp4Mime() : false;
+    const keepOriginalWebm = output.mp4Output && !tabMp4Supported;
+
+    if (keepOriginalWebm) {
+      this.reportWarning(
+        output.resizePostprocess
+          ? 'Tab MP4 delivery with audio is not supported in this Chrome runtime. The original WebM tab recording will be kept unchanged, so resize-after-capture is skipped for this recording.'
+          : 'Tab MP4 delivery with audio is not supported in this Chrome runtime. The original WebM tab recording will be kept unchanged.'
+      );
+    }
+
+    const resolvedOutputContainer: RecorderVideoContainer = keepOriginalWebm ? 'webm' : requestedOutputContainer;
+    const resolvedResizePostprocess = keepOriginalWebm ? false : output.resizePostprocess;
+    const resolvedTarget = resolvedResizePostprocess ? target : undefined;
+
     this.deps.log('tab recorder input stream:', {
       resized: false,
       sourceWidth: sourceMetrics.width,
@@ -384,18 +400,25 @@ export class RecorderEngine {
       targetWidth: target?.width,
       targetHeight: target?.height,
       targetFrameRate: target?.frameRate,
-      tabResizePostprocess: output.resizePostprocess,
+      requestedOutputContainer,
+      requestedResizePostprocess: output.resizePostprocess,
+      resolvedOutputContainer,
+      resolvedResizePostprocess,
+      resolvedTargetWidth: resolvedTarget?.width,
+      resolvedTargetHeight: resolvedTarget?.height,
+      resolvedTargetFrameRate: resolvedTarget?.frameRate,
       tabMp4Output: output.mp4Output,
+      tabMp4Supported,
     });
 
     return {
       stream: sourceStream,
       finalize: {
-        outputContainer: output.mp4Output ? 'mp4' : 'webm',
-        resizeTabOutput: output.resizePostprocess,
-        outputTarget: target,
+        outputContainer: resolvedOutputContainer,
+        resizeTabOutput: resolvedResizePostprocess,
+        outputTarget: resolvedTarget,
       },
-      attemptLiveMp4Delivery: output.mp4Output && !output.resizePostprocess,
+      attemptLiveMp4Delivery: resolvedOutputContainer === 'mp4' && !resolvedResizePostprocess,
     };
   }
 
@@ -1076,7 +1099,6 @@ export class RecorderEngine {
     this.playback = null;
     this.mixedAudio?.stop();
     this.mixedAudio = null;
-    this.suffix = 'google-meet';
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
     this.recorderSettings = null;

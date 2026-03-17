@@ -126,4 +126,9 @@ describe('settings page', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(bubble.hidden).toBe(true);
   });
+
+  it('documents the native-only tab MP4 fallback behavior in the tooltips', () => {
+    expect(settingsHtml).toContain('If Chrome cannot record tab MP4 with audio, the original WebM tab recording is kept unchanged instead.');
+    expect(settingsHtml).toContain('If tab MP4 is also requested but unavailable in this Chrome runtime, the original WebM tab file is preserved unchanged instead.');
+  });
 });

@@ -34,6 +34,11 @@ type VideoArtifactPostprocessorDeps = {
   warn: (...a: any[]) => void;
 };
 
+type PlaybackAudioCapture = {
+  stream: MediaStream;
+  cleanup: () => Promise<void>;
+};
+
 class InMemoryStorageTarget {
   private readonly chunks: Blob[] = [];
   private closed = false;
@@ -109,11 +114,32 @@ async function waitForRecorderStart(recorder: MediaRecorder): Promise<void> {
         () => reject(new Error('Video postprocess MediaRecorder did not start (timeout)')),
         TIMEOUTS.RECORDER_START_MS
       );
+      let pollHandle: ReturnType<typeof setTimeout> | null = null;
 
-      recorder.onstart = () => {
+      const cleanup = () => {
         clearTimeout(startTimeout);
+        if (pollHandle) clearTimeout(pollHandle);
+      };
+
+      const resolveStarted = () => {
+        cleanup();
         resolve();
       };
+
+      const pollState = () => {
+        if (recorder.state === 'recording') {
+          resolveStarted();
+          return;
+        }
+
+        pollHandle = setTimeout(pollState, 25);
+      };
+
+      recorder.onstart = () => {
+        resolveStarted();
+      };
+
+      pollState();
     }),
     TIMEOUTS.RECORDER_START_MS + 100,
     'video postprocess recorder start'
@@ -148,6 +174,49 @@ function replaceExtension(filename: string, extension: '.webm' | '.mp4'): string
   return filename.replace(/\.[^.]+$/u, extension);
 }
 
+function createMediaStream(tracks: MediaStreamTrack[]): MediaStream {
+  if (typeof MediaStream !== 'undefined') {
+    return new MediaStream(tracks);
+  }
+
+  return {
+    getTracks: () => tracks,
+    getAudioTracks: () => tracks.filter((track) => track.kind === 'audio'),
+    getVideoTracks: () => tracks.filter((track) => track.kind === 'video'),
+  } as any;
+}
+
+async function createTabPlaybackAudioCapture(video: HTMLVideoElement): Promise<PlaybackAudioCapture> {
+  const AC = (
+    globalThis.AudioContext
+    || (globalThis as any).webkitAudioContext
+    || (window.AudioContext || (window as any).webkitAudioContext)
+  ) as typeof AudioContext | undefined;
+  if (!AC) {
+    throw new Error('AudioContext is unavailable for tab audio postprocess');
+  }
+
+  const ctx = new AC();
+  await ctx.resume().catch(() => {});
+
+  const source = ctx.createMediaElementSource(video);
+  const destination = ctx.createMediaStreamDestination();
+  source.connect(destination);
+
+  return {
+    stream: destination.stream,
+    cleanup: async () => {
+      try {
+        source.disconnect();
+      } catch {}
+
+      try {
+        await ctx.close();
+      } catch {}
+    },
+  };
+}
+
 function resolveOutputMime(plan: VideoArtifactPostprocessPlan): string {
   if (plan.outputContainer === 'mp4') {
     const mime = plan.stream === 'tab' ? getNativeTabMp4Mime() : getNativeSelfVideoMp4Mime();
@@ -180,6 +249,7 @@ export async function postprocessVideoArtifact(
   const inputUrl = URL.createObjectURL(artifact.file);
   let playbackVideo: HTMLVideoElement | null = null;
   let playbackStream: MediaStream | null = null;
+  let playbackAudioCapture: PlaybackAudioCapture | null = null;
   let processedStream: MediaStream | null = null;
   let cleanupProcessedStream: (() => void) | null = null;
   let usingOpfsTarget = false;
@@ -203,10 +273,16 @@ export async function postprocessVideoArtifact(
     if (!playbackStream.getVideoTracks().length) {
       throw new Error('Playback capture did not produce a video track for video postprocess');
     }
+    if (plan.stream === 'tab' && playbackStream.getAudioTracks().length > 0) {
+      playbackAudioCapture = await createTabPlaybackAudioCapture(playbackVideo);
+    }
 
     if (plan.outputTarget) {
       const resized = await createResizedVideoStream(playbackStream, plan.outputTarget);
-      processedStream = resized.stream;
+      processedStream = createMediaStream([
+        ...resized.stream.getVideoTracks(),
+        ...(playbackAudioCapture?.stream.getAudioTracks() ?? resized.stream.getAudioTracks()),
+      ]);
       cleanupProcessedStream = resized.cleanup;
       const processedMetrics = readStreamVideoMetrics(processedStream);
       const target = plan.outputTarget;
@@ -227,7 +303,10 @@ export async function postprocessVideoArtifact(
         );
       }
     } else {
-      processedStream = playbackStream;
+      processedStream = createMediaStream([
+        ...playbackStream.getVideoTracks(),
+        ...(playbackAudioCapture?.stream.getAudioTracks() ?? playbackStream.getAudioTracks()),
+      ]);
     }
 
     playbackVideo.pause();
@@ -305,8 +384,9 @@ export async function postprocessVideoArtifact(
 
     const startPromise = waitForRecorderStart(recorder);
     recorder.start(plan.chunking.defaultTimesliceMs);
+    const resumePlaybackPromise = playbackVideo.play();
     await startPromise;
-    await playbackVideo.play();
+    await resumePlaybackPromise;
     const processedArtifact = await processedArtifactPromise;
     while (recorder.state !== 'inactive') {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -344,9 +424,11 @@ export async function postprocessVideoArtifact(
   } finally {
     cleanupProcessedStream?.();
     stopStream(playbackStream);
+    stopStream(playbackAudioCapture?.stream ?? null);
     if (processedStream && processedStream !== playbackStream) {
       stopStream(processedStream);
     }
+    await playbackAudioCapture?.cleanup().catch(() => {});
     if (playbackVideo) {
       try { playbackVideo.pause(); } catch {}
       playbackVideo.src = '';

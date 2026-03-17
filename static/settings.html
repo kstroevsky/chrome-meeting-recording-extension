@@ -328,7 +328,7 @@
           <label for="tab-resize-postprocess">Resize tab recording after capture</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab resize postprocess" aria-controls="tooltip-tab-resize-postprocess" aria-expanded="false">?</button>
-            <span id="tooltip-tab-resize-postprocess" class="tooltip-bubble" role="tooltip" hidden>When enabled, the extension keeps the original tab recording during the meeting and resizes the final saved tab file after capture stops.</span>
+            <span id="tooltip-tab-resize-postprocess" class="tooltip-bubble" role="tooltip" hidden>When enabled, the extension keeps the original tab recording during the meeting and resizes the final saved tab file after capture stops. If tab MP4 is also requested but unavailable in this Chrome runtime, the original WebM tab file is preserved unchanged instead.</span>
           </span>
         </div>
         <input id="tab-resize-postprocess" type="checkbox" />
@@ -337,7 +337,7 @@
           <label for="tab-mp4-output">Save tab as MP4</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab MP4 output" aria-controls="tooltip-tab-mp4-output" aria-expanded="false">?</button>
-            <span id="tooltip-tab-mp4-output" class="tooltip-bubble" role="tooltip" hidden>Tries to deliver the final tab file as native MP4 (H.264/AAC) when Chrome supports it. If MP4 delivery fails, the original WebM is saved instead.</span>
+            <span id="tooltip-tab-mp4-output" class="tooltip-bubble" role="tooltip" hidden>Tries to deliver the final tab file as native MP4 (H.264/AAC) when Chrome supports it. If Chrome cannot record tab MP4 with audio, the original WebM tab recording is kept unchanged instead.</span>
           </span>
         </div>
         <input id="tab-mp4-output" type="checkbox" />

@@ -44,6 +44,7 @@ class FakeMediaRecorder {
   static isTypeSupported = jest.fn((mime: string) =>
     mime.startsWith('video/webm') || mime.startsWith('video/mp4')
   );
+  static startBehavior: ((recorder: FakeMediaRecorder) => void) | null = null;
 
   ondataavailable: ((event: BlobEvent) => void) | null = null;
   onstop: (() => void) | null = null;
@@ -59,6 +60,11 @@ class FakeMediaRecorder {
   }
 
   start = jest.fn(() => {
+    if (FakeMediaRecorder.startBehavior) {
+      FakeMediaRecorder.startBehavior(this);
+      return;
+    }
+
     this.state = 'recording';
     queueMicrotask(() => this.onstart?.());
   });
@@ -76,24 +82,45 @@ class FakeMediaRecorder {
 
 describe('TabArtifactPostprocessor', () => {
   let originalMediaRecorder: typeof MediaRecorder;
+  let originalAudioContext: typeof AudioContext | undefined;
   let originalCreateElement: typeof document.createElement;
   let originalCreateObjectURL: typeof URL.createObjectURL;
   let originalRevokeObjectURL: typeof URL.revokeObjectURL;
 
   beforeEach(() => {
     originalMediaRecorder = global.MediaRecorder as any;
+    originalAudioContext = (global as any).AudioContext;
     originalCreateElement = document.createElement.bind(document);
     originalCreateObjectURL = URL.createObjectURL;
     originalRevokeObjectURL = URL.revokeObjectURL;
 
     (global as any).MediaRecorder = FakeMediaRecorder as any;
+    const graphAudioTrack = makeTrack('audio');
+    const sourceNode = {
+      connect: jest.fn(),
+      disconnect: jest.fn(),
+    };
+    const destination = {
+      stream: makeStream([graphAudioTrack]),
+    };
+    const audioContextCtor = jest.fn().mockImplementation(() => ({
+      resume: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn().mockResolvedValue(undefined),
+      createMediaElementSource: jest.fn(() => sourceNode),
+      createMediaStreamDestination: jest.fn(() => destination),
+    }));
+    (global as any).AudioContext = audioContextCtor;
+    (window as any).AudioContext = audioContextCtor;
     FakeMediaRecorder.instances = [];
+    FakeMediaRecorder.startBehavior = null;
     URL.createObjectURL = jest.fn(() => 'blob:input');
     URL.revokeObjectURL = jest.fn();
   });
 
   afterEach(() => {
     (global as any).MediaRecorder = originalMediaRecorder;
+    (global as any).AudioContext = originalAudioContext;
+    (window as any).AudioContext = originalAudioContext;
     document.createElement = originalCreateElement;
     URL.createObjectURL = originalCreateObjectURL;
     URL.revokeObjectURL = originalRevokeObjectURL;
@@ -186,10 +213,109 @@ describe('TabArtifactPostprocessor', () => {
     expect(FakeMediaRecorder.instances).toHaveLength(1);
     expect(FakeMediaRecorder.instances[0].start).toHaveBeenCalledTimes(1);
     expect(FakeMediaRecorder.instances[0].stop).toHaveBeenCalledTimes(1);
+    expect(FakeMediaRecorder.instances[0].stream.getAudioTracks()).toHaveLength(1);
     expect(video.play).toHaveBeenCalledTimes(2);
     expect(processed.filename).toBe('tab.webm');
     expect(await toText(processed.file)).toBe('processed');
     expect(originalArtifact.cleanup).toHaveBeenCalledTimes(1);
     expect(cleanupResized).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts replay postprocess even when recorder start only becomes active after playback resumes', async () => {
+    const playbackStream = makeStream([
+      makeTrack('audio'),
+      makeTrack('video', { width: 1920, height: 1080, frameRate: 30 }),
+    ]);
+    const resizedStream = makeStream([
+      makeTrack('audio'),
+      makeTrack('video', { width: 640, height: 360, frameRate: 24 }),
+    ]);
+
+    jest.spyOn(RecorderVideoResizer, 'createResizedVideoStream').mockResolvedValue({
+      stream: resizedStream,
+      resized: true,
+      source: { width: 1920, height: 1080, frameRate: 30 },
+      output: { width: 640, height: 360, frameRate: 24 },
+      cleanup: jest.fn(),
+    });
+    jest.spyOn(RecorderVideoResizer, 'readStreamVideoMetrics').mockReturnValue({
+      width: 640,
+      height: 360,
+      frameRate: 24,
+    });
+
+    const listeners = new Map<string, Set<() => void>>();
+    const emit = (eventName: string) => {
+      for (const listener of listeners.get(eventName) ?? []) listener();
+    };
+    let playCount = 0;
+    const video = {
+      src: '',
+      muted: false,
+      playsInline: false,
+      autoplay: false,
+      hidden: false,
+      preload: '',
+      style: {},
+      currentTime: 0,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      play: jest.fn().mockImplementation(async () => {
+        playCount += 1;
+        if (playCount >= 2) {
+          queueMicrotask(() => {
+            const recorder = FakeMediaRecorder.instances[0];
+            recorder.state = 'recording';
+            setTimeout(() => emit('ended'), 50);
+          });
+        }
+      }),
+      pause: jest.fn(),
+      load: jest.fn(),
+      addEventListener: jest.fn((eventName: string, handler: () => void) => {
+        const set = listeners.get(eventName) ?? new Set<() => void>();
+        set.add(handler);
+        listeners.set(eventName, set);
+      }),
+      removeEventListener: jest.fn((eventName: string, handler: () => void) => {
+        listeners.get(eventName)?.delete(handler);
+      }),
+      captureStream: jest.fn(() => playbackStream),
+    } as any;
+
+    document.createElement = jest.fn((tagName: string) => {
+      if (tagName === 'video') return video;
+      return originalCreateElement(tagName as any);
+    }) as any;
+
+    FakeMediaRecorder.startBehavior = (recorder) => {
+      recorder.state = 'inactive';
+    };
+
+    const originalArtifact = {
+      filename: 'tab.webm',
+      file: new File(['original'], 'tab.webm', { type: 'video/webm' }),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const processed = await postprocessVideoArtifact(
+      originalArtifact,
+      {
+        stream: 'tab',
+        outputContainer: 'webm',
+        outputTarget: { width: 640, height: 360, frameRate: 24 },
+        chunking: buildRecorderRuntimeSettingsSnapshot(DEFAULT_EXTENSION_SETTINGS).chunking,
+      },
+      {
+        log: jest.fn(),
+        warn: jest.fn(),
+      }
+    );
+
+    expect(processed.filename).toBe('tab.webm');
+    expect(await toText(processed.file)).toBe('processed');
+    expect(video.play).toHaveBeenCalledTimes(2);
+    expect(FakeMediaRecorder.instances[0].start).toHaveBeenCalledTimes(1);
+    expect(FakeMediaRecorder.instances[0].stop).toHaveBeenCalledTimes(1);
   });
 });

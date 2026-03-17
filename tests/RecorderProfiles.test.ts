@@ -66,6 +66,16 @@ describe('RecorderProfiles', () => {
     (MediaRecorder.isTypeSupported as any) = original;
   });
 
+  it('does not treat generic video/mp4 as tab MP4 support when AAC capability is unknown', () => {
+    const original = MediaRecorder.isTypeSupported;
+    (MediaRecorder.isTypeSupported as any) = jest.fn((mime: string) => mime === 'video/mp4');
+
+    expect(getNativeTabMp4Mime()).toBeNull();
+    expect(getNativeSelfVideoMp4Mime()).toBe('video/mp4');
+
+    (MediaRecorder.isTypeSupported as any) = original;
+  });
+
   it('adapts self-video bitrate within the allowed ceiling when profiling is enabled', () => {
     PERF_FLAGS.adaptiveSelfVideoProfile = true;
 
