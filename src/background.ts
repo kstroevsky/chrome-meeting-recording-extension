@@ -24,6 +24,10 @@ import { pokeRuntime } from './platform/chrome/runtime';
 import { makeLogger } from './shared/logger';
 import { broadcastToPopup } from './shared/messages';
 import {
+  buildRecorderRuntimeSettingsSnapshot,
+  loadExtensionSettingsFromStorage,
+} from './shared/extensionSettings';
+import {
   isPerfEventMessage,
   isPopupToBgMessage,
   type CommandResult,
@@ -242,6 +246,17 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.Mess
         return;
       }
 
+      let recorderSettings: ReturnType<typeof buildRecorderRuntimeSettingsSnapshot>;
+      try {
+        const extensionSettings = await loadExtensionSettingsFromStorage();
+        recorderSettings = buildRecorderRuntimeSettingsSnapshot(extensionSettings);
+      } catch (e: any) {
+        const error = `Failed to load recorder settings: ${e?.message || e}`;
+        L.error(error);
+        sendResponse(failureResult(error));
+        return;
+      }
+
       session.start(runConfig);
 
       L.log('Popup requested START_RECORDING for tabId', msg.tabId);
@@ -261,6 +276,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender: chrome.runtime.Mess
           type: 'OFFSCREEN_START',
           streamId,
           runConfig,
+          recorderSettings,
         });
 
         L.log('rpc(OFFSCREEN_START) response', r);

@@ -1,7 +1,9 @@
 import {
+  buildRecorderRuntimeSettingsSnapshot,
   DEFAULT_EXTENSION_SETTINGS,
   getSelfVideoProfileSettings,
   getTabCaptureSettings,
+  normalizeRecorderRuntimeSettingsSnapshot,
   normalizeExtensionSettings,
 } from '../src/shared/extensionSettings';
 
@@ -103,5 +105,73 @@ describe('extensionSettings', () => {
 
     expect(settings.professional.selfVideoBitrate).toBe(3_000_000);
     expect(settings.professional.selfVideoMinAdaptiveBitrate).toBe(3_000_000);
+  });
+
+  it('builds a recorder runtime snapshot from the normalized capture settings', () => {
+    const settings = normalizeExtensionSettings({
+      basic: {
+        selfVideoResolutionPreset: '1280x720',
+      },
+      professional: {
+        selfVideoFrameRate: 24,
+        selfVideoBitrate: 2_000_000,
+        selfVideoMinAdaptiveBitrate: 1_000_000,
+        tabResolutionPreset: '640x360',
+        tabMaxFrameRate: 20,
+        microphoneEchoCancellation: false,
+        microphoneNoiseSuppression: true,
+        microphoneAutoGainControl: false,
+        chunkDefaultTimesliceMs: 1500,
+        chunkExtendedTimesliceMs: 4500,
+      },
+    });
+
+    expect(buildRecorderRuntimeSettingsSnapshot(settings)).toEqual({
+      tab: {
+        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20 },
+      },
+      selfVideo: {
+        profile: {
+          width: 1280,
+          height: 720,
+          frameRate: 24,
+          aspectRatio: 1280 / 720,
+          defaultBitsPerSecond: 2_000_000,
+          minAdaptiveBitsPerSecond: 1_000_000,
+        },
+      },
+      microphone: {
+        echoCancellation: false,
+        noiseSuppression: true,
+        autoGainControl: false,
+      },
+      chunking: {
+        defaultTimesliceMs: 1500,
+        extendedTimesliceMs: 4500,
+      },
+    });
+  });
+
+  it('accepts only valid recorder runtime snapshots without applying silent defaults', () => {
+    const snapshot = buildRecorderRuntimeSettingsSnapshot(
+      normalizeExtensionSettings({
+        professional: {
+          tabResolutionPreset: '640x360',
+        },
+      })
+    );
+
+    expect(normalizeRecorderRuntimeSettingsSnapshot(snapshot)).toEqual(snapshot);
+    expect(
+      normalizeRecorderRuntimeSettingsSnapshot({
+        ...snapshot,
+        tab: {
+          output: {
+            ...snapshot.tab.output,
+            maxFrameRate: 'fast',
+          },
+        },
+      })
+    ).toBeNull();
   });
 });

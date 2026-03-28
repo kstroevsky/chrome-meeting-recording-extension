@@ -37,8 +37,8 @@ describe('RecorderProfiles', () => {
     expect(matchesSelfVideoProfile({ width: 1280, height: 720 })).toBe(false);
   });
 
-  it('keeps tab chunks conservative while letting self-video use the longer cadence', () => {
-    expect(getChunkTimesliceMs('tab')).toBe(2000);
+  it('keeps the tab and self-video recorders on the longer default cadence', () => {
+    expect(getChunkTimesliceMs('tab')).toBe(4000);
     expect(getChunkTimesliceMs('mic')).toBe(2000);
     expect(getChunkTimesliceMs('selfVideo')).toBe(4000);
   });
@@ -46,7 +46,7 @@ describe('RecorderProfiles', () => {
   it('extends only the microphone chunks when the perf flag is enabled', () => {
     PERF_FLAGS.extendedTimeslice = true;
 
-    expect(getChunkTimesliceMs('tab')).toBe(2000);
+    expect(getChunkTimesliceMs('tab')).toBe(4000);
     expect(getChunkTimesliceMs('mic')).toBe(4000);
     expect(getChunkTimesliceMs('selfVideo')).toBe(4000);
   });

@@ -305,7 +305,7 @@
           <label for="tab-resolution-preset">Tab resolution</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab resolution" aria-controls="tooltip-tab-resolution" aria-expanded="false">?</button>
-            <span id="tooltip-tab-resolution" class="tooltip-bubble" role="tooltip" hidden>Sets the final recorded tab size. The extension captures the tab at a higher ceiling first, then downscales live when this preset is smaller.</span>
+            <span id="tooltip-tab-resolution" class="tooltip-bubble" role="tooltip" hidden>Sets the requested maximum tab capture size. Chrome may still deliver a different size depending on the page, display scale, and browser limits.</span>
           </span>
         </div>
         <select id="tab-resolution-preset">

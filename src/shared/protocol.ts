@@ -6,6 +6,7 @@
  */
 
 import type { MeetingProviderInfo } from './provider';
+import type { RecorderRuntimeSettingsSnapshot } from './extensionSettings';
 import type {
   RecordingRunConfig,
   RecordingSessionSnapshot,
@@ -79,6 +80,7 @@ export type BgToOffscreenRpc =
       type: 'OFFSCREEN_START';
       streamId: string;
       runConfig: RecordingRunConfig;
+      recorderSettings: RecorderRuntimeSettingsSnapshot;
     }>
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>;
 

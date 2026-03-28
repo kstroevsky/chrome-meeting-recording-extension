@@ -6,6 +6,8 @@
 
 import { PERF_FLAGS, clamp } from '../shared/perf';
 import {
+  type ChunkingSettings,
+  type SelfVideoProfileSettings,
   DEFAULT_EXTENSION_SETTINGS,
   getChunkingSettings,
   getSelfVideoProfileSettings,
@@ -13,14 +15,15 @@ import {
 
 export type RecorderChunkStream = 'tab' | 'mic' | 'selfVideo';
 
-const DEFAULT_SELF_VIDEO_PROFILE = getSelfVideoProfileSettings(DEFAULT_EXTENSION_SETTINGS);
+const DEFAULT_SELF_VIDEO_PROFILE_SETTINGS = getSelfVideoProfileSettings(DEFAULT_EXTENSION_SETTINGS);
+const DEFAULT_CHUNKING_SETTINGS = getChunkingSettings(DEFAULT_EXTENSION_SETTINGS);
 
 export const SELF_VIDEO_PROFILE = Object.freeze({
-  width: DEFAULT_SELF_VIDEO_PROFILE.width,
-  height: DEFAULT_SELF_VIDEO_PROFILE.height,
-  frameRate: DEFAULT_SELF_VIDEO_PROFILE.frameRate,
-  aspectRatio: DEFAULT_SELF_VIDEO_PROFILE.aspectRatio,
-  defaultBitsPerSecond: DEFAULT_SELF_VIDEO_PROFILE.defaultBitsPerSecond,
+  width: DEFAULT_SELF_VIDEO_PROFILE_SETTINGS.width,
+  height: DEFAULT_SELF_VIDEO_PROFILE_SETTINGS.height,
+  frameRate: DEFAULT_SELF_VIDEO_PROFILE_SETTINGS.frameRate,
+  aspectRatio: DEFAULT_SELF_VIDEO_PROFILE_SETTINGS.aspectRatio,
+  defaultBitsPerSecond: DEFAULT_SELF_VIDEO_PROFILE_SETTINGS.defaultBitsPerSecond,
 });
 
 /** Converts a requested self-video profile into strict getUserMedia constraints. */
@@ -69,14 +72,10 @@ function buildStrictSizeConstraints(profile: {
   } as any;
 }
 
-/** Reads the current self-video profile from normalized extension settings. */
-function getCurrentSelfVideoProfile() {
-  return getSelfVideoProfileSettings();
-}
-
 /** Returns the active self-video profile used for logging and recorder setup. */
-export function getSelfVideoProfile() {
-  const profile = getCurrentSelfVideoProfile();
+export function getSelfVideoProfile(
+  profile: Readonly<SelfVideoProfileSettings> = DEFAULT_SELF_VIDEO_PROFILE_SETTINGS
+) {
   return Object.freeze({
     width: profile.width,
     height: profile.height,
@@ -87,8 +86,10 @@ export function getSelfVideoProfile() {
 }
 
 /** Returns the active camera constraints derived from the selected preset and frame rate. */
-export function getSelfVideoConstraints(): MediaTrackConstraints {
-  return buildConstraints(getCurrentSelfVideoProfile());
+export function getSelfVideoConstraints(
+  profile: Readonly<SelfVideoProfileSettings> = DEFAULT_SELF_VIDEO_PROFILE_SETTINGS
+): MediaTrackConstraints {
+  return buildConstraints(profile);
 }
 
 export const SELF_VIDEO_CONSTRAINTS: MediaTrackConstraints = buildConstraints(SELF_VIDEO_PROFILE);
@@ -99,9 +100,9 @@ export type SelfVideoConstraintRequest = {
 };
 
 /** Returns the deterministic self-video getUserMedia fallback ladder. */
-export function getSelfVideoConstraintRequests(): SelfVideoConstraintRequest[] {
-  const profile = getCurrentSelfVideoProfile();
-
+export function getSelfVideoConstraintRequests(
+  profile: Readonly<SelfVideoProfileSettings> = DEFAULT_SELF_VIDEO_PROFILE_SETTINGS
+): SelfVideoConstraintRequest[] {
   return [
     {
       label: 'exact-size-and-fps',
@@ -116,11 +117,6 @@ export function getSelfVideoConstraintRequests(): SelfVideoConstraintRequest[] {
       constraints: buildConstraints(profile),
     },
   ];
-}
-
-/** Returns the minimum bitrate floor used by adaptive self-video bitrate logic. */
-function getCurrentSelfVideoMinBitrate(): number {
-  return getCurrentSelfVideoProfile().minAdaptiveBitsPerSecond;
 }
 
 /** Picks the first browser-supported MediaRecorder MIME from the candidate list. */
@@ -152,8 +148,10 @@ export function getAudioMime(): string {
  * the longer cadence to reduce OPFS write churn. The mic recorder stays on the
  * shorter cadence unless the perf flag explicitly opts into larger chunks.
  */
-export function getChunkTimesliceMs(stream: RecorderChunkStream): number {
-  const chunking = getChunkingSettings();
+export function getChunkTimesliceMs(
+  stream: RecorderChunkStream,
+  chunking: Readonly<ChunkingSettings> = DEFAULT_CHUNKING_SETTINGS
+): number {
   if (stream === 'tab') return chunking.extendedTimesliceMs;
   if (stream === 'selfVideo') return chunking.extendedTimesliceMs;
   if (PERF_FLAGS.extendedTimeslice) {
@@ -163,26 +161,32 @@ export function getChunkTimesliceMs(stream: RecorderChunkStream): number {
 }
 
 /** Returns the configured default bitrate ceiling for self-video recordings. */
-export function getDefaultSelfVideoBitrate(): number {
-  return getCurrentSelfVideoProfile().defaultBitsPerSecond;
+export function getDefaultSelfVideoBitrate(
+  profile: Readonly<SelfVideoProfileSettings> = DEFAULT_SELF_VIDEO_PROFILE_SETTINGS
+): number {
+  return profile.defaultBitsPerSecond;
 }
 
 /** Checks whether the delivered camera track matches the requested preset size. */
-export function matchesSelfVideoProfile(settings?: MediaTrackSettings): boolean {
-  const profile = getCurrentSelfVideoProfile();
+export function matchesSelfVideoProfile(
+  settings: MediaTrackSettings | undefined,
+  profile: Readonly<SelfVideoProfileSettings> = DEFAULT_SELF_VIDEO_PROFILE_SETTINGS
+): boolean {
   return settings?.width === profile.width && settings?.height === profile.height;
 }
 
 /** Formats the current self-video preset for diagnostics and warnings. */
-export function formatSelfVideoProfile(): string {
-  const profile = getCurrentSelfVideoProfile();
+export function formatSelfVideoProfile(
+  profile: Readonly<SelfVideoProfileSettings> = DEFAULT_SELF_VIDEO_PROFILE_SETTINGS
+): string {
   return `${profile.width}x${profile.height}`;
 }
 
 /** Adapts camera bitrate to the delivered track while respecting configured bounds. */
 export function resolveSelfVideoBitrate(
   fallbackBitsPerSecond: number,
-  settings?: MediaTrackSettings
+  settings?: MediaTrackSettings,
+  minAdaptiveBitsPerSecond = DEFAULT_SELF_VIDEO_PROFILE_SETTINGS.minAdaptiveBitsPerSecond
 ): number {
   if (!PERF_FLAGS.adaptiveSelfVideoProfile) return fallbackBitsPerSecond;
 
@@ -192,5 +196,5 @@ export function resolveSelfVideoBitrate(
   if (!width || !height || !frameRate) return fallbackBitsPerSecond;
 
   const estimated = Math.round(width * height * frameRate * 0.1);
-  return clamp(estimated, getCurrentSelfVideoMinBitrate(), fallbackBitsPerSecond);
+  return clamp(estimated, minAdaptiveBitsPerSecond, fallbackBitsPerSecond);
 }

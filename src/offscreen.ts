@@ -28,7 +28,7 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
-import { loadExtensionSettingsFromStorage } from './shared/extensionSettings';
+import { normalizeRecorderRuntimeSettingsSnapshot } from './shared/extensionSettings';
 import {
   DEFAULT_RECORDING_RUN_CONFIG,
   normalizeRunConfig,
@@ -258,20 +258,21 @@ function wirePortHandlers(port: chrome.runtime.Port) {
       OFFSCREEN_START: async (msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_START' }>) => {
         const streamId = msg.streamId as string | undefined;
         const runConfig = normalizeRunConfig(msg.runConfig);
+        const recorderSettings = normalizeRecorderRuntimeSettingsSnapshot(msg.recorderSettings);
         if (!streamId) return { ok: false, error: 'Missing streamId' };
         if (!runConfig) return { ok: false, error: 'Missing run configuration' };
+        if (!recorderSettings) return { ok: false, error: 'Missing or invalid recorder settings snapshot' };
         if (currentPhase !== 'idle' || finalizeRunPromise) {
           return { ok: false, error: `Recorder is busy (${currentPhase})` };
         }
 
-        await loadExtensionSettingsFromStorage();
         currentRunConfig = runConfig;
         currentStorageMode = runConfig.storageMode;
         clearWarnings();
         pushState('starting');
 
         try {
-          await engine.startFromStreamId(streamId, runConfig);
+          await engine.startFromStreamId(streamId, runConfig, recorderSettings);
           return { ok: true };
         } catch (e: any) {
           currentRunConfig = null;

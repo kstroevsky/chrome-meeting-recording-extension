@@ -44,7 +44,7 @@ describe('RecorderCapture', () => {
     await resetExtensionSettingsToDefaults();
   });
 
-  it('keeps tab acquisition at the high-ceiling capture size regardless of output preset', async () => {
+  it('requests tab acquisition at the selected capture ceiling', async () => {
     const tabStream = makeStream(
       makeVideoTrack({ width: 1920, height: 1080, frameRate: 24 })
     );
@@ -64,8 +64,8 @@ describe('RecorderCapture', () => {
         video: expect.objectContaining({
           mandatory: expect.objectContaining({
             chromeMediaSourceId: 'stream-id',
-            maxWidth: 1920,
-            maxHeight: 1080,
+            maxWidth: 640,
+            maxHeight: 360,
             maxFrameRate: 24,
           }),
         }),
