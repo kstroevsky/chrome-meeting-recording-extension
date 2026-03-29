@@ -39,6 +39,7 @@ import {
 } from '../shared/recording';
 import { TIMEOUTS } from '../shared/timeouts';
 import type { VideoResizeTarget } from './RecorderVideoResizer';
+import ysFixWebmDuration from 'fix-webm-duration';
 
 type RecordingStateExtra = Record<string, any> | undefined;
 
@@ -437,6 +438,7 @@ export class RecorderEngine {
   private async startTabRecorder(recordingStream: MediaStream, runStartedAt: number): Promise<void> {
     const mime = getVideoMime();
     let started = false;
+    let actualStartTimeMs = 0;
     const timesliceMs = getChunkTimesliceMs('tab', this.getRequiredRecorderSettings().chunking);
 
     const recorder = new MediaRecorder(recordingStream, {
@@ -453,6 +455,14 @@ export class RecorderEngine {
       try {
         const artifact = await target.close();
         if (artifact) {
+          if (started && actualStartTimeMs > 0) {
+            try {
+              const durationMs = nowMs() - actualStartTimeMs;
+              artifact.file = await ysFixWebmDuration(artifact.file, durationMs, { logger: false });
+            } catch (e) {
+              this.deps.warn(`${label} duration fix failed`, e);
+            }
+          }
           this.finalizedArtifacts.push({
             stream: 'tab',
             artifact,
@@ -507,6 +517,7 @@ export class RecorderEngine {
       recorder.onstart = () => {
         clearTimeout(startTimeout);
         started = true;
+        actualStartTimeMs = nowMs();
         this.onRecorderStarted();
         logPerf(this.deps.log, 'recorder', 'recorder_started', {
           stream: 'tab',
@@ -547,6 +558,7 @@ export class RecorderEngine {
     this.micStream = mic;
     const mime = getAudioMime();
     let started = false;
+    let actualStartTimeMs = 0;
     const timesliceMs = getChunkTimesliceMs('mic', this.getRequiredRecorderSettings().chunking);
     const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
     this.micRecorder = recorder;
@@ -557,7 +569,17 @@ export class RecorderEngine {
     const finalize = async (label: string) => {
       try {
         const artifact = await target.close();
-        if (artifact) this.finalizedArtifacts.push({ stream: 'mic', artifact });
+        if (artifact) {
+          if (started && actualStartTimeMs > 0) {
+            try {
+              const durationMs = nowMs() - actualStartTimeMs;
+              artifact.file = await ysFixWebmDuration(artifact.file, durationMs, { logger: false });
+            } catch (e) {
+              this.deps.warn(`${label} duration fix failed`, e);
+            }
+          }
+          this.finalizedArtifacts.push({ stream: 'mic', artifact });
+        }
       } catch (e) {
         this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
       } finally {
@@ -600,6 +622,7 @@ export class RecorderEngine {
       recorder.onstart = () => {
         clearTimeout(startTimeout);
         started = true;
+        actualStartTimeMs = nowMs();
         this.onRecorderStarted();
         logPerf(this.deps.log, 'recorder', 'recorder_started', {
           stream: 'mic',
@@ -643,6 +666,7 @@ export class RecorderEngine {
     const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate(recorderSettings.selfVideo.profile);
     const mime = getVideoOnlyMime();
     let started = false;
+    let actualStartTimeMs = 0;
     const timesliceMs = getChunkTimesliceMs('selfVideo', recorderSettings.chunking);
     const track = selfVideo.getVideoTracks()[0];
     const settings = track?.getSettings?.();
@@ -673,7 +697,17 @@ export class RecorderEngine {
     const finalize = async (label: string) => {
       try {
         const artifact = await target.close();
-        if (artifact) this.finalizedArtifacts.push({ stream: 'selfVideo', artifact });
+        if (artifact) {
+          if (started && actualStartTimeMs > 0) {
+            try {
+              const durationMs = nowMs() - actualStartTimeMs;
+              artifact.file = await ysFixWebmDuration(artifact.file, durationMs, { logger: false });
+            } catch (e) {
+              this.deps.warn(`${label} duration fix failed`, e);
+            }
+          }
+          this.finalizedArtifacts.push({ stream: 'selfVideo', artifact });
+        }
       } catch (e) {
         this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
       } finally {
@@ -723,6 +757,7 @@ export class RecorderEngine {
       recorder.onstart = () => {
         clearTimeout(startTimeout);
         started = true;
+        actualStartTimeMs = nowMs();
         this.onRecorderStarted();
         logPerf(this.deps.log, 'recorder', 'recorder_started', {
           stream: 'selfVideo',

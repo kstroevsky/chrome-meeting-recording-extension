@@ -14,6 +14,8 @@ import { LocalFileTarget } from './LocalFileTarget';
 import { getVideoMime } from './RecorderProfiles';
 import { describeMediaError } from './RecorderSupport';
 import { createResizedVideoStream, readStreamVideoMetrics } from './RecorderVideoResizer';
+import { nowMs } from '../shared/perf';
+import ysFixWebmDuration from 'fix-webm-duration';
 
 type TabArtifactPostprocessorDeps = {
   log: (...a: any[]) => void;
@@ -212,6 +214,7 @@ export async function postprocessTabArtifact(
     });
 
     let writeFailed = false;
+    let actualStartTimeMs = 0;
     const processedArtifact = await new Promise<SealedStorageFile>((resolve, reject) => {
       let settled = false;
       const fail = (error: unknown) => {
@@ -227,6 +230,14 @@ export async function postprocessTabArtifact(
           if (!sealed) {
             reject(new Error('Tab postprocess produced no output artifact'));
             return;
+          }
+          if (actualStartTimeMs > 0) {
+            try {
+              const durationMs = nowMs() - actualStartTimeMs;
+              sealed.file = await ysFixWebmDuration(sealed.file, durationMs, { logger: false });
+            } catch (fixErr) {
+              deps.warn('Tab postprocess duration fix failed', fixErr);
+            }
           }
           resolve({
             ...sealed,
@@ -264,6 +275,7 @@ export async function postprocessTabArtifact(
     const startPromise = waitForRecorderStart(recorder);
     recorder.start(chunking.defaultTimesliceMs);
     await startPromise;
+    actualStartTimeMs = nowMs();
     await playbackVideo.play();
     while (recorder.state !== 'inactive') {
       await new Promise((resolve) => setTimeout(resolve, 50));
