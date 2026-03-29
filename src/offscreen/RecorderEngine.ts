@@ -144,6 +144,12 @@ export class RecorderEngine {
   private stopPromise: Promise<CompletedRecordingArtifact[]> | null = null;
   private resolveStop: ((artifacts: CompletedRecordingArtifact[]) => void) | null = null;
   private finalizedArtifacts: CompletedRecordingArtifact[] = [];
+  /**
+   * Tracks in-flight recorder start tasks (tab + optional mic + optional selfVideo).
+   * Populated during startFromStreamId and drained at the top of stop() so that
+   * stop() always sees fully-initialised recorder references.
+   */
+  private pendingStartPromises: Promise<void>[] = [];
 
   /** Creates a recorder engine bound to runtime logging, phase, and storage callbacks. */
   constructor(deps: RecorderEngineDeps) {
@@ -210,22 +216,36 @@ export class RecorderEngine {
       this.tabFinalizePlan = preparedTabRecorder.finalize ?? null;
       this.tabRecordingStream = tabRecorderStream;
 
-      const tabStarted = this.startTabRecorder(tabRecorderStream, runStartedAt);
+      // Collect start promises for all requested streams so they can be
+      // awaited together. This guarantees every MediaRecorder begins at the
+      // same logical moment and that stop() never races an in-flight start.
+      const startTasks: Promise<void>[] = [
+        this.startTabRecorder(tabRecorderStream, runStartedAt),
+      ];
+
       if (this.micMode === 'separate') {
-        void this.tryStartMicRecorder(runId, runStartedAt, micForRun).catch((e) =>
-          this.deps.warn('Mic recorder start failed', describeMediaError(e))
+        startTasks.push(
+          this.tryStartMicRecorder(runId, runStartedAt, micForRun).catch((e) =>
+            this.deps.warn('Mic recorder start failed', describeMediaError(e))
+          )
         );
       }
       if (this.recordSelfVideo) {
-        void this.tryStartSelfVideoRecorder(runId, runStartedAt).catch((e) =>
-          this.deps.warn(
-            'Self video recorder start failed (continuing without camera stream)',
-            describeMediaError(e)
+        startTasks.push(
+          this.tryStartSelfVideoRecorder(runId, runStartedAt).catch((e) =>
+            this.deps.warn(
+              'Self video recorder start failed (continuing without camera stream)',
+              describeMediaError(e)
+            )
           )
         );
       }
 
-      await tabStarted;
+      // Expose in-flight tasks so stop() can drain them before stopping recorders.
+      this.pendingStartPromises = startTasks;
+      await Promise.all(startTasks);
+      this.pendingStartPromises = [];
+
       if (this.runId === runId && this.state === 'starting') {
         this.state = 'recording';
       }
@@ -237,7 +257,7 @@ export class RecorderEngine {
   }
 
   /** Stops every active recorder and resolves once all sealed artifacts are ready. */
-  stop(): Promise<CompletedRecordingArtifact[]> {
+  async stop(): Promise<CompletedRecordingArtifact[]> {
     if (!this.tabRecorder || !this.isRecording()) {
       this.deps.warn('Stop called but not recording');
       return Promise.resolve([]);
@@ -250,7 +270,16 @@ export class RecorderEngine {
       this.resolveStop = resolve;
     });
 
-    try { this.tabRecorder.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); throw e; }
+    // If start tasks are still in flight (e.g. getUserMedia for camera hasn't
+    // resolved yet), wait for all of them to settle before issuing .stop().
+    // This ensures micRecorder / selfVideoRecorder are never null when we try
+    // to stop them, preventing streams from running past the tab recording.
+    if (this.pendingStartPromises.length) {
+      await Promise.allSettled(this.pendingStartPromises);
+      this.pendingStartPromises = [];
+    }
+
+    try { this.tabRecorder?.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); throw e; }
     try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', describeMediaError(e)); }
     try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', describeMediaError(e)); }
     this.releaseSelfVideoCapture();
@@ -798,5 +827,6 @@ export class RecorderEngine {
     this.tabFinalizePlan = null;
     this.stopPromise = null;
     this.resolveStop = null;
+    this.pendingStartPromises = [];
   }
 }
