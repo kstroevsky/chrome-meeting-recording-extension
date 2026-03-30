@@ -2,19 +2,25 @@
  * @file offscreen/TabArtifactPostprocessor.ts
  *
  * Best-effort fallback that replays a sealed tab artifact, downscales it
- * through the existing canvas-based resizer, and returns a replacement file
- * for the final save/upload step.
+ * through the canvas-based resizer, and returns a replacement file for the
+ * final save/upload step.
  */
 
-import { withTimeout } from '../shared/async';
 import { getChunkingSettings } from '../shared/extensionSettings';
-import { TIMEOUTS } from '../shared/timeouts';
+import { nowMs } from '../shared/perf';
 import type { RecordingArtifactFinalizePlan, SealedStorageFile } from './RecorderEngine';
 import { LocalFileTarget } from './LocalFileTarget';
 import { getVideoMime } from './RecorderProfiles';
 import { describeMediaError } from './RecorderSupport';
 import { createResizedVideoStream, readStreamVideoMetrics } from './RecorderVideoResizer';
-import { nowMs } from '../shared/perf';
+import {
+  cleanupTempOpfsFile,
+  formatMetrics,
+  preparePlaybackElement,
+  stopStream,
+  waitForRecorderStart,
+  waitForVideoMetadata,
+} from './postprocessor/VideoPlaybackElement';
 import ysFixWebmDuration from 'fix-webm-duration';
 
 type TabArtifactPostprocessorDeps = {
@@ -22,14 +28,12 @@ type TabArtifactPostprocessorDeps = {
   warn: (...a: any[]) => void;
 };
 
-class InMemoryStorageTarget {
+/** RAM-backed fallback target when OPFS is unavailable during postprocessing. */
+class InMemoryPostprocessTarget {
   private readonly chunks: Blob[] = [];
   private closed = false;
 
-  constructor(
-    private readonly filename: string,
-    private readonly mimeType: string,
-  ) {}
+  constructor(private readonly filename: string, private readonly mimeType: string) {}
 
   async write(chunk: Blob): Promise<void> {
     if (this.closed) throw new Error('In-memory postprocess target is closed');
@@ -40,96 +44,12 @@ class InMemoryStorageTarget {
     if (this.closed) return null;
     this.closed = true;
     if (!this.chunks.length) return null;
-
     return {
       filename: this.filename,
-      file: new File([new Blob(this.chunks, { type: this.mimeType })], this.filename, {
-        type: this.mimeType,
-      }),
+      file: new File([new Blob(this.chunks, { type: this.mimeType })], this.filename, { type: this.mimeType }),
       cleanup: async () => {},
     };
   }
-}
-
-function preparePlaybackElement(video: HTMLVideoElement): void {
-  video.muted = true;
-  video.playsInline = true;
-  video.autoplay = false;
-  video.hidden = true;
-  video.preload = 'auto';
-  video.style.position = 'fixed';
-  video.style.left = '-99999px';
-  video.style.top = '-99999px';
-  video.style.opacity = '0';
-  video.style.pointerEvents = 'none';
-}
-
-async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
-  if (video.videoWidth > 0 && video.videoHeight > 0) return;
-
-  await withTimeout(
-    new Promise<void>((resolve, reject) => {
-      const onLoadedMetadata = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = () => {
-        cleanup();
-        reject(new Error('Tab postprocess video metadata could not be loaded'));
-      };
-      const cleanup = () => {
-        video.removeEventListener('loadedmetadata', onLoadedMetadata);
-        video.removeEventListener('error', onError);
-      };
-
-      video.addEventListener('loadedmetadata', onLoadedMetadata);
-      video.addEventListener('error', onError);
-    }),
-    TIMEOUTS.GUM_MS,
-    'tab postprocess metadata'
-  );
-}
-
-async function waitForRecorderStart(recorder: MediaRecorder): Promise<void> {
-  await withTimeout(
-    new Promise<void>((resolve, reject) => {
-      const startTimeout = setTimeout(
-        () => reject(new Error('Tab postprocess MediaRecorder did not start (timeout)')),
-        TIMEOUTS.RECORDER_START_MS
-      );
-
-      recorder.onstart = () => {
-        clearTimeout(startTimeout);
-        resolve();
-      };
-    }),
-    TIMEOUTS.RECORDER_START_MS + 100,
-    'tab postprocess recorder start'
-  );
-}
-
-async function cleanupTempOpfsFile(filename: string): Promise<void> {
-  try {
-    const root = await navigator.storage.getDirectory();
-    await root.removeEntry(filename);
-  } catch (error: any) {
-    if (error?.name !== 'NotFoundError') throw error;
-  }
-}
-
-function stopStream(stream: MediaStream | null): void {
-  try {
-    stream?.getTracks().forEach((track) => track.stop());
-  } catch {}
-}
-
-function formatMetrics(width?: number, height?: number, frameRate?: number): string {
-  const resolution =
-    typeof width === 'number' && typeof height === 'number'
-      ? `${width}x${height}`
-      : 'unknown resolution';
-  const fps = typeof frameRate === 'number' ? `@${Math.round(frameRate * 10) / 10}fps` : '';
-  return `${resolution}${fps}`;
 }
 
 /**
@@ -150,7 +70,7 @@ export async function postprocessTabArtifact(
   let processedStream: MediaStream | null = null;
   let cleanupProcessedStream: (() => void) | null = null;
   let usingOpfsTarget = false;
-  let outputTarget: LocalFileTarget | InMemoryStorageTarget | null = null;
+  let outputTarget: LocalFileTarget | InMemoryPostprocessTarget | null = null;
 
   try {
     playbackVideo = document.createElement('video');
@@ -179,17 +99,11 @@ export async function postprocessTabArtifact(
     if (
       processedMetrics.width !== target.width
       || processedMetrics.height !== target.height
-      || (
-        typeof processedMetrics.frameRate === 'number'
-        && processedMetrics.frameRate > target.frameRate + 0.5
-      )
+      || (typeof processedMetrics.frameRate === 'number' && processedMetrics.frameRate > target.frameRate + 0.5)
     ) {
       throw new Error(
-        `Tab postprocess produced ${formatMetrics(
-          processedMetrics.width,
-          processedMetrics.height,
-          processedMetrics.frameRate
-        )} instead of ${formatMetrics(target.width, target.height, target.frameRate)}`
+        `Tab postprocess produced ${formatMetrics(processedMetrics.width, processedMetrics.height, processedMetrics.frameRate)} `
+        + `instead of ${formatMetrics(target.width, target.height, target.frameRate)}`
       );
     }
 
@@ -200,11 +114,8 @@ export async function postprocessTabArtifact(
       outputTarget = await LocalFileTarget.create(tempFilename);
       usingOpfsTarget = true;
     } catch (error) {
-      deps.warn(
-        'Failed to open postprocess storage target, falling back to RAM buffer',
-        describeMediaError(error)
-      );
-      outputTarget = new InMemoryStorageTarget(tempFilename, mimeType);
+      deps.warn('Failed to open postprocess storage target, falling back to RAM buffer', describeMediaError(error));
+      outputTarget = new InMemoryPostprocessTarget(tempFilename, mimeType);
     }
 
     const recorder = new MediaRecorder(processedStream, {
@@ -227,25 +138,16 @@ export async function postprocessTabArtifact(
         settled = true;
         try {
           const sealed = await outputTarget!.close();
-          if (!sealed) {
-            reject(new Error('Tab postprocess produced no output artifact'));
-            return;
-          }
+          if (!sealed) { reject(new Error('Tab postprocess produced no output artifact')); return; }
           if (actualStartTimeMs > 0) {
             try {
-              const durationMs = nowMs() - actualStartTimeMs;
-              sealed.file = await ysFixWebmDuration(sealed.file, durationMs, { logger: false });
+              sealed.file = await ysFixWebmDuration(sealed.file, nowMs() - actualStartTimeMs, { logger: false });
             } catch (fixErr) {
               deps.warn('Tab postprocess duration fix failed', fixErr);
             }
           }
-          resolve({
-            ...sealed,
-            filename: artifact.filename,
-          });
-        } catch (error) {
-          reject(error);
-        }
+          resolve({ ...sealed, filename: artifact.filename });
+        } catch (error) { reject(error); }
       };
 
       recorder.ondataavailable = (event: BlobEvent) => {
@@ -284,11 +186,7 @@ export async function postprocessTabArtifact(
     try {
       await artifact.cleanup();
     } catch (error) {
-      deps.warn(
-        'Failed to cleanup original tab artifact after postprocess',
-        artifact.filename,
-        describeMediaError(error)
-      );
+      deps.warn('Failed to cleanup original tab artifact after postprocess', artifact.filename, describeMediaError(error));
     }
 
     deps.log('tab artifact postprocess complete:', {
@@ -310,9 +208,7 @@ export async function postprocessTabArtifact(
   } finally {
     cleanupProcessedStream?.();
     stopStream(playbackStream);
-    if (processedStream && processedStream !== playbackStream) {
-      stopStream(processedStream);
-    }
+    if (processedStream && processedStream !== playbackStream) stopStream(processedStream);
     if (playbackVideo) {
       try { playbackVideo.pause(); } catch {}
       playbackVideo.src = '';

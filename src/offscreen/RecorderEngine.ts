@@ -1,122 +1,43 @@
 /**
  * @file offscreen/RecorderEngine.ts
  *
- * Core recording logic. Captures tab audio+video and optional microphone/self
- * video streams, writes chunks to local storage targets, and returns sealed
- * local artifacts once capture stops.
+ * State machine facade that coordinates tab, mic, and self-video recorder tasks.
+ * Stream acquisition and audio mixing are delegated to RecorderEngineSetup;
+ * per-stream recording tasks live in ./engine/Tab|Mic|SelfVideoRecorderTask.
  */
 
-import { AudioPlaybackBridge, MixedAudioMixer } from './RecorderAudio';
-import {
-  captureTabStreamFromId,
-  inferActiveTabSuffix,
-  maybeGetMicStream,
-  maybeGetSelfVideoStream,
-} from './RecorderCapture';
-import {
-  getDefaultSelfVideoBitrate,
-  getAudioMime,
-  getChunkTimesliceMs,
-  getSelfVideoProfile,
-  getVideoMime,
-  getVideoOnlyMime,
-  resolveSelfVideoBitrate,
-} from './RecorderProfiles';
+import { captureTabStreamFromId, inferActiveTabSuffix } from './RecorderCapture';
+import { buildRecorderRuntimeSettingsSnapshot, type RecorderRuntimeSettingsSnapshot } from '../shared/extensionSettings';
+import { DEFAULT_RECORDING_RUN_CONFIG, type MicMode, type RecordingRunConfig } from '../shared/recording';
 import { describeMediaError } from './RecorderSupport';
-import { readStreamVideoMetrics } from './RecorderVideoResizer';
+import type { MixedAudioMixer } from './RecorderAudio';
+import type { AudioPlaybackBridge } from './RecorderAudio';
+
+import { startTabRecorder } from './engine/TabRecorderTask';
+import { startMicRecorder } from './engine/MicRecorderTask';
+import { startSelfVideoRecorder } from './engine/SelfVideoRecorderTask';
 import {
-  buildRecorderRuntimeSettingsSnapshot,
-  type RecorderRuntimeSettingsSnapshot,
-} from '../shared/extensionSettings';
-import { PERF_FLAGS, debugPerf, logPerf, nowMs, roundMs } from '../shared/perf';
-import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
-import {
-  DEFAULT_RECORDING_RUN_CONFIG,
-  type MicMode,
-  type RecordingPhase,
-  type RecordingRunConfig,
-  type RecordingStream,
-} from '../shared/recording';
-import { TIMEOUTS } from '../shared/timeouts';
-import type { VideoResizeTarget } from './RecorderVideoResizer';
-import ysFixWebmDuration from 'fix-webm-duration';
+  acquireMicStream,
+  attachTabEndedHandler,
+  createMixedTabStream,
+  ensureAudiblePlayback,
+  logStreamAcquired,
+} from './engine/RecorderEngineSetup';
+import type {
+  CompletedRecordingArtifact,
+  EngineState,
+  RecorderEngineDeps,
+  RecordingArtifactFinalizePlan,
+} from './engine/RecorderEngineTypes';
 
-type RecordingStateExtra = Record<string, any> | undefined;
-
-type EngineState = 'idle' | 'starting' | 'recording' | 'stopping';
-
-type PreparedTabRecorderStream = {
-  stream: MediaStream;
-  finalize?: RecordingArtifactFinalizePlan;
-};
-
-export interface SealedStorageFile {
-  filename: string;
-  file: Blob;
-  opfsFilename?: string;
-  cleanup: () => Promise<void>;
-}
-
-export interface StorageTarget {
-  write(chunk: Blob): Promise<void>;
-  close(): Promise<SealedStorageFile | null>;
-}
-
-export type RecordingArtifactFinalizePlan = {
-  outputTarget: VideoResizeTarget;
-  liveResized: boolean;
-  requiresPostprocess: boolean;
-};
-
-export type CompletedRecordingArtifact = {
-  stream: RecordingStream;
-  artifact: SealedStorageFile;
-  finalize?: RecordingArtifactFinalizePlan;
-};
-
-export type RecorderEngineDeps = {
-  log: (...a: any[]) => void;
-  warn: (...a: any[]) => void;
-  error: (...a: any[]) => void;
-  notifyPhase: (phase: RecordingPhase, extra?: RecordingStateExtra) => void;
-  reportWarning?: (warning: string) => void;
-  openTarget?: (filename: string) => Promise<StorageTarget>;
-};
-
-/** RAM-backed fallback target used when OPFS is unavailable for a stream. */
-class InMemoryStorageTarget implements StorageTarget {
-  private readonly chunks: Blob[] = [];
-  private closed = false;
-
-  /** Stores filename and MIME so a final File can be assembled on close. */
-  constructor(
-    private readonly filename: string,
-    private readonly mimeType: string,
-  ) {}
-
-  /** Buffers a recorder chunk in memory until the stream is finalized. */
-  async write(chunk: Blob): Promise<void> {
-    if (this.closed) throw new Error('In-memory target is closed');
-    this.chunks.push(chunk);
-  }
-
-  /** Seals buffered chunks into a File-like artifact for downstream finalization. */
-  async close(): Promise<SealedStorageFile | null> {
-    if (this.closed) return null;
-    this.closed = true;
-    if (!this.chunks.length) return null;
-
-    const file = new File([new Blob(this.chunks, { type: this.mimeType })], this.filename, {
-      type: this.mimeType,
-    });
-
-    return {
-      filename: this.filename,
-      file,
-      cleanup: async () => {},
-    };
-  }
-}
+// Re-export types for consumers that import from the engine root.
+export type {
+  SealedStorageFile,
+  StorageTarget,
+  CompletedRecordingArtifact,
+  RecordingArtifactFinalizePlan,
+  RecorderEngineDeps,
+} from './engine/RecorderEngineTypes';
 
 export class RecorderEngine {
   private readonly deps: RecorderEngineDeps;
@@ -132,7 +53,6 @@ export class RecorderEngine {
   private tabCaptureStream: MediaStream | null = null;
   private tabRecordingStream: MediaStream | null = null;
   private micStream: MediaStream | null = null;
-  private selfVideoStream: MediaStream | null = null;
   private tabFinalizePlan: RecordingArtifactFinalizePlan | null = null;
   private recorderSettings: RecorderRuntimeSettingsSnapshot | null = null;
 
@@ -145,43 +65,25 @@ export class RecorderEngine {
   private stopPromise: Promise<CompletedRecordingArtifact[]> | null = null;
   private resolveStop: ((artifacts: CompletedRecordingArtifact[]) => void) | null = null;
   private finalizedArtifacts: CompletedRecordingArtifact[] = [];
-  /**
-   * Tracks in-flight recorder start tasks (tab + optional mic + optional selfVideo).
-   * Populated during startFromStreamId and drained at the top of stop() so that
-   * stop() always sees fully-initialised recorder references.
-   */
   private pendingStartPromises: Promise<void>[] = [];
 
-  /** Creates a recorder engine bound to runtime logging, phase, and storage callbacks. */
   constructor(deps: RecorderEngineDeps) {
     this.deps = deps;
   }
 
-  /** Returns true while a recording run is starting, active, or stopping. */
   isRecording(): boolean {
     return this.state === 'recording' || this.state === 'starting' || this.state === 'stopping';
   }
 
-  /** Exposes how many MediaRecorder instances are currently active for diagnostics. */
-  getActiveRecorderCount(): number {
-    return this.activeRecorders;
-  }
+  getActiveRecorderCount(): number { return this.activeRecorders; }
+  getDebugState(): EngineState { return this.state; }
 
-  /** Returns the engine's internal state machine phase for diagnostics sampling. */
-  getDebugState(): EngineState {
-    return this.state;
-  }
-
-  /** Starts a full recording run from a background-provided tab capture stream id. */
   async startFromStreamId(
     streamId: string,
     options: RecordingRunConfig,
     recorderSettings: RecorderRuntimeSettingsSnapshot = buildRecorderRuntimeSettingsSnapshot()
   ): Promise<void> {
-    if (this.isRecording()) {
-      this.deps.log('Already recording; ignoring start');
-      return;
-    }
+    if (this.isRecording()) { this.deps.log('Already recording; ignoring start'); return; }
 
     this.resetRunState();
     this.state = 'starting';
@@ -190,66 +92,61 @@ export class RecorderEngine {
     this.micMode = options.micMode;
     this.recordSelfVideo = options.recordSelfVideo;
     this.recorderSettings = recorderSettings;
-    const runStartedAt = nowMs();
+    const runStartedAt = Date.now();
 
     try {
       const baseStream = await captureTabStreamFromId(streamId, recorderSettings.tab.output, this.deps);
       this.tabCaptureStream = baseStream;
-      this.assertVideoTrack(baseStream);
-      this.deps.log('tab source stream acquired:', readStreamVideoMetrics(baseStream));
-      await this.ensureAudiblePlaybackIfSuppressed(baseStream);
+      logStreamAcquired(baseStream, this.deps);
+
+      this.playback = await ensureAudiblePlayback(baseStream, this.deps);
       this.suffix = await inferActiveTabSuffix().catch(() => 'google-meet');
-      this.attachTabEndedHandler(baseStream);
+      attachTabEndedHandler(baseStream, () => this.stopAllRecorders(), this.deps.log);
 
       let micForRun: MediaStream | null = null;
       if (this.micMode === 'mixed' || this.micMode === 'separate') {
-        micForRun = await this.requireMicStream(runId);
+        micForRun = await acquireMicStream(runId, () => this.runId, () => this.state, this.micMode, recorderSettings, this.deps);
         this.micStream = micForRun;
       }
 
       let tabRecorderStream = baseStream;
       if (this.micMode === 'mixed') {
-        this.mixedAudio = new MixedAudioMixer(this.deps);
-        tabRecorderStream = await this.mixedAudio.create(baseStream, micForRun!);
+        const { mixer, stream } = await createMixedTabStream(baseStream, micForRun!, this.deps);
+        this.mixedAudio = mixer;
+        tabRecorderStream = stream;
       }
-      const preparedTabRecorder = await this.prepareTabRecorderStream(tabRecorderStream);
-      tabRecorderStream = preparedTabRecorder.stream;
-      this.tabFinalizePlan = preparedTabRecorder.finalize ?? null;
       this.tabRecordingStream = tabRecorderStream;
 
-      // Collect start promises for all requested streams so they can be
-      // awaited together. This guarantees every MediaRecorder begins at the
-      // same logical moment and that stop() never races an in-flight start.
       const startTasks: Promise<void>[] = [
-        this.startTabRecorder(tabRecorderStream, runStartedAt),
+        startTabRecorder(tabRecorderStream, this.suffix, runStartedAt, this.tabFinalizePlan, recorderSettings, this.deps, {
+          onStarted: () => this.onRecorderStarted(),
+          onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.tabRecorder = null; this.onRecorderStopped(); },
+        }).then((rec) => { this.tabRecorder = rec; }),
       ];
 
       if (this.micMode === 'separate') {
         startTasks.push(
-          this.tryStartMicRecorder(runId, runStartedAt, micForRun).catch((e) =>
-            this.deps.warn('Mic recorder start failed', describeMediaError(e))
-          )
-        );
-      }
-      if (this.recordSelfVideo) {
-        startTasks.push(
-          this.tryStartSelfVideoRecorder(runId, runStartedAt).catch((e) =>
-            this.deps.warn(
-              'Self video recorder start failed (continuing without camera stream)',
-              describeMediaError(e)
-            )
-          )
+          startMicRecorder(runId, () => this.runId, () => this.state === 'stopping' || this.state === 'idle', this.suffix, runStartedAt, this.micMode, recorderSettings, micForRun, this.deps, {
+            onStarted: () => this.onRecorderStarted(),
+            onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.micRecorder = null; this.micStream = null; this.onRecorderStopped(); },
+          }).then((rec) => { this.micRecorder = rec; }).catch((e) => this.deps.warn('Mic recorder start failed', describeMediaError(e)))
         );
       }
 
-      // Expose in-flight tasks so stop() can drain them before stopping recorders.
+      if (this.recordSelfVideo) {
+        startTasks.push(
+          startSelfVideoRecorder(runId, () => this.runId, () => this.state === 'stopping' || this.state === 'idle', this.suffix, runStartedAt, this.recordSelfVideo, recorderSettings, this.deps, {
+            onStarted: () => this.onRecorderStarted(),
+            onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.selfVideoRecorder = null; this.onRecorderStopped(); },
+            onWarning: (msg) => this.deps.reportWarning?.(msg),
+          }).then((rec) => { this.selfVideoRecorder = rec; }).catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
+        );
+      }
+
       this.pendingStartPromises = startTasks;
       await Promise.all(startTasks);
       this.pendingStartPromises = [];
-
-      if (this.runId === runId && this.state === 'starting') {
-        this.state = 'recording';
-      }
+      if (this.runId === runId && this.state === 'starting') this.state = 'recording';
     } catch (e) {
       this.state = 'idle';
       this.resetRunState();
@@ -257,13 +154,11 @@ export class RecorderEngine {
     }
   }
 
-  /** Stops every active recorder and resolves once all sealed artifacts are ready. */
   async stop(): Promise<CompletedRecordingArtifact[]> {
     if (!this.tabRecorder || !this.isRecording()) {
       this.deps.warn('Stop called but not recording');
       return Promise.resolve([]);
     }
-
     if (this.stopPromise) return this.stopPromise;
 
     this.state = 'stopping';
@@ -271,597 +166,77 @@ export class RecorderEngine {
       this.resolveStop = resolve;
     });
 
-    // If start tasks are still in flight (e.g. getUserMedia for camera hasn't
-    // resolved yet), wait for all of them to settle before issuing .stop().
-    // This ensures micRecorder / selfVideoRecorder are never null when we try
-    // to stop them, preventing streams from running past the tab recording.
     if (this.pendingStartPromises.length) {
       await Promise.allSettled(this.pendingStartPromises);
       this.pendingStartPromises = [];
     }
 
-    try { this.tabRecorder?.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); throw e; }
-    try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', describeMediaError(e)); }
-    try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', describeMediaError(e)); }
-    this.releaseSelfVideoCapture();
-
-    this.playback?.stop();
-    this.playback = null;
-    this.mixedAudio?.stop();
-    this.mixedAudio = null;
-
+    this.stopAllRecorders();
+    this.playback?.stop(); this.playback = null;
+    this.mixedAudio?.stop(); this.mixedAudio = null;
     return this.stopPromise;
   }
 
-  /** Revokes a locally created blob URL once download or upload work is complete. */
   revokeBlobUrl(blobUrl: string) {
     try { URL.revokeObjectURL(blobUrl); } catch {}
   }
 
-  /** Enforces the invariant that the captured tab stream must contain video. */
-  private assertVideoTrack(stream: MediaStream) {
-    if (!stream.getVideoTracks().length) throw new Error('No video track in captured stream');
+  private stopAllRecorders() {
+    try { this.tabRecorder?.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); }
+    try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', describeMediaError(e)); }
+    try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', describeMediaError(e)); }
   }
 
-  /** Stops the run if Chrome ends the captured tab's video track unexpectedly. */
-  private attachTabEndedHandler(stream: MediaStream) {
-    stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-      this.deps.log('Video track ended');
-      if (this.tabRecorder && this.isRecording()) { try { this.tabRecorder.stop(); } catch {} }
-      if (this.micRecorder && this.isRecording()) { try { this.micRecorder.stop(); } catch {} }
-      if (this.selfVideoRecorder && this.isRecording()) { try { this.selfVideoRecorder.stop(); } catch {} }
-    });
-  }
-
-  /** Emits a warning both to logs and to the popup-visible session warning list. */
-  private reportWarning(message: string): void {
-    const warning = message.trim();
-    if (!warning) return;
-    this.deps.warn(warning);
-    this.deps.reportWarning?.(warning);
-  }
-
-  /** Formats width/height/frameRate tuples in a compact, user-visible form. */
-  private formatVideoMetrics(
-    width?: number,
-    height?: number,
-    frameRate?: number
-  ): string {
-    const resolution =
-      typeof width === 'number' && typeof height === 'number'
-        ? `${width}x${height}`
-        : 'unknown resolution';
-    const fps = typeof frameRate === 'number' ? `@${Math.round(frameRate * 10) / 10}fps` : '';
-    return `${resolution}${fps}`;
-  }
-
-  /** Reports when the browser delivers a different camera profile than requested. */
-  private maybeReportSelfVideoWarning(settings?: MediaTrackSettings): void {
-    const profile = getSelfVideoProfile(this.getRequiredRecorderSettings().selfVideo.profile);
-    const deliveredWidth = settings?.width;
-    const deliveredHeight = settings?.height;
-    const deliveredFrameRate = settings?.frameRate;
-    const sizeMismatch =
-      deliveredWidth !== profile.width
-      || deliveredHeight !== profile.height;
-    const frameRateMismatch =
-      typeof deliveredFrameRate === 'number'
-      && deliveredFrameRate + 0.5 < profile.frameRate;
-
-    if (!sizeMismatch && !frameRateMismatch) return;
-
-    this.reportWarning(
-      `Camera recording requested ${this.formatVideoMetrics(profile.width, profile.height, profile.frameRate)}, `
-      + `but browser delivered ${this.formatVideoMetrics(deliveredWidth, deliveredHeight, deliveredFrameRate)}. `
-      + 'Extension camera quality is controlled by extension settings; shared camera use or hardware limits can reduce the delivered profile.'
-    );
-  }
-
-  /** Stops and releases the extension-owned self-video stream without touching recorder state. */
-  private releaseSelfVideoCapture(): void {
-    this.safeStopStream(this.selfVideoStream);
-    this.selfVideoStream = null;
-  }
-
-  /** Records the captured tab stream directly using the selected capture ceiling. */
-  private async prepareTabRecorderStream(sourceStream: MediaStream): Promise<PreparedTabRecorderStream> {
-    const target = this.getRequiredRecorderSettings().tab.output;
-    const sourceMetrics = readStreamVideoMetrics(sourceStream);
-    this.deps.log('tab recorder input stream:', {
-      resized: false,
-      sourceWidth: sourceMetrics.width,
-      sourceHeight: sourceMetrics.height,
-      sourceFrameRate: sourceMetrics.frameRate,
-      width: sourceMetrics.width,
-      height: sourceMetrics.height,
-      frameRate: sourceMetrics.frameRate,
-      targetWidth: target.maxWidth,
-      targetHeight: target.maxHeight,
-      targetFrameRate: target.maxFrameRate,
-    });
-    return {
-      stream: sourceStream,
-    };
-  }
-
-  /** Acquires a microphone stream and rejects stale streams from an old run. */
-  private async requireMicStream(runId: number): Promise<MediaStream> {
-    const mic = await maybeGetMicStream(this.micMode, this.getRequiredRecorderSettings().microphone, this.deps);
-    if (!mic?.getAudioTracks().length) {
-      throw new Error('Microphone stream is required for mixed microphone mode');
-    }
-    if (this.runId !== runId || this.state === 'stopping' || this.state === 'idle') {
-      mic.getTracks().forEach((track) => track.stop());
-      throw new Error('Microphone stream became stale before recording could start');
-    }
-    return mic;
-  }
-
-  /** Restores speaker playback when Chrome suppresses local tab audio during capture. */
-  private async ensureAudiblePlaybackIfSuppressed(stream: MediaStream) {
-    const rawAudio = stream.getAudioTracks()[0];
-
-    this.deps.log('getUserMedia() tracks:', {
-      audioCount: stream.getAudioTracks().length,
-      videoCount: stream.getVideoTracks().length,
-      audioMuted: rawAudio?.muted,
-      audioEnabled: rawAudio?.enabled,
-    });
-
-    stream.getAudioTracks().forEach((t) => { try { t.enabled = true; } catch {} });
-
-    if (!rawAudio) {
-      this.deps.warn('WARNING: tab stream has NO audio track — tab recording will be silent');
-      return;
-    }
-
-    const settings = rawAudio.getSettings?.();
-    const suppress = (settings as any)?.suppressLocalAudioPlayback;
-    const shouldBridge =
-      PERF_FLAGS.audioPlaybackBridgeMode === 'always'
-        ? (suppress ?? true)
-        : suppress === true;
-
-    logPerf(this.deps.log, 'recorder', 'tab_audio_bridge_check', {
-      mode: PERF_FLAGS.audioPlaybackBridgeMode,
-      suppressLocalAudioPlayback: suppress,
-      willBridge: shouldBridge,
-    });
-
-    if (shouldBridge) {
-      this.playback = new AudioPlaybackBridge(this.deps);
-      await this.playback.start(rawAudio);
-    }
-  }
-
-  /** Starts the main tab recorder and streams chunks into the selected storage target. */
-  private async startTabRecorder(recordingStream: MediaStream, runStartedAt: number): Promise<void> {
-    const mime = getVideoMime();
-    let started = false;
-    let actualStartTimeMs = 0;
-    const timesliceMs = getChunkTimesliceMs('tab', this.getRequiredRecorderSettings().chunking);
-
-    const recorder = new MediaRecorder(recordingStream, {
-      mimeType: mime,
-      videoBitsPerSecond: 1_500_000,
-      audioBitsPerSecond: 96_000,
-    });
-    this.tabRecorder = recorder;
-
-    const filename = `google-meet-recording-${this.suffix}-${Date.now()}.webm`;
-    const target = await this.openStorageTarget(filename, mime);
-
-    const finalize = async (label: string) => {
-      try {
-        const artifact = await target.close();
-        if (artifact) {
-          if (started && actualStartTimeMs > 0) {
-            try {
-              const durationMs = nowMs() - actualStartTimeMs;
-              artifact.file = await ysFixWebmDuration(artifact.file, durationMs, { logger: false });
-            } catch (e) {
-              this.deps.warn(`${label} duration fix failed`, e);
-            }
-          }
-          this.finalizedArtifacts.push({
-            stream: 'tab',
-            artifact,
-            finalize: this.tabFinalizePlan ? { ...this.tabFinalizePlan } : undefined,
-          });
-        }
-      } catch (e) {
-        this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
-      } finally {
-        this.tabRecorder = null;
-        if (started) this.onRecorderStopped();
-      }
-    };
-
-    recorder.ondataavailable = (e: BlobEvent) => {
-      if (!e.data?.size) return;
-      const writeStartedAt = nowMs();
-      void target.write(e.data)
-        .then(() => {
-          debugPerf(this.deps.log, 'recorder', 'chunk_persisted', {
-            stream: 'tab',
-            chunkBytes: e.data.size,
-            durationMs: roundMs(nowMs() - writeStartedAt),
-          });
-        })
-        .catch((err) => this.deps.error('Target write error', describeMediaError(err)));
-    };
-
-    recorder.onerror = (e: any) => {
-      this.deps.error('Tab MediaRecorder error', e);
-      this.safeStopStream(this.tabCaptureStream);
-      this.safeStopStream(this.tabRecordingStream);
-      if (this.micRecorder && this.micRecorder.state !== 'inactive') {
-        try { this.micRecorder.stop(); } catch {}
-      }
-      if (this.selfVideoRecorder && this.selfVideoRecorder.state !== 'inactive') {
-        try { this.selfVideoRecorder.stop(); } catch {}
-      }
-      void finalize('Tab');
-    };
-
-    recorder.onstop = () => {
-      void finalize('Tab');
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      const startTimeout = setTimeout(
-        () => reject(new Error('Tab MediaRecorder did not start (timeout)')),
-        TIMEOUTS.RECORDER_START_MS
-      );
-
-      recorder.onstart = () => {
-        clearTimeout(startTimeout);
-        started = true;
-        actualStartTimeMs = nowMs();
-        this.onRecorderStarted();
-        logPerf(this.deps.log, 'recorder', 'recorder_started', {
-          stream: 'tab',
-          latencyMs: roundMs(nowMs() - runStartedAt),
-          mime,
-          timesliceMs,
-        });
-        this.deps.log('Tab MediaRecorder started');
-        resolve();
-      };
-
-      recorder.start(timesliceMs);
-    });
-  }
-
-  /** Starts the separate microphone recorder when the run config requires it. */
-  private async tryStartMicRecorder(
-    runId: number,
-    runStartedAt: number,
-    existingMic?: MediaStream | null
-  ): Promise<void> {
-    const mic = existingMic ?? await maybeGetMicStream(
-      this.micMode,
-      this.getRequiredRecorderSettings().microphone,
-      this.deps
-    );
-    if (!mic?.getAudioTracks().length || this.runId !== runId || this.state === 'stopping' || this.state === 'idle') {
-      mic?.getTracks().forEach((t) => t.stop());
-      this.micStream = null;
-      if (mic?.getAudioTracks().length) {
-        this.deps.log('Mic stream obtained after stop; discarding it');
-      } else {
-        this.deps.log('Mic stream unavailable; continuing with tab-only recording');
-      }
-      return;
-    }
-
-    this.micStream = mic;
-    const mime = getAudioMime();
-    let started = false;
-    let actualStartTimeMs = 0;
-    const timesliceMs = getChunkTimesliceMs('mic', this.getRequiredRecorderSettings().chunking);
-    const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
-    this.micRecorder = recorder;
-
-    const filename = `google-meet-mic-${this.suffix}-${Date.now()}.webm`;
-    const target = await this.openStorageTarget(filename, mime);
-
-    const finalize = async (label: string) => {
-      try {
-        const artifact = await target.close();
-        if (artifact) {
-          if (started && actualStartTimeMs > 0) {
-            try {
-              const durationMs = nowMs() - actualStartTimeMs;
-              artifact.file = await ysFixWebmDuration(artifact.file, durationMs, { logger: false });
-            } catch (e) {
-              this.deps.warn(`${label} duration fix failed`, e);
-            }
-          }
-          this.finalizedArtifacts.push({ stream: 'mic', artifact });
-        }
-      } catch (e) {
-        this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
-      } finally {
-        this.micRecorder = null;
-        this.micStream = null;
-        if (started) this.onRecorderStopped();
-      }
-    };
-
-    recorder.ondataavailable = (e: BlobEvent) => {
-      if (!e.data?.size) return;
-      const writeStartedAt = nowMs();
-      void target.write(e.data)
-        .then(() => {
-          debugPerf(this.deps.log, 'recorder', 'chunk_persisted', {
-            stream: 'mic',
-            chunkBytes: e.data.size,
-            durationMs: roundMs(nowMs() - writeStartedAt),
-          });
-        })
-        .catch((err) => this.deps.error('Mic target write error', describeMediaError(err)));
-    };
-
-    recorder.onerror = (e: any) => {
-      this.deps.error('Mic MediaRecorder error', e);
-      this.safeStopStream(this.micStream);
-      void finalize('Mic');
-    };
-
-    recorder.onstop = () => {
-      void finalize('Mic');
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      const startTimeout = setTimeout(
-        () => reject(new Error('Mic MediaRecorder did not start (timeout)')),
-        TIMEOUTS.RECORDER_START_MS
-      );
-
-      recorder.onstart = () => {
-        clearTimeout(startTimeout);
-        started = true;
-        actualStartTimeMs = nowMs();
-        this.onRecorderStarted();
-        logPerf(this.deps.log, 'recorder', 'recorder_started', {
-          stream: 'mic',
-          latencyMs: roundMs(nowMs() - runStartedAt),
-          mime,
-          timesliceMs,
-        });
-        this.deps.log('Mic MediaRecorder started');
-        resolve();
-      };
-
-      recorder.start(timesliceMs);
-    });
-  }
-
-  /** Starts the separate self-video recorder when camera capture is enabled. */
-  private async tryStartSelfVideoRecorder(runId: number, runStartedAt: number): Promise<void> {
-    const recorderSettings = this.getRequiredRecorderSettings();
-    const selfVideo = await maybeGetSelfVideoStream(
-      this.recordSelfVideo,
-      recorderSettings.selfVideo.profile,
-      this.deps
-    );
-    if (
-      !selfVideo?.getVideoTracks().length ||
-      this.runId !== runId ||
-      this.state === 'stopping' ||
-      this.state === 'idle'
-    ) {
-      selfVideo?.getTracks().forEach((t) => t.stop());
-      this.releaseSelfVideoCapture();
-      if (selfVideo?.getVideoTracks().length) {
-        this.deps.log('Self video stream obtained after stop; discarding it');
-      } else {
-        this.deps.warn('Self video stream unavailable; continuing without camera recording');
-      }
-      return;
-    }
-
-    this.selfVideoStream = selfVideo;
-    const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate(recorderSettings.selfVideo.profile);
-    const mime = getVideoOnlyMime();
-    let started = false;
-    let actualStartTimeMs = 0;
-    const timesliceMs = getChunkTimesliceMs('selfVideo', recorderSettings.chunking);
-    const track = selfVideo.getVideoTracks()[0];
-    const settings = track?.getSettings?.();
-    logPerf(this.deps.log, 'recorder', 'self_video_stream_acquired', {
-      width: settings?.width,
-      height: settings?.height,
-      frameRate: settings?.frameRate,
-    });
-    this.maybeReportSelfVideoWarning(settings);
-    const videoBitsPerSecond = resolveSelfVideoBitrate(
-      defaultVideoBitsPerSecond,
-      settings,
-      recorderSettings.selfVideo.profile.minAdaptiveBitsPerSecond
-    );
-    try {
-      if (track && 'contentHint' in track) (track as any).contentHint = 'motion';
-    } catch {}
-
-    const recorder = new MediaRecorder(selfVideo, {
-      mimeType: mime,
-      videoBitsPerSecond,
-    });
-    this.selfVideoRecorder = recorder;
-
-    const filename = `google-meet-self-video-${this.suffix}-${Date.now()}.webm`;
-    const target = await this.openStorageTarget(filename, mime);
-
-    const finalize = async (label: string) => {
-      try {
-        const artifact = await target.close();
-        if (artifact) {
-          if (started && actualStartTimeMs > 0) {
-            try {
-              const durationMs = nowMs() - actualStartTimeMs;
-              artifact.file = await ysFixWebmDuration(artifact.file, durationMs, { logger: false });
-            } catch (e) {
-              this.deps.warn(`${label} duration fix failed`, e);
-            }
-          }
-          this.finalizedArtifacts.push({ stream: 'selfVideo', artifact });
-        }
-      } catch (e) {
-        this.deps.error(`${label} finalize/save failed`, describeMediaError(e));
-      } finally {
-        this.selfVideoRecorder = null;
-        this.releaseSelfVideoCapture();
-        if (started) this.onRecorderStopped();
-      }
-    };
-
-    selfVideo.getVideoTracks()[0]?.addEventListener('ended', () => {
-      this.deps.log('Self video track ended');
-      if (this.selfVideoRecorder && this.selfVideoRecorder.state !== 'inactive') {
-        try { this.selfVideoRecorder.stop(); } catch {}
-      }
-    });
-
-    recorder.ondataavailable = (e: BlobEvent) => {
-      if (!e.data?.size) return;
-      const writeStartedAt = nowMs();
-      void target.write(e.data)
-        .then(() => {
-          debugPerf(this.deps.log, 'recorder', 'chunk_persisted', {
-            stream: 'selfVideo',
-            chunkBytes: e.data.size,
-            durationMs: roundMs(nowMs() - writeStartedAt),
-          });
-        })
-        .catch((err) => this.deps.error('Self video target write error', describeMediaError(err)));
-    };
-
-    recorder.onerror = (e: any) => {
-      this.deps.error('Self video MediaRecorder error', e);
-      this.releaseSelfVideoCapture();
-      void finalize('Self video');
-    };
-
-    recorder.onstop = () => {
-      void finalize('Self video');
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      const startTimeout = setTimeout(
-        () => reject(new Error('Self video MediaRecorder did not start (timeout)')),
-        TIMEOUTS.RECORDER_START_MS
-      );
-
-      recorder.onstart = () => {
-        clearTimeout(startTimeout);
-        started = true;
-        actualStartTimeMs = nowMs();
-        this.onRecorderStarted();
-        logPerf(this.deps.log, 'recorder', 'recorder_started', {
-          stream: 'selfVideo',
-          latencyMs: roundMs(nowMs() - runStartedAt),
-          mime,
-          timesliceMs,
-          videoBitsPerSecond,
-        });
-        this.deps.log('Self video MediaRecorder started', { mime, videoBitsPerSecond });
-        resolve();
-      };
-
-      recorder.start(timesliceMs);
-    });
-  }
-
-  /** Opens the preferred storage target and falls back to RAM buffering on failure. */
-  private async openStorageTarget(filename: string, mimeType: string): Promise<StorageTarget> {
-    if (!this.deps.openTarget) return new InMemoryStorageTarget(filename, mimeType);
-
-    try {
-      return await this.deps.openTarget(filename);
-    } catch (e) {
-      this.deps.warn(
-        'Failed to open storage target, falling back to RAM buffer',
-        describeMediaError(e)
-      );
-      return new InMemoryStorageTarget(filename, mimeType);
-    }
-  }
-
-  /** Tracks recorder starts and emits `recording` once the first recorder is live. */
   private onRecorderStarted() {
     if (this.activeRecorders === 0) this.deps.notifyPhase('recording');
     this.activeRecorders += 1;
   }
 
-  /** Finalizes run state once the last active recorder has stopped. */
   private onRecorderStopped() {
     this.activeRecorders = Math.max(0, this.activeRecorders - 1);
+    if (this.activeRecorders !== 0) return;
 
-    if (this.activeRecorders === 0) {
-      const artifacts = [...this.finalizedArtifacts];
-      this.state = 'idle';
-      this.safeStopStream(this.tabCaptureStream);
-      this.safeStopStream(this.tabRecordingStream);
-      this.safeStopStream(this.micStream);
-      this.releaseSelfVideoCapture();
-      this.tabCaptureStream = null;
-      this.tabRecordingStream = null;
-      this.micStream = null;
-      this.playback?.stop();
-      this.playback = null;
-      this.mixedAudio?.stop();
-      this.mixedAudio = null;
-      this.recorderSettings = null;
-      this.finalizedArtifacts = [];
-      this.tabFinalizePlan = null;
+    const artifacts = [...this.finalizedArtifacts];
+    this.state = 'idle';
+    this.safeStopStream(this.tabCaptureStream);
+    this.safeStopStream(this.tabRecordingStream);
+    this.safeStopStream(this.micStream);
+    this.tabCaptureStream = null;
+    this.tabRecordingStream = null;
+    this.micStream = null;
+    this.playback?.stop(); this.playback = null;
+    this.mixedAudio?.stop(); this.mixedAudio = null;
+    this.recorderSettings = null;
+    this.finalizedArtifacts = [];
+    this.tabFinalizePlan = null;
 
-      const resolveStop = this.resolveStop;
-      this.resolveStop = null;
-      this.stopPromise = null;
-      resolveStop?.(artifacts);
-    }
+    const resolveStop = this.resolveStop;
+    this.resolveStop = null;
+    this.stopPromise = null;
+    resolveStop?.(artifacts);
   }
 
-  /** Best-effort helper that stops every track in a stream without surfacing cleanup errors. */
   private safeStopStream(stream: MediaStream | null) {
     try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
   }
 
-  /** Returns the frozen per-run recorder settings, failing loudly if start wiring broke. */
-  private getRequiredRecorderSettings(): RecorderRuntimeSettingsSnapshot {
-    if (!this.recorderSettings) {
-      throw new Error('Recorder settings snapshot is missing for the active run');
-    }
-    return this.recorderSettings;
-  }
-
-  /** Clears all per-run state before a new start or after a failed setup. */
   private resetRunState() {
+    this.stopAllRecorders();
     this.activeRecorders = 0;
-    this.tabRecorder = null;
-    this.micRecorder = null;
-    this.selfVideoRecorder = null;
+    this.tabRecorder = null; this.micRecorder = null; this.selfVideoRecorder = null;
     this.safeStopStream(this.tabCaptureStream);
     this.safeStopStream(this.tabRecordingStream);
     this.safeStopStream(this.micStream);
-    this.releaseSelfVideoCapture();
-    this.tabCaptureStream = null;
-    this.tabRecordingStream = null;
-    this.micStream = null;
-    this.playback?.stop();
-    this.playback = null;
-    this.mixedAudio?.stop();
-    this.mixedAudio = null;
+    this.tabCaptureStream = null; this.tabRecordingStream = null; this.micStream = null;
+    this.playback?.stop(); this.playback = null;
+    this.mixedAudio?.stop(); this.mixedAudio = null;
     this.suffix = 'google-meet';
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
     this.recorderSettings = null;
     this.finalizedArtifacts = [];
     this.tabFinalizePlan = null;
-    this.stopPromise = null;
-    this.resolveStop = null;
+    this.stopPromise = null; this.resolveStop = null;
     this.pendingStartPromises = [];
   }
 }

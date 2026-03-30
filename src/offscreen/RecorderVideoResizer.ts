@@ -7,6 +7,7 @@
 
 import { withTimeout } from '../shared/async';
 import { TIMEOUTS } from '../shared/timeouts';
+import { startFrameLoop } from './video/CanvasResizerLoop';
 
 export type VideoResizeTarget = {
   width: number;
@@ -73,7 +74,7 @@ export type RecorderVideoResizerDeps = {
   clearTimeout?: typeof globalThis.clearTimeout;
 };
 
-/** Reads the current width, height, and frame rate reported by a stream's first video track. */
+/** Reads the current width, height, and frame rate from a stream's first video track. */
 export function readStreamVideoMetrics(stream: MediaStream): StreamVideoMetrics {
   const settings = stream.getVideoTracks()[0]?.getSettings?.();
   return {
@@ -113,37 +114,22 @@ function prepareVideoElement(video: VideoElementLike): void {
 
 /** Clears a temporary media element without surfacing teardown failures. */
 function cleanupVideoElement(video: VideoElementLike): void {
-  try {
-    video.pause();
-  } catch {}
-
-  try {
-    video.srcObject = null;
-  } catch {}
+  try { video.pause(); } catch {}
+  try { video.srcObject = null; } catch {}
 }
 
 /** Stops every track in an internally created stream. */
 function stopStream(stream: MediaStream | null): void {
-  try {
-    stream?.getTracks().forEach((track) => track.stop());
-  } catch {}
+  try { stream?.getTracks().forEach((track) => track.stop()); } catch {}
 }
 
-/** Resolves once the source video exposes dimensions so the resizer can size the canvas correctly. */
-async function waitForVideoMetadata(
-  video: VideoElementLike
-): Promise<void> {
+/** Resolves once the video element exposes dimensions. */
+async function waitForVideoMetadata(video: VideoElementLike): Promise<void> {
   if (video.videoWidth > 0 && video.videoHeight > 0) return;
 
   await withTimeout(new Promise<void>((resolve, reject) => {
-    const onLoadedMetadata = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error('Tab resize video metadata could not be loaded'));
-    };
+    const onLoadedMetadata = () => { cleanup(); resolve(); };
+    const onError = () => { cleanup(); reject(new Error('Tab resize video metadata could not be loaded')); };
     const cleanup = () => {
       video.removeEventListener('loadedmetadata', onLoadedMetadata);
       video.removeEventListener('error', onError);
@@ -154,16 +140,10 @@ async function waitForVideoMetadata(
   }), TIMEOUTS.GUM_MS, 'tab resize metadata');
 }
 
-/** Creates a combined stream from one resized video track plus the original audio tracks. */
-function createCombinedStream(
-  tracks: MediaStreamTrack[],
-  deps: RecorderVideoResizerDeps
-): MediaStream {
-  if (deps.createMediaStream) return deps.createMediaStream(tracks);
-  return new MediaStream(tracks);
-}
-
-/** Draws video frames into a canvas stream when the target preset is smaller than the source. */
+/**
+ * Creates a downscaled video stream via canvas when the source exceeds the target.
+ * Returns the original stream unchanged when no resize is needed.
+ */
 export async function createResizedVideoStream(
   sourceStream: MediaStream,
   target: VideoResizeTarget,
@@ -174,20 +154,12 @@ export async function createResizedVideoStream(
 
   const sourceMetrics = readStreamVideoMetrics(sourceStream);
   if (isAtOrBelowTarget(sourceMetrics, target)) {
-    return {
-      stream: sourceStream,
-      resized: false,
-      source: sourceMetrics,
-      output: sourceMetrics,
-      cleanup: () => {},
-    };
+    return { stream: sourceStream, resized: false, source: sourceMetrics, output: sourceMetrics, cleanup: () => {} };
   }
 
   const documentLike = deps.document ?? (
     typeof document !== 'undefined'
-      ? {
-          createElement: ((tagName: 'video' | 'canvas') => document.createElement(tagName)) as DocumentLike['createElement'],
-        }
+      ? { createElement: ((tagName: 'video' | 'canvas') => document.createElement(tagName)) as DocumentLike['createElement'] }
       : null
   );
 
@@ -208,13 +180,7 @@ export async function createResizedVideoStream(
   };
   if (isAtOrBelowTarget(measuredSource, target)) {
     cleanupVideoElement(video);
-    return {
-      stream: sourceStream,
-      resized: false,
-      source: measuredSource,
-      output: measuredSource,
-      cleanup: () => {},
-    };
+    return { stream: sourceStream, resized: false, source: measuredSource, output: measuredSource, cleanup: () => {} };
   }
 
   const canvas = documentLike.createElement('canvas') as CanvasElementLike;
@@ -240,9 +206,7 @@ export async function createResizedVideoStream(
   ctx.imageSmoothingQuality = 'high';
 
   const drawFrame = () => {
-    try {
-      ctx.drawImage(video as any, 0, 0, target.width, target.height);
-    } catch {}
+    try { ctx.drawImage(video as any, 0, 0, target.width, target.height); } catch {}
   };
 
   drawFrame();
@@ -255,74 +219,14 @@ export async function createResizedVideoStream(
     throw new Error('Canvas capture did not produce a video track');
   }
 
-  const outputStream = createCombinedStream(
-    [resizedVideoTrack, ...sourceStream.getAudioTracks()],
-    deps
-  );
-
+  const tracks = [resizedVideoTrack, ...sourceStream.getAudioTracks()];
+  const outputStream = deps.createMediaStream ? deps.createMediaStream(tracks) : new MediaStream(tracks);
   const outputMetrics = readStreamVideoMetrics(resizedCanvasStream);
-  const raf = deps.requestAnimationFrame ?? globalThis.requestAnimationFrame?.bind(globalThis);
-  const cancelRaf = deps.cancelAnimationFrame ?? globalThis.cancelAnimationFrame?.bind(globalThis);
-  const scheduleTimeout = deps.setTimeout ?? globalThis.setTimeout.bind(globalThis);
-  const clearScheduledTimeout = deps.clearTimeout ?? globalThis.clearTimeout.bind(globalThis);
 
-  let stopped = false;
-  let frameHandle: number | ReturnType<typeof setTimeout> | null = null;
-  let frameMode: 'video' | 'animation' | 'timeout' | null = null;
-
-  const cancelScheduledFrame = () => {
-    if (frameHandle == null || !frameMode) return;
-
-    if (frameMode === 'video') {
-      try {
-        video.cancelVideoFrameCallback?.(frameHandle as number);
-      } catch {}
-    } else if (frameMode === 'animation') {
-      try {
-        cancelRaf?.(frameHandle as number);
-      } catch {}
-    } else {
-      clearScheduledTimeout(frameHandle as ReturnType<typeof setTimeout>);
-    }
-
-    frameHandle = null;
-    frameMode = null;
-  };
-
-  const scheduleNextFrame = () => {
-    if (stopped) return;
-
-    if (typeof video.requestVideoFrameCallback === 'function') {
-      frameMode = 'video';
-      frameHandle = video.requestVideoFrameCallback(() => {
-        drawFrame();
-        scheduleNextFrame();
-      });
-      return;
-    }
-
-    if (raf) {
-      frameMode = 'animation';
-      frameHandle = raf(() => {
-        drawFrame();
-        scheduleNextFrame();
-      });
-      return;
-    }
-
-    frameMode = 'timeout';
-    frameHandle = scheduleTimeout(() => {
-      drawFrame();
-      scheduleNextFrame();
-    }, Math.max(1, Math.round(1000 / Math.max(target.frameRate, 1))));
-  };
-
-  scheduleNextFrame();
+  const cancelLoop = startFrameLoop(video as any, target, drawFrame, deps);
 
   const cleanup = () => {
-    if (stopped) return;
-    stopped = true;
-    cancelScheduledFrame();
+    cancelLoop();
     stopStream(resizedCanvasStream);
     cleanupVideoElement(video);
     canvas.width = 0;
