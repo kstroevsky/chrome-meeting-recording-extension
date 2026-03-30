@@ -121,6 +121,7 @@ export class RecorderEngine {
         startTabRecorder(tabRecorderStream, this.suffix, runStartedAt, this.tabFinalizePlan, recorderSettings, this.deps, {
           onStarted: () => this.onRecorderStarted(),
           onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.tabRecorder = null; this.onRecorderStopped(); },
+          onError: () => this.stopAllRecorders(),
         }).then((rec) => { this.tabRecorder = rec; }),
       ];
 

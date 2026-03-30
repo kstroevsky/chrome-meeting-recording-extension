@@ -172,16 +172,23 @@ export async function postprocessTabArtifact(
           try { recorder.stop(); } catch (error) { fail(error); }
         }
       }, { once: true });
-    });
 
-    const startPromise = waitForRecorderStart(recorder);
-    recorder.start(chunking.defaultTimesliceMs);
-    await startPromise;
-    actualStartTimeMs = nowMs();
-    await playbackVideo.play();
-    while (recorder.state !== 'inactive') {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+      // Start the recorder and kick off playback inside the executor so that
+      // the event handlers wired above are active before any data arrives.
+      // Starting here (not after the await) prevents the irresolvable deadlock
+      // where the promise waits for onstop but the recorder was never started.
+      waitForRecorderStart(recorder)
+        .then(() => {
+          actualStartTimeMs = nowMs();
+          return playbackVideo!.play();
+        })
+        .catch(fail);
+      try {
+        recorder.start(chunking.defaultTimesliceMs);
+      } catch (error) {
+        fail(error);
+      }
+    });
 
     try {
       await artifact.cleanup();

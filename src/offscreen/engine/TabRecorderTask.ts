@@ -24,6 +24,8 @@ import type {
 export type TabRecorderCallbacks = {
   onStarted: () => void;
   onStopped: (artifact: CompletedRecordingArtifact | null) => void;
+  /** Called when the tab MediaRecorder fires onerror, before artifact finalization. */
+  onError?: () => void;
 };
 
 /**
@@ -76,6 +78,7 @@ export async function startTabRecorder(
 
   recorder.onerror = (e: any) => {
     deps.error('Tab MediaRecorder error', e);
+    callbacks.onError?.();
     void finalize('Tab');
   };
 

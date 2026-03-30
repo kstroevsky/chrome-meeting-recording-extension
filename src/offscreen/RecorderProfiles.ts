@@ -152,7 +152,7 @@ export function getChunkTimesliceMs(
   stream: RecorderChunkStream,
   chunking: Readonly<ChunkingSettings> = DEFAULT_CHUNKING_SETTINGS
 ): number {
-  if (stream === 'tab') return chunking.extendedTimesliceMs;
+  if (stream === 'tab') return chunking.defaultTimesliceMs;
   if (stream === 'selfVideo') return chunking.extendedTimesliceMs;
   if (PERF_FLAGS.extendedTimeslice) {
     return chunking.extendedTimesliceMs;
