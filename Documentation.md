@@ -192,6 +192,9 @@ File: `src/offscreen/RecorderEngine.ts`
   - MIME selection
   - chunk timeslice policy
   - adaptive self-video bitrate policy
+- `src/offscreen/RecorderVideoResizer.ts`
+  - live tab downscale before `MediaRecorder`
+  - hidden `video -> canvas` pipeline for deterministic output size
 - `src/offscreen/RecorderSupport.ts`
   - media error formatting
 
@@ -204,10 +207,21 @@ Recorder responsibilities:
 - resolve only when final writes are drained and artifacts are sealed
 
 Self-video profiles:
-- single best-effort camera profile
-  - prefers `1920x1080` at `30fps` when the extension opens the webcam itself
-  - actual delivered settings still depend on Chrome, Meet camera usage, and camera hardware
-  - recorder diagnostics log both the requested profile and the delivered track settings
+- preset-based direct camera profile
+  - settings page offers `640x360`, `854x480`, `1280x720`, and `1920x1080`
+  - default preset is `1920x1080` at `30fps` when the extension opens the webcam itself
+  - the recorder always uses the same fallback ladder: exact preset size/FPS, exact size with bounded FPS, then best-effort preset constraints
+  - actual delivered settings still depend on Chrome camera sharing and hardware limits
+  - recorder diagnostics and popup session warnings include both the requested profile and the delivered track settings when they differ
+
+Tab capture profiles:
+- preset-based recorded output size
+  - settings page offers `640x360`, `854x480`, `1280x720`, and `1920x1080`
+  - tab acquisition still requests a stable high ceiling up to `1920x1080`
+  - when the selected preset is smaller than the delivered tab stream, the offscreen document first tries live downscale before `MediaRecorder` starts
+  - if live downscale cannot be established, or the live recorder input still misses the requested target, recording continues and the finalized tab artifact is downscaled after stop
+  - if fallback post-stop downscale also fails, the original artifact is preserved and a visible warning explains that the requested preset could not be enforced
+  - visual detail still depends on what Meet rendered into the tab before the extension captured it
 
 #### Microphone Modes
 - `off`
@@ -256,6 +270,7 @@ Local mode:
 - create blob URLs for sealed artifacts
 - ask background to save them locally
 - background revokes blob URLs and optionally removes OPFS files later
+- if a tab artifact was marked `requiresPostprocess`, finalize it through the fallback downscale pipeline before creating the blob URL
 
 Drive mode:
 - resolve a shared folder once per finalize run
@@ -263,6 +278,12 @@ Drive mode:
 - clean up OPFS files after successful upload
 - fall back per file to local download if upload fails
 - return `UploadSummary`
+
+Fallback tab postprocess:
+- replay the sealed tab artifact inside the offscreen document
+- capture that playback back into a stream
+- reuse the canvas-based resize pipeline to produce the requested final size/frame rate
+- replace the original tab artifact only if the fallback pass succeeds
 
 Upload order is deterministic:
 1. `tab`
@@ -292,6 +313,7 @@ Current popup controls:
 - microphone mode select
 - storage mode select
 - self-video enable
+- settings gear button
 - start recording
 - stop recording
 - diagnostics page link in dev builds
@@ -303,6 +325,21 @@ Current popup controls:
 - disables controls for all busy phases
 - shows upload summaries and local fallback errors
 - includes run configuration in status text so popup reopen shows the real session configuration
+
+### 7.1 Settings Page
+Files:
+- `static/settings.html`
+- `src/settings.ts`
+- `src/shared/extensionSettings.ts`
+
+Purpose:
+- configure default run behavior and advanced recorder parameters outside the disposable popup
+
+Current settings behavior:
+- camera and tab capture sizes are chosen through preset selectors instead of raw width/height inputs
+- every settings field exposes a click-to-open tooltip with a short operational explanation
+- legacy stored width/height settings are normalized into the nearest supported preset on load
+- the popup gear icon opens this page in a regular extension tab
 
 ### 8. Meeting Provider Adapter Boundary
 Files:
@@ -342,7 +379,6 @@ These files define the extension's inter-context contracts.
 #### Popup -> Content Script
 - `GET_TRANSCRIPT`
 - `RESET_TRANSCRIPT`
-- `GET_PROVIDER_INFO`
 
 #### Background -> Popup
 - `RECORDING_STATE`
@@ -422,7 +458,7 @@ Availability:
 2. Background marks the session `stopping`.
 3. Background sends `OFFSCREEN_STOP`.
 4. Offscreen transitions to `stopping` and starts finalize orchestration.
-5. `RecorderEngine.stop()` seals artifacts.
+5. `RecorderEngine.stop()` releases the extension-owned camera immediately, then seals artifacts.
 6. If storage mode is `drive`, offscreen transitions to `uploading`.
 7. `RecordingFinalizer` either saves locally or uploads to Drive.
 8. Offscreen emits `OFFSCREEN_STATE(phase='idle', uploadSummary?)` or `OFFSCREEN_STATE(phase='failed', error)`.
@@ -678,7 +714,6 @@ flowchart TD
 | :--- | :--- |
 | `GET_TRANSCRIPT` | transcript text + provider info |
 | `RESET_TRANSCRIPT` | `{ ok: true }` |
-| `GET_PROVIDER_INFO` | provider metadata |
 
 ### Offscreen -> Background
 | Message | Meaning |
@@ -746,6 +781,8 @@ flowchart TD
 | `src/popup/popupMessages.ts` | user-facing popup copy constants/builders |
 | `src/popup/MicPermissionService.ts` | microphone permission flow |
 | `src/popup/CameraPermissionService.ts` | camera permission flow |
+| `src/settings.ts` | settings page controller |
+| `src/shared/extensionSettings.ts` | preset-based settings normalization and runtime accessors |
 | `src/micsetup.ts` | dedicated mic setup page |
 | `src/camsetup.ts` | dedicated camera setup page |
 
@@ -799,7 +836,7 @@ Note:
 - `oauth2.client_id` in source control is a placeholder.
 - Webpack injects the real value from `.env` / shell env key `GOOGLE_OAUTH_CLIENT_ID` into `dist/manifest.json` at build time.
 - If the env var is missing, build keeps the placeholder and logs a warning; Drive auth will fail until configured.
-- Source HTML shells and the source manifest live under `static/`, while the emitted extension layout in `dist/` remains flat.
+- Source HTML shells and the source manifest live under `static/`, shared popup assets live under `public/`, and the emitted extension layout in `dist/` remains flat.
 
 Important permissions:
 - `activeTab`

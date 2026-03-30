@@ -1,4 +1,10 @@
 import { RecorderEngine, type SealedStorageFile, type StorageTarget } from '../src/offscreen/RecorderEngine';
+import {
+  buildRecorderRuntimeSettingsSnapshot,
+  normalizeExtensionSettings,
+  resetExtensionSettingsToDefaults,
+  saveExtensionSettingsToStorage,
+} from '../src/shared/extensionSettings';
 import { PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
 import type { RecordingRunConfig } from '../src/shared/recording';
 
@@ -144,11 +150,70 @@ describe('RecorderEngine', () => {
   let originalMediaRecorder: typeof MediaRecorder;
   let originalAudioContext: typeof AudioContext | undefined;
   let originalMediaStream: typeof MediaStream | undefined;
+  let originalCreateElement: typeof document.createElement;
 
-  beforeEach(() => {
+  function installResizerDom(options: {
+    sourceWidth: number;
+    sourceHeight: number;
+    outputWidth: number;
+    outputHeight: number;
+    outputFrameRate: number;
+  }) {
+    const outputVideoTrack = makeTrack('video', {
+      width: options.outputWidth,
+      height: options.outputHeight,
+      frameRate: options.outputFrameRate,
+    });
+    const captureStream = makeStream({
+      videoTracks: [outputVideoTrack],
+    });
+    const drawImage = jest.fn();
+    const video = {
+      srcObject: null,
+      muted: false,
+      playsInline: false,
+      autoplay: false,
+      hidden: false,
+      style: {},
+      videoWidth: options.sourceWidth,
+      videoHeight: options.sourceHeight,
+      play: jest.fn().mockResolvedValue(undefined),
+      pause: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+    } as any;
+    const canvas = {
+      width: 0,
+      height: 0,
+      hidden: false,
+      style: {},
+      getContext: jest.fn(() => ({
+        drawImage,
+        imageSmoothingEnabled: false,
+        imageSmoothingQuality: 'low',
+      })),
+      captureStream: jest.fn(() => captureStream),
+    } as any;
+
+    document.createElement = jest.fn((tagName: string) => {
+      if (tagName === 'video') return video;
+      if (tagName === 'canvas') return canvas;
+      return originalCreateElement(tagName as any);
+    }) as any;
+
+    return {
+      canvas,
+      drawImage,
+      outputVideoTrack,
+      video,
+    };
+  }
+
+  beforeEach(async () => {
     originalMediaRecorder = global.MediaRecorder as any;
     originalAudioContext = (global as any).AudioContext;
     originalMediaStream = (global as any).MediaStream;
+    originalCreateElement = document.createElement.bind(document);
     (global as any).MediaRecorder = FakeMediaRecorder as any;
     (global as any).MediaStream = class {
       constructor(public readonly tracks: any[] = []) {}
@@ -169,16 +234,20 @@ describe('RecorderEngine', () => {
       warn: jest.fn(),
       error: jest.fn(),
       notifyPhase: jest.fn(),
+      reportWarning: jest.fn(),
       enableMicMix: false,
     };
     engine = new RecorderEngine(deps);
+    await resetExtensionSettingsToDefaults();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     (global as any).MediaRecorder = originalMediaRecorder;
     (global as any).AudioContext = originalAudioContext;
     (global as any).MediaStream = originalMediaStream;
+    document.createElement = originalCreateElement;
     resetPerfFlags();
+    await resetExtensionSettingsToDefaults();
   });
 
   it('starts as idle and isRecording() is false', () => {
@@ -302,6 +371,34 @@ describe('RecorderEngine', () => {
     });
   });
 
+  it('releases the self-video track immediately when stop is requested', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const selfVideoTrack = makeTrack('video', { width: 1280, height: 720, frameRate: 30 });
+    const selfVideoStream = makeStream({
+      videoTracks: [selfVideoTrack],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.video && constraints.audio === false) return selfVideoStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ recordSelfVideo: true }));
+    await flushAsyncWork();
+
+    const stopPromise = engine.stop();
+    expect(selfVideoTrack.stop).toHaveBeenCalledTimes(1);
+
+    await stopPromise;
+    expect(selfVideoTrack.stop).toHaveBeenCalledTimes(1);
+  });
+
   it('mixes microphone audio into the tab recording when micMode=mixed', async () => {
     const createMediaStreamSource = jest.fn().mockReturnValue({ connect: jest.fn() });
     const mixedAudioTrack = makeTrack('audio');
@@ -341,7 +438,101 @@ describe('RecorderEngine', () => {
     expect(await toText(artifacts[0].artifact.file)).toBe('tab');
   });
 
-  it('uses the extended timeslice only when the feature flag is enabled', async () => {
+  it('records the original tab stream directly using the frozen capture ceiling', async () => {
+    const baseAudioTrack = makeTrack('audio', { suppressLocalAudioPlayback: false });
+    const baseStream = makeStream({
+      audioTracks: [baseAudioTrack],
+      videoTracks: [makeTrack('video', { width: 1920, height: 1080, frameRate: 30 })],
+    });
+    const recorderSettings = buildRecorderRuntimeSettingsSnapshot(normalizeExtensionSettings({
+      professional: {
+        tabResolutionPreset: '640x360',
+        tabMaxFrameRate: 24,
+      },
+    }));
+    const createElementSpy = jest.fn((tagName: string) => originalCreateElement(tagName as any));
+    document.createElement = createElementSpy as any;
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig(), recorderSettings);
+
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video: expect.objectContaining({
+          mandatory: expect.objectContaining({
+            maxWidth: 640,
+            maxHeight: 360,
+            maxFrameRate: 24,
+          }),
+        }),
+      })
+    );
+    expect(tabRecorder?.stream).toBe(baseStream);
+    expect(createElementSpy).not.toHaveBeenCalled();
+
+    const artifacts = await engine.stop();
+    expect(artifacts[0].finalize).toBeUndefined();
+  });
+
+  it('preserves mixed microphone audio without introducing a resize stream', async () => {
+    await saveExtensionSettingsToStorage({
+      professional: {
+        tabResolutionPreset: '640x360',
+        tabMaxFrameRate: 24,
+      },
+    });
+
+    const createMediaStreamSource = jest.fn().mockReturnValue({ connect: jest.fn() });
+    const mixedAudioTrack = makeTrack('audio');
+    const createMediaStreamDestination = jest.fn().mockReturnValue({
+      stream: makeStream({ audioTracks: [mixedAudioTrack] }),
+    });
+    const audioContextCtor = jest.fn().mockImplementation(() => ({
+      resume: jest.fn().mockResolvedValue(undefined),
+      createMediaStreamSource,
+      createMediaStreamDestination,
+      destination: {},
+      close: jest.fn(),
+    }));
+    (global as any).AudioContext = audioContextCtor;
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video', { width: 1920, height: 1080, frameRate: 30 })],
+    });
+    const micStream = makeStream({
+      audioTracks: [makeTrack('audio')],
+    });
+    const baseVideoTrack = baseStream.getVideoTracks()[0];
+    const createElementSpy = jest.fn((tagName: string) => originalCreateElement(tagName as any));
+    document.createElement = createElementSpy as any;
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return micStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'mixed' }));
+
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    expect(tabRecorder?.stream.getVideoTracks()).toEqual([baseVideoTrack]);
+    expect(tabRecorder?.stream.getAudioTracks()).toEqual([mixedAudioTrack]);
+    expect(createElementSpy).not.toHaveBeenCalled();
+
+    await engine.stop();
+  });
+
+  it('keeps the tab recorder on the default cadence when the mic recorder uses extended chunks', async () => {
     PERF_FLAGS.extendedTimeslice = true;
 
     const baseStream = makeStream({
@@ -361,10 +552,13 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
 
-    expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(4000);
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    const micRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'mic');
+    expect(tabRecorder?.timesliceMs).toBe(4000);
+    expect(micRecorder?.timesliceMs).toBe(4000);
   });
 
-  it('keeps the default 2000 ms timeslice when the extended flag is off', async () => {
+  it('keeps the default tab and mic cadence when the extended flag is off', async () => {
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
       videoTracks: [makeTrack('video')],
@@ -382,7 +576,38 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
 
-    expect(FakeMediaRecorder.instances[0].timesliceMs).toBe(2000);
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    const micRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'mic');
+    expect(tabRecorder?.timesliceMs).toBe(4000);
+    expect(micRecorder?.timesliceMs).toBe(2000);
+  });
+
+  it('uses the longer timeslice for self-video while keeping the tab recorder on its normal extended cadence', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const selfVideoStream = makeStream({
+      videoTracks: [makeTrack('video', { width: 640, height: 360, frameRate: 30 })],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.video && constraints.audio === false) {
+        return selfVideoStream;
+      }
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ recordSelfVideo: true }));
+    await flushAsyncWork();
+
+    const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
+    const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
+    expect(tabRecorder?.timesliceMs).toBe(4000);
+    expect(selfVideoRecorder?.timesliceMs).toBe(4000);
   });
 
   it('skips the audio playback bridge in auto mode when local tab audio is not suppressed', async () => {
@@ -469,5 +694,8 @@ describe('RecorderEngine', () => {
 
     const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
     expect(selfVideoRecorder?.options.videoBitsPerSecond).toBe(1_000_000);
+    expect(deps.reportWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Camera recording requested 1920x1080@30fps, but browser delivered 640x360@15fps.')
+    );
   });
 });

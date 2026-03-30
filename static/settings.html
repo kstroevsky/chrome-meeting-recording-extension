@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Recorder Settings</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f7f4ee;
+      --panel-bg: #fffdf8;
+      --panel-border: #d8d1c2;
+      --text: #221f1a;
+      --muted: #655f54;
+      --accent: #8b4b24;
+      --accent-soft: #f4ddcf;
+      --tooltip-bg: #221f1a;
+      --tooltip-text: #fffaf2;
+      --success: #145a00;
+      --error: #8b0000;
+      --control-border: #bcb3a0;
+      --shadow: 0 10px 24px rgba(34, 31, 26, 0.08);
+    }
+
+    body {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      margin: 0;
+      background:
+        radial-gradient(circle at top right, rgba(139, 75, 36, 0.08), transparent 26%),
+        linear-gradient(180deg, #fcfaf5 0%, var(--page-bg) 100%);
+      color: var(--text);
+    }
+
+    main {
+      margin: 0 auto;
+      max-width: 920px;
+      padding: 24px 18px 40px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0.01em;
+    }
+
+    .intro {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .section {
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 14px;
+      background: var(--panel-bg);
+      box-shadow: var(--shadow);
+    }
+
+    .section h2 {
+      margin: 0 0 14px;
+      font-size: 16px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+      gap: 12px 16px;
+      align-items: center;
+    }
+
+    .field-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: relative;
+      min-width: 0;
+    }
+
+    label {
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .tooltip-shell {
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
+    }
+
+    .tooltip-toggle {
+      width: 18px;
+      height: 18px;
+      border: 1px solid var(--control-border);
+      border-radius: 999px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #fff;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .tooltip-toggle:hover,
+    .tooltip-toggle[aria-expanded="true"] {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+    }
+
+    .tooltip-bubble {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: -8px;
+      width: 240px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--tooltip-bg);
+      color: var(--tooltip-text);
+      box-shadow: 0 12px 30px rgba(17, 14, 11, 0.24);
+      font-size: 12px;
+      line-height: 1.45;
+      z-index: 10;
+    }
+
+    .tooltip-bubble::before {
+      content: "";
+      position: absolute;
+      top: -6px;
+      left: 14px;
+      width: 12px;
+      height: 12px;
+      background: var(--tooltip-bg);
+      transform: rotate(45deg);
+    }
+
+    input[type="number"],
+    select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid var(--control-border);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      justify-self: start;
+      accent-color: var(--accent);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    button {
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 9px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #save-settings {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    #reset-settings {
+      background: transparent;
+      border-color: var(--control-border);
+      color: var(--text);
+    }
+
+    #status {
+      min-height: 1.2em;
+      font-size: 12px;
+      color: var(--success);
+    }
+
+    @media (max-width: 720px) {
+      main {
+        padding: 18px 14px 32px;
+      }
+
+      .field-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .tooltip-bubble {
+        left: 0;
+        width: min(240px, calc(100vw - 56px));
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Recorder Settings</h1>
+    <p class="intro">
+      Configure the defaults used when you start a recording, plus the advanced capture parameters
+      that shape tab, camera, microphone, and chunking behavior.
+    </p>
+
+    <section class="section">
+      <h2>Basic</h2>
+      <div class="field-grid">
+        <div class="field-label">
+          <label for="recording-mode">Default recording mode</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain default recording mode" aria-controls="tooltip-recording-mode" aria-expanded="false">?</button>
+            <span id="tooltip-recording-mode" class="tooltip-bubble" role="tooltip" hidden>Choose where finished recordings go by default. Drive uploads happen after capture stops.</span>
+          </span>
+        </div>
+        <select id="recording-mode">
+          <option value="opfs">OPFS (Local Disk)</option>
+          <option value="drive">Google Drive</option>
+        </select>
+
+        <div class="field-label">
+          <label for="mic-mode">Default microphone mode</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain default microphone mode" aria-controls="tooltip-mic-mode" aria-expanded="false">?</button>
+            <span id="tooltip-mic-mode" class="tooltip-bubble" role="tooltip" hidden>Sets whether your microphone is ignored, mixed into the tab file, or saved as a separate file by default.</span>
+          </span>
+        </div>
+        <select id="mic-mode">
+          <option value="off">Do not record microphone</option>
+          <option value="mixed">Mix microphone into tab recording</option>
+          <option value="separate">Save microphone separately</option>
+        </select>
+
+        <div class="field-label">
+          <label for="separate-camera">Record camera separately by default</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain separate camera capture" aria-controls="tooltip-separate-camera" aria-expanded="false">?</button>
+            <span id="tooltip-separate-camera" class="tooltip-bubble" role="tooltip" hidden>When enabled, the extension asks for your camera and writes it as its own recording file by default.</span>
+          </span>
+        </div>
+        <input id="separate-camera" type="checkbox" />
+
+        <div class="field-label">
+          <label for="self-video-resolution-preset">Camera resolution</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain camera resolution" aria-controls="tooltip-self-video-resolution" aria-expanded="false">?</button>
+            <span id="tooltip-self-video-resolution" class="tooltip-bubble" role="tooltip" hidden>Select the preferred camera capture size. When Meet camera is off, separate camera recording can enforce this preset more strongly. Otherwise Chrome can still deliver a lower resolution.</span>
+          </span>
+        </div>
+        <select id="self-video-resolution-preset">
+          <option value="640x360">640x360</option>
+          <option value="854x480">854x480</option>
+          <option value="1280x720">1280x720</option>
+          <option value="1920x1080">1920x1080</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Professional</h2>
+      <div class="field-grid">
+        <div class="field-label">
+          <label for="self-video-bitrate">Camera bitrate (bits/s)</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain camera bitrate" aria-controls="tooltip-self-video-bitrate" aria-expanded="false">?</button>
+            <span id="tooltip-self-video-bitrate" class="tooltip-bubble" role="tooltip" hidden>Higher bitrate preserves more camera detail but increases file size and upload time.</span>
+          </span>
+        </div>
+        <input id="self-video-bitrate" type="number" min="100000" max="3000000" step="1000" />
+
+        <div class="field-label">
+          <label for="self-video-frame-rate">Camera frame rate (FPS)</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain camera frame rate" aria-controls="tooltip-self-video-frame-rate" aria-expanded="false">?</button>
+            <span id="tooltip-self-video-frame-rate" class="tooltip-bubble" role="tooltip" hidden>Controls the requested camera motion smoothness. Higher values can use more bandwidth and CPU.</span>
+          </span>
+        </div>
+        <input id="self-video-frame-rate" type="number" min="1" max="120" />
+
+        <div class="field-label">
+          <label for="self-video-min-adaptive-bitrate">Minimum adaptive bitrate (bits/s)</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain minimum adaptive bitrate" aria-controls="tooltip-self-video-min-adaptive-bitrate" aria-expanded="false">?</button>
+            <span id="tooltip-self-video-min-adaptive-bitrate" class="tooltip-bubble" role="tooltip" hidden>Sets the floor when adaptive camera bitrate is enabled so video quality does not drop below this level.</span>
+          </span>
+        </div>
+        <input id="self-video-min-adaptive-bitrate" type="number" min="100000" step="1000" />
+
+        <div class="field-label">
+          <label for="tab-resolution-preset">Tab resolution</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain tab resolution" aria-controls="tooltip-tab-resolution" aria-expanded="false">?</button>
+            <span id="tooltip-tab-resolution" class="tooltip-bubble" role="tooltip" hidden>Sets the requested maximum tab capture size. Chrome may still deliver a different size depending on the page, display scale, and browser limits.</span>
+          </span>
+        </div>
+        <select id="tab-resolution-preset">
+          <option value="640x360">640x360</option>
+          <option value="854x480">854x480</option>
+          <option value="1280x720">1280x720</option>
+          <option value="1920x1080">1920x1080</option>
+        </select>
+
+        <div class="field-label">
+          <label for="tab-max-frame-rate">Tab capture max frame rate (FPS)</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain tab frame rate" aria-controls="tooltip-tab-max-frame-rate" aria-expanded="false">?</button>
+            <span id="tooltip-tab-max-frame-rate" class="tooltip-bubble" role="tooltip" hidden>Caps the preferred tab frame rate. Chrome tab capture tops out at 30 FPS, and lower values can reduce CPU use and file size.</span>
+          </span>
+        </div>
+        <input id="tab-max-frame-rate" type="number" min="1" max="120" />
+
+        <div class="field-label">
+          <label for="mic-echo-cancellation">Microphone echo cancellation</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain echo cancellation" aria-controls="tooltip-mic-echo-cancellation" aria-expanded="false">?</button>
+            <span id="tooltip-mic-echo-cancellation" class="tooltip-bubble" role="tooltip" hidden>Asks Chrome to reduce playback echo leaking back into the microphone stream.</span>
+          </span>
+        </div>
+        <input id="mic-echo-cancellation" type="checkbox" />
+
+        <div class="field-label">
+          <label for="mic-noise-suppression">Microphone noise suppression</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain noise suppression" aria-controls="tooltip-mic-noise-suppression" aria-expanded="false">?</button>
+            <span id="tooltip-mic-noise-suppression" class="tooltip-bubble" role="tooltip" hidden>Requests background-noise cleanup on the microphone track before it is recorded.</span>
+          </span>
+        </div>
+        <input id="mic-noise-suppression" type="checkbox" />
+
+        <div class="field-label">
+          <label for="mic-auto-gain">Microphone auto gain control</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain auto gain control" aria-controls="tooltip-mic-auto-gain" aria-expanded="false">?</button>
+            <span id="tooltip-mic-auto-gain" class="tooltip-bubble" role="tooltip" hidden>Lets Chrome automatically boost or lower microphone volume while capturing audio.</span>
+          </span>
+        </div>
+        <input id="mic-auto-gain" type="checkbox" />
+
+        <div class="field-label">
+          <label for="chunk-default-timeslice">Default chunk timeslice (ms)</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain default chunk timeslice" aria-controls="tooltip-chunk-default-timeslice" aria-expanded="false">?</button>
+            <span id="tooltip-chunk-default-timeslice" class="tooltip-bubble" role="tooltip" hidden>Controls how often MediaRecorder flushes normal recording chunks to storage during simple runs.</span>
+          </span>
+        </div>
+        <input id="chunk-default-timeslice" type="number" min="250" max="60000" />
+
+        <div class="field-label">
+          <label for="chunk-extended-timeslice">Extended chunk timeslice (ms)</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain extended chunk timeslice" aria-controls="tooltip-chunk-extended-timeslice" aria-expanded="false">?</button>
+            <span id="tooltip-chunk-extended-timeslice" class="tooltip-bubble" role="tooltip" hidden>Used when extra streams are active and the performance flag enables longer recorder chunk intervals.</span>
+          </span>
+        </div>
+        <input id="chunk-extended-timeslice" type="number" min="250" max="60000" />
+      </div>
+    </section>
+
+    <div class="actions">
+      <button id="save-settings">Save</button>
+      <button id="reset-settings" type="button">Reset to defaults</button>
+      <span id="status"></span>
+    </div>
+  </main>
+
+  <script src="settings.js"></script>
+</body>
+</html>

@@ -8,6 +8,7 @@
 
 import { CameraPermissionService } from './CameraPermissionService';
 import { MicPermissionService } from './MicPermissionService';
+import { PopupStateController } from './controllers/PopupStateController';
 import {
   buildLocalSaveFailedAlert,
   buildLocalSaveFailedToast,
@@ -20,53 +21,48 @@ import {
   POPUP_TOAST_DURATION_MS,
   POPUP_TOAST_TEXT,
 } from './popupMessages';
-import { applyRunConfigToForm, buildRunConfigFromForm } from './popupRunConfig';
 import {
   setControlsForPhase,
   setStatusText,
   type PopupElements,
 } from './popupView';
-import { describeRunConfig, formatUploadFallbackMessage, STATUS_BY_PHASE } from './popupStatus';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
-import {
-  createDefaultRunConfig,
-  getRunConfigOrDefault,
-  normalizeSessionSnapshot,
-  type RecordingPhase,
-  type RecordingRunConfig,
-  type RecordingSessionSnapshot,
-  type UploadSummary,
-} from '../shared/recording';
+import { normalizeSessionSnapshot, type RecordingPhase } from '../shared/recording';
 
 export class PopupController {
   private readonly el: PopupElements;
   private readonly mic = new MicPermissionService();
   private readonly camera = new CameraPermissionService();
+  private readonly state: PopupStateController;
   private inFlight = false;
-  private lastPhase: RecordingPhase = 'idle';
-  private shownUploadSummary = '';
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
-  private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
 
   constructor(el: PopupElements) {
     this.el = el;
+    this.state = new PopupStateController(el, {
+      onPhaseChange: (phase, session) => this.onPhaseChange(phase),
+      onToast: (msg) => this.toast(msg),
+      onAlert: (msg) => alert(msg),
+    });
   }
 
+  /** Wires every popup interaction and kicks off the initial status refresh. */
   init() {
-    this.setActiveRunConfig(createDefaultRunConfig());
     this.wireRecordingStateListener();
     this.wireTranscriptDownload();
     this.wireStartStop();
     this.wireMic();
+    this.wireSettingsLink();
     this.wireDiagnosticsLink();
-    void this.refreshInitialUi();
+    void this.state.refreshInitialState();
   }
 
+  /** Clears transient timers when the popup is torn down. */
   destroy() {
     if (this.statusTimer) {
       clearTimeout(this.statusTimer);
@@ -74,32 +70,12 @@ export class PopupController {
     }
   }
 
-  private setUI(phase: RecordingPhase) {
+  private onPhaseChange(phase: RecordingPhase) {
     setControlsForPhase(this.el, phase);
-    this.lastPhase = phase;
-    this.syncPhaseStatus(phase);
-  }
-
-  private setStatus(text: string) {
-    setStatusText(this.el, text);
-  }
-
-  private syncPhaseStatus(phase: RecordingPhase) {
-    if (phase === 'idle') {
-      this.persistentStatus = '';
-    } else {
-      const run = describeRunConfig(this.activeRunConfig);
-      const suffix = run ? ` ${run}` : '';
-      this.persistentStatus = `${STATUS_BY_PHASE[phase]}${suffix}`;
-    }
+    this.persistentStatus = this.state.buildPersistentStatus(phase);
     if (!this.statusTimer) {
-      this.setStatus(this.persistentStatus);
+      setStatusText(this.el, this.persistentStatus);
     }
-  }
-
-  private setActiveRunConfig(config: RecordingRunConfig | null) {
-    this.activeRunConfig = config;
-    applyRunConfigToForm(this.el, config);
   }
 
   private toast(msg: string) {
@@ -107,51 +83,22 @@ export class PopupController {
       clearTimeout(this.statusTimer);
       this.statusTimer = null;
     }
-
-    this.setStatus(msg);
+    setStatusText(this.el, msg);
     this.statusTimer = setTimeout(() => {
       this.statusTimer = null;
-      this.setStatus(this.persistentStatus);
+      setStatusText(this.el, this.persistentStatus);
     }, POPUP_TOAST_DURATION_MS);
-
     if (isTestRuntime()) console.log('[popup]', msg);
-  }
-
-  private applySession(snapshot: RecordingSessionSnapshot) {
-    const prevPhase = this.lastPhase;
-    const runConfig = snapshot.phase === 'idle'
-      ? createDefaultRunConfig()
-      : getRunConfigOrDefault(snapshot.runConfig);
-    this.setActiveRunConfig(runConfig);
-    this.setUI(snapshot.phase);
-
-    if (snapshot.phase === 'failed' && snapshot.error) {
-      this.toast(`Recording error: ${snapshot.error}`);
-    }
-
-    this.handleUploadSummary(prevPhase, snapshot.phase, snapshot.uploadSummary);
-  }
-
-  private async refreshInitialUi() {
-    try {
-      const res = await sendToBackground({ type: 'GET_RECORDING_STATUS' });
-      this.applySession(normalizeSessionSnapshot(res.session));
-    } catch {
-      this.setActiveRunConfig(createDefaultRunConfig());
-      this.setUI('idle');
-    }
   }
 
   private wireRecordingStateListener() {
     chrome.runtime.onMessage.addListener((msg: BgToPopup) => {
       if (msg?.type === 'RECORDING_STATE') {
-        this.applySession(normalizeSessionSnapshot(msg.session));
+        this.state.applySession(normalizeSessionSnapshot(msg.session));
       }
-
       if (msg?.type === 'RECORDING_SAVED') {
         this.toast(buildSavedLocallyMessage(msg.filename));
       }
-
       if (msg?.type === 'RECORDING_SAVE_ERROR') {
         this.toast(buildLocalSaveFailedToast(msg.filename, msg.error));
         alert(buildLocalSaveFailedAlert(msg.filename, msg.error));
@@ -159,31 +106,16 @@ export class PopupController {
     });
   }
 
-  private handleUploadSummary(
-    prevPhase: RecordingPhase,
-    phase: RecordingPhase,
-    summary?: UploadSummary
-  ) {
-    if (phase !== 'idle' || !summary) return;
-
-    const key = JSON.stringify(summary);
-    if (this.shownUploadSummary === key) return;
-    this.shownUploadSummary = key;
-
-    const fallbackMessage = formatUploadFallbackMessage(summary);
-    if (fallbackMessage) {
-      alert(fallbackMessage);
-      return;
-    }
-
-    if (prevPhase === 'uploading' && summary.uploaded.length > 0) {
-      this.toast(`Uploaded ${summary.uploaded.length} file(s) to Google Drive`);
-    }
-  }
-
   private wireMic() {
     if (!this.el.micBtn) return;
     this.mic.bindButton(this.el.micBtn);
+  }
+
+  private wireSettingsLink() {
+    if (!this.el.openSettingsBtn) return;
+    this.el.openSettingsBtn.addEventListener('click', async () => {
+      await createRuntimeTab('settings.html');
+    });
   }
 
   private wireDiagnosticsLink() {
@@ -225,11 +157,7 @@ export class PopupController {
       const suffix = res?.provider.meetingId || 'google-meet';
 
       try {
-        await downloadFile({
-          url,
-          filename: buildTranscriptFilename(suffix),
-          saveAs: true,
-        });
+        await downloadFile({ url, filename: buildTranscriptFilename(suffix), saveAs: true });
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -251,7 +179,7 @@ export class PopupController {
 
         await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
-        const runConfig = buildRunConfigFromForm(this.el);
+        const runConfig = this.state.getRunConfigFromForm();
         const { micMode, recordSelfVideo } = runConfig;
 
         const micReady = await this.mic.ensureReadyForRecording(micMode);
@@ -259,23 +187,17 @@ export class PopupController {
 
         if (recordSelfVideo) {
           const cameraReady = await this.camera.ensureReadyForRecording();
-          if (!cameraReady) {
-            throw new Error(CAMERA_PERMISSION_ERROR);
-          }
+          if (!cameraReady) throw new Error(CAMERA_PERMISSION_ERROR);
         }
 
-        const resp = await sendToBackground({
-          type: 'START_RECORDING',
-          tabId: tab.id,
-          runConfig,
-        });
+        const resp = await sendToBackground({ type: 'START_RECORDING', tabId: tab.id, runConfig });
         if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
 
-        this.applySession(resp.session);
+        this.state.applySession(resp.session);
         this.toast(POPUP_TOAST_TEXT.recordingStarted);
       } catch (e: unknown) {
         console.error('[popup] START_RECORDING error', e);
-        this.setUI('idle');
+        this.onPhaseChange('idle');
         alert(buildStartErrorAlert(e));
       } finally {
         this.inFlight = false;
@@ -290,12 +212,12 @@ export class PopupController {
       try {
         const resp = await sendToBackground({ type: 'STOP_RECORDING' });
         if (resp.ok === false) throw new Error(resp.error || 'Failed to stop');
-        this.applySession(resp.session);
+        this.state.applySession(resp.session);
         this.toast(POPUP_TOAST_TEXT.stopping);
       } catch (e: unknown) {
         console.error('[popup] STOP_RECORDING error', e);
         alert(buildStopErrorAlert(e));
-        this.setUI('idle');
+        this.onPhaseChange('idle');
       } finally {
         this.inFlight = false;
       }

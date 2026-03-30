@@ -11,7 +11,7 @@
  *   2. A second observer watches that region for new speaker blocks.
  *   3. A third observer (per block) watches for text refinements — Meet
  *      continuously updates caption text as the speech engine refines its guess.
- *   4. A per-speaker timer (CAPTION_GRACE_MS) fires after silence to "commit"
+ *   4. Per-speaker timers (CAPTION_GRACE_MS) fire after silence to commit
  *      the buffered utterance to the final transcript array.
  *
  * Public API exposed to the Popup:
@@ -24,50 +24,25 @@
 
 import { GoogleMeetAdapter } from './content/GoogleMeetAdapter';
 import type { MeetingProviderAdapter } from './content/MeetingProviderAdapter';
-import { TIMEOUTS } from './shared/timeouts';
 import { isPopupToContentMessage } from './shared/protocol';
 import { configurePerfRuntime, logPerf, type PerfEventEntry } from './shared/perf';
+import { CaptionBuffer } from './content/captionBuffer';
 
-type Chunk = {
-  startTime: number;
-  endTime: number;
-  speaker: string;
-  text: string;
-};
+function sendPerfEvent(entry: PerfEventEntry) {
+  try {
+    chrome.runtime.sendMessage({ type: 'PERF_EVENT', entry }, () => { void chrome.runtime.lastError; });
+  } catch {}
+}
 
-type OpenChunk = Chunk & { timer: number };
+void configurePerfRuntime({ source: 'captions', sink: sendPerfEvent });
+
 type ObservedCaptionBlock = {
   observer: MutationObserver;
   textNode: HTMLElement;
 };
 
-function sendPerfEvent(entry: PerfEventEntry) {
-  try {
-    chrome.runtime.sendMessage({ type: 'PERF_EVENT', entry }, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch {}
-}
-
-void configurePerfRuntime({
-  source: 'captions',
-  sink: sendPerfEvent,
-});
-
-function normalize(pre: string) {
-  return pre
-    .toLowerCase()
-    .replace(/[.,?!'"\u2019]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 class TranscriptCollector {
-  constructor(private readonly provider: MeetingProviderAdapter) {}
-
-  private transcript: string[] = [];
-  private prior = new Map<string, OpenChunk>();
-  private lastSeen = new Map<string, string>();
+  private readonly buffer = new CaptionBuffer();
   private captionObserver: MutationObserver | null = null;
   private regionObserver: MutationObserver | null = null;
   private regionParentObserver: MutationObserver | null = null;
@@ -76,41 +51,30 @@ class TranscriptCollector {
   private readonly observedBlocks = new Set<HTMLElement>();
   private activeBlockObserverCount = 0;
 
+  constructor(private readonly provider: MeetingProviderAdapter) {}
+
   start() {
     this.observeCaptionsRegionAppearance();
     this.exposeWindowApi();
     this.exposeMessageApi();
   }
 
-  getTranscriptText(): string {
-    this.flushOpenChunks();
-    return this.transcript.join('\n');
-  }
+  getTranscriptText(): string { return this.buffer.getTranscriptText(); }
 
   reset() {
-    this.prior.forEach((v) => clearTimeout(v.timer));
-    this.prior.clear();
-    this.lastSeen.clear();
-    this.transcript.length = 0;
+    this.buffer.reset();
   }
 
   private observeCaptionsRegionAppearance() {
-    const existing = this.findCaptionsRegion();
-    if (existing) {
-      this.attachRegion(existing);
-      return;
-    }
+    const existing = this.provider.findCaptionsRegion(document);
+    if (existing) { this.attachRegion(existing); return; }
 
     this.regionObserver?.disconnect();
     this.regionObserver = new MutationObserver(() => {
-      const region = this.findCaptionsRegion();
+      const region = this.provider.findCaptionsRegion(document);
       if (region) this.attachRegion(region);
     });
     this.regionObserver.observe(document.body, { childList: true, subtree: true });
-  }
-
-  private findCaptionsRegion(): HTMLElement | null {
-    return this.provider.findCaptionsRegion(document);
   }
 
   private attachRegion(region: HTMLElement) {
@@ -124,47 +88,33 @@ class TranscriptCollector {
     this.activeRegion = region;
 
     this.regionParentObserver = new MutationObserver(() => {
-      if (!this.activeRegion?.isConnected) {
-        this.onRegionRemoved();
-      }
+      if (!this.activeRegion?.isConnected) this.onRegionRemoved();
     });
     this.regionParentObserver.observe(document.body, { childList: true, subtree: true });
 
     this.captionObserver = new MutationObserver((mutations) => {
       for (const m of mutations) {
         for (const node of Array.from(m.addedNodes)) {
-          for (const block of this.collectCaptionBlocks(node)) {
+          for (const block of this.provider.collectCaptionBlocks(node)) {
             this.scanSpeakerBlock(block);
           }
         }
-
         for (const node of Array.from(m.removedNodes)) {
-          if (node === this.activeRegion) {
-            this.onRegionRemoved();
-            return;
-          }
+          if (node === this.activeRegion) { this.onRegionRemoved(); return; }
           this.cleanupSpeakerBlockObservers(node);
         }
       }
     });
-
     this.captionObserver.observe(region, { childList: true, subtree: true });
-
     this.provider.collectCaptionBlocks(region).forEach((el) => this.scanSpeakerBlock(el));
   }
 
   private onRegionRemoved() {
-    this.captionObserver?.disconnect();
-    this.captionObserver = null;
-    this.regionParentObserver?.disconnect();
-    this.regionParentObserver = null;
+    this.captionObserver?.disconnect(); this.captionObserver = null;
+    this.regionParentObserver?.disconnect(); this.regionParentObserver = null;
     this.activeRegion = null;
     this.cleanupAllSpeakerBlockObservers();
     this.observeCaptionsRegionAppearance();
-  }
-
-  private collectCaptionBlocks(node: Node): HTMLElement[] {
-    return this.provider.collectCaptionBlocks(node);
   }
 
   private scanSpeakerBlock(block: HTMLElement) {
@@ -174,24 +124,18 @@ class TranscriptCollector {
 
     const push = () => {
       const trimmed = txtNode.textContent?.trim() ?? '';
-      if (trimmed) this.handleCaption(key, speakerName, trimmed);
+      if (trimmed) this.buffer.handleCaption(key, speakerName, trimmed);
     };
 
     push();
-
     const existing = this.blockObservers.get(block);
     if (existing?.textNode === txtNode) return;
-
     existing?.observer.disconnect();
 
     const observer = new MutationObserver(push);
-    observer.observe(txtNode, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-
+    observer.observe(txtNode, { childList: true, subtree: true, characterData: true });
     this.blockObservers.set(block, { observer, textNode: txtNode });
+
     if (!existing) {
       this.observedBlocks.add(block);
       this.activeBlockObserverCount += 1;
@@ -200,7 +144,7 @@ class TranscriptCollector {
   }
 
   private cleanupSpeakerBlockObservers(node: Node) {
-    for (const block of this.collectCaptionBlocks(node)) {
+    for (const block of this.provider.collectCaptionBlocks(node)) {
       const observed = this.blockObservers.get(block);
       if (!observed) continue;
       observed.observer.disconnect();
@@ -213,8 +157,7 @@ class TranscriptCollector {
 
   private cleanupAllSpeakerBlockObservers() {
     for (const block of Array.from(this.observedBlocks)) {
-      const observed = this.blockObservers.get(block);
-      observed?.observer.disconnect();
+      this.blockObservers.get(block)?.observer.disconnect();
       this.blockObservers.delete(block);
     }
     this.observedBlocks.clear();
@@ -223,63 +166,10 @@ class TranscriptCollector {
   }
 
   private reportObserverCount() {
-    logPerf(console.log, 'captions', 'observer_count', {
-      activeBlockObservers: this.activeBlockObserverCount,
-    });
+    logPerf(console.log, 'captions', 'observer_count', { activeBlockObservers: this.activeBlockObserverCount });
   }
 
-  getActiveBlockObserverCount(): number {
-    return this.activeBlockObserverCount;
-  }
-
-  private handleCaption(speakerKey: string, speakerName: string, rawText: string) {
-    const text = rawText.trim();
-    if (!text) return;
-
-    const norm = normalize(text);
-    const prev = this.lastSeen.get(speakerKey);
-    if (prev === norm) return;
-
-    this.lastSeen.set(speakerKey, norm);
-
-    const now = Date.now();
-    const existing = this.prior.get(speakerKey);
-
-    if (!existing) {
-      const timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
-      this.prior.set(speakerKey, {
-        startTime: now,
-        endTime: now,
-        speaker: speakerName,
-        text,
-        timer,
-      });
-      return;
-    }
-
-    existing.endTime = now;
-    existing.text = text;
-    existing.speaker = speakerName;
-
-    clearTimeout(existing.timer);
-    existing.timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
-  }
-
-  private commit(key: string) {
-    const entry = this.prior.get(key);
-    if (!entry) return;
-
-    const startTS = new Date(entry.startTime).toISOString();
-    const endTS = new Date(entry.endTime).toISOString();
-    this.transcript.push(`[${startTS}] [${endTS}] ${entry.speaker} : ${entry.text}`.trim());
-
-    clearTimeout(entry.timer);
-    this.prior.delete(key);
-  }
-
-  private flushOpenChunks() {
-    for (const k of Array.from(this.prior.keys())) this.commit(k);
-  }
+  getActiveBlockObserverCount(): number { return this.activeBlockObserverCount; }
 
   private exposeWindowApi() {
     (window as any).getTranscript = () => this.getTranscriptText();
@@ -293,21 +183,13 @@ class TranscriptCollector {
       sendResponse: (response?: unknown) => void
     ) => {
       if (!isPopupToContentMessage(msg)) return false;
-
       if (msg.type === 'GET_TRANSCRIPT') {
-        sendResponse({
-          transcript: this.getTranscriptText(),
-          provider: this.provider.getProviderInfo(window.location),
-        });
+        sendResponse({ transcript: this.getTranscriptText(), provider: this.provider.getProviderInfo(window.location, document) });
         return true;
       }
       if (msg.type === 'RESET_TRANSCRIPT') {
         this.reset();
         sendResponse({ ok: true });
-        return true;
-      }
-      if (msg.type === 'GET_PROVIDER_INFO') {
-        sendResponse(this.provider.getProviderInfo(window.location));
         return true;
       }
       return false;
@@ -316,12 +198,8 @@ class TranscriptCollector {
 
   stop() {
     this.reset();
-    this.captionObserver?.disconnect();
-    this.regionObserver?.disconnect();
-    this.regionParentObserver?.disconnect();
-    this.captionObserver = null;
-    this.regionObserver = null;
-    this.regionParentObserver = null;
+    this.captionObserver?.disconnect(); this.regionObserver?.disconnect(); this.regionParentObserver?.disconnect();
+    this.captionObserver = null; this.regionObserver = null; this.regionParentObserver = null;
     this.activeRegion = null;
     this.cleanupAllSpeakerBlockObservers();
   }

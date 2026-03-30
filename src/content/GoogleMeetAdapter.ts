@@ -29,7 +29,7 @@ const MEET_SELECTORS = {
 } as const;
 
 export class GoogleMeetAdapter implements MeetingProviderAdapter {
-  getProviderInfo(location: Location): MeetingProviderInfo {
+  getProviderInfo(location: Location, root: ParentNode): MeetingProviderInfo {
     const meetingId = location.pathname.split('/').pop() || null;
     return {
       providerId: 'google-meet',

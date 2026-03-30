@@ -60,6 +60,10 @@ Object.assign(global, {
     downloads: {
       download: jest.fn(),
     },
+    tabCapture: {
+      getMediaStreamId: jest.fn(),
+      getCapturedTabs: jest.fn((callback?: (result: chrome.tabCapture.CaptureInfo[]) => void) => callback?.([])),
+    },
     action: {
       setBadgeText: jest.fn().mockResolvedValue(undefined),
     },

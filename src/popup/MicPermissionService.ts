@@ -9,10 +9,12 @@ import type { MicMode } from '../shared/recording';
 import { createRuntimeTab } from '../platform/chrome/tabs';
 
 export class MicPermissionService {
+  /** Opens the dedicated runtime page that can trigger Chrome's microphone permission UI. */
   async openMicSetupTab() {
     await createRuntimeTab('micsetup.html');
   }
 
+  /** Reads Chrome's current microphone permission state for the extension origin. */
   async queryMicPermissionState(): Promise<'granted' | 'denied' | 'prompt' | 'unknown'> {
     if (!('permissions' in navigator)) return 'unknown';
 
@@ -24,6 +26,7 @@ export class MicPermissionService {
     }
   }
 
+  /** Tries to grant microphone access inline from the popup when Chrome allows it. */
   async tryPrimeInline(): Promise<boolean> {
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -34,6 +37,7 @@ export class MicPermissionService {
     }
   }
 
+  /** Ensures microphone permission is ready before a recording that needs mic audio starts. */
   async ensureReadyForRecording(micMode: MicMode): Promise<boolean> {
     if (micMode === 'off') return true;
 
@@ -51,6 +55,7 @@ export class MicPermissionService {
     return false;
   }
 
+  /** Binds the popup's mic-permission button to refresh state and request access. */
   bindButton(
     micBtn: HTMLButtonElement,
     onTextChange?: (text: string) => void

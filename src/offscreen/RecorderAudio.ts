@@ -16,8 +16,10 @@ export class MixedAudioMixer {
   private ctx: AudioContext | null = null;
   private sources: MediaStreamAudioSourceNode[] = [];
 
+  /** Creates a mixer that can combine tab and microphone audio into one stream. */
   constructor(private readonly deps: RecorderAudioDeps) {}
 
+  /** Returns a new stream containing the original tab video plus mixed audio tracks. */
   async create(tabStream: MediaStream, micStream: MediaStream): Promise<MediaStream> {
     const AC = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
     const ctx = new AC();
@@ -44,6 +46,7 @@ export class MixedAudioMixer {
     return new MediaStream(mixedTracks);
   }
 
+  /** Disconnects audio graph nodes and closes the underlying AudioContext. */
   stop() {
     for (const source of this.sources) {
       try {
@@ -63,8 +66,10 @@ export class AudioPlaybackBridge {
   private ctx: AudioContext | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
 
+  /** Creates a helper that replays captured tab audio locally when Chrome suppresses it. */
   constructor(private readonly deps: RecorderAudioDeps) {}
 
+  /** Connects a captured audio track back to the speaker output. */
   async start(track: MediaStreamTrack): Promise<void> {
     try {
       const AC = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
@@ -83,6 +88,7 @@ export class AudioPlaybackBridge {
     }
   }
 
+  /** Disconnects the playback bridge and closes the AudioContext. */
   stop() {
     try {
       this.source?.disconnect();

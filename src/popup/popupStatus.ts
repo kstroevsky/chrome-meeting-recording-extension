@@ -14,6 +14,7 @@ export const STATUS_BY_PHASE: Record<Exclude<RecordingPhase, 'idle'>, string> = 
   failed: 'The last recording attempt failed.',
 };
 
+/** Formats the active run configuration into popup-friendly status prose. */
 export function describeRunConfig(config: RecordingRunConfig | null): string {
   if (!config) return '';
 
@@ -28,6 +29,13 @@ export function describeRunConfig(config: RecordingRunConfig | null): string {
   return `${mode} ${mic} ${camera}`.trim();
 }
 
+/** Formats the first active warning for compact popup display. */
+export function describeRecordingWarnings(warnings?: string[]): string {
+  const first = warnings?.find((warning) => warning.trim());
+  return first ? `Warning: ${first}` : '';
+}
+
+/** Builds the post-upload alert when some files fell back to local downloads. */
 export function formatUploadFallbackMessage(summary: UploadSummary): string | null {
   if (!summary.localFallbacks.length) return null;
 

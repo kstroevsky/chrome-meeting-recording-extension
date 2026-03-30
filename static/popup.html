@@ -1,7 +1,35 @@
 <!DOCTYPE html>
 <html>
-  <head><title>Google Meet Helper</title></head>
+  <head>
+    <title>Google Meet Helper</title>
+    <style>
+      .popup-header {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 8px;
+      }
+
+      .icon-button {
+        border: 0;
+        background: transparent;
+        padding: 2px;
+        cursor: pointer;
+        line-height: 0;
+      }
+
+      .icon-button img {
+        display: block;
+        width: 18px;
+        height: 18px;
+      }
+    </style>
+  </head>
   <body>
+    <div class="popup-header">
+      <button id="open-settings" class="icon-button" type="button" title="Open recorder settings" aria-label="Open recorder settings">
+        <img src="gear.png" alt="" />
+      </button>
+    </div>
     <button id="save">Download Transcript</button>
     <hr/>
     <button id="enable-mic">Enable Microphone</button>

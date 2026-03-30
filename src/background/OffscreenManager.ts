@@ -35,10 +35,12 @@ export class OffscreenManager {
 
   private readonly rpcClient = createPortRpcClient(() => this.port, { timeoutMs: TIMEOUTS.RPC_MS });
 
+  /** Initializes badge state before any offscreen connection exists. */
   constructor() {
     this.setBadge('idle');
   }
 
+  /** Attaches the live offscreen port and starts listening for lifecycle messages. */
   attachPort(port: chrome.runtime.Port) {
     L.log('Offscreen connected');
     this.port = port;
@@ -55,15 +57,18 @@ export class OffscreenManager {
     });
   }
 
+  /** Syncs badge state from an already-known recording phase during hydration. */
   hydratePhase(phase: RecordingPhase) {
     this.lastKnownPhase = phase;
     this.setBadge(phase);
   }
 
+  /** Returns the last phase reported by the offscreen document. */
   getRecordingStatus(): RecordingPhase {
     return this.lastKnownPhase;
   }
 
+  /** Ensures the offscreen document exists and has completed its ready handshake. */
   async ensureReady(): Promise<void> {
     if (this.port && this.ready) return;
 
@@ -87,10 +92,12 @@ export class OffscreenManager {
     await withTimeout(this.readyPromise, TIMEOUTS.READY_TIMEOUT_MS, 'Offscreen ready');
   }
 
+  /** Sends an RPC command across the offscreen port once the document is connected. */
   async rpc<TRes = any>(msg: BgToOffscreenRpc): Promise<TRes> {
     return await this.rpcClient<BgToOffscreenRpc, TRes>(msg);
   }
 
+  /** Best-effort stop request used when Chrome is about to suspend the worker. */
   async stopIfPossibleOnSuspend(): Promise<void> {
     try {
       if (this.port && (this.lastKnownPhase === 'starting' || this.lastKnownPhase === 'recording' || this.lastKnownPhase === 'stopping')) {
@@ -100,18 +107,21 @@ export class OffscreenManager {
     this.setBadge('idle');
   }
 
+  /** Asks offscreen to revoke a blob URL and optionally clean up the related OPFS file. */
   revokeBlobUrl(blobUrl: string, opfsFilename?: string) {
     try {
       this.port?.postMessage({ type: 'REVOKE_BLOB_URL', blobUrl, opfsFilename });
     } catch {}
   }
 
+  /** Resolves the pending ready promise after OFFSCREEN_READY arrives. */
   private signalReady() {
     this.resolveReady?.();
     this.resolveReady = null;
     this.readyPromise = null;
   }
 
+  /** Routes validated offscreen messages into readiness, phase, and save handlers. */
   private onOffscreenMessage(msg: unknown) {
     if (!isOffscreenToBgMessage(msg)) return;
 
@@ -142,6 +152,7 @@ export class OffscreenManager {
     }
   }
 
+  /** Updates the extension action badge to reflect the last known runtime phase. */
   private setBadge(phase: RecordingPhase) {
     const text =
       phase === 'uploading'
@@ -154,6 +165,7 @@ export class OffscreenManager {
     void setActionBadgeText(text);
   }
 
+  /** Checks whether Chrome already has an offscreen document for this extension. */
   private async hasOffscreenContext(): Promise<boolean> {
     return await hasOffscreenDocument();
   }
