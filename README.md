@@ -1,5 +1,11 @@
 # Meeting Recording Extension (Chrome Extension)
 
+*Copyright (c) 2026 Kostiantyn Stroievskyi. All Rights Reserved.*
+
+No permission is granted to use, copy, modify, merge, publish, distribute, sublicense, or sell copies of this software or any portion of it, for any purpose, without explicit written permission from the copyright holder.
+
+-----
+
 Scrape live captions from a Google Meet and save them as a `.txt` transcript, or record the current Google Meet tab (video + audio) to a `.webm` file. Microphone capture is explicit per run: off, mixed into the main recording, or saved as a separate audio file.
 
 Everything happens in your browser, and capture is local-first.

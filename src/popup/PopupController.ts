@@ -133,6 +133,7 @@ export class PopupController {
     });
   }
 
+  /** Downloads the accumulated transcript from the active meeting tab. */
   private wireTranscriptDownload() {
     const { saveBtn } = this.el;
     if (!saveBtn) return;
