@@ -1,62 +1,285 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="utf-8" />
     <title>Google Meet Helper</title>
     <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        width: 280px;
+        font-family: 'Google Sans', 'Segoe UI', Roboto, Arial, sans-serif;
+        font-size: 13px;
+        color: #c9cdd4;
+        background: #141517;
+        padding: 14px;
+      }
+
+      /* ── Header ── */
       .popup-header {
         display: flex;
-        justify-content: flex-end;
-        margin-bottom: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+
+      .popup-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: #7da4f5;
+        letter-spacing: 0.01em;
       }
 
       .icon-button {
         border: 0;
         background: transparent;
-        padding: 2px;
+        padding: 5px;
         cursor: pointer;
         line-height: 0;
+        border-radius: 50%;
+        transition: background 0.15s;
       }
 
-      .icon-button img {
+      .icon-button:hover {
+        background: #2c2e33;
+      }
+
+      .icon-button svg {
         display: block;
-        width: 18px;
-        height: 18px;
+        width: 16px;
+        height: 16px;
+        opacity: 0.55;
+      }
+
+      /* ── Section groups ── */
+      .section {
+        background: #1e1f24;
+        border: 1px solid #2c2e33;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+      }
+
+      .section-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #5c6070;
+        margin-bottom: 8px;
+      }
+
+      /* ── Selects ── */
+      select {
+        width: 100%;
+        padding: 7px 28px 7px 9px;
+        border: 1px solid #2c2e33;
+        border-radius: 6px;
+        background-color: #25262b;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%235c6070' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 9px center;
+        color: #c9cdd4;
+        font-family: inherit;
+        font-size: 12px;
+        cursor: pointer;
+        appearance: none;
+        transition: border-color 0.15s;
+      }
+
+      select:focus {
+        outline: none;
+        border-color: #4c7fe3;
+        box-shadow: 0 0 0 2px rgba(76, 127, 227, 0.2);
+      }
+
+      /* ── Checkbox ── */
+      .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 12px;
+        color: #a0a6b4;
+        margin-top: 9px;
+        user-select: none;
+      }
+
+      .checkbox-label input[type="checkbox"] {
+        width: 14px;
+        height: 14px;
+        accent-color: #4c7fe3;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      /* ── Buttons ── */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: background 0.15s, box-shadow 0.15s, opacity 0.15s;
+        white-space: nowrap;
+        line-height: 1;
+      }
+
+      .btn svg {
+        flex-shrink: 0;
+      }
+
+      .btn-primary {
+        background: #4c7fe3;
+        color: #fff;
+        border-color: #4c7fe3;
+      }
+
+      .btn-primary:hover:not(:disabled) {
+        background: #3a6fd4;
+        box-shadow: 0 1px 4px rgba(76, 127, 227, 0.45);
+      }
+
+      .btn-danger {
+        background: #c0392b;
+        color: #fff;
+        border-color: #c0392b;
+      }
+
+      .btn-danger:hover:not(:disabled) {
+        background: #a93226;
+        box-shadow: 0 1px 4px rgba(192, 57, 43, 0.45);
+      }
+
+      .btn-secondary {
+        background: #25262b;
+        color: #c9cdd4;
+        border-color: #2c2e33;
+      }
+
+      .btn-secondary:hover:not(:disabled) {
+        background: #2c2e33;
+      }
+
+      .btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+
+      /* ── Top actions ── */
+      .top-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+
+      /* ── Action row (start/stop) ── */
+      .action-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px;
+        margin-top: 6px;
+      }
+
+      /* ── Status ── */
+      #recording-status {
+        min-height: 18px;
+        font-size: 11px;
+        color: #e8a045;
+        font-weight: 500;
+        text-align: center;
+        padding: 2px 0;
+      }
+
+      /* ── Diagnostics ── */
+      #open-diagnostics {
+        width: 100%;
+        margin-top: 8px;
       }
     </style>
   </head>
   <body>
+    <!-- Header -->
     <div class="popup-header">
+      <span class="popup-title">Meet Recorder</span>
       <button id="open-settings" class="icon-button" type="button" title="Open recorder settings" aria-label="Open recorder settings">
-        <img src="gear.png" alt="" />
+        <svg viewBox="0 0 20 20" fill="white" xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+        </svg>
       </button>
     </div>
-    <button id="save">Download Transcript</button>
-    <hr/>
-    <button id="enable-mic">Enable Microphone</button>
-    <br/><br/>
-    <label for="mic-mode">Microphone mode</label>
-    <br/>
-    <select id="mic-mode">
-      <option value="off">Do not record microphone</option>
-      <option value="mixed">Mix microphone into tab recording</option>
-      <option value="separate" selected>Save microphone as separate audio file</option>
-    </select>
-    <hr/>
-    <select id="storage-mode">
-      <option value="local">Save to Local Disk (OPFS)</option>
-      <option value="drive" selected>Save to Google Drive (after stop)</option>
-    </select>
-    <br/><br/>
-    <label>
-      <input type="checkbox" id="record-self-video" checked />
-      Record my camera separately
-    </label>
-    <br/><br/>
-    <button id="open-diagnostics" hidden>Open Diagnostics</button>
-    <br/><br/>
-    <div id="recording-status" style="min-height: 1.5em; font-size: 12px; color: #a15c00;"></div>
-    <button id="start-rec">Start Recording</button>
-    <button id="stop-rec" disabled>Stop Recording</button>
+
+    <!-- Quick actions -->
+    <div class="top-actions">
+      <button id="save" class="btn btn-secondary">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 12l-4.5-4.5 1.06-1.06L7 8.88V2h2v6.88l2.44-2.44 1.06 1.06L8 12z"/>
+          <path d="M2 13h12v1.5H2z"/>
+        </svg>
+        Download
+      </button>
+      <button id="enable-mic" class="btn btn-secondary">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 10a2 2 0 002-2V4a2 2 0 00-4 0v4a2 2 0 002 2z"/>
+          <path d="M4.5 8a.5.5 0 00-1 0 4.5 4.5 0 009 0 .5.5 0 00-1 0 3.5 3.5 0 01-7 0zM7.5 13.5v1.5h1v-1.5a.5.5 0 00-1 0z"/>
+        </svg>
+        Enable Mic
+      </button>
+    </div>
+
+    <!-- Microphone section -->
+    <div class="section">
+      <div class="section-label">Microphone</div>
+      <select id="mic-mode">
+        <option value="off">Do not record microphone</option>
+        <option value="mixed">Mix into tab recording</option>
+        <option value="separate" selected>Save as separate audio file</option>
+      </select>
+    </div>
+
+    <!-- Storage & video section -->
+    <div class="section">
+      <div class="section-label">Output</div>
+      <select id="storage-mode">
+        <option value="local">Save to Local Disk (OPFS)</option>
+        <option value="drive" selected>Save to Google Drive (after stop)</option>
+      </select>
+      <label class="checkbox-label">
+        <input type="checkbox" id="record-self-video" checked />
+        Record my camera separately
+      </label>
+    </div>
+
+    <!-- Status & controls -->
+    <div id="recording-status"></div>
+    <div class="action-row">
+      <button id="start-rec" class="btn btn-primary">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor">
+          <path d="M3 2l7 4-7 4V2z"/>
+        </svg>
+        Start Recording
+      </button>
+      <button id="stop-rec" class="btn btn-danger" disabled>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <rect width="10" height="10" rx="1"/>
+        </svg>
+        Stop
+      </button>
+    </div>
+
+    <button id="open-diagnostics" class="btn btn-secondary" hidden>Open Diagnostics</button>
+
     <script src="popup.js"></script>
   </body>
 </html>
