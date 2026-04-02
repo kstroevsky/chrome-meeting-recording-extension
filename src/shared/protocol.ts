@@ -79,6 +79,7 @@ export type BgToOffscreenRpc =
   | RpcRequest<{
       type: 'OFFSCREEN_START';
       streamId: string;
+      meetingSlug: string;
       runConfig: RecordingRunConfig;
       recorderSettings: RecorderRuntimeSettingsSnapshot;
     }>

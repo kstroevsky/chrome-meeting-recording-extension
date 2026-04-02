@@ -12,6 +12,7 @@ import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSett
 import type { MicMode } from '../../shared/recording';
 import {
   awaitRecorderStart,
+  buildRecordingFilename,
   makeChunkHandler,
   openStorageTarget,
   sealAndFixArtifact,
@@ -61,7 +62,7 @@ export async function startMicRecorder(
 
   const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
 
-  const filename = `google-meet-mic-${suffix}-${Date.now()}.webm`;
+  const filename = buildRecordingFilename(suffix, 'mic');
   const target = await openStorageTarget(filename, mime, deps);
 
   const finalize = async (label: string) => {

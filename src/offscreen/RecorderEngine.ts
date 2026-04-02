@@ -6,7 +6,7 @@
  * per-stream recording tasks live in ./engine/Tab|Mic|SelfVideoRecorderTask.
  */
 
-import { captureTabStreamFromId, inferActiveTabSuffix } from './RecorderCapture';
+import { captureTabStreamFromId } from './RecorderCapture';
 import { buildRecorderRuntimeSettingsSnapshot, type RecorderRuntimeSettingsSnapshot } from '../shared/extensionSettings';
 import { DEFAULT_RECORDING_RUN_CONFIG, type MicMode, type RecordingRunConfig } from '../shared/recording';
 import { describeMediaError } from './RecorderSupport';
@@ -56,7 +56,7 @@ export class RecorderEngine {
   private tabFinalizePlan: RecordingArtifactFinalizePlan | null = null;
   private recorderSettings: RecorderRuntimeSettingsSnapshot | null = null;
 
-  private suffix = 'google-meet';
+  private suffix = '';
   private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
   private recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
 
@@ -81,7 +81,8 @@ export class RecorderEngine {
   async startFromStreamId(
     streamId: string,
     options: RecordingRunConfig,
-    recorderSettings: RecorderRuntimeSettingsSnapshot = buildRecorderRuntimeSettingsSnapshot()
+    recorderSettings: RecorderRuntimeSettingsSnapshot = buildRecorderRuntimeSettingsSnapshot(),
+    meetingSlug = ''
   ): Promise<void> {
     if (this.isRecording()) { this.deps.log('Already recording; ignoring start'); return; }
 
@@ -100,7 +101,7 @@ export class RecorderEngine {
       logStreamAcquired(baseStream, this.deps);
 
       this.playback = await ensureAudiblePlayback(baseStream, this.deps);
-      this.suffix = await inferActiveTabSuffix().catch(() => 'google-meet');
+      this.suffix = meetingSlug;
       attachTabEndedHandler(baseStream, () => this.stopAllRecorders(), this.deps.log);
 
       let micForRun: MediaStream | null = null;
@@ -231,7 +232,7 @@ export class RecorderEngine {
     this.tabCaptureStream = null; this.tabRecordingStream = null; this.micStream = null;
     this.playback?.stop(); this.playback = null;
     this.mixedAudio?.stop(); this.mixedAudio = null;
-    this.suffix = 'google-meet';
+    this.suffix = '';
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
     this.recorderSettings = null;

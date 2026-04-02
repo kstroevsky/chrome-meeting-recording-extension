@@ -46,6 +46,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
     {
       OFFSCREEN_START: async (msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_START' }>) => {
         const streamId = msg.streamId as string | undefined;
+        const meetingSlug = typeof msg.meetingSlug === 'string' ? msg.meetingSlug : '';
         const runConfig = normalizeRunConfig(msg.runConfig);
         const recorderSettings = normalizeRecorderRuntimeSettingsSnapshot(msg.recorderSettings);
         if (!streamId) return { ok: false, error: 'Missing streamId' };
@@ -60,7 +61,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
         deps.pushState('starting');
 
         try {
-          await deps.engine.startFromStreamId(streamId, runConfig, recorderSettings);
+          await deps.engine.startFromStreamId(streamId, runConfig, recorderSettings, meetingSlug);
           return { ok: true };
         } catch (e: any) {
           const error = `${e?.name || 'Error'}: ${e?.message || e}`;

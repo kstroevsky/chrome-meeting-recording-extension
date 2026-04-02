@@ -17,6 +17,7 @@ import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSett
 import { logPerf } from '../../shared/perf';
 import {
   awaitRecorderStart,
+  buildRecordingFilename,
   makeChunkHandler,
   openStorageTarget,
   sealAndFixArtifact,
@@ -115,7 +116,7 @@ export async function startSelfVideoRecorder(
 
   const recorder = new MediaRecorder(selfVideo, { mimeType: mime, videoBitsPerSecond });
 
-  const filename = `google-meet-self-video-${suffix}-${Date.now()}.webm`;
+  const filename = buildRecordingFilename(suffix, 'self-video');
   const target = await openStorageTarget(filename, mime, deps);
 
   const stopSelfVideoStream = () => {

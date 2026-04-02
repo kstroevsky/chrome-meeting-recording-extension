@@ -138,9 +138,18 @@ export function registerMessageHandlers({ L, offscreen, session, perfDebugStore 
 
         try {
           const streamId = await getMediaStreamIdForTab(msg.tabId);
+          const tab = await chrome.tabs.get(msg.tabId).catch(() => null);
+          const meetingSlug = (() => {
+            try {
+              const url = tab?.url;
+              if (!url) return '';
+              return new URL(url).pathname.split('/').pop() || '';
+            } catch { return ''; }
+          })();
           const r = await offscreen.rpc<{ ok: boolean; error?: string }>({
             type: 'OFFSCREEN_START',
             streamId,
+            meetingSlug,
             runConfig,
             recorderSettings,
           });
@@ -210,7 +219,7 @@ export function registerSaveHandler(
     const resolvedFilename =
       typeof filename === 'string' && filename.trim()
         ? filename
-        : `google-meet-recording-${Date.now()}.webm`;
+        : `google-meet-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, (c) => (c === 'T' ? 'T' : ''))}-recording.webm`;
 
     if (!blobUrl) return;
 

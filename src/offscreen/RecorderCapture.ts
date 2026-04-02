@@ -16,7 +16,6 @@ import {
   type TabCaptureSettings,
 } from '../shared/extensionSettings';
 import { TIMEOUTS } from '../shared/timeouts';
-import { queryActiveTab } from '../platform/chrome/tabs';
 import { describeMediaError } from './RecorderSupport';
 import {
   formatSelfVideoProfile,
@@ -234,13 +233,15 @@ export async function maybeGetSelfVideoStream(
 
 /** Derives a stable filename suffix from the active tab URL when possible. */
 export async function inferActiveTabSuffix(): Promise<string> {
-  const url = (await queryActiveTab())?.url || null;
-
   try {
-    if (!url) return 'google-meet';
+    // Query by Meet URL directly — `currentWindow: true` is unreliable from
+    // the offscreen document context since it has no browser window.
+    const [meetTab] = await chrome.tabs.query({ url: '*://meet.google.com/*' });
+    const url = meetTab?.url || null;
+    if (!url) return '';
     const parsed = new URL(url);
-    return parsed.pathname.split('/').pop() || 'google-meet';
+    return parsed.pathname.split('/').pop() || '';
   } catch {
-    return 'google-meet';
+    return '';
   }
 }

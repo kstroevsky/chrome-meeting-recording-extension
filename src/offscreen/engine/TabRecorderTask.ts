@@ -10,6 +10,7 @@ import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSett
 import { nowMs } from '../../shared/perf';
 import {
   awaitRecorderStart,
+  buildRecordingFilename,
   makeChunkHandler,
   openStorageTarget,
   sealAndFixArtifact,
@@ -53,7 +54,7 @@ export async function startTabRecorder(
     audioBitsPerSecond: 96_000,
   });
 
-  const filename = `google-meet-recording-${suffix}-${Date.now()}.webm`;
+  const filename = buildRecordingFilename(suffix, 'recording');
   const target = await openStorageTarget(filename, mime, deps);
 
   const finalize = async (label: string) => {

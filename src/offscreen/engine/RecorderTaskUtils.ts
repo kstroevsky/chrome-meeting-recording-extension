@@ -13,6 +13,26 @@ import type { CompletedRecordingArtifact, RecorderEngineDeps, SealedStorageFile,
 import { InMemoryStorageTarget } from './RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
 
+/**
+ * Formats the current time as a filesystem-safe UTC datetime string:
+ * `YYYYMMDDTHHmmssZ` — no colons or slashes that would break file paths.
+ */
+function utcDatetimeStamp(date = new Date()): string {
+  // Format: YYYYMMDDTHHmm  (UTC, no seconds)
+  return date.toISOString().slice(0, 16).replace(/[-:T]/g, (c) => (c === 'T' ? 'T' : ''));
+}
+
+/**
+ * Builds a recording filename using the format:
+ * `google-meet-{slug}-{UTC-datetime}-{type}.webm`
+ *
+ * Example: `google-meet-abc123de-20260402T083000Z-recording.webm`
+ */
+export function buildRecordingFilename(slug: string, type: 'recording' | 'mic' | 'self-video'): string {
+  const slugPart = slug ? `${slug}-` : '';
+  return `google-meet-${slugPart}${utcDatetimeStamp()}-${type}.webm`;
+}
+
 /** Opens the preferred storage target and falls back to RAM buffering on failure. */
 export async function openStorageTarget(
   filename: string,
