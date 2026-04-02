@@ -66,6 +66,7 @@ export class RecorderEngine {
   private resolveStop: ((artifacts: CompletedRecordingArtifact[]) => void) | null = null;
   private finalizedArtifacts: CompletedRecordingArtifact[] = [];
   private pendingStartPromises: Promise<void>[] = [];
+  private stopSelfVideoStream: (() => void) | null = null;
 
   constructor(deps: RecorderEngineDeps) {
     this.deps = deps;
@@ -139,8 +140,9 @@ export class RecorderEngine {
         startTasks.push(
           startSelfVideoRecorder(runId, () => this.runId, () => this.state === 'stopping' || this.state === 'idle', this.suffix, runStartedAt, this.recordSelfVideo, recorderSettings, this.deps, {
             onStarted: () => this.onRecorderStarted(),
-            onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.selfVideoRecorder = null; this.onRecorderStopped(); },
+            onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.selfVideoRecorder = null; this.stopSelfVideoStream = null; this.onRecorderStopped(); },
             onWarning: (msg) => this.deps.reportWarning?.(msg),
+            onStreamAcquired: (stopFn) => { this.stopSelfVideoStream = stopFn; },
           }).then((rec) => { this.selfVideoRecorder = rec; }).catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
         );
       }
@@ -186,6 +188,7 @@ export class RecorderEngine {
   private stopAllRecorders() {
     try { this.tabRecorder?.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); }
     try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', describeMediaError(e)); }
+    this.stopSelfVideoStream?.();
     try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', describeMediaError(e)); }
   }
 
@@ -225,7 +228,7 @@ export class RecorderEngine {
   private resetRunState() {
     this.stopAllRecorders();
     this.activeRecorders = 0;
-    this.tabRecorder = null; this.micRecorder = null; this.selfVideoRecorder = null;
+    this.tabRecorder = null; this.micRecorder = null; this.selfVideoRecorder = null; this.stopSelfVideoStream = null;
     this.safeStopStream(this.tabCaptureStream);
     this.safeStopStream(this.tabRecordingStream);
     this.safeStopStream(this.micStream);

@@ -38,12 +38,12 @@ function buildBadClientIdError(rawError: string): string {
   const configuredClientId = manifest.oauth2?.client_id ?? '(missing in manifest.oauth2.client_id)';
   const extensionId = getRuntimeId() ?? '(unknown extension id)';
 
-  return [
-    `Google OAuth is misconfigured: ${rawError}`,
-    `Current extension ID: ${extensionId}`,
-    `Manifest client ID: ${configuredClientId}`,
-    'Fix: create a Google Cloud OAuth client of type "Chrome Extension" for this extension ID and use that client ID in manifest.oauth2.client_id.',
-  ].join(' ');
+  return (
+    `Google OAuth is misconfigured: ${rawError} ` +
+    `Current extension ID: ${extensionId} ` +
+    `Manifest client ID: ${configuredClientId} ` +
+    'Fix: create a Google Cloud OAuth client of type "Chrome Extension" for this extension ID and use that client ID in manifest.oauth2.client_id.'
+  );
 }
 
 export async function fetchDriveTokenWithFallback(options: DriveTokenOptions = {}): Promise<DriveTokenResponse> {

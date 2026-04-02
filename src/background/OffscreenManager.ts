@@ -18,6 +18,9 @@ import type {
   OffscreenToBg,
 } from '../shared/protocol';
 import { isOffscreenToBgMessage } from '../shared/protocol';
+
+export type OffscreenStateListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_STATE' }>) => void;
+export type OffscreenSaveListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>) => void;
 import { TIMEOUTS } from '../shared/timeouts';
 import type { RecordingPhase } from '../shared/recording';
 
@@ -30,8 +33,8 @@ export class OffscreenManager {
   private readyPromise: Promise<void> | null = null;
   private resolveReady: (() => void) | null = null;
 
-  public onStateChanged?: (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_STATE' }>) => void;
-  public onSaveRequested?: (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>) => void;
+  public onStateChanged?: OffscreenStateListener;
+  public onSaveRequested?: OffscreenSaveListener;
 
   private readonly rpcClient = createPortRpcClient(() => this.port, { timeoutMs: TIMEOUTS.RPC_MS });
 

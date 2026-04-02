@@ -18,7 +18,7 @@ import type { CompletedRecordingArtifact, SealedStorageFile } from './RecorderEn
 import { postprocessTabArtifact } from './TabArtifactPostprocessor';
 import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
 
-const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'selfVideo'];
+const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'self-video'];
 
 type UploadOutcome = {
   stream: RecordingStream;

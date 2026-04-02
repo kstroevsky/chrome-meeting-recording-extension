@@ -9,6 +9,7 @@ import {
   DRIVE_MAX_RETRIES,
   DRIVE_REQUEST_TIMEOUT_MS,
   DRIVE_RETRY_BASE_DELAY_MS,
+  DRIVE_RETRY_BACKOFF_MAX_MULTIPLIER,
 } from './constants';
 import { formatDriveError, readDriveErrorDetail } from './errors';
 import type { TokenProvider } from './request';
@@ -42,9 +43,9 @@ export function isTransientFetchError(err: unknown): boolean {
   return e?.name === 'AbortError' || e?.name === 'TypeError';
 }
 
-/** Exponential backoff delay capped at 8× the base interval. */
+/** Exponential backoff delay capped at DRIVE_RETRY_BACKOFF_MAX_MULTIPLIER× the base interval. */
 export function backoffMs(attempt: number): number {
-  return DRIVE_RETRY_BASE_DELAY_MS * Math.min(8, 2 ** Math.max(0, attempt - 1));
+  return DRIVE_RETRY_BASE_DELAY_MS * Math.min(DRIVE_RETRY_BACKOFF_MAX_MULTIPLIER, 2 ** Math.max(0, attempt - 1));
 }
 
 /**

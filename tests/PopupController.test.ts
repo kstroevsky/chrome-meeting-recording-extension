@@ -184,7 +184,7 @@ describe('PopupController', () => {
   it('shows the first recording warning in popup status', async () => {
     controller.init();
     await new Promise(process.nextTick);
-    (controller as any).applySession({
+    (controller as any).state.applySession({
       phase: 'recording',
       runConfig: (global as any).__TEST_RUN_CONFIG__({ recordSelfVideo: true }),
       warnings: ['Tab recording requested 640x360@24fps, but recorder input is 1920x1080@24fps.'],
@@ -227,12 +227,11 @@ describe('PopupController', () => {
     controller.init();
     await new Promise(process.nextTick);
 
-    (controller as any).setActiveRunConfig({
-      storageMode: 'drive',
-      micMode: 'separate',
-      recordSelfVideo: true,
+    (controller as any).state.applySession({
+      phase: 'uploading',
+      runConfig: { storageMode: 'drive', micMode: 'separate', recordSelfVideo: true },
+      updatedAt: Date.now(),
     });
-    (controller as any).setUI('uploading');
 
     expect(elements.startBtn.disabled).toBe(true);
     expect(elements.stopBtn.disabled).toBe(true);

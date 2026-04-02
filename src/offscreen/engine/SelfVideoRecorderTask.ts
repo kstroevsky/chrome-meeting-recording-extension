@@ -28,6 +28,8 @@ export type SelfVideoRecorderCallbacks = {
   onStarted: () => void;
   onStopped: (artifact: CompletedRecordingArtifact | null) => void;
   onWarning?: (message: string) => void;
+  /** Called once the camera stream is acquired; receives an idempotent stop-stream function. */
+  onStreamAcquired?: (stopStream: () => void) => void;
 };
 
 /** Reports a warning when the browser delivers a lower camera profile than requested. */
@@ -94,7 +96,7 @@ export async function startSelfVideoRecorder(
   const mime = getVideoOnlyMime();
   let started = false;
   let actualStartTimeMs = 0;
-  const timesliceMs = getChunkTimesliceMs('selfVideo', recorderSettings.chunking);
+  const timesliceMs = getChunkTimesliceMs('self-video', recorderSettings.chunking);
 
   const track = selfVideo.getVideoTracks()[0];
   const settings = track?.getSettings?.();
@@ -119,15 +121,20 @@ export async function startSelfVideoRecorder(
   const filename = buildRecordingFilename(suffix, 'self-video');
   const target = await openStorageTarget(filename, mime, deps);
 
+  let selfVideoStreamStopped = false;
   const stopSelfVideoStream = () => {
+    if (selfVideoStreamStopped) return;
+    selfVideoStreamStopped = true;
     try { selfVideo.getTracks().forEach((t) => t.stop()); } catch {}
   };
+
+  callbacks.onStreamAcquired?.(stopSelfVideoStream);
 
   const finalize = async (label: string) => {
     try {
       const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps);
       stopSelfVideoStream();
-      callbacks.onStopped(artifact ? { stream: 'selfVideo', artifact } : null);
+      callbacks.onStopped(artifact ? { stream: 'self-video', artifact } : null);
     } catch (e) {
       deps.error(`${label} finalize/save failed`, describeMediaError(e));
       stopSelfVideoStream();
@@ -142,7 +149,7 @@ export async function startSelfVideoRecorder(
     }
   });
 
-  recorder.ondataavailable = makeChunkHandler(target, 'selfVideo', deps);
+  recorder.ondataavailable = makeChunkHandler(target, 'self-video', deps);
   recorder.onerror = (e: any) => {
     deps.error('Self video MediaRecorder error', e);
     void finalize('Self video');
@@ -153,7 +160,7 @@ export async function startSelfVideoRecorder(
 
   const { actualStartTimeMs: startMs } = await awaitRecorderStart(
     recorder,
-    'selfVideo',
+    'self-video',
     runStartedAt,
     mime,
     timesliceMs,

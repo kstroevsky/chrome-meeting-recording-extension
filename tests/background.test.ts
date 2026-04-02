@@ -121,6 +121,7 @@ describe('background runtime messages', () => {
     expect(offscreenInstance.rpc).toHaveBeenCalledWith({
       type: 'OFFSCREEN_START',
       streamId: 'stream-1',
+      meetingSlug: 'abc-defg-hij',
       runConfig: {
         storageMode: 'local',
         micMode: 'off',

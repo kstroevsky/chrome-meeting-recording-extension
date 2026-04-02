@@ -7,16 +7,14 @@
  */
 
 import { fetchDriveTokenWithFallback } from './driveAuth';
-import { downloadFile } from '../platform/chrome/downloads';
 import { getCapturedTabs, getMediaStreamIdForTab } from '../platform/chrome/tabs';
-import { broadcastToPopup } from '../shared/messages';
 import {
   buildRecorderRuntimeSettingsSnapshot,
   loadExtensionSettingsFromStorage,
 } from '../shared/extensionSettings';
 import { isPerfEventMessage, isPopupToBgMessage, type CommandResult } from '../shared/protocol';
 import { type PerfEventEntry } from '../shared/perf';
-import { isBusyPhase, normalizeRunConfig } from '../shared/recording';
+import { isBusyPhase, parseRunConfig } from '../shared/recording';
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
 import type { PerfDebugStore } from './PerfDebugStore';
@@ -96,7 +94,7 @@ export function registerMessageHandlers({ L, offscreen, session, perfDebugStore 
           return;
         }
 
-        const runConfig = normalizeRunConfig(msg.runConfig);
+        const runConfig = parseRunConfig(msg.runConfig);
         if (!runConfig) {
           sendResponse(failureResult('Missing or invalid run configuration', session));
           return;
@@ -207,39 +205,3 @@ export function registerMessageHandlers({ L, offscreen, session, perfDebugStore 
   });
 }
 
-/**
- * Registers the offscreen OFFSCREEN_SAVE handler on the offscreen manager.
- * Triggers a background-side download and broadcasts the outcome to the popup.
- */
-export function registerSaveHandler(
-  offscreen: OffscreenManager,
-  L: MessageHandlersDeps['L']
-) {
-  offscreen.onSaveRequested = ({ filename, blobUrl, opfsFilename }) => {
-    const resolvedFilename =
-      typeof filename === 'string' && filename.trim()
-        ? filename
-        : `google-meet-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, (c) => (c === 'T' ? 'T' : ''))}-recording.webm`;
-
-    if (!blobUrl) return;
-
-    L.log('Saving OFFSCREEN_SAVE via blobUrl', resolvedFilename);
-    void (async () => {
-      let cleanupOpfsFilename: string | undefined;
-
-      try {
-        await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
-        cleanupOpfsFilename = opfsFilename;
-        await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        L.warn('downloads.download error:', message);
-        await broadcastToPopup({ type: 'RECORDING_SAVE_ERROR', filename: resolvedFilename, error: message });
-      } finally {
-        setTimeout(() => {
-          offscreen.revokeBlobUrl(blobUrl, cleanupOpfsFilename);
-        }, 10_000);
-      }
-    })();
-  };
-}
