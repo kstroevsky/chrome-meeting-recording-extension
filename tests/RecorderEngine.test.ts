@@ -1,4 +1,5 @@
 import { RecorderEngine, type SealedStorageFile, type StorageTarget } from '../src/offscreen/RecorderEngine';
+import { openStorageTarget } from '../src/offscreen/engine/RecorderTaskUtils';
 import {
   buildRecorderRuntimeSettingsSnapshot,
   normalizeExtensionSettings,
@@ -105,7 +106,7 @@ class FakeMediaRecorder {
   static stopPayloadByKind: Record<string, string> = {
     tab: 'tab',
     mic: 'mic',
-    selfVideo: 'selfVideo',
+    'self-video': 'self-video',
   };
 
   ondataavailable: ((event: BlobEvent) => void) | null = null;
@@ -114,7 +115,7 @@ class FakeMediaRecorder {
   onerror: ((event: any) => void) | null = null;
   state = 'inactive';
   timesliceMs: number | undefined;
-  readonly kind: 'tab' | 'mic' | 'selfVideo' | 'unknown';
+  readonly kind: 'tab' | 'mic' | 'self-video' | 'unknown';
 
   constructor(
     readonly stream: MediaStream,
@@ -122,7 +123,7 @@ class FakeMediaRecorder {
   ) {
     const hasAudio = stream.getAudioTracks().length > 0;
     const hasVideo = stream.getVideoTracks().length > 0;
-    this.kind = hasAudio && hasVideo ? 'tab' : hasAudio ? 'mic' : hasVideo ? 'selfVideo' : 'unknown';
+    this.kind = hasAudio && hasVideo ? 'tab' : hasAudio ? 'mic' : hasVideo ? 'self-video' : 'unknown';
     FakeMediaRecorder.instances.push(this);
   }
 
@@ -225,7 +226,7 @@ describe('RecorderEngine', () => {
     FakeMediaRecorder.stopPayloadByKind = {
       tab: 'tab',
       mic: 'mic',
-      selfVideo: 'selfVideo',
+      'self-video': 'self-video',
     };
     resetPerfFlags();
 
@@ -261,9 +262,8 @@ describe('RecorderEngine', () => {
 
   it('falls back to in-memory storage when local target creation fails', async () => {
     deps.openTarget = jest.fn().mockRejectedValue(new Error('OPFS unavailable'));
-    engine = new RecorderEngine(deps);
 
-    const target = await (engine as any).openStorageTarget('test.webm', 'video/webm');
+    const target = await openStorageTarget('test.webm', 'video/webm', deps);
     await target.write(chunk('abc'));
     const artifact = await target.close();
 
@@ -363,11 +363,11 @@ describe('RecorderEngine', () => {
       )
     );
 
-    expect(artifacts.map((entry) => entry.stream).sort()).toEqual(['mic', 'selfVideo', 'tab']);
+    expect(artifacts.map((entry) => entry.stream).sort()).toEqual(['mic', 'self-video', 'tab']);
     expect(byStream).toEqual({
       tab: 'tab',
       mic: 'mic',
-      selfVideo: 'selfVideo',
+      'self-video': 'self-video',
     });
   });
 
@@ -605,7 +605,7 @@ describe('RecorderEngine', () => {
     await flushAsyncWork();
 
     const tabRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'tab');
-    const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
+    const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'self-video');
     expect(tabRecorder?.timesliceMs).toBe(4000);
     expect(selfVideoRecorder?.timesliceMs).toBe(4000);
   });
@@ -692,7 +692,7 @@ describe('RecorderEngine', () => {
     }));
     await flushAsyncWork();
 
-    const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'selfVideo');
+    const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'self-video');
     expect(selfVideoRecorder?.options.videoBitsPerSecond).toBe(1_000_000);
     expect(deps.reportWarning).toHaveBeenCalledWith(
       expect.stringContaining('Camera recording requested 1920x1080@30fps, but browser delivered 640x360@15fps.')

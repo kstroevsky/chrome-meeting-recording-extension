@@ -79,13 +79,6 @@ export function getTabOutputSettings(
   };
 }
 
-/** Preserves the legacy helper name for callers that still expect tab sizing settings. */
-export function getTabCaptureSettings(
-  settings: Readonly<ExtensionSettings> = runtimeSettings
-): TabCaptureSettings {
-  return getTabOutputSettings(settings);
-}
-
 /** Returns microphone capture constraints used when a mic stream is requested. */
 export function getMicrophoneCaptureSettings(
   settings: Readonly<ExtensionSettings> = runtimeSettings

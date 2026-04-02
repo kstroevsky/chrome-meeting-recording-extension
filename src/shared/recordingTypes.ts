@@ -6,7 +6,7 @@
  */
 
 export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'uploading' | 'failed';
-export type RecordingStream = 'tab' | 'mic' | 'selfVideo';
+export type RecordingStream = 'tab' | 'mic' | 'self-video';
 export type StorageMode = 'local' | 'drive';
 export type MicMode = 'off' | 'mixed' | 'separate';
 

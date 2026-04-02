@@ -23,7 +23,7 @@ export function applyRecorderStarted(snapshot: Readonly<PerfDebugSnapshot>, entr
   const latencyMs = toNumber(entry.fields.latencyMs);
   const timesliceMs = toNumber(entry.fields.timesliceMs);
   const videoBitsPerSecond = toNumber(entry.fields.videoBitsPerSecond);
-  if (stream !== 'tab' && stream !== 'mic' && stream !== 'selfVideo') return;
+  if (stream !== 'tab' && stream !== 'mic' && stream !== 'self-video') return;
 
   const recorder = snapshot.summary.recorder;
   const startCount = (recorder.startCountByStream[stream] ?? 0) + 1;

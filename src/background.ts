@@ -17,8 +17,8 @@
 import { OffscreenManager } from './background/OffscreenManager';
 import { PerfDebugStore } from './background/PerfDebugStore';
 import { RecordingSession } from './background/RecordingSession';
-import { registerMessageHandlers, registerSaveHandler } from './background/messageHandlers';
-import { startKeepAlive, stopKeepAlive, maybeClearPerfDiagnostics } from './background/sessionLifecycle';
+import { registerMessageHandlers } from './background/messageHandlers';
+import { startKeepAlive, stopKeepAlive, maybeClearPerfDiagnostics, registerSaveHandler } from './background/sessionLifecycle';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
 import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
 import { makeLogger } from './shared/logger';

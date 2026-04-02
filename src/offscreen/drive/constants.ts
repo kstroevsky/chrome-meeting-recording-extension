@@ -45,3 +45,6 @@ export const DRIVE_MAX_RETRIES = 5;
 
 /** Base delay for exponential backoff between transient retries. */
 export const DRIVE_RETRY_BASE_DELAY_MS = 1_000;
+
+/** Maximum multiplier applied to the base delay during exponential backoff (caps at 8×). */
+export const DRIVE_RETRY_BACKOFF_MAX_MULTIPLIER = 8;

@@ -8,7 +8,6 @@
 import {
   PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
   type PerfDebugSnapshot,
-  type PerfDebugSummary,
   type PerfEventEntry,
   type PerfPhase,
   type PerfSettings,
@@ -128,7 +127,7 @@ export class PerfDebugStore {
         ...entry,
         fields: { ...entry.fields },
       })),
-      summary: JSON.parse(JSON.stringify(this.snapshot.summary)) as PerfDebugSummary,
+      summary: structuredClone(this.snapshot.summary),
     };
   }
 

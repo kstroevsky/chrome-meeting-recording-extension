@@ -5,7 +5,7 @@
  * extension that stored `phase` and `activeRunConfig` as separate keys.
  */
 
-import { normalizeRunConfig, type RecordingSessionSnapshot } from '../shared/recording';
+import { parseRunConfig, type RecordingSessionSnapshot } from '../shared/recording';
 
 export const LEGACY_SESSION_PHASE_KEY = 'phase';
 export const LEGACY_SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
@@ -29,7 +29,7 @@ export function hydrateLegacySession(
 
   return {
     phase,
-    runConfig: phase === 'idle' ? null : normalizeRunConfig(value?.[LEGACY_SESSION_RUN_CONFIG_KEY]),
+    runConfig: phase === 'idle' ? null : parseRunConfig(value?.[LEGACY_SESSION_RUN_CONFIG_KEY]),
     updatedAt: Date.now(),
   };
 }

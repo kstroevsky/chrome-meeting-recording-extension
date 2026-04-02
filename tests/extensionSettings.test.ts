@@ -2,7 +2,7 @@ import {
   buildRecorderRuntimeSettingsSnapshot,
   DEFAULT_EXTENSION_SETTINGS,
   getSelfVideoProfileSettings,
-  getTabCaptureSettings,
+  getTabOutputSettings,
   normalizeRecorderRuntimeSettingsSnapshot,
   normalizeExtensionSettings,
 } from '../src/shared/extensionSettings';
@@ -17,7 +17,7 @@ describe('extensionSettings', () => {
         height: 1080,
       })
     );
-    expect(getTabCaptureSettings(DEFAULT_EXTENSION_SETTINGS)).toEqual(
+    expect(getTabOutputSettings(DEFAULT_EXTENSION_SETTINGS)).toEqual(
       expect.objectContaining({
         maxWidth: 1920,
         maxHeight: 1080,
@@ -43,7 +43,7 @@ describe('extensionSettings', () => {
         height: 720,
       })
     );
-    expect(getTabCaptureSettings(settings)).toEqual(
+    expect(getTabOutputSettings(settings)).toEqual(
       expect.objectContaining({
         maxWidth: 854,
         maxHeight: 480,

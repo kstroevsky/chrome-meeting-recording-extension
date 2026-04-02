@@ -13,7 +13,7 @@ import {
   getSelfVideoProfileSettings,
 } from '../shared/extensionSettings';
 
-export type RecorderChunkStream = 'tab' | 'mic' | 'selfVideo';
+export type RecorderChunkStream = 'tab' | 'mic' | 'self-video';
 
 const DEFAULT_SELF_VIDEO_PROFILE_SETTINGS = getSelfVideoProfileSettings(DEFAULT_EXTENSION_SETTINGS);
 const DEFAULT_CHUNKING_SETTINGS = getChunkingSettings(DEFAULT_EXTENSION_SETTINGS);
@@ -152,8 +152,8 @@ export function getChunkTimesliceMs(
   stream: RecorderChunkStream,
   chunking: Readonly<ChunkingSettings> = DEFAULT_CHUNKING_SETTINGS
 ): number {
-  if (stream === 'tab') return chunking.defaultTimesliceMs;
-  if (stream === 'selfVideo') return chunking.extendedTimesliceMs;
+  if (stream === 'tab') return chunking.extendedTimesliceMs;
+  if (stream === 'self-video') return chunking.extendedTimesliceMs;
   if (PERF_FLAGS.extendedTimeslice) {
     return chunking.extendedTimesliceMs;
   }

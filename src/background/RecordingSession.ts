@@ -16,9 +16,34 @@ import {
   type UploadSummary,
 } from '../shared/recording';
 
-type SessionChangeListener = (snapshot: RecordingSessionSnapshot) => void;
-type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<void> | void;
+export type SessionChangeListener = (snapshot: RecordingSessionSnapshot) => void;
+export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<void> | void;
 
+/**
+ * Canonical state machine for a recording session.
+ *
+ * Valid phase transitions:
+ *
+ *   idle  ──start()──►  starting  ──markRecording()──►  recording
+ *                                                            │
+ *                                              markStopping()▼
+ *                                                         stopping
+ *                                                            │
+ *                                              markUploading()▼
+ *                                                         uploading
+ *                                                            │
+ *                                                markIdle()  ▼
+ *                                                          idle
+ *
+ *   Any non-idle phase ──fail()──► failed
+ *   failed             ──start()──► starting   (retry)
+ *
+ *   applyOffscreenPhase() drives the same transitions but from offscreen-sourced
+ *   state updates. It delegates to markIdle() or fail() for terminal phases.
+ *
+ *   markIdle() carries the optional UploadSummary from the completed upload pass.
+ *   fail() preserves the last active runConfig so the popup can display context.
+ */
 export class RecordingSession {
   private snapshot: RecordingSessionSnapshot = createIdleSession();
 
@@ -36,7 +61,7 @@ export class RecordingSession {
 
   /** Returns a defensive clone of the current session snapshot. */
   getSnapshot(): RecordingSessionSnapshot {
-    return cloneSession(this.snapshot);
+    return structuredClone(this.snapshot);
   }
 
   /** Starts a new session in the `starting` phase with the chosen run configuration. */
@@ -141,19 +166,3 @@ export class RecordingSession {
   }
 }
 
-/** Deep-clones the session snapshot so callers cannot mutate shared state. */
-function cloneSession(snapshot: RecordingSessionSnapshot): RecordingSessionSnapshot {
-  return {
-    phase: snapshot.phase,
-    runConfig: snapshot.runConfig ? { ...snapshot.runConfig } : null,
-    uploadSummary: snapshot.uploadSummary
-      ? {
-          uploaded: snapshot.uploadSummary.uploaded.map((entry) => ({ ...entry })),
-          localFallbacks: snapshot.uploadSummary.localFallbacks.map((entry) => ({ ...entry })),
-        }
-      : undefined,
-    error: snapshot.error,
-    warnings: snapshot.warnings ? [...snapshot.warnings] : undefined,
-    updatedAt: snapshot.updatedAt,
-  };
-}

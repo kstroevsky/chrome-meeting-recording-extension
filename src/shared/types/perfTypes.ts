@@ -4,7 +4,7 @@
  * Diagnostic logging types for evaluating runtime timing boundaries.
  */
 
-import type { RecordingPhase } from '../recordingTypes';
+import type { RecordingPhase, RecordingStream } from '../recordingTypes';
 
 export type AudioPlaybackBridgeMode = 'always' | 'auto';
 export type PerfSource = 'background' | 'offscreen' | 'captions' | 'popup' | 'unknown';
@@ -37,9 +37,9 @@ export type PerfDebugSummary = {
   totalEvents: number;
   countsByScope: Record<string, number>;
   recorder: {
-    startCountByStream: Partial<Record<'tab' | 'mic' | 'selfVideo', number>>;
-    lastStartLatencyMsByStream: Partial<Record<'tab' | 'mic' | 'selfVideo', number>>;
-    avgStartLatencyMsByStream: Partial<Record<'tab' | 'mic' | 'selfVideo', number>>;
+    startCountByStream: Partial<Record<RecordingStream, number>>;
+    lastStartLatencyMsByStream: Partial<Record<RecordingStream, number>>;
+    avgStartLatencyMsByStream: Partial<Record<RecordingStream, number>>;
     persistedChunkCount: number;
     persistedChunkBytes: number;
     avgPersistedChunkDurationMs: number | null;

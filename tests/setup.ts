@@ -1,5 +1,10 @@
 ;(globalThis as any).__DEV_BUILD__ = false;
 
+// structuredClone is available in Node 17+ but not always exposed in jsdom globals.
+if (typeof (globalThis as any).structuredClone !== 'function') {
+  (globalThis as any).structuredClone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+}
+
 // Mock global Chrome API for tests
 Object.assign(global, {
   chrome: {
@@ -54,6 +59,7 @@ Object.assign(global, {
     },
     tabs: {
       query: jest.fn().mockResolvedValue([{ url: 'https://meet.google.com/abc-defg-hij' }]),
+      get: jest.fn().mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' }),
       create: jest.fn().mockResolvedValue(undefined),
       sendMessage: jest.fn().mockResolvedValue(undefined),
     },

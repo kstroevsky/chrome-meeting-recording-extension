@@ -26,7 +26,7 @@ export function buildRecorderText(snapshot: PerfDebugSnapshot): string {
     `Timeslice: ${summary.recorder.lastTimesliceMs ?? 'n/a'} ms`,
     `Tab start latency: ${formatMetric(summary.recorder.lastStartLatencyMsByStream.tab, 'ms')}`,
     `Mic start latency: ${formatMetric(summary.recorder.lastStartLatencyMsByStream.mic, 'ms')}`,
-    `Self-video start latency: ${formatMetric(summary.recorder.lastStartLatencyMsByStream.selfVideo, 'ms')}`,
+    `Self-video start latency: ${formatMetric(summary.recorder.lastStartLatencyMsByStream['self-video'], 'ms')}`,
     `Persisted chunks: ${summary.recorder.persistedChunkCount}`,
     `Persisted bytes: ${formatBytes(summary.recorder.persistedChunkBytes)}`,
     `Average chunk write: ${formatMetric(summary.recorder.avgPersistedChunkDurationMs, 'ms')}`,
