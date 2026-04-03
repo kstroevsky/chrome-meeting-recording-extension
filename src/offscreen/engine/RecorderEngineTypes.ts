@@ -9,9 +9,6 @@ import type { RecordingPhase, RecordingStream } from '../../shared/recording';
 export type RecordingStateExtra = Record<string, any> | undefined;
 export type EngineState = Exclude<RecordingPhase, 'uploading' | 'failed'>;
 
-export type PreparedTabRecorderStream = {
-  stream: MediaStream;
-};
 
 export interface SealedStorageFile {
   filename: string;

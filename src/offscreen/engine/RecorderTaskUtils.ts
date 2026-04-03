@@ -132,22 +132,3 @@ export async function sealAndFixArtifact(
   }
   return artifact;
 }
-
-/** Pushes a completed artifact into the finalized list or logs a finalization failure. */
-export async function finalizeArtifact(
-  getArtifact: () => Promise<SealedStorageFile | null>,
-  stream: RecordingStream,
-  finalizedArtifacts: CompletedRecordingArtifact[],
-  label: string,
-  deps: Pick<RecorderEngineDeps, 'error'>,
-  extraFields?: Omit<CompletedRecordingArtifact, 'stream' | 'artifact'>
-): Promise<void> {
-  try {
-    const artifact = await getArtifact();
-    if (artifact) {
-      finalizedArtifacts.push({ stream, artifact, ...extraFields });
-    }
-  } catch (e) {
-    deps.error(`${label} finalize/save failed`, describeMediaError(e));
-  }
-}

@@ -192,9 +192,6 @@ File: `src/offscreen/RecorderEngine.ts`
   - MIME selection
   - chunk timeslice policy
   - adaptive self-video bitrate policy
-- `src/offscreen/RecorderVideoResizer.ts`
-  - live tab downscale before `MediaRecorder`
-  - hidden `video -> canvas` pipeline for deterministic output size
 - `src/offscreen/RecorderSupport.ts`
   - media error formatting
 

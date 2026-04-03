@@ -590,7 +590,6 @@ Files: `src/offscreen/RecorderEngine.ts`, `src/offscreen/engine/*`
 - `src/offscreen/RecorderAudio.ts` — `MixedAudioMixer` (mixes mic + tab audio into one stream) and `AudioPlaybackBridge` (routes tab audio for mixing).
 - `src/offscreen/RecorderCapture.ts` — media acquisition helpers for tab, mic, and self-video; active-tab suffix inference.
 - `src/offscreen/RecorderProfiles.ts` — MIME type selection, chunk timeslice policy, adaptive self-video bitrate policy.
-- `src/offscreen/RecorderVideoResizer.ts` — live tab downscale entry point before `MediaRecorder` starts.
 - `src/offscreen/video/CanvasResizerLoop.ts` — hidden `video → canvas` render loop producing deterministic output size for both live downscale and post-stop postprocessing.
 - `src/offscreen/RecorderSupport.ts` — media error formatting helpers.
 
@@ -1306,7 +1305,6 @@ flowchart TD
 | `src/offscreen/RecorderAudio.ts` | audio mixing (`MixedAudioMixer`) and playback bridge (`AudioPlaybackBridge`) |
 | `src/offscreen/RecorderCapture.ts` | media acquisition helpers (tab, mic, self-video) |
 | `src/offscreen/RecorderProfiles.ts` | MIME type, bitrate, and timeslice policy |
-| `src/offscreen/RecorderVideoResizer.ts` | live tab downscale entry point |
 | `src/offscreen/RecorderSupport.ts` | recorder error helpers |
 | `src/offscreen/video/CanvasResizerLoop.ts` | canvas-based resize render loop (live and post-stop) |
 | `src/offscreen/postprocessor/VideoPlaybackElement.ts` | hidden video element helper for post-stop replay |
