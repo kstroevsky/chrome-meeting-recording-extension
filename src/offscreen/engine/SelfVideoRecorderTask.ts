@@ -2,6 +2,10 @@
  * @file offscreen/engine/SelfVideoRecorderTask.ts
  *
  * Starts, writes, and seals the self-video (camera) MediaRecorder stream.
+ *
+ * Initialization is split into two phases:
+ *  1. acquireSelfVideoStream  — getUserMedia, staleness check, perf/warning reporting
+ *  2. startWiredSelfVideoRecorder — recorder creation, event wiring, await start
  */
 
 import {
@@ -32,28 +36,6 @@ export type SelfVideoRecorderCallbacks = {
   onStreamAcquired?: (stopStream: () => void) => void;
 };
 
-/** Reports a warning when the browser delivers a lower camera profile than requested. */
-function maybeReportSelfVideoWarning(
-  settings: MediaTrackSettings | undefined,
-  recorderSettings: RecorderRuntimeSettingsSnapshot,
-  formatVideoMetrics: (w?: number, h?: number, fps?: number) => string,
-  onWarning?: (message: string) => void
-): void {
-  if (!onWarning) return;
-  const profile = getSelfVideoProfile(recorderSettings.selfVideo.profile);
-  const sizeMismatch = settings?.width !== profile.width || settings?.height !== profile.height;
-  const frameRateMismatch =
-    typeof settings?.frameRate === 'number' && settings.frameRate + 0.5 < profile.frameRate;
-
-  if (!sizeMismatch && !frameRateMismatch) return;
-
-  onWarning(
-    `Camera recording requested ${formatVideoMetrics(profile.width, profile.height, profile.frameRate)}, `
-    + `but browser delivered ${formatVideoMetrics(settings?.width, settings?.height, settings?.frameRate)}. `
-    + 'Extension camera quality is controlled by extension settings; shared camera use or hardware limits can reduce the delivered profile.'
-  );
-}
-
 function formatVideoMetrics(width?: number, height?: number, frameRate?: number): string {
   const resolution =
     typeof width === 'number' && typeof height === 'number'
@@ -63,23 +45,42 @@ function formatVideoMetrics(width?: number, height?: number, frameRate?: number)
   return `${resolution}${fps}`;
 }
 
+/** Reports a warning when the browser delivers a lower camera profile than requested. */
+function maybeReportSelfVideoWarning(
+  settings: MediaTrackSettings | undefined,
+  recorderSettings: RecorderRuntimeSettingsSnapshot,
+  onWarning?: (message: string) => void
+): void {
+  if (!onWarning) return;
+  const profile = getSelfVideoProfile(recorderSettings.selfVideo.profile);
+  const sizeMismatch = settings?.width !== profile.width || settings?.height !== profile.height;
+  const frameRateMismatch =
+    typeof settings?.frameRate === 'number' && settings.frameRate + 0.5 < profile.frameRate;
+  if (!sizeMismatch && !frameRateMismatch) return;
+
+  onWarning(
+    `Camera recording requested ${formatVideoMetrics(profile.width, profile.height, profile.frameRate)}, `
+    + `but browser delivered ${formatVideoMetrics(settings?.width, settings?.height, settings?.frameRate)}. `
+    + 'Extension camera quality is controlled by extension settings; shared camera use or hardware limits can reduce the delivered profile.'
+  );
+}
+
 /**
- * Acquires the camera stream, applies content hints, wires a MediaRecorder
- * against it, and starts recording. Resolves when the recorder fires `onstart`.
+ * Phase 1 — Acquires the camera stream and validates it is still needed.
  *
- * Returns `null` if no camera is available or the run was cancelled first.
+ * Returns the stream if recording should proceed, or `null` if the stream was
+ * unavailable, the run was already cancelled, or the engine transitioned away.
+ * Logs perf data and fires onWarning for profile mismatches.
  */
-export async function startSelfVideoRecorder(
+async function acquireSelfVideoStream(
   runId: number,
   currentRunId: () => number,
   isStale: () => boolean,
-  suffix: string,
-  runStartedAt: number,
   recordSelfVideo: boolean,
   recorderSettings: RecorderRuntimeSettingsSnapshot,
   deps: RecorderEngineDeps,
-  callbacks: SelfVideoRecorderCallbacks
-): Promise<MediaRecorder | null> {
+  onWarning?: (message: string) => void
+): Promise<MediaStream | null> {
   const selfVideo = await maybeGetSelfVideoStream(recordSelfVideo, recorderSettings.selfVideo.profile, deps);
 
   if (!selfVideo?.getVideoTracks().length || runId !== currentRunId() || isStale()) {
@@ -92,12 +93,6 @@ export async function startSelfVideoRecorder(
     return null;
   }
 
-  const defaultVideoBitsPerSecond = getDefaultSelfVideoBitrate(recorderSettings.selfVideo.profile);
-  const mime = getVideoOnlyMime();
-  let started = false;
-  let actualStartTimeMs = 0;
-  const timesliceMs = getChunkTimesliceMs('self-video', recorderSettings.chunking);
-
   const track = selfVideo.getVideoTracks()[0];
   const settings = track?.getSettings?.();
   logPerf(deps.log, 'recorder', 'self_video_stream_acquired', {
@@ -105,21 +100,43 @@ export async function startSelfVideoRecorder(
     height: settings?.height,
     frameRate: settings?.frameRate,
   });
-  maybeReportSelfVideoWarning(settings, recorderSettings, formatVideoMetrics, callbacks.onWarning);
+  maybeReportSelfVideoWarning(settings, recorderSettings, onWarning);
 
-  const videoBitsPerSecond = resolveSelfVideoBitrate(
-    defaultVideoBitsPerSecond,
-    settings,
-    recorderSettings.selfVideo.profile.minAdaptiveBitsPerSecond
-  );
   try {
     if (track && 'contentHint' in track) (track as any).contentHint = 'motion';
   } catch {}
 
-  const recorder = new MediaRecorder(selfVideo, { mimeType: mime, videoBitsPerSecond });
+  return selfVideo;
+}
 
-  const filename = buildRecordingFilename(suffix, 'self-video');
-  const target = await openStorageTarget(filename, mime, deps);
+/**
+ * Phase 2 — Creates the MediaRecorder against an already-acquired stream,
+ * wires all event handlers, and awaits the recorder's `onstart` event.
+ *
+ * The stream's tracks are released via an idempotent closure that is passed to
+ * `callbacks.onStreamAcquired`, allowing the engine to stop the camera eagerly
+ * when the user clicks stop before the recorder's `onstop` fires.
+ */
+async function startWiredSelfVideoRecorder(
+  selfVideo: MediaStream,
+  suffix: string,
+  runStartedAt: number,
+  recorderSettings: RecorderRuntimeSettingsSnapshot,
+  deps: RecorderEngineDeps,
+  callbacks: SelfVideoRecorderCallbacks
+): Promise<MediaRecorder> {
+  const track = selfVideo.getVideoTracks()[0];
+  const settings = track?.getSettings?.();
+  const mime = getVideoOnlyMime();
+  const timesliceMs = getChunkTimesliceMs('self-video', recorderSettings.chunking);
+  const videoBitsPerSecond = resolveSelfVideoBitrate(
+    getDefaultSelfVideoBitrate(recorderSettings.selfVideo.profile),
+    settings,
+    recorderSettings.selfVideo.profile.minAdaptiveBitsPerSecond
+  );
+
+  const recorder = new MediaRecorder(selfVideo, { mimeType: mime, videoBitsPerSecond });
+  const target = await openStorageTarget(buildRecordingFilename(suffix, 'self-video'), mime, deps);
 
   let selfVideoStreamStopped = false;
   const stopSelfVideoStream = () => {
@@ -127,8 +144,10 @@ export async function startSelfVideoRecorder(
     selfVideoStreamStopped = true;
     try { selfVideo.getTracks().forEach((t) => t.stop()); } catch {}
   };
-
   callbacks.onStreamAcquired?.(stopSelfVideoStream);
+
+  let started = false;
+  let actualStartTimeMs = 0;
 
   const finalize = async (label: string) => {
     try {
@@ -144,32 +163,39 @@ export async function startSelfVideoRecorder(
 
   selfVideo.getVideoTracks()[0]?.addEventListener('ended', () => {
     deps.log('Self video track ended');
-    if (recorder.state !== 'inactive') {
-      try { recorder.stop(); } catch {}
-    }
+    if (recorder.state !== 'inactive') try { recorder.stop(); } catch {}
   });
-
   recorder.ondataavailable = makeChunkHandler(target, 'self-video', deps);
-  recorder.onerror = (e: any) => {
-    deps.error('Self video MediaRecorder error', e);
-    void finalize('Self video');
-  };
-  recorder.onstop = () => {
-    void finalize('Self video');
-  };
+  recorder.onerror = (e: any) => { deps.error('Self video MediaRecorder error', e); void finalize('Self video'); };
+  recorder.onstop = () => { void finalize('Self video'); };
 
   const { actualStartTimeMs: startMs } = await awaitRecorderStart(
-    recorder,
-    'self-video',
-    runStartedAt,
-    mime,
-    timesliceMs,
-    callbacks.onStarted,
-    deps.log,
-    { videoBitsPerSecond }
+    recorder, 'self-video', runStartedAt, mime, timesliceMs, callbacks.onStarted, deps.log, { videoBitsPerSecond }
   );
   started = true;
   actualStartTimeMs = startMs;
 
   return recorder;
+}
+
+/**
+ * Acquires the camera stream and starts the self-video recorder.
+ * Returns `null` if no camera is available or the run was cancelled during acquisition.
+ */
+export async function startSelfVideoRecorder(
+  runId: number,
+  currentRunId: () => number,
+  isStale: () => boolean,
+  suffix: string,
+  runStartedAt: number,
+  recordSelfVideo: boolean,
+  recorderSettings: RecorderRuntimeSettingsSnapshot,
+  deps: RecorderEngineDeps,
+  callbacks: SelfVideoRecorderCallbacks
+): Promise<MediaRecorder | null> {
+  const stream = await acquireSelfVideoStream(
+    runId, currentRunId, isStale, recordSelfVideo, recorderSettings, deps, callbacks.onWarning
+  );
+  if (!stream) return null;
+  return startWiredSelfVideoRecorder(stream, suffix, runStartedAt, recorderSettings, deps, callbacks);
 }
