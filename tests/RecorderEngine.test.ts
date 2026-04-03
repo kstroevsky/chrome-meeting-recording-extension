@@ -477,8 +477,7 @@ describe('RecorderEngine', () => {
     expect(tabRecorder?.stream).toBe(baseStream);
     expect(createElementSpy).not.toHaveBeenCalled();
 
-    const artifacts = await engine.stop();
-    expect(artifacts[0].finalize).toBeUndefined();
+    await engine.stop();
   });
 
   it('preserves mixed microphone audio without introducing a resize stream', async () => {

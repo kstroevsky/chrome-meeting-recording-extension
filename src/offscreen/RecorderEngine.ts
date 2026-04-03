@@ -27,7 +27,6 @@ import type {
   CompletedRecordingArtifact,
   EngineState,
   RecorderEngineDeps,
-  RecordingArtifactFinalizePlan,
 } from './engine/RecorderEngineTypes';
 
 // Re-export types for consumers that import from the engine root.
@@ -35,7 +34,6 @@ export type {
   SealedStorageFile,
   StorageTarget,
   CompletedRecordingArtifact,
-  RecordingArtifactFinalizePlan,
   RecorderEngineDeps,
 } from './engine/RecorderEngineTypes';
 
@@ -53,7 +51,6 @@ export class RecorderEngine {
   private tabCaptureStream: MediaStream | null = null;
   private tabRecordingStream: MediaStream | null = null;
   private micStream: MediaStream | null = null;
-  private tabFinalizePlan: RecordingArtifactFinalizePlan | null = null;
   private recorderSettings: RecorderRuntimeSettingsSnapshot | null = null;
 
   private suffix = '';
@@ -120,7 +117,7 @@ export class RecorderEngine {
       this.tabRecordingStream = tabRecorderStream;
 
       const startTasks: Promise<void>[] = [
-        startTabRecorder(tabRecorderStream, this.suffix, runStartedAt, this.tabFinalizePlan, recorderSettings, this.deps, {
+        startTabRecorder(tabRecorderStream, this.suffix, runStartedAt, recorderSettings, this.deps, {
           onStarted: () => this.onRecorderStarted(),
           onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.tabRecorder = null; this.onRecorderStopped(); },
           onError: () => this.stopAllRecorders(),
@@ -213,7 +210,6 @@ export class RecorderEngine {
     this.mixedAudio?.stop(); this.mixedAudio = null;
     this.recorderSettings = null;
     this.finalizedArtifacts = [];
-    this.tabFinalizePlan = null;
 
     const resolveStop = this.resolveStop;
     this.resolveStop = null;
@@ -240,7 +236,6 @@ export class RecorderEngine {
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
     this.recorderSettings = null;
     this.finalizedArtifacts = [];
-    this.tabFinalizePlan = null;
     this.stopPromise = null; this.resolveStop = null;
     this.pendingStartPromises = [];
   }

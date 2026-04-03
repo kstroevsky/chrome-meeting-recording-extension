@@ -17,7 +17,6 @@ import {
 } from './RecorderTaskUtils';
 import type {
   CompletedRecordingArtifact,
-  RecordingArtifactFinalizePlan,
   RecorderEngineDeps,
   SealedStorageFile,
 } from './RecorderEngineTypes';
@@ -38,7 +37,6 @@ export async function startTabRecorder(
   recordingStream: MediaStream,
   suffix: string,
   runStartedAt: number,
-  tabFinalizePlan: RecordingArtifactFinalizePlan | null,
   recorderSettings: RecorderRuntimeSettingsSnapshot,
   deps: RecorderEngineDeps,
   callbacks: TabRecorderCallbacks
@@ -64,7 +62,6 @@ export async function startTabRecorder(
         callbacks.onStopped({
           stream: 'tab',
           artifact,
-          finalize: tabFinalizePlan ? { ...tabFinalizePlan } : undefined,
         });
       } else {
         callbacks.onStopped(null);

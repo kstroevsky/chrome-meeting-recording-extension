@@ -8,7 +8,6 @@
 
 import { AudioPlaybackBridge, MixedAudioMixer } from '../RecorderAudio';
 import { maybeGetMicStream } from '../RecorderCapture';
-import { readStreamVideoMetrics } from '../RecorderVideoResizer';
 import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSettings';
 import { PERF_FLAGS } from '../../shared/perf';
 import type { MicMode } from '../../shared/recording';
@@ -16,7 +15,8 @@ import type { RecorderEngineDeps } from './RecorderEngineTypes';
 
 /** Logs the source stream dimensions for debugging and perf diagnostics. */
 export function logStreamAcquired(stream: MediaStream, deps: RecorderEngineDeps): void {
-  deps.log('tab source stream acquired:', readStreamVideoMetrics(stream));
+  const settings = stream.getVideoTracks()[0]?.getSettings?.();
+  deps.log('tab source stream acquired:', { width: settings?.width, height: settings?.height, frameRate: settings?.frameRate });
 }
 
 /** Enables all audio tracks and optionally starts an audio playback bridge. */

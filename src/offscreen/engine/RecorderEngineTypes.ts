@@ -5,14 +5,12 @@
  */
 
 import type { RecordingPhase, RecordingStream } from '../../shared/recording';
-import type { VideoResizeTarget } from '../RecorderVideoResizer';
 
 export type RecordingStateExtra = Record<string, any> | undefined;
 export type EngineState = Exclude<RecordingPhase, 'uploading' | 'failed'>;
 
 export type PreparedTabRecorderStream = {
   stream: MediaStream;
-  finalize?: RecordingArtifactFinalizePlan;
 };
 
 export interface SealedStorageFile {
@@ -27,16 +25,9 @@ export interface StorageTarget {
   close(): Promise<SealedStorageFile | null>;
 }
 
-export type RecordingArtifactFinalizePlan = {
-  outputTarget: VideoResizeTarget;
-  liveResized: boolean;
-  requiresPostprocess: boolean;
-};
-
 export type CompletedRecordingArtifact = {
   stream: RecordingStream;
   artifact: SealedStorageFile;
-  finalize?: RecordingArtifactFinalizePlan;
 };
 
 export type RecorderEngineDeps = {
