@@ -91,59 +91,12 @@ export class RecorderEngine {
     this.micMode = options.micMode;
     this.recordSelfVideo = options.recordSelfVideo;
     this.recorderSettings = recorderSettings;
+    this.suffix = meetingSlug;
     const runStartedAt = Date.now();
 
     try {
-      const baseStream = await captureTabStreamFromId(streamId, recorderSettings.tab.output, this.deps);
-      this.tabCaptureStream = baseStream;
-      logStreamAcquired(baseStream, this.deps);
-
-      this.playback = await ensureAudiblePlayback(baseStream, this.deps);
-      this.suffix = meetingSlug;
-      attachTabEndedHandler(baseStream, () => this.stopAllRecorders(), this.deps.log);
-
-      let micForRun: MediaStream | null = null;
-      if (this.micMode === 'mixed' || this.micMode === 'separate') {
-        micForRun = await acquireMicStream(runId, () => this.runId, () => this.state, this.micMode, recorderSettings, this.deps);
-        this.micStream = micForRun;
-      }
-
-      let tabRecorderStream = baseStream;
-      if (this.micMode === 'mixed') {
-        const { mixer, stream } = await createMixedTabStream(baseStream, micForRun!, this.deps);
-        this.mixedAudio = mixer;
-        tabRecorderStream = stream;
-      }
-      this.tabRecordingStream = tabRecorderStream;
-
-      const startTasks: Promise<void>[] = [
-        startTabRecorder(tabRecorderStream, this.suffix, runStartedAt, recorderSettings, this.deps, {
-          onStarted: () => this.onRecorderStarted(),
-          onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.tabRecorder = null; this.onRecorderStopped(); },
-          onError: () => this.stopAllRecorders(),
-        }).then((rec) => { this.tabRecorder = rec; }),
-      ];
-
-      if (this.micMode === 'separate') {
-        startTasks.push(
-          startMicRecorder(runId, () => this.runId, () => this.state === 'stopping' || this.state === 'idle', this.suffix, runStartedAt, this.micMode, recorderSettings, micForRun, this.deps, {
-            onStarted: () => this.onRecorderStarted(),
-            onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.micRecorder = null; this.micStream = null; this.onRecorderStopped(); },
-          }).then((rec) => { this.micRecorder = rec; }).catch((e) => this.deps.warn('Mic recorder start failed', describeMediaError(e)))
-        );
-      }
-
-      if (this.recordSelfVideo) {
-        startTasks.push(
-          startSelfVideoRecorder(runId, () => this.runId, () => this.state === 'stopping' || this.state === 'idle', this.suffix, runStartedAt, this.recordSelfVideo, recorderSettings, this.deps, {
-            onStarted: () => this.onRecorderStarted(),
-            onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.selfVideoRecorder = null; this.stopSelfVideoStream = null; this.onRecorderStopped(); },
-            onWarning: (msg) => this.deps.reportWarning?.(msg),
-            onStreamAcquired: (stopFn) => { this.stopSelfVideoStream = stopFn; },
-          }).then((rec) => { this.selfVideoRecorder = rec; }).catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
-        );
-      }
-
+      const tabRecorderStream = await this.acquireRecordingStreams(streamId, options, recorderSettings, runId);
+      const startTasks = this.buildRecorderStartTasks(tabRecorderStream, runId, runStartedAt, recorderSettings);
       this.pendingStartPromises = startTasks;
       await Promise.all(startTasks);
       this.pendingStartPromises = [];
@@ -153,6 +106,79 @@ export class RecorderEngine {
       this.resetRunState();
       throw e;
     }
+  }
+
+  /**
+   * Acquires the tab capture stream, optional mic stream, and audio mixer.
+   * Assigns results directly to instance fields so that `resetRunState()` can
+   * clean up any partially-acquired resources if a later step throws.
+   * Returns the stream the tab recorder should record from.
+   */
+  private async acquireRecordingStreams(
+    streamId: string,
+    options: RecordingRunConfig,
+    recorderSettings: RecorderRuntimeSettingsSnapshot,
+    runId: number
+  ): Promise<MediaStream> {
+    const baseStream = await captureTabStreamFromId(streamId, recorderSettings.tab.output, this.deps);
+    this.tabCaptureStream = baseStream;
+    logStreamAcquired(baseStream, this.deps);
+
+    this.playback = await ensureAudiblePlayback(baseStream, this.deps);
+    attachTabEndedHandler(baseStream, () => this.stopAllRecorders(), this.deps.log);
+
+    if (options.micMode === 'mixed' || options.micMode === 'separate') {
+      this.micStream = await acquireMicStream(runId, () => this.runId, () => this.state, options.micMode, recorderSettings, this.deps);
+    }
+
+    if (options.micMode === 'mixed') {
+      const { mixer, stream } = await createMixedTabStream(baseStream, this.micStream!, this.deps);
+      this.mixedAudio = mixer;
+      this.tabRecordingStream = stream;
+      return stream;
+    }
+
+    this.tabRecordingStream = baseStream;
+    return baseStream;
+  }
+
+  /** Builds the parallel recorder startup promises for tab, mic, and self-video. */
+  private buildRecorderStartTasks(
+    tabRecorderStream: MediaStream,
+    runId: number,
+    runStartedAt: number,
+    recorderSettings: RecorderRuntimeSettingsSnapshot
+  ): Promise<void>[] {
+    const isStale = () => this.state === 'stopping' || this.state === 'idle';
+    const tasks: Promise<void>[] = [
+      startTabRecorder(tabRecorderStream, this.suffix, runStartedAt, recorderSettings, this.deps, {
+        onStarted: () => this.onRecorderStarted(),
+        onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.tabRecorder = null; this.onRecorderStopped(); },
+        onError: () => this.stopAllRecorders(),
+      }).then((rec) => { this.tabRecorder = rec; }),
+    ];
+
+    if (this.micMode === 'separate') {
+      tasks.push(
+        startMicRecorder(runId, () => this.runId, isStale, this.suffix, runStartedAt, this.micMode, recorderSettings, this.micStream, this.deps, {
+          onStarted: () => this.onRecorderStarted(),
+          onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.micRecorder = null; this.micStream = null; this.onRecorderStopped(); },
+        }).then((rec) => { this.micRecorder = rec; }).catch((e) => this.deps.warn('Mic recorder start failed', describeMediaError(e)))
+      );
+    }
+
+    if (this.recordSelfVideo) {
+      tasks.push(
+        startSelfVideoRecorder(runId, () => this.runId, isStale, this.suffix, runStartedAt, this.recordSelfVideo, recorderSettings, this.deps, {
+          onStarted: () => this.onRecorderStarted(),
+          onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.selfVideoRecorder = null; this.stopSelfVideoStream = null; this.onRecorderStopped(); },
+          onWarning: (msg) => this.deps.reportWarning?.(msg),
+          onStreamAcquired: (stopFn) => { this.stopSelfVideoStream = stopFn; },
+        }).then((rec) => { this.selfVideoRecorder = rec; }).catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
+      );
+    }
+
+    return tasks;
   }
 
   async stop(): Promise<CompletedRecordingArtifact[]> {

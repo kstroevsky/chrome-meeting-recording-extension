@@ -168,60 +168,63 @@ export class PopupController {
   private wireStartStop() {
     const { startBtn, stopBtn } = this.el;
     if (!startBtn || !stopBtn) return;
+    startBtn.addEventListener('click', () => this.executeCommand(startBtn, 'START_RECORDING', () => this.startRecording(), buildStartErrorAlert));
+    stopBtn.addEventListener('click',  () => this.executeCommand(stopBtn,  'STOP_RECORDING',  () => this.stopRecording(),  buildStopErrorAlert));
+  }
 
-    startBtn.addEventListener('click', async () => {
-      if (this.inFlight) return;
-      this.inFlight = true;
-      startBtn.disabled = true;
+  /**
+   * Shared scaffolding for start/stop button handlers: guards against concurrent
+   * commands, disables the button while the action is in-flight, and resets UI
+   * to idle on failure.
+   */
+  private async executeCommand(
+    btn: HTMLButtonElement,
+    label: string,
+    action: () => Promise<void>,
+    buildErrorAlert: (e: unknown) => string
+  ): Promise<void> {
+    if (this.inFlight) return;
+    this.inFlight = true;
+    btn.disabled = true;
+    try {
+      await action();
+    } catch (e: unknown) {
+      console.error(`[popup] ${label} error`, e);
+      this.onPhaseChange('idle');
+      alert(buildErrorAlert(e));
+    } finally {
+      this.inFlight = false;
+    }
+  }
 
-      try {
-        const tab = await queryActiveTab();
-        if (!tab?.id) throw new Error('No active tab');
+  private async startRecording(): Promise<void> {
+    const tab = await queryActiveTab();
+    if (!tab?.id) throw new Error('No active tab');
 
-        await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
+    await sendToContent(tab.id, { type: 'RESET_TRANSCRIPT' }).catch(() => {});
 
-        const runConfig = this.state.getRunConfigFromForm();
-        const { micMode, recordSelfVideo } = runConfig;
+    const runConfig = this.state.getRunConfigFromForm();
+    const { micMode, recordSelfVideo } = runConfig;
 
-        const micReady = await this.mic.ensureReadyForRecording(micMode);
-        if (!micReady) throw new Error(buildMicPermissionError(micMode));
+    const micReady = await this.mic.ensureReadyForRecording(micMode);
+    if (!micReady) throw new Error(buildMicPermissionError(micMode));
 
-        if (recordSelfVideo) {
-          const cameraReady = await this.camera.ensureReadyForRecording();
-          if (!cameraReady) throw new Error(CAMERA_PERMISSION_ERROR);
-        }
+    if (recordSelfVideo) {
+      const cameraReady = await this.camera.ensureReadyForRecording();
+      if (!cameraReady) throw new Error(CAMERA_PERMISSION_ERROR);
+    }
 
-        const resp = await sendToBackground({ type: 'START_RECORDING', tabId: tab.id, runConfig });
-        if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
+    const resp = await sendToBackground({ type: 'START_RECORDING', tabId: tab.id, runConfig });
+    if (resp.ok === false) throw new Error(resp.error || 'Failed to start');
 
-        this.state.applySession(resp.session);
-        this.toast(POPUP_TOAST_TEXT.recordingStarted);
-      } catch (e: unknown) {
-        console.error('[popup] START_RECORDING error', e);
-        this.onPhaseChange('idle');
-        alert(buildStartErrorAlert(e));
-      } finally {
-        this.inFlight = false;
-      }
-    });
+    this.state.applySession(resp.session);
+    this.toast(POPUP_TOAST_TEXT.recordingStarted);
+  }
 
-    stopBtn.addEventListener('click', async () => {
-      if (this.inFlight) return;
-      this.inFlight = true;
-      stopBtn.disabled = true;
-
-      try {
-        const resp = await sendToBackground({ type: 'STOP_RECORDING' });
-        if (resp.ok === false) throw new Error(resp.error || 'Failed to stop');
-        this.state.applySession(resp.session);
-        this.toast(POPUP_TOAST_TEXT.stopping);
-      } catch (e: unknown) {
-        console.error('[popup] STOP_RECORDING error', e);
-        alert(buildStopErrorAlert(e));
-        this.onPhaseChange('idle');
-      } finally {
-        this.inFlight = false;
-      }
-    });
+  private async stopRecording(): Promise<void> {
+    const resp = await sendToBackground({ type: 'STOP_RECORDING' });
+    if (resp.ok === false) throw new Error(resp.error || 'Failed to stop');
+    this.state.applySession(resp.session);
+    this.toast(POPUP_TOAST_TEXT.stopping);
   }
 }
