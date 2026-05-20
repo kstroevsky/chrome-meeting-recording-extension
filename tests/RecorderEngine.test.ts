@@ -153,63 +153,6 @@ describe('RecorderEngine', () => {
   let originalMediaStream: typeof MediaStream | undefined;
   let originalCreateElement: typeof document.createElement;
 
-  function installResizerDom(options: {
-    sourceWidth: number;
-    sourceHeight: number;
-    outputWidth: number;
-    outputHeight: number;
-    outputFrameRate: number;
-  }) {
-    const outputVideoTrack = makeTrack('video', {
-      width: options.outputWidth,
-      height: options.outputHeight,
-      frameRate: options.outputFrameRate,
-    });
-    const captureStream = makeStream({
-      videoTracks: [outputVideoTrack],
-    });
-    const drawImage = jest.fn();
-    const video = {
-      srcObject: null,
-      muted: false,
-      playsInline: false,
-      autoplay: false,
-      hidden: false,
-      style: {},
-      videoWidth: options.sourceWidth,
-      videoHeight: options.sourceHeight,
-      play: jest.fn().mockResolvedValue(undefined),
-      pause: jest.fn(),
-      addEventListener: jest.fn(),
-      removeEventListener: jest.fn(),
-    } as any;
-    const canvas = {
-      width: 0,
-      height: 0,
-      hidden: false,
-      style: {},
-      getContext: jest.fn(() => ({
-        drawImage,
-        imageSmoothingEnabled: false,
-        imageSmoothingQuality: 'low',
-      })),
-      captureStream: jest.fn(() => captureStream),
-    } as any;
-
-    document.createElement = jest.fn((tagName: string) => {
-      if (tagName === 'video') return video;
-      if (tagName === 'canvas') return canvas;
-      return originalCreateElement(tagName as any);
-    }) as any;
-
-    return {
-      canvas,
-      drawImage,
-      outputVideoTrack,
-      video,
-    };
-  }
-
   beforeEach(async () => {
     originalMediaRecorder = global.MediaRecorder as any;
     originalAudioContext = (global as any).AudioContext;

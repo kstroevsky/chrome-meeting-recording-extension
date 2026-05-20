@@ -39,6 +39,23 @@ describe('OffscreenManager', () => {
     );
   });
 
+  it('requests a reconnect when an offscreen document exists without a ready port', async () => {
+    (chrome.offscreen.hasDocument as jest.Mock).mockResolvedValue(true);
+
+    const ensureReadyPromise = manager.ensureReady();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    manager.attachPort(mockPort);
+    const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
+    onMessageListener({ type: 'OFFSCREEN_READY' });
+
+    await ensureReadyPromise;
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'OFFSCREEN_CONNECT' });
+    expect(chrome.offscreen.createDocument).not.toHaveBeenCalled();
+  });
+
   it('syncs phase updates from offscreen to the badge and listener callback', () => {
     manager.attachPort(mockPort);
     manager.onStateChanged = jest.fn();
