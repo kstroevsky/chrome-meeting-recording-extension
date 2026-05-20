@@ -187,7 +187,6 @@ File: `src/offscreen/RecorderEngine.ts`
   - tab capture acquisition
   - microphone acquisition
   - self-video acquisition
-  - active-tab suffix inference
 - `src/offscreen/RecorderProfiles.ts`
   - MIME selection
   - chunk timeslice policy
@@ -214,10 +213,8 @@ Self-video profiles:
 Tab capture profiles:
 - preset-based recorded output size
   - settings page offers `640x360`, `854x480`, `1280x720`, and `1920x1080`
-  - tab acquisition still requests a stable high ceiling up to `1920x1080`
-  - when the selected preset is smaller than the delivered tab stream, the offscreen document first tries live downscale before `MediaRecorder` starts
-  - if live downscale cannot be established, or the live recorder input still misses the requested target, recording continues and the finalized tab artifact is downscaled after stop
-  - if fallback post-stop downscale also fails, the original artifact is preserved and a visible warning explains that the requested preset could not be enforced
+  - tab acquisition requests the selected preset as Chrome's capture ceiling
+  - the tab recorder records the stream Chrome delivers directly
   - visual detail still depends on what Meet rendered into the tab before the extension captured it
 
 #### Microphone Modes
@@ -267,7 +264,6 @@ Local mode:
 - create blob URLs for sealed artifacts
 - ask background to save them locally
 - background revokes blob URLs and optionally removes OPFS files later
-- if a tab artifact was marked `requiresPostprocess`, finalize it through the fallback downscale pipeline before creating the blob URL
 
 Drive mode:
 - resolve a shared folder once per finalize run
@@ -275,12 +271,6 @@ Drive mode:
 - clean up OPFS files after successful upload
 - fall back per file to local download if upload fails
 - return `UploadSummary`
-
-Fallback tab postprocess:
-- replay the sealed tab artifact inside the offscreen document
-- capture that playback back into a stream
-- reuse the canvas-based resize pipeline to produce the requested final size/frame rate
-- replace the original tab artifact only if the fallback pass succeeds
 
 Upload order is deterministic:
 1. `tab`

@@ -16,7 +16,7 @@ Everything happens in your browser. Capture is **local-first**: recording data s
 
 **Transcript saver** — parses Google Meet's live captions and downloads a timestamped `.txt` file. Turn captions on in Google Meet, then hit Download Transcript at any point during or after the meeting.
 
-**Tab recorder** — captures the Google Meet tab (video + system audio) into a `.webm` via `MediaRecorder`. The selected resolution preset is enforced on the final saved file, with a live downscale path and a post-stop fallback downscale when needed.
+**Tab recorder** — captures the Google Meet tab (video + system audio) into a `.webm` via `MediaRecorder`. The selected resolution preset is requested as the tab-capture ceiling; the final file reflects the stream Chrome actually delivers.
 
 **Direct-to-disk streaming** — recording chunks stream continuously to OPFS during capture, keeping memory bounded to a 5 MB working buffer. This prevents memory crashes on 2-hour+ meetings. Drive uploads happen after stop, not during capture.
 
@@ -155,9 +155,9 @@ All three commands compile TypeScript via `ts-loader`, copy HTML shells and the 
 
 **Record my camera separately** — if checked, starts an additional camera-only recorder. If camera permission is missing when you click Start, a `camsetup.html` tab opens so you can grant access. Camera quality is controlled by the extension settings page, not Google Meet's own video setting.
 
-**Start Recording** — begins capturing the current tab (video + system audio). The extension tries to enforce the selected resolution preset via live downscale before the recorder starts. If live downscale cannot meet the target, recording continues at the captured resolution and the finalized tab file is downscaled after stop. If post-stop downscale also fails, the original file is preserved and a visible warning explains the mismatch.
+**Start Recording** — begins capturing the current tab (video + system audio). The extension asks Chrome for the selected tab resolution preset as the capture ceiling. Actual resolution still depends on Chrome tab-capture behavior and what Meet renders into the tab.
 
-**Stop Recording** — releases the extension-owned camera immediately, seals all active recorders, and runs the finalization pipeline. In local mode a file download begins. In Drive mode the popup passes through an `uploading` phase before returning to idle.
+**Stop Recording** — releases the extension-owned camera immediately, seals all active recorders, and runs the finalization pipeline. The extension also stops the active run if the recorded tab closes, navigates away from the meeting, or the Meet page stays in an ended-call state for 30 seconds. In local mode a file download begins. In Drive mode the popup passes through an `uploading` phase before returning to idle.
 
 > The extension badge shows `REC` while recording and `UP` while uploading to Drive.
 
@@ -578,19 +578,18 @@ Files: `src/offscreen/RecorderEngine.ts`, `src/offscreen/engine/*`
 
 **Task sub-modules** (`src/offscreen/engine/`):
 
-- `RecorderEngineTypes.ts` — shared types across all task files: `StorageTarget`, `SealedStorageFile`, `CompletedRecordingArtifact`, `RecordingArtifactFinalizePlan`, `RecorderEngineDeps`, and `InMemoryStorageTarget` (RAM-backed fallback when OPFS is unavailable for a stream).
+- `RecorderEngineTypes.ts` — shared types across all task files: `StorageTarget`, `SealedStorageFile`, `CompletedRecordingArtifact`, `RecorderEngineDeps`, and `InMemoryStorageTarget` (RAM-backed fallback when OPFS is unavailable for a stream).
 - `RecorderEngineSetup.ts` — engine initialization helpers (stream acquisition sequencing, storage target opening).
 - `RecorderTaskUtils.ts` — task utility helpers shared by multiple tasks.
-- `TabRecorderTask.ts` — tab capture recorder task: acquires the tab stream from the background-provided `streamId`, coordinates live downscale, starts `MediaRecorder`, and streams chunks to `StorageTarget`.
+- `TabRecorderTask.ts` — tab capture recorder task: records the tab stream from the background-provided `streamId` with `MediaRecorder` and streams chunks to `StorageTarget`.
 - `MicRecorderTask.ts` — mic capture recorder task: acquires the microphone stream, starts a dedicated `MediaRecorder` in `separate` mode, streams chunks to a second `StorageTarget`.
 - `SelfVideoRecorderTask.ts` — self-video recorder task: opens the camera, applies the preset fallback ladder, starts `MediaRecorder`, streams chunks to a third `StorageTarget`.
 
 **Support modules:**
 
 - `src/offscreen/RecorderAudio.ts` — `MixedAudioMixer` (mixes mic + tab audio into one stream) and `AudioPlaybackBridge` (routes tab audio for mixing).
-- `src/offscreen/RecorderCapture.ts` — media acquisition helpers for tab, mic, and self-video; active-tab suffix inference.
+- `src/offscreen/RecorderCapture.ts` — media acquisition helpers for tab, mic, and self-video.
 - `src/offscreen/RecorderProfiles.ts` — MIME type selection, chunk timeslice policy, adaptive self-video bitrate policy.
-- `src/offscreen/video/CanvasResizerLoop.ts` — hidden `video → canvas` render loop producing deterministic output size for both live downscale and post-stop postprocessing.
 - `src/offscreen/RecorderSupport.ts` — media error formatting helpers.
 
 **Recorder responsibilities:**
@@ -613,10 +612,8 @@ Files: `src/offscreen/RecorderEngine.ts`, `src/offscreen/engine/*`
 **Tab capture profiles:**
 
 - settings page offers `640x360`, `854x480`, `1280x720`, and `1920x1080`
-- tab acquisition still requests a stable high ceiling up to `1920x1080`
-- when the selected preset is smaller than the delivered tab stream, the offscreen document first tries live downscale before `MediaRecorder` starts
-- if live downscale cannot be established, or the live recorder input still misses the requested target, recording continues and the finalized tab artifact is downscaled after stop
-- if fallback post-stop downscale also fails, the original artifact is preserved and a visible warning explains that the requested preset could not be enforced
+- tab acquisition requests the selected preset as Chrome's capture ceiling
+- the tab recorder records the stream Chrome delivers directly; it does not run a resize pass
 - visual detail still depends on what Meet rendered into the tab before the extension captured it
 
 #### Microphone Modes
@@ -665,8 +662,6 @@ This is the long-meeting safety mechanism.
 Files:
 
 - `src/offscreen/RecordingFinalizer.ts`
-- `src/offscreen/TabArtifactPostprocessor.ts`
-- `src/offscreen/postprocessor/VideoPlaybackElement.ts`
 - `src/offscreen/DriveTarget.ts`
 - `src/offscreen/drive/DriveChunkUploader.ts`
 - `src/offscreen/drive/DriveFolderResolver.ts`
@@ -682,7 +677,6 @@ Files:
 - create blob URLs for sealed artifacts
 - ask background to save them locally
 - background revokes blob URLs and optionally removes OPFS files later
-- if a tab artifact was marked `requiresPostprocess`, finalize it through the fallback downscale pipeline before creating the blob URL
 
 **Drive mode:**
 
@@ -691,13 +685,6 @@ Files:
 - clean up OPFS files after successful upload
 - fall back per file to local download if upload fails
 - return `UploadSummary`
-
-**Fallback tab postprocess** (`TabArtifactPostprocessor`, `VideoPlaybackElement`, `CanvasResizerLoop`):
-
-- replay the sealed tab artifact via a `VideoPlaybackElement` helper inside the offscreen document
-- `VideoPlaybackElement` manages the hidden `<video>` element used for post-stop playback
-- capture the playback stream into `CanvasResizerLoop` to produce the requested final size/frame rate
-- replace the original tab artifact only if the fallback pass succeeds
 
 **Upload order is deterministic:**
 
@@ -1284,7 +1271,6 @@ flowchart TD
 | `src/offscreen/rpcHandlers.ts` | background→offscreen RPC message wiring |
 | `src/offscreen/RecorderEngine.ts` | capture and recorder coordinator (facade) |
 | `src/offscreen/RecordingFinalizer.ts` | post-stop save/upload coordinator |
-| `src/offscreen/TabArtifactPostprocessor.ts` | fallback post-stop tab downscale coordinator |
 | `src/offscreen/LocalFileTarget.ts` | OPFS-backed live storage target |
 
 ### Recorder Task Sub-Modules
@@ -1306,8 +1292,6 @@ flowchart TD
 | `src/offscreen/RecorderCapture.ts` | media acquisition helpers (tab, mic, self-video) |
 | `src/offscreen/RecorderProfiles.ts` | MIME type, bitrate, and timeslice policy |
 | `src/offscreen/RecorderSupport.ts` | recorder error helpers |
-| `src/offscreen/video/CanvasResizerLoop.ts` | canvas-based resize render loop (live and post-stop) |
-| `src/offscreen/postprocessor/VideoPlaybackElement.ts` | hidden video element helper for post-stop replay |
 
 ### Drive Subsystem
 
