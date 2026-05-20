@@ -11,3 +11,9 @@ export function isDevBuild(): boolean {
 export function isTestRuntime(): boolean {
   return typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 }
+
+export function isE2EMockCaptureBuild(): boolean {
+  return (globalThis as any).__E2E_MOCK_CAPTURE__ === true;
+}
+
+export const E2E_MOCK_TAB_STREAM_ID = '__E2E_MOCK_TAB_CAPTURE__';

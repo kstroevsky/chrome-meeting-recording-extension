@@ -68,6 +68,10 @@ const session = new RecordingSession(
 
 // Wire offscreen -> background save requests and session phase updates.
 offscreen.onStateChanged = (msg) => {
+  if (session.getSnapshot().phase === 'starting' && msg.phase === 'idle') {
+    L.log('Ignoring pre-start offscreen idle state while START_RECORDING is in flight');
+    return;
+  }
   session.applyOffscreenPhase(msg);
 };
 registerSaveHandler(offscreen, L);

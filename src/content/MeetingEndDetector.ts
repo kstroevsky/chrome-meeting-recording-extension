@@ -73,6 +73,11 @@ export class MeetingEndDetector {
     }
 
     this.pendingReason = reason;
+    if (TIMEOUTS.MEETING_END_GRACE_MS <= 0) {
+      queueMicrotask(() => this.confirmEnd());
+      return;
+    }
+
     this.graceTimer = setTimeout(() => {
       this.graceTimer = null;
       this.confirmEnd();

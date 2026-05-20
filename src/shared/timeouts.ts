@@ -11,6 +11,10 @@
  *  - code-reviewers can reason about timing policy in one glance.
  */
 
+import { isE2EMockCaptureBuild } from './build';
+
+const MEETING_END_GRACE_MS = isE2EMockCaptureBuild() ? 0 : 30_000;
+
 export const TIMEOUTS = {
   /**
    * Maximum time we allow `getUserMedia()` to hang before we try the
@@ -45,7 +49,7 @@ export const TIMEOUTS = {
    * How long Meet must look ended before the content script asks background
    * to stop. This intentionally favors late stops over false auto-stops.
    */
-  MEETING_END_GRACE_MS: 30_000,
+  MEETING_END_GRACE_MS,
 
   /** Fallback polling cadence for meeting-end detection when DOM mutations are quiet. */
   MEETING_END_POLL_MS: 2_000,

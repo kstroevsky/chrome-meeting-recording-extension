@@ -52,9 +52,18 @@ function transformManifest(content, oauthClientId) {
   return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
 }
 
+function isTruthyEnvFlag(value) {
+  return value === true || value === 'true' || value === '1'
+}
+
 module.exports = (_env, argv) => {
+  const env = _env || {}
   const mode = argv.mode || 'production'
   const isDevBuild = mode === 'development'
+  const e2eMockCapture = isTruthyEnvFlag(env.e2eMockCapture) || process.env.E2E_MOCK_CAPTURE === '1'
+  const outputDir = typeof env.outputPath === 'string' && env.outputPath.trim()
+    ? env.outputPath.trim()
+    : 'dist'
   const configuredGoogleOauthClientId = resolveGoogleOauthClientId(__dirname)
   const googleOauthClientId = configuredGoogleOauthClientId || OAUTH_CLIENT_ID_PLACEHOLDER
 
@@ -78,7 +87,7 @@ module.exports = (_env, argv) => {
       settings: './src/settings.ts',
     },
     output: {
-      path: path.resolve(__dirname, 'dist'),
+      path: path.resolve(__dirname, outputDir),
       filename: '[name].js'
     },
     resolve: { extensions: ['.ts', '.js'] },
@@ -95,6 +104,7 @@ module.exports = (_env, argv) => {
       new CleanWebpackPlugin(),
       new webpack.DefinePlugin({
         'globalThis.__DEV_BUILD__': JSON.stringify(isDevBuild),
+        'globalThis.__E2E_MOCK_CAPTURE__': JSON.stringify(e2eMockCapture),
         'process.env.NODE_ENV': JSON.stringify(mode),
       }),
       new CopyWebpackPlugin({

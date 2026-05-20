@@ -132,6 +132,60 @@ describe('background runtime messages', () => {
     expect(response).toEqual(expect.objectContaining({ ok: true }));
   });
 
+  it('preserves the starting session when offscreen reports its initial idle state during start', async () => {
+    const getMediaStreamIdForTab = jest.fn().mockResolvedValue('stream-1');
+    const getCapturedTabs = jest.fn().mockResolvedValue([]);
+    const offscreenInstance = {
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
+      hydratePhase: jest.fn(),
+      attachPort: jest.fn(),
+      ensureReady: jest.fn().mockImplementation(async () => {
+        offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
+      }),
+      stopIfPossibleOnSuspend: jest.fn(),
+      rpc: jest.fn().mockResolvedValue({ ok: true }),
+      revokeBlobUrl: jest.fn(),
+    };
+
+    jest.doMock('../src/platform/chrome/tabs', () => ({
+      ...jest.requireActual('../src/platform/chrome/tabs'),
+      getCapturedTabs,
+      getMediaStreamIdForTab,
+    }));
+    jest.doMock('../src/background/driveAuth', () => ({
+      fetchDriveTokenWithFallback: jest.fn(),
+    }));
+    jest.doMock('../src/background/OffscreenManager', () => ({
+      OffscreenManager: jest.fn(() => offscreenInstance),
+    }));
+
+    await import('../src/background');
+    await new Promise(process.nextTick);
+
+    const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
+    const response = await new Promise<any>((resolve) => {
+      listener({
+        type: 'START_RECORDING',
+        tabId: 42,
+        runConfig: {
+          storageMode: 'local',
+          micMode: 'off',
+          recordSelfVideo: false,
+        },
+      }, {}, resolve);
+    });
+
+    expect(response).toEqual(expect.objectContaining({
+      ok: true,
+      session: expect.objectContaining({
+        phase: 'starting',
+        targetTabId: 42,
+        meetingSlug: 'abc-defg-hij',
+      }),
+    }));
+  });
+
   it('clears diagnostics only after the debug dashboard disconnects while the session is idle', async () => {
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
     const offscreenInstance = {

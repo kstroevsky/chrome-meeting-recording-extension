@@ -1,38 +1,138 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Mock Google Meet</title>
+  <meta charset="utf-8" />
+  <title>Mock Google Meet</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      color: #fff;
+      background: #101418;
+      display: grid;
+      place-items: center;
+    }
+
+    main {
+      width: min(960px, calc(100vw - 32px));
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #111827;
+      border-radius: 8px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    [aria-label="Captions"] {
+      margin-top: 16px;
+      min-height: 72px;
+    }
+
+    .nMcdL {
+      display: inline-block;
+      min-width: 280px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.72);
+    }
+
+    .NWpY1d {
+      margin-bottom: 4px;
+      color: #8ab4f8;
+      font-weight: 700;
+    }
+
+    .ygicle {
+      font-size: 18px;
+      line-height: 1.35;
+    }
+
+    #ended-state {
+      margin-top: 16px;
+      color: #fca5a5;
+      font-size: 18px;
+      font-weight: 700;
+    }
+  </style>
 </head>
 <body>
-    <h1>Fake Google Meet</h1>
-    <!-- Fake Caption Container -->
-    <div class="a4cQT">
-        <div class="TBMuR bj4p3b">
-            <div class="KcIKk">John Doe</div>
-            <div class="iTTPs">Hello testing 123</div>
-        </div>
+  <main>
+    <canvas id="stage" width="1280" height="720" aria-label="Mock meeting video"></canvas>
+
+    <div class="controls">
+      <button id="leave-call" type="button" aria-label="Leave call">Leave call</button>
+      <button id="caption-update" type="button">Update caption</button>
+      <button id="end-meeting" type="button">End meeting</button>
     </div>
-    
-    <!-- Video Element (Needed for Tab Capture testing) -->
-    <video autoplay muted loop id="mock-video"></video>
 
-    <script>
-        // Generate a test video stream
-        const canvas = document.createElement('canvas');
-        canvas.width = 640;
-        canvas.height = 480;
-        const ctx = canvas.getContext('2d');
-        
-        setInterval(() => {
-            ctx.fillStyle = `hsl(${Math.random() * 360}, 100%, 50%)`;
-            ctx.fillRect(0,0,640,480);
-            ctx.fillStyle = 'white';
-            ctx.font = '30px Arial';
-            ctx.fillText(Date.now().toString(), 10, 50);
-        }, 1000);
+    <div id="captions-region" role="region" aria-label="Captions">
+      <div class="nMcdL" data-participant-id="alice">
+        <div class="NWpY1d">Alice Example</div>
+        <div class="ygicle">Initial caption from mocked Meet</div>
+      </div>
+    </div>
 
-        const video = document.getElementById('mock-video');
-        video.srcObject = canvas.captureStream(30);
-    </script>
+    <div id="ended-state" hidden>You left the meeting Rejoin</div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById('stage');
+    const ctx = canvas.getContext('2d');
+    const textNode = document.querySelector('.ygicle');
+    const leaveButton = document.getElementById('leave-call');
+    const captionsRegion = document.getElementById('captions-region');
+    const endedState = document.getElementById('ended-state');
+    let frame = 0;
+
+    function draw() {
+      const hue = (frame * 4) % 360;
+      ctx.fillStyle = `hsl(${hue}, 58%, 22%)`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '48px Arial';
+      ctx.fillText('Mock Google Meet', 48, 92);
+      ctx.font = '34px Arial';
+      ctx.fillText(`Frame ${frame}`, 48, 154);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillRect(48, 210, 220 + ((frame * 9) % 560), 32);
+      frame += 1;
+      requestAnimationFrame(draw);
+    }
+
+    function setCaption(text) {
+      textNode.textContent = text;
+    }
+
+    function endMeeting() {
+      leaveButton.remove();
+      captionsRegion.remove();
+      endedState.hidden = false;
+    }
+
+    document.getElementById('caption-update').addEventListener('click', () => {
+      setCaption(`Updated caption ${Date.now()}`);
+    });
+    document.getElementById('end-meeting').addEventListener('click', endMeeting);
+
+    window.mockMeet = { setCaption, endMeeting };
+    draw();
+  </script>
 </body>
 </html>

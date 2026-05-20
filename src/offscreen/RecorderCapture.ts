@@ -5,6 +5,7 @@
  */
 
 import { withTimeout } from '../shared/async';
+import { E2E_MOCK_TAB_STREAM_ID, isE2EMockCaptureBuild } from '../shared/build';
 import type { MicMode } from '../shared/recording';
 import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 import {
@@ -116,6 +117,78 @@ function makeTabCaptureConstraints(
   };
 }
 
+function patchTrackStop(track: MediaStreamTrack | undefined, cleanup: () => void): void {
+  if (!track) return;
+  const originalStop = track.stop.bind(track);
+  let cleaned = false;
+  track.stop = () => {
+    if (!cleaned) {
+      cleaned = true;
+      cleanup();
+    }
+    originalStop();
+  };
+}
+
+function createE2EMockTabStream(
+  tabOutput: Readonly<TabCaptureSettings>,
+  deps: RecorderCaptureDeps
+): MediaStream {
+  const canvas = document.createElement('canvas');
+  canvas.width = tabOutput.maxWidth;
+  canvas.height = tabOutput.maxHeight;
+  const ctx = canvas.getContext('2d');
+  let frame = 0;
+
+  const draw = () => {
+    if (!ctx) return;
+    const hue = (frame * 6) % 360;
+    ctx.fillStyle = `hsl(${hue}, 60%, 24%)`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '40px sans-serif';
+    ctx.fillText('E2E mock tab capture', 32, 72);
+    ctx.font = '24px sans-serif';
+    ctx.fillText(`Frame ${frame}`, 32, 116);
+    frame += 1;
+  };
+
+  draw();
+  const timer = window.setInterval(draw, 1000 / Math.max(1, Math.min(tabOutput.maxFrameRate, 30)));
+  const stream = canvas.captureStream(Math.max(1, Math.min(tabOutput.maxFrameRate, 30)));
+  const cleanupCallbacks: Array<() => void> = [() => clearInterval(timer)];
+
+  try {
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContextCtor) {
+      const audio = new AudioContextCtor();
+      const oscillator = audio.createOscillator();
+      const gain = audio.createGain();
+      const destination = audio.createMediaStreamDestination();
+      gain.gain.value = 0.02;
+      oscillator.frequency.value = 440;
+      oscillator.connect(gain);
+      gain.connect(destination);
+      oscillator.start();
+      const audioTrack = destination.stream.getAudioTracks()[0];
+      if (audioTrack) stream.addTrack(audioTrack);
+      cleanupCallbacks.push(() => {
+        try { oscillator.stop(); } catch {}
+        void audio.close().catch(() => {});
+      });
+    }
+  } catch (error) {
+    deps.warn('E2E mock tab audio setup failed; continuing with video-only stream', describeMediaError(error));
+  }
+
+  const cleanup = () => {
+    while (cleanupCallbacks.length) cleanupCallbacks.shift()?.();
+  };
+  stream.getTracks().forEach((track) => patchTrackStop(track, cleanup));
+  deps.log('Using E2E mock tab capture stream');
+  return stream;
+}
+
 /** Acquires the tab stream from the background-provided stream id with desktop fallback. */
 export async function captureTabStreamFromId(
   streamId: string,
@@ -124,6 +197,10 @@ export async function captureTabStreamFromId(
 ): Promise<MediaStream> {
   const tabOutput = deps ? tabOutputOrDeps as Readonly<TabCaptureSettings> : getTabOutputSettings();
   const captureDeps = (deps ?? tabOutputOrDeps) as RecorderCaptureDeps;
+
+  if (isE2EMockCaptureBuild() && streamId.startsWith(E2E_MOCK_TAB_STREAM_ID)) {
+    return createE2EMockTabStream(tabOutput, captureDeps);
+  }
 
   captureDeps.log(`Attempting getUserMedia with streamId ${streamId} source=tab`);
   try {
