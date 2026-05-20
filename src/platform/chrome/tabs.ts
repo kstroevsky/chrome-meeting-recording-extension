@@ -48,3 +48,15 @@ export function getCapturedTabs(): Promise<chrome.tabCapture.CaptureInfo[]> {
     }
   });
 }
+
+export function addTabRemovedListener(
+  listener: (tabId: number, removeInfo: chrome.tabs.TabRemoveInfo) => void
+): void {
+  chrome.tabs.onRemoved.addListener(listener);
+}
+
+export function addTabUpdatedListener(
+  listener: (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void
+): void {
+  chrome.tabs.onUpdated.addListener(listener);
+}

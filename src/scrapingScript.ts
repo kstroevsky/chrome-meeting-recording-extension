@@ -27,6 +27,7 @@ import type { MeetingProviderAdapter } from './content/MeetingProviderAdapter';
 import { isPopupToContentMessage } from './shared/protocol';
 import { configurePerfRuntime, logPerf, type PerfEventEntry } from './shared/perf';
 import { CaptionBuffer } from './content/captionBuffer';
+import { MeetingEndDetector, type MeetingEndedPayload } from './content/MeetingEndDetector';
 
 function sendPerfEvent(entry: PerfEventEntry) {
   try {
@@ -46,6 +47,7 @@ class TranscriptCollector {
   private captionObserver: MutationObserver | null = null;
   private regionObserver: MutationObserver | null = null;
   private regionParentObserver: MutationObserver | null = null;
+  private meetingEndDetector: MeetingEndDetector | null = null;
   private activeRegion: HTMLElement | null = null;
   private readonly blockObservers = new WeakMap<HTMLElement, ObservedCaptionBlock>();
   private readonly observedBlocks = new Set<HTMLElement>();
@@ -55,6 +57,7 @@ class TranscriptCollector {
 
   start() {
     this.observeCaptionsRegionAppearance();
+    this.observeMeetingLifecycle();
     this.exposeWindowApi();
     this.exposeMessageApi();
   }
@@ -171,6 +174,24 @@ class TranscriptCollector {
 
   getActiveBlockObserverCount(): number { return this.activeBlockObserverCount; }
 
+  private observeMeetingLifecycle() {
+    this.meetingEndDetector?.stop();
+    this.meetingEndDetector = new MeetingEndDetector({
+      provider: this.provider,
+      getMeetingId: () => this.provider.getProviderInfo(window.location, document).meetingId,
+      onMeetingEnded: (payload) => this.reportMeetingEnded(payload),
+    });
+    this.meetingEndDetector.start();
+  }
+
+  private reportMeetingEnded(payload: MeetingEndedPayload) {
+    try {
+      chrome.runtime.sendMessage({ type: 'MEETING_ENDED', ...payload }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch {}
+  }
+
   private exposeWindowApi() {
     (window as any).getTranscript = () => this.getTranscriptText();
     (window as any).resetTranscript = () => this.reset();
@@ -200,6 +221,7 @@ class TranscriptCollector {
     this.reset();
     this.captionObserver?.disconnect(); this.regionObserver?.disconnect(); this.regionParentObserver?.disconnect();
     this.captionObserver = null; this.regionObserver = null; this.regionParentObserver = null;
+    this.meetingEndDetector?.stop(); this.meetingEndDetector = null;
     this.activeRegion = null;
     this.cleanupAllSpeakerBlockObservers();
   }

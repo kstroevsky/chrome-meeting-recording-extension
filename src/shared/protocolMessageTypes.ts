@@ -16,6 +16,10 @@ export const POPUP_TO_CONTENT_MESSAGE_TYPES = [
   'RESET_TRANSCRIPT',
 ] as const;
 
+export const CONTENT_TO_BG_MESSAGE_TYPES = [
+  'MEETING_ENDED',
+] as const;
+
 export const OFFSCREEN_TO_BG_MESSAGE_TYPES = [
   'OFFSCREEN_READY',
   'OFFSCREEN_STATE',

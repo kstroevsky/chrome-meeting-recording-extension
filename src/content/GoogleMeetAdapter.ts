@@ -4,7 +4,7 @@
  * Google Meet implementation of `MeetingProviderAdapter`.
  */
 
-import type { MeetingProviderAdapter, CaptionBlockData } from './MeetingProviderAdapter';
+import type { MeetingProviderAdapter, CaptionBlockData, MeetingLifecycleState } from './MeetingProviderAdapter';
 import type { MeetingProviderInfo } from '../shared/provider';
 
 /**
@@ -26,10 +26,26 @@ const MEET_SELECTORS = {
   captionText: '.ygicle',
   speakerName: '.NWpY1d',
   captionBlock: '.nMcdL',
+  leaveCallControl: [
+    '[aria-label*="Leave call" i]',
+    '[aria-label*="Leave meeting" i]',
+    '[data-tooltip*="Leave call" i]',
+    '[data-tooltip*="Leave meeting" i]',
+  ].join(','),
 } as const;
 
+const ENDED_TEXT_PATTERNS = [
+  /\byou'?ve left the meeting\b/i,
+  /\byou left the meeting\b/i,
+  /\bthe meeting has ended\b/i,
+  /\bthis meeting has ended\b/i,
+  /\breturn to home screen\b/i,
+  /\brejoin\b/i,
+  /\bre-join\b/i,
+];
+
 export class GoogleMeetAdapter implements MeetingProviderAdapter {
-  getProviderInfo(location: Location, root: ParentNode): MeetingProviderInfo {
+  getProviderInfo(location: Location, _root: ParentNode): MeetingProviderInfo {
     const meetingId = location.pathname.split('/').pop() || null;
     return {
       providerId: 'google-meet',
@@ -65,5 +81,16 @@ export class GoogleMeetAdapter implements MeetingProviderAdapter {
       speakerName,
       textNode,
     };
+  }
+
+  getMeetingLifecycleState(root: ParentNode): MeetingLifecycleState {
+    if (root.querySelector(MEET_SELECTORS.leaveCallControl)) return 'active';
+
+    const bodyText = root instanceof Document
+      ? root.body?.innerText || root.body?.textContent || ''
+      : root.textContent || '';
+    return ENDED_TEXT_PATTERNS.some((pattern) => pattern.test(bodyText))
+      ? 'ended'
+      : 'unknown';
   }
 }

@@ -15,6 +15,7 @@ import type {
 } from './recording';
 import {
   BG_TO_OFFSCREEN_RUNTIME_CONNECT,
+  CONTENT_TO_BG_MESSAGE_TYPES,
   OFFSCREEN_TO_BG_MESSAGE_TYPES,
   PERF_EVENT_MESSAGE_TYPE,
   POPUP_TO_BG_MESSAGE_TYPES,
@@ -70,6 +71,12 @@ export type PopupToContentResponse<T extends PopupToContent> =
   T extends PopupResetTranscript ? { ok: true } :
   never;
 
+export type ContentMeetingEnded = {
+  type: 'MEETING_ENDED';
+  meetingId: string | null;
+  reason?: string;
+};
+
 export type BgToPopup =
   | { type: 'RECORDING_STATE'; session: RecordingSessionSnapshot }
   | { type: 'RECORDING_SAVED'; filename?: string }
@@ -121,6 +128,11 @@ export function isPopupToBgMessage(value: unknown): value is PopupToBg {
 /** Checks whether a tab message belongs to the popup -> content command set. */
 export function isPopupToContentMessage(value: unknown): value is PopupToContent {
   return hasKnownMessageType(value, POPUP_TO_CONTENT_MESSAGE_TYPES);
+}
+
+/** Checks whether a content script message reports that the active meeting ended. */
+export function isMeetingEndedMessage(value: unknown): value is ContentMeetingEnded {
+  return hasKnownMessageType(value, CONTENT_TO_BG_MESSAGE_TYPES);
 }
 
 /** Checks whether a port/runtime message belongs to the offscreen -> background set. */

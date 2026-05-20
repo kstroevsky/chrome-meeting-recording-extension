@@ -20,7 +20,7 @@ import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
-import { wirePortHandlers } from './offscreen/rpcHandlers';
+import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
 import {
   DEFAULT_RECORDING_RUN_CONFIG,
@@ -244,4 +244,5 @@ function sampleRuntimeMetrics() {
 
 setInterval(sampleRuntimeMetrics, RUNTIME_SAMPLE_INTERVAL_MS);
 
+wireRuntimeListener(connectPort);
 getPort();

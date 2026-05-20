@@ -18,6 +18,7 @@ import { OffscreenManager } from './background/OffscreenManager';
 import { PerfDebugStore } from './background/PerfDebugStore';
 import { RecordingSession } from './background/RecordingSession';
 import { registerMessageHandlers } from './background/messageHandlers';
+import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { startKeepAlive, stopKeepAlive, maybeClearPerfDiagnostics, registerSaveHandler } from './background/sessionLifecycle';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
 import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
@@ -73,6 +74,7 @@ registerSaveHandler(offscreen, L);
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, offscreen, session, perfDebugStore });
+registerRecordingAutoStop({ L, offscreen, session });
 
 // Register port listeners for offscreen and debug dashboard connections.
 chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {

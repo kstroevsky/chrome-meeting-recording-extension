@@ -6,7 +6,8 @@
  */
 
 import { fetchDriveTokenWithFallback } from './driveAuth';
-import { isPerfEventMessage, isPopupToBgMessage, type CommandResult } from '../shared/protocol';
+import { handleMeetingEndedMessage } from './recordingAutoStop';
+import { isMeetingEndedMessage, isPerfEventMessage, isPopupToBgMessage, type CommandResult } from '../shared/protocol';
 import { type PerfEventEntry } from '../shared/perf';
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
@@ -29,13 +30,20 @@ export type MessageHandlersDeps = {
 export function registerMessageHandlers({ L, offscreen, session, perfDebugStore }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
-    _sender: chrome.runtime.MessageSender,
+    sender: chrome.runtime.MessageSender,
     sendResponse: (response?: unknown) => void
   ) => {
     if (isPerfEventMessage(msg)) {
       perfDebugStore.record(msg.entry as PerfEventEntry);
       sendResponse({ ok: true });
       return false;
+    }
+
+    if (isMeetingEndedMessage(msg)) {
+      handleMeetingEndedMessage(msg, sender, { L, offscreen, session })
+        .then((res) => sendResponse(res))
+        .catch((e: any) => sendResponse({ ok: false, stopped: false, error: e?.message || String(e) }));
+      return true;
     }
 
     if (!isPopupToBgMessage(msg)) return false;

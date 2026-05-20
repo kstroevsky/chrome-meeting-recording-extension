@@ -123,6 +123,18 @@ export function normalizeWarnings(value: unknown): string[] | undefined {
   return normalized.length ? normalized : undefined;
 }
 
+/** Normalizes an optional Chrome tab id stored with the active recording. */
+function normalizeTargetTabId(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+/** Normalizes an optional Meet URL slug stored with the active recording. */
+function normalizeMeetingSlug(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 /** Creates the canonical idle session snapshot used as the safe fallback state. */
 export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
   return {
@@ -138,10 +150,14 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
   const candidate = value as Partial<RecordingSessionSnapshot>;
   const phase = normalizePhase(candidate.phase);
   const runConfig = phase === 'idle' ? null : parseRunConfig(candidate.runConfig);
+  const targetTabId = phase === 'idle' ? undefined : normalizeTargetTabId(candidate.targetTabId);
+  const meetingSlug = phase === 'idle' ? undefined : normalizeMeetingSlug(candidate.meetingSlug);
 
   return {
     phase,
     runConfig,
+    targetTabId,
+    meetingSlug,
     uploadSummary: normalizeUploadSummary(candidate.uploadSummary),
     error: typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error : undefined,
     warnings: normalizeWarnings(candidate.warnings),

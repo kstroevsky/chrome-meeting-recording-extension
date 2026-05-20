@@ -42,6 +42,15 @@ export const TIMEOUTS = {
   CAPTION_GRACE_MS: 2_000,
 
   /**
+   * How long Meet must look ended before the content script asks background
+   * to stop. This intentionally favors late stops over false auto-stops.
+   */
+  MEETING_END_GRACE_MS: 30_000,
+
+  /** Fallback polling cadence for meeting-end detection when DOM mutations are quiet. */
+  MEETING_END_POLL_MS: 2_000,
+
+  /**
    * Maximum time ensureReady() will wait for the offscreen document to
    * connect its Port and signal OFFSCREEN_READY before giving up.
    * Uses a Promise-based signal (not polling) so the wait resolves
