@@ -241,4 +241,163 @@ describe('background runtime messages', () => {
 
     expect(chrome.storage.session.remove).not.toHaveBeenCalled();
   });
+
+  it('stops the active recording when the recorded tab is closed', async () => {
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({
+      recordingSession: {
+        phase: 'recording',
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        targetTabId: 42,
+        meetingSlug: 'abc-defg-hij',
+        updatedAt: Date.now(),
+      },
+    });
+    const offscreenInstance = {
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
+      hydratePhase: jest.fn(),
+      attachPort: jest.fn(),
+      ensureReady: jest.fn().mockResolvedValue(undefined),
+      stopIfPossibleOnSuspend: jest.fn(),
+      rpc: jest.fn().mockResolvedValue({ ok: true }),
+      revokeBlobUrl: jest.fn(),
+    };
+
+    jest.doMock('../src/background/driveAuth', () => ({
+      fetchDriveTokenWithFallback: jest.fn(),
+    }));
+    jest.doMock('../src/background/OffscreenManager', () => ({
+      OffscreenManager: jest.fn(() => offscreenInstance),
+    }));
+
+    await import('../src/background');
+    await new Promise(process.nextTick);
+
+    const removedListener = (chrome.tabs.onRemoved.addListener as jest.Mock).mock.calls[0][0];
+    removedListener(42, { windowId: 1, isWindowClosing: false });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(offscreenInstance.ensureReady).toHaveBeenCalled();
+    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+  });
+
+  it('stops the active recording when the recorded tab navigates away from the meeting', async () => {
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({
+      recordingSession: {
+        phase: 'recording',
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        targetTabId: 42,
+        meetingSlug: 'abc-defg-hij',
+        updatedAt: Date.now(),
+      },
+    });
+    const offscreenInstance = {
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
+      hydratePhase: jest.fn(),
+      attachPort: jest.fn(),
+      ensureReady: jest.fn().mockResolvedValue(undefined),
+      stopIfPossibleOnSuspend: jest.fn(),
+      rpc: jest.fn().mockResolvedValue({ ok: true }),
+      revokeBlobUrl: jest.fn(),
+    };
+
+    jest.doMock('../src/background/driveAuth', () => ({
+      fetchDriveTokenWithFallback: jest.fn(),
+    }));
+    jest.doMock('../src/background/OffscreenManager', () => ({
+      OffscreenManager: jest.fn(() => offscreenInstance),
+    }));
+
+    await import('../src/background');
+    await new Promise(process.nextTick);
+
+    const updatedListener = (chrome.tabs.onUpdated.addListener as jest.Mock).mock.calls[0][0];
+    updatedListener(42, { url: 'https://example.com/' }, { id: 42 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+  });
+
+  it('ignores meeting-ended messages from a different meeting', async () => {
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({
+      recordingSession: {
+        phase: 'recording',
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        targetTabId: 42,
+        meetingSlug: 'abc-defg-hij',
+        updatedAt: Date.now(),
+      },
+    });
+    const offscreenInstance = {
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
+      hydratePhase: jest.fn(),
+      attachPort: jest.fn(),
+      ensureReady: jest.fn().mockResolvedValue(undefined),
+      stopIfPossibleOnSuspend: jest.fn(),
+      rpc: jest.fn().mockResolvedValue({ ok: true }),
+      revokeBlobUrl: jest.fn(),
+    };
+
+    jest.doMock('../src/background/driveAuth', () => ({
+      fetchDriveTokenWithFallback: jest.fn(),
+    }));
+    jest.doMock('../src/background/OffscreenManager', () => ({
+      OffscreenManager: jest.fn(() => offscreenInstance),
+    }));
+
+    await import('../src/background');
+    await new Promise(process.nextTick);
+
+    const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
+    const response = await new Promise<any>((resolve) => {
+      listener({ type: 'MEETING_ENDED', meetingId: 'other-meet', reason: 'post-call state detected' }, { tab: { id: 42 } }, resolve);
+    });
+
+    expect(response).toEqual({ ok: true, stopped: false, reason: 'meeting-mismatch' });
+    expect(offscreenInstance.rpc).not.toHaveBeenCalled();
+  });
+
+  it('stops only when the meeting-ended message matches the recorded tab and meeting', async () => {
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({
+      recordingSession: {
+        phase: 'recording',
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        targetTabId: 42,
+        meetingSlug: 'abc-defg-hij',
+        updatedAt: Date.now(),
+      },
+    });
+    const offscreenInstance = {
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
+      hydratePhase: jest.fn(),
+      attachPort: jest.fn(),
+      ensureReady: jest.fn().mockResolvedValue(undefined),
+      stopIfPossibleOnSuspend: jest.fn(),
+      rpc: jest.fn().mockResolvedValue({ ok: true }),
+      revokeBlobUrl: jest.fn(),
+    };
+
+    jest.doMock('../src/background/driveAuth', () => ({
+      fetchDriveTokenWithFallback: jest.fn(),
+    }));
+    jest.doMock('../src/background/OffscreenManager', () => ({
+      OffscreenManager: jest.fn(() => offscreenInstance),
+    }));
+
+    await import('../src/background');
+    await new Promise(process.nextTick);
+
+    const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
+    const response = await new Promise<any>((resolve) => {
+      listener({ type: 'MEETING_ENDED', meetingId: 'abc-defg-hij', reason: 'post-call state detected' }, { tab: { id: 42 } }, resolve);
+    });
+
+    expect(response).toEqual({ ok: true, stopped: true, reason: 'meeting ended: post-call state detected' });
+    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+  });
 });

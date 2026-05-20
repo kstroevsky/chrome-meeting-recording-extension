@@ -62,6 +62,14 @@ Object.assign(global, {
       get: jest.fn().mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' }),
       create: jest.fn().mockResolvedValue(undefined),
       sendMessage: jest.fn().mockResolvedValue(undefined),
+      onRemoved: {
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+      },
+      onUpdated: {
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+      },
     },
     downloads: {
       download: jest.fn(),

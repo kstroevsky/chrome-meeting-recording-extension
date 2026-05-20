@@ -18,4 +18,18 @@ describe('GoogleMeetAdapter', () => {
       supportsCaptions: true,
     });
   });
+
+  it('recognizes an active meeting from the leave-call control', () => {
+    const leaveButton = document.createElement('button');
+    leaveButton.setAttribute('aria-label', 'Leave call');
+    document.body.appendChild(leaveButton);
+
+    expect(adapter.getMeetingLifecycleState(document)).toBe('active');
+  });
+
+  it('recognizes a post-call state from ended meeting text', () => {
+    document.body.textContent = 'You left the meeting Rejoin';
+
+    expect(adapter.getMeetingLifecycleState(document)).toBe('ended');
+  });
 });

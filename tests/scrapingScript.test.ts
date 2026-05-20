@@ -38,6 +38,13 @@ function mountCaptionsRegionInWrapper(...blocks: HTMLDivElement[]): { wrapper: H
   return { wrapper, region };
 }
 
+function mountLeaveCallControl(): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.setAttribute('aria-label', 'Leave call');
+  document.body.appendChild(button);
+  return button;
+}
+
 async function flushMutations(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -130,7 +137,7 @@ describe('scrapingScript', () => {
 
   it('cleans up block observers when caption blocks are removed', async () => {
     const block = createCaptionBlock('user1', 'John Doe', 'Hello world');
-    const region = mountCaptionsRegion(block);
+    mountCaptionsRegion(block);
 
     await flushMutations();
     expect(getCollector().getActiveBlockObserverCount()).toBe(1);
@@ -176,5 +183,49 @@ describe('scrapingScript', () => {
 
     jest.advanceTimersByTime(TIMEOUTS.CAPTION_GRACE_MS + 100);
     expect((window as any).getTranscript()).toContain('John Doe : Hello again there');
+  });
+
+  it('reports meeting end only after the grace period', async () => {
+    const leaveCall = mountLeaveCallControl();
+    await flushMutations();
+    (chrome.runtime.sendMessage as jest.Mock).mockClear();
+
+    leaveCall.remove();
+    document.body.appendChild(document.createTextNode('You left the meeting Rejoin'));
+    await flushMutations();
+
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS - 1);
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'MEETING_ENDED' }),
+      expect.any(Function)
+    );
+
+    jest.advanceTimersByTime(1);
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'MEETING_ENDED',
+        reason: 'post-call state detected',
+      }),
+      expect.any(Function)
+    );
+  });
+
+  it('cancels a pending meeting-end report when call controls return', async () => {
+    const leaveCall = mountLeaveCallControl();
+    await flushMutations();
+    (chrome.runtime.sendMessage as jest.Mock).mockClear();
+
+    leaveCall.remove();
+    await flushMutations();
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS / 2);
+
+    mountLeaveCallControl();
+    await flushMutations();
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS);
+
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'MEETING_ENDED' }),
+      expect.any(Function)
+    );
   });
 });
