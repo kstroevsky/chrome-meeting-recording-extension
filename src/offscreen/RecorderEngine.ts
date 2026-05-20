@@ -51,7 +51,6 @@ export class RecorderEngine {
   private tabCaptureStream: MediaStream | null = null;
   private tabRecordingStream: MediaStream | null = null;
   private micStream: MediaStream | null = null;
-  private recorderSettings: RecorderRuntimeSettingsSnapshot | null = null;
 
   private suffix = '';
   private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
@@ -90,7 +89,6 @@ export class RecorderEngine {
     const runId = this.runId;
     this.micMode = options.micMode;
     this.recordSelfVideo = options.recordSelfVideo;
-    this.recorderSettings = recorderSettings;
     this.suffix = meetingSlug;
     const runStartedAt = Date.now();
 
@@ -234,7 +232,6 @@ export class RecorderEngine {
     this.micStream = null;
     this.playback?.stop(); this.playback = null;
     this.mixedAudio?.stop(); this.mixedAudio = null;
-    this.recorderSettings = null;
     this.finalizedArtifacts = [];
 
     const resolveStop = this.resolveStop;
@@ -260,7 +257,6 @@ export class RecorderEngine {
     this.suffix = '';
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
-    this.recorderSettings = null;
     this.finalizedArtifacts = [];
     this.stopPromise = null; this.resolveStop = null;
     this.pendingStartPromises = [];

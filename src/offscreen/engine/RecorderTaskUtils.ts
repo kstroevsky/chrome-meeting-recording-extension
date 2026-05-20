@@ -9,7 +9,7 @@ import { describeMediaError } from '../RecorderSupport';
 import { debugPerf, logPerf, nowMs, roundMs } from '../../shared/perf';
 import { TIMEOUTS } from '../../shared/timeouts';
 import ysFixWebmDuration from 'fix-webm-duration';
-import type { CompletedRecordingArtifact, RecorderEngineDeps, SealedStorageFile, StorageTarget } from './RecorderEngineTypes';
+import type { RecorderEngineDeps, SealedStorageFile, StorageTarget } from './RecorderEngineTypes';
 import { InMemoryStorageTarget } from './RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
 

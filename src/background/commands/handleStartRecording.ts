@@ -89,7 +89,11 @@ export async function handleStartRecording(
     return;
   }
 
-  session.start(runConfig);
+  const meetingSlug = await resolveMeetingSlug(msg.tabId);
+  session.start(runConfig, {
+    targetTabId: msg.tabId,
+    meetingSlug: meetingSlug || undefined,
+  });
   L.log('Popup requested START_RECORDING for tabId', msg.tabId);
 
   try {
@@ -102,10 +106,7 @@ export async function handleStartRecording(
   }
 
   try {
-    const [streamId, meetingSlug] = await Promise.all([
-      getMediaStreamIdForTab(msg.tabId),
-      resolveMeetingSlug(msg.tabId),
-    ]);
+    const streamId = await getMediaStreamIdForTab(msg.tabId);
     const r = await offscreen.rpc<{ ok: boolean; error?: string }>({
       type: 'OFFSCREEN_START',
       streamId,

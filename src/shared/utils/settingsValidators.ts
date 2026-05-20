@@ -5,7 +5,6 @@
  * Used by settingsNormalizer.ts to keep per-section validation logic small.
  */
 
-import type { ResolutionPreset } from '../types/settingsTypes';
 import type { ChunkingSettings, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings } from '../types/settingsTypes';
 
 export type BoundedPositiveIntResult = number | null;

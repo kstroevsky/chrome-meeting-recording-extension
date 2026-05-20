@@ -25,7 +25,6 @@ import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type 
 import {
   DEFAULT_RECORDING_RUN_CONFIG,
   type RecordingPhase,
-  type RecordingRunConfig,
 } from './shared/recording';
 
 const L = makeLogger('offscreen');
@@ -51,7 +50,6 @@ let portRef: chrome.runtime.Port | null = null;
 let reconnectEnabled = true;
 let currentStorageMode: 'local' | 'drive' = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
 let currentPhase: RecordingPhase = 'idle';
-let currentRunConfig: RecordingRunConfig | null = null;
 let currentWarnings: string[] = [];
 let finalizeRunPromise: Promise<void> | null = null;
 
@@ -94,8 +92,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     currentPhase: () => currentPhase,
     isFinalizing: () => !!finalizeRunPromise,
     clearWarnings: () => { currentWarnings = []; },
-    onStartRequested: (runConfig, storageMode) => {
-      currentRunConfig = runConfig;
+    onStartRequested: (_runConfig, storageMode) => {
       currentStorageMode = storageMode;
     },
     onStopRequested: () => {
@@ -197,12 +194,10 @@ async function finalizeCurrentRecordingRun(): Promise<void> {
       pushState('uploading');
     }
     const summary = await finalizer.finalize({ artifacts, storageMode: currentStorageMode });
-    currentRunConfig = null;
     pushState('idle', summary ? { uploadSummary: summary } : undefined);
   })()
     .catch((e) => {
       L.error('Stop/finalize pipeline failed', describeRuntimeError(e));
-      currentRunConfig = null;
       pushState('failed', { error: describeRuntimeError(e) });
     })
     .finally(() => {

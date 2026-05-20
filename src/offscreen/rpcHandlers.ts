@@ -51,8 +51,9 @@ async function handleOffscreenStart(
   if (!streamId)        return { ok: false, error: 'Missing streamId' };
   if (!runConfig)       return { ok: false, error: 'Missing run configuration' };
   if (!recorderSettings) return { ok: false, error: 'Missing or invalid recorder settings snapshot' };
-  if (deps.currentPhase() !== 'idle' || deps.isFinalizing()) {
-    return { ok: false, error: `Recorder is busy (${deps.currentPhase()})` };
+  const currentPhase = deps.currentPhase();
+  if ((currentPhase !== 'idle' && currentPhase !== 'failed') || deps.isFinalizing()) {
+    return { ok: false, error: `Recorder is busy (${currentPhase})` };
   }
 
   deps.clearWarnings();
@@ -112,10 +113,9 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
   );
 }
 
-/** Registers the direct runtime message listener for the OFFSCREEN_PING reconnect signal. */
+/** Registers the direct runtime message listener for the OFFSCREEN_CONNECT reconnect signal. */
 export function wireRuntimeListener(
-  connectPort: () => chrome.runtime.Port,
-  sendResponse: (response?: unknown) => void
+  connectPort: () => chrome.runtime.Port
 ) {
   chrome.runtime.onMessage.addListener((
     msg: BgToOffscreenRuntime,

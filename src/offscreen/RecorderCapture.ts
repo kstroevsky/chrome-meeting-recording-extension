@@ -230,18 +230,3 @@ export async function maybeGetSelfVideoStream(
 
   return null;
 }
-
-/** Derives a stable filename suffix from the active tab URL when possible. */
-export async function inferActiveTabSuffix(): Promise<string> {
-  try {
-    // Query by Meet URL directly — `currentWindow: true` is unreliable from
-    // the offscreen document context since it has no browser window.
-    const [meetTab] = await chrome.tabs.query({ url: '*://meet.google.com/*' });
-    const url = meetTab?.url || null;
-    if (!url) return '';
-    const parsed = new URL(url);
-    return parsed.pathname.split('/').pop() || '';
-  } catch {
-    return '';
-  }
-}

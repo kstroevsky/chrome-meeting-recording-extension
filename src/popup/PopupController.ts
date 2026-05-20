@@ -45,7 +45,7 @@ export class PopupController {
   constructor(el: PopupElements) {
     this.el = el;
     this.state = new PopupStateController(el, {
-      onPhaseChange: (phase, session) => this.onPhaseChange(phase),
+      onPhaseChange: (phase, _session) => this.onPhaseChange(phase),
       onToast: (msg) => this.toast(msg),
       onAlert: (msg) => alert(msg),
     });

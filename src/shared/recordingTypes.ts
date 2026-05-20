@@ -30,6 +30,8 @@ export type UploadSummary = {
 export type RecordingSessionSnapshot = {
   phase: RecordingPhase;
   runConfig: RecordingRunConfig | null;
+  targetTabId?: number;
+  meetingSlug?: string;
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];

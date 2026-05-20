@@ -5,6 +5,8 @@
         "module": "esnext",
         "moduleResolution": "node",
         "strict": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
         "esModuleInterop": true,
         "types": ["chrome", "jest", "node"],
         "outDir": "dist",

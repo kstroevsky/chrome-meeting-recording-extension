@@ -7,7 +7,6 @@
 import { getChunkTimesliceMs, getVideoMime } from '../RecorderProfiles';
 import { describeMediaError } from '../RecorderSupport';
 import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSettings';
-import { nowMs } from '../../shared/perf';
 import {
   awaitRecorderStart,
   buildRecordingFilename,
@@ -18,7 +17,6 @@ import {
 import type {
   CompletedRecordingArtifact,
   RecorderEngineDeps,
-  SealedStorageFile,
 } from './RecorderEngineTypes';
 
 export type TabRecorderCallbacks = {

@@ -16,6 +16,11 @@ import {
   type UploadSummary,
 } from '../shared/recording';
 
+export type RecordingTarget = {
+  targetTabId: number;
+  meetingSlug?: string;
+};
+
 export type SessionChangeListener = (snapshot: RecordingSessionSnapshot) => void;
 export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<void> | void;
 
@@ -64,11 +69,13 @@ export class RecordingSession {
     return structuredClone(this.snapshot);
   }
 
-  /** Starts a new session in the `starting` phase with the chosen run configuration. */
-  start(runConfig: RecordingRunConfig): RecordingSessionSnapshot {
+  /** Starts a new session in the `starting` phase with the chosen run configuration and target tab. */
+  start(runConfig: RecordingRunConfig, target?: RecordingTarget): RecordingSessionSnapshot {
     this.snapshot = {
       phase: 'starting',
       runConfig,
+      targetTabId: target?.targetTabId,
+      meetingSlug: target?.meetingSlug,
       warnings: undefined,
       updatedAt: Date.now(),
     };
@@ -107,6 +114,8 @@ export class RecordingSession {
     this.snapshot = {
       phase: 'failed',
       runConfig: this.snapshot.runConfig,
+      targetTabId: this.snapshot.targetTabId,
+      meetingSlug: this.snapshot.meetingSlug,
       error,
       warnings: this.snapshot.warnings,
       updatedAt: Date.now(),
@@ -138,6 +147,8 @@ export class RecordingSession {
     this.snapshot = {
       phase,
       runConfig: this.snapshot.runConfig,
+      targetTabId: this.snapshot.targetTabId,
+      meetingSlug: this.snapshot.meetingSlug,
       error,
       warnings,
       uploadSummary: undefined,
@@ -151,6 +162,8 @@ export class RecordingSession {
     this.snapshot = {
       phase,
       runConfig: this.snapshot.runConfig,
+      targetTabId: this.snapshot.targetTabId,
+      meetingSlug: this.snapshot.meetingSlug,
       warnings: this.snapshot.warnings,
       updatedAt: Date.now(),
     };
@@ -165,4 +178,3 @@ export class RecordingSession {
     return snapshot;
   }
 }
-
