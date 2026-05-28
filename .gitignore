@@ -5,3 +5,9 @@ output/
 .DS_Store
 .env
 .env.local
+.idea/
+.vscode/
+.cursor/
+.codegraph/
+.claude/
+.claude.json
