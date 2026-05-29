@@ -14,6 +14,7 @@ import type {
   BgToOffscreenOneWay,
   BgToOffscreenRpc,
   BgToOffscreenRuntime,
+  OffscreenPhaseUpdate,
   RpcResponse,
 } from '../shared/protocol';
 import type { RecorderEngine } from './RecorderEngine';
@@ -27,7 +28,7 @@ export type RpcHandlerDeps = {
   isFinalizing: () => boolean;
   onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive') => void;
   onStopRequested: () => void;
-  pushState: (phase: RecordingPhase, extra?: Record<string, any>) => void;
+  pushState: (phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>) => void;
   clearWarnings: () => void;
   log: (...a: any[]) => void;
   error: (...a: any[]) => void;

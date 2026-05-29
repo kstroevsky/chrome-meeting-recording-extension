@@ -18,10 +18,9 @@ import {
 import {
   createDefaultRunConfig,
   getRunConfigOrDefault,
-  normalizeSessionSnapshot,
   type RecordingPhase,
   type RecordingRunConfig,
-  type RecordingSessionSnapshot,
+  type RecordingStatusView,
   type UploadSummary,
 } from '../../shared/recording';
 import { sendToBackground } from '../../shared/messages';
@@ -29,10 +28,15 @@ import { formatUploadFallbackMessage } from '../popupStatus';
 import type { PopupElements } from '../popupView';
 
 export type PopupStateCallbacks = {
-  onPhaseChange: (phase: RecordingPhase, session: RecordingSessionSnapshot) => void;
+  onPhaseChange: (phase: RecordingPhase, session: RecordingStatusView) => void;
   onToast: (msg: string) => void;
   onAlert: (msg: string) => void;
 };
+
+/** Idle view used as the popup's local fallback when the background is unreachable. */
+function createIdleStatusView(): RecordingStatusView {
+  return { phase: 'idle', runConfig: null, updatedAt: Date.now() };
+}
 
 export class PopupStateController {
   private activeRunConfig: RecordingRunConfig | null = createDefaultRunConfig();
@@ -56,14 +60,14 @@ export class PopupStateController {
 
     try {
       const res = await sendToBackground({ type: 'GET_RECORDING_STATUS' });
-      this.applySession(normalizeSessionSnapshot(res.session));
+      this.applySession(res.session);
     } catch {
-      this.callbacks.onPhaseChange('idle', normalizeSessionSnapshot(undefined));
+      this.callbacks.onPhaseChange('idle', createIdleStatusView());
     }
   }
 
-  /** Applies a canonical session snapshot from background into the popup state. */
-  applySession(snapshot: RecordingSessionSnapshot) {
+  /** Applies the popup-facing status view from background into the popup state. */
+  applySession(snapshot: RecordingStatusView) {
     const prevPhase = this.lastPhase;
     this.lastPhase = snapshot.phase;
     const runConfig = snapshot.phase === 'idle'

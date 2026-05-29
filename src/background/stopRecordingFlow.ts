@@ -5,7 +5,7 @@
  */
 
 import type { CommandResult } from '../shared/protocol';
-import type { RecordingPhase } from '../shared/recording';
+import { type RecordingPhase, toStatusView } from '../shared/recording';
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
 
@@ -20,10 +20,10 @@ export function isStoppablePhase(phase: RecordingPhase): boolean {
 }
 
 const ok = (session: RecordingSession): CommandResult =>
-  ({ ok: true, session: session.getSnapshot() });
+  ({ ok: true, session: toStatusView(session.getSnapshot()) });
 
 const fail = (error: string, session: RecordingSession): CommandResult =>
-  ({ ok: false, error, session: session.getSnapshot() });
+  ({ ok: false, error, session: toStatusView(session.getSnapshot()) });
 
 /** Marks the session as stopping and delegates the stop request to offscreen. */
 export async function stopRecordingFlow(

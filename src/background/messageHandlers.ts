@@ -8,6 +8,7 @@
 import { fetchDriveTokenWithFallback } from './driveAuth';
 import { handleMeetingEndedMessage } from './recordingAutoStop';
 import { isMeetingEndedMessage, isPerfEventMessage, isPopupToBgMessage, type CommandResult } from '../shared/protocol';
+import { toStatusView } from '../shared/recording';
 import { type PerfEventEntry } from '../shared/perf';
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
@@ -68,11 +69,11 @@ export function registerMessageHandlers({ L, offscreen, session, perfDebugStore 
     (async () => {
       if (msg.type === 'START_RECORDING')    return handleStartRecording(msg, deps, send);
       if (msg.type === 'STOP_RECORDING')     return handleStopRecording(deps, send);
-      if (msg.type === 'GET_RECORDING_STATUS') { sendResponse({ session: session.getSnapshot() }); return; }
+      if (msg.type === 'GET_RECORDING_STATUS') { sendResponse({ session: toStatusView(session.getSnapshot()) }); return; }
     })().catch((err) => {
       console.error('[background] top-level error', err);
       session.fail(String(err));
-      sendResponse({ ok: false, error: String(err), session: session.getSnapshot() } satisfies CommandResult);
+      sendResponse({ ok: false, error: String(err), session: toStatusView(session.getSnapshot()) } satisfies CommandResult);
     });
 
     return true;

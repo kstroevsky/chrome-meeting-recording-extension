@@ -27,11 +27,30 @@ export type UploadSummary = {
   localFallbacks: UploadSummaryEntry[];
 };
 
+/**
+ * Background-owned, persisted session state. Carries control-plane bookkeeping
+ * (`targetTabId`, `meetingSlug`) that only the background reads — for auto-stop
+ * tab matching and survival across service-worker restarts.
+ */
 export type RecordingSessionSnapshot = {
   phase: RecordingPhase;
   runConfig: RecordingRunConfig | null;
   targetTabId?: number;
   meetingSlug?: string;
+  uploadSummary?: UploadSummary;
+  error?: string;
+  warnings?: string[];
+  updatedAt: number;
+};
+
+/**
+ * Popup-facing projection of a session snapshot. Drops the control-plane
+ * bookkeeping the popup never renders. This is what crosses the wire to the
+ * popup; produce it with `toStatusView`.
+ */
+export type RecordingStatusView = {
+  phase: RecordingPhase;
+  runConfig: RecordingRunConfig | null;
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];

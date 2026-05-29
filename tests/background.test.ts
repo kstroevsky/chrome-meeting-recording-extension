@@ -176,12 +176,13 @@ describe('background runtime messages', () => {
       }, {}, resolve);
     });
 
+    // The wire response carries the popup-facing status view, which intentionally
+    // drops control-plane bookkeeping (targetTabId/meetingSlug) the popup never renders.
     expect(response).toEqual(expect.objectContaining({
       ok: true,
       session: expect.objectContaining({
         phase: 'starting',
-        targetTabId: 42,
-        meetingSlug: 'abc-defg-hij',
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
       }),
     }));
   });

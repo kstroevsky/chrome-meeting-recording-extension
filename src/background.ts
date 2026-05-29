@@ -32,6 +32,7 @@ import {
 import {
   isBusyPhase,
   RECORDING_SESSION_STORAGE_KEY,
+  toStatusView,
 } from './shared/recording';
 
 const L = makeLogger('background');
@@ -61,7 +62,7 @@ const session = new RecordingSession(
       maybeClearPerfDiagnostics({ session, perfDebugStore, isSessionHydrated: () => sessionHydrated, getActiveDebugDashboards: () => activeDebugDashboards });
     }
     void import('./shared/messages').then(({ broadcastToPopup }) =>
-      broadcastToPopup({ type: 'RECORDING_STATE', session: snapshot })
+      broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) })
     );
   }
 );

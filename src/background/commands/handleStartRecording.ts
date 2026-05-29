@@ -12,7 +12,7 @@ import {
   loadExtensionSettingsFromStorage,
 } from '../../shared/extensionSettings';
 import { type CommandResult } from '../../shared/protocol';
-import { parseRunConfig } from '../../shared/recording';
+import { parseRunConfig, toStatusView } from '../../shared/recording';
 import type { MessageHandlersDeps } from '../messageHandlers';
 
 type StartRecordingMsg = {
@@ -22,9 +22,9 @@ type StartRecordingMsg = {
 };
 
 const ok = (session: MessageHandlersDeps['session']): CommandResult =>
-  ({ ok: true, session: session.getSnapshot() });
+  ({ ok: true, session: toStatusView(session.getSnapshot()) });
 const fail = (error: string, session: MessageHandlersDeps['session']): CommandResult =>
-  ({ ok: false, error, session: session.getSnapshot() });
+  ({ ok: false, error, session: toStatusView(session.getSnapshot()) });
 
 /** Checks for an existing tab capture that would conflict with a new recording start. */
 async function findTabCaptureConflict(

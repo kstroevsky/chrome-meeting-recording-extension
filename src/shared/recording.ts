@@ -16,6 +16,7 @@ export type {
   RecordingPhase,
   RecordingRunConfig,
   RecordingSessionSnapshot,
+  RecordingStatusView,
   RecordingStream,
   StorageMode,
   UploadSummary,
@@ -47,4 +48,5 @@ export {
 export {
   createDefaultRunConfig,
   getRunConfigOrDefault,
+  toStatusView,
 } from './recordingFactories';

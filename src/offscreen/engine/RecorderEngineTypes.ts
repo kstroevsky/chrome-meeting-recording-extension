@@ -6,7 +6,6 @@
 
 import type { RecordingPhase, RecordingStream } from '../../shared/recording';
 
-export type RecordingStateExtra = Record<string, any> | undefined;
 export type EngineState = Exclude<RecordingPhase, 'uploading' | 'failed'>;
 
 
@@ -31,7 +30,7 @@ export type RecorderEngineDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
   error: (...a: any[]) => void;
-  notifyPhase: (phase: RecordingPhase, extra?: RecordingStateExtra) => void;
+  notifyPhase: (phase: RecordingPhase) => void;
   reportWarning?: (warning: string) => void;
   openTarget?: (filename: string) => Promise<StorageTarget>;
 };

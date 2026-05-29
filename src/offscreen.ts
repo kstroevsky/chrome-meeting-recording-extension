@@ -21,6 +21,7 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
+import type { OffscreenPhaseUpdate } from './shared/protocol';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
 import {
   DEFAULT_RECORDING_RUN_CONFIG,
@@ -129,7 +130,7 @@ function getPort(): chrome.runtime.Port {
 
 // ─── State helpers ───────────────────────────────────────────────────────────
 
-function pushState(phase: RecordingPhase, extra?: Record<string, any>) {
+function pushState(phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>) {
   if (phase !== currentPhase && phase !== 'idle') {
     expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
   }

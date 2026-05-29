@@ -31,7 +31,7 @@ import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
-import { normalizeSessionSnapshot, type RecordingPhase } from '../shared/recording';
+import { type RecordingPhase } from '../shared/recording';
 
 export class PopupController {
   private readonly el: PopupElements;
@@ -94,7 +94,7 @@ export class PopupController {
   private wireRecordingStateListener() {
     chrome.runtime.onMessage.addListener((msg: BgToPopup) => {
       if (msg?.type === 'RECORDING_STATE') {
-        this.state.applySession(normalizeSessionSnapshot(msg.session));
+        this.state.applySession(msg.session);
       }
       if (msg?.type === 'RECORDING_SAVED') {
         this.toast(buildSavedLocallyMessage(msg.filename));

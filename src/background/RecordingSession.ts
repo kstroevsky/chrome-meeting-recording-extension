@@ -7,14 +7,12 @@
 
 import {
   createIdleSession,
-  normalizePhase,
   normalizeSessionSnapshot,
-  normalizeUploadSummary,
-  normalizeWarnings,
   type RecordingRunConfig,
   type RecordingSessionSnapshot,
   type UploadSummary,
 } from '../shared/recording';
+import type { OffscreenPhaseUpdate } from '../shared/protocol';
 
 export type RecordingTarget = {
   targetTabId: number;
@@ -102,8 +100,8 @@ export class RecordingSession {
     this.snapshot = {
       phase: 'idle',
       runConfig: null,
-      uploadSummary: normalizeUploadSummary(uploadSummary),
-      warnings: normalizeWarnings(warnings),
+      uploadSummary,
+      warnings,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -123,17 +121,13 @@ export class RecordingSession {
     return this.commit();
   }
 
-  /** Applies an offscreen phase update onto the canonical background-owned snapshot. */
-  applyOffscreenPhase(update: {
-    phase: unknown;
-    uploadSummary?: unknown;
-    error?: unknown;
-    warnings?: unknown;
-  }): RecordingSessionSnapshot {
-    const phase = normalizePhase(update.phase);
-    const error = typeof update.error === 'string' && update.error.trim() ? update.error : undefined;
-    const uploadSummary = normalizeUploadSummary(update.uploadSummary);
-    const warnings = normalizeWarnings(update.warnings);
+  /**
+   * Applies an offscreen phase update onto the canonical background-owned
+   * snapshot. The update is a typed `OffscreenPhaseUpdate` produced by our own
+   * offscreen code, so it is trusted as-is — no defensive normalization.
+   */
+  applyOffscreenPhase(update: OffscreenPhaseUpdate): RecordingSessionSnapshot {
+    const { phase, error, uploadSummary, warnings } = update;
 
     if (phase === 'idle') {
       return this.markIdle(uploadSummary, warnings);

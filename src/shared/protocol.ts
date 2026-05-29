@@ -9,7 +9,7 @@ import type { MeetingProviderInfo } from './provider';
 import type { RecorderRuntimeSettingsSnapshot } from './extensionSettings';
 import type {
   RecordingRunConfig,
-  RecordingSessionSnapshot,
+  RecordingStatusView,
   RecordingPhase,
   UploadSummary,
 } from './recording';
@@ -29,8 +29,8 @@ export type RpcRequest<T extends { type: string }> = T & { __id?: RpcId };
 export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
 
 export type CommandResult =
-  | { ok: true; session: RecordingSessionSnapshot }
-  | { ok: false; error: string; session: RecordingSessionSnapshot };
+  | { ok: true; session: RecordingStatusView }
+  | { ok: false; error: string; session: RecordingStatusView };
 
 export type DriveTokenResponse =
   | { ok: true; token: string }
@@ -55,7 +55,7 @@ export type PopupToBg =
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
   T extends PopupStopRecording ? CommandResult :
-  T extends PopupGetRecordingStatus ? { session: RecordingSessionSnapshot } :
+  T extends PopupGetRecordingStatus ? { session: RecordingStatusView } :
   T extends PopupGetDriveToken ? DriveTokenResponse :
   never;
 
@@ -78,9 +78,21 @@ export type ContentMeetingEnded = {
 };
 
 export type BgToPopup =
-  | { type: 'RECORDING_STATE'; session: RecordingSessionSnapshot }
+  | { type: 'RECORDING_STATE'; session: RecordingStatusView }
   | { type: 'RECORDING_SAVED'; filename?: string }
   | { type: 'RECORDING_SAVE_ERROR'; filename?: string; error: string };
+
+/**
+ * Typed phase update emitted by the offscreen document and applied to the
+ * background-owned session. Both ends are our own code, so the receiver trusts
+ * this shape instead of re-normalizing arbitrary input.
+ */
+export type OffscreenPhaseUpdate = {
+  phase: RecordingPhase;
+  uploadSummary?: UploadSummary;
+  error?: string;
+  warnings?: string[];
+};
 
 export type BgToOffscreenRpc =
   | RpcRequest<{
@@ -100,13 +112,7 @@ export type BgToOffscreenRuntime =
 
 export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY' }
-  | {
-      type: 'OFFSCREEN_STATE';
-      phase: RecordingPhase;
-      uploadSummary?: UploadSummary;
-      error?: string;
-      warnings?: string[];
-    }
+  | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string };
 
 export type PerfEventMessage = {
