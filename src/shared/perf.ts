@@ -7,6 +7,7 @@
 
 import { isDevBuild } from './build';
 import {
+  addStorageChangedListener,
   getLocalStorageValues,
   hasLocalStorageArea,
   setLocalStorageValues,
@@ -102,9 +103,8 @@ export async function configurePerfRuntime(options: ConfigurePerfRuntimeOptions)
   const settings = applyPerfSettings(await readStoredPerfSettings());
   options.onSettingsChanged?.(settings);
 
-  if (!storageWatchInstalled && typeof chrome !== 'undefined' && chrome.storage?.onChanged?.addListener) {
-    storageWatchInstalled = true;
-    chrome.storage.onChanged.addListener((changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+  if (!storageWatchInstalled) {
+    storageWatchInstalled = addStorageChangedListener((changes, areaName) => {
       if (areaName !== 'local') return;
       if (!changes?.[PERF_SETTINGS_STORAGE_KEY]) return;
       const next = applyPerfSettings(changes[PERF_SETTINGS_STORAGE_KEY].newValue);

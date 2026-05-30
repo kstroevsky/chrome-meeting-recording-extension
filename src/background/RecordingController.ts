@@ -12,7 +12,7 @@
  * across separate command handlers.
  */
 
-import { getCapturedTabs, getMediaStreamIdForTab } from '../platform/chrome/tabs';
+import { getCapturedTabs, getMediaStreamIdForTab, getTab } from '../platform/chrome/tabs';
 import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { type CommandResult } from '../shared/protocol';
@@ -166,7 +166,7 @@ export class RecordingController {
   /** Extracts the last path segment from the active tab URL as the meeting slug. */
   private async resolveMeetingSlug(tabId: number): Promise<string> {
     try {
-      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      const tab = await getTab(tabId);
       if (!tab?.url) return '';
       return new URL(tab.url).pathname.split('/').pop() || '';
     } catch { return ''; }

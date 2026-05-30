@@ -24,15 +24,14 @@
 
 import { GoogleMeetAdapter } from './content/GoogleMeetAdapter';
 import type { MeetingProviderAdapter } from './content/MeetingProviderAdapter';
+import { trySendRuntimeMessage } from './platform/chrome/runtime';
 import { isPopupToContentMessage } from './shared/protocol';
 import { configurePerfRuntime, logPerf, type PerfEventEntry } from './shared/perf';
 import { CaptionBuffer } from './content/captionBuffer';
 import { MeetingEndDetector, type MeetingEndedPayload } from './content/MeetingEndDetector';
 
 function sendPerfEvent(entry: PerfEventEntry) {
-  try {
-    chrome.runtime.sendMessage({ type: 'PERF_EVENT', entry }, () => { void chrome.runtime.lastError; });
-  } catch {}
+  void trySendRuntimeMessage({ type: 'PERF_EVENT', entry });
 }
 
 void configurePerfRuntime({ source: 'captions', sink: sendPerfEvent });
@@ -185,11 +184,7 @@ class TranscriptCollector {
   }
 
   private reportMeetingEnded(payload: MeetingEndedPayload) {
-    try {
-      chrome.runtime.sendMessage({ type: 'MEETING_ENDED', ...payload }, () => {
-        void chrome.runtime.lastError;
-      });
-    } catch {}
+    void trySendRuntimeMessage({ type: 'MEETING_ENDED', ...payload });
   }
 
   private exposeWindowApi() {

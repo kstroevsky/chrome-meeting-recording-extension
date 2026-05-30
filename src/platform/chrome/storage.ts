@@ -39,3 +39,23 @@ export async function setSessionStorageValues(values: StorageValues): Promise<vo
 export async function removeSessionStorageValues(keys: string | string[]): Promise<void> {
   await chrome.storage.session.remove(keys as string[]);
 }
+
+export type StorageChangedListener = (
+  changes: Record<string, chrome.storage.StorageChange>,
+  areaName: string
+) => void;
+
+/**
+ * Subscribes to storage change events. Returns true when the listener was
+ * actually installed, false when the storage area is unavailable (e.g. in a
+ * context without `chrome.storage`).
+ */
+export function addStorageChangedListener(listener: StorageChangedListener): boolean {
+  if (typeof chrome === 'undefined' || !chrome.storage?.onChanged?.addListener) return false;
+  chrome.storage.onChanged.addListener(listener);
+  return true;
+}
+
+export function removeStorageChangedListener(listener: StorageChangedListener): void {
+  chrome.storage?.onChanged?.removeListener?.(listener);
+}

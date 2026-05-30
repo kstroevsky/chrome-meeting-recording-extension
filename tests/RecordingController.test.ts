@@ -5,12 +5,13 @@ import type { OffscreenManager } from '../src/background/OffscreenManager';
 jest.mock('../src/platform/chrome/tabs', () => ({
   getCapturedTabs: jest.fn().mockResolvedValue([]),
   getMediaStreamIdForTab: jest.fn().mockResolvedValue('stream-xyz'),
+  getTab: jest.fn().mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' }),
 }));
 jest.mock('../src/shared/settings', () => ({
   loadRecorderRuntimeSettingsSnapshot: jest.fn().mockResolvedValue({ recorder: 'snapshot' }),
 }));
 
-import { getCapturedTabs, getMediaStreamIdForTab } from '../src/platform/chrome/tabs';
+import { getCapturedTabs, getMediaStreamIdForTab, getTab } from '../src/platform/chrome/tabs';
 import { loadRecorderRuntimeSettingsSnapshot } from '../src/shared/settings';
 
 const RUN_CONFIG = { storageMode: 'local', micMode: 'off', recordSelfVideo: false } as const;
@@ -30,8 +31,8 @@ describe('RecordingController', () => {
     jest.clearAllMocks();
     (getCapturedTabs as jest.Mock).mockResolvedValue([]);
     (getMediaStreamIdForTab as jest.Mock).mockResolvedValue('stream-xyz');
+    (getTab as jest.Mock).mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' });
     (loadRecorderRuntimeSettingsSnapshot as jest.Mock).mockResolvedValue({ recorder: 'snapshot' });
-    (chrome.tabs.get as jest.Mock).mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' });
 
     session = new RecordingSession(() => {});
     offscreen = {

@@ -17,6 +17,15 @@ export async function createRuntimeTab(path: string): Promise<chrome.tabs.Tab> {
   return await chrome.tabs.create({ url: getRuntimeUrl(path) });
 }
 
+/** Resolves a tab by id, returning null when it no longer exists. */
+export async function getTab(tabId: number): Promise<chrome.tabs.Tab | null> {
+  try {
+    return await chrome.tabs.get(tabId);
+  } catch {
+    return null;
+  }
+}
+
 export async function sendTabMessage<T = unknown>(tabId: number, message: unknown): Promise<T> {
   return await chrome.tabs.sendMessage(tabId, message) as T;
 }

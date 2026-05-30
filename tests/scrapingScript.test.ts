@@ -196,8 +196,7 @@ describe('scrapingScript', () => {
 
     jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS - 1);
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'MEETING_ENDED' }),
-      expect.any(Function)
+      expect.objectContaining({ type: 'MEETING_ENDED' })
     );
 
     jest.advanceTimersByTime(1);
@@ -205,8 +204,7 @@ describe('scrapingScript', () => {
       expect.objectContaining({
         type: 'MEETING_ENDED',
         reason: 'post-call state detected',
-      }),
-      expect.any(Function)
+      })
     );
   });
 
@@ -224,8 +222,7 @@ describe('scrapingScript', () => {
     jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS);
 
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'MEETING_ENDED' }),
-      expect.any(Function)
+      expect.objectContaining({ type: 'MEETING_ENDED' })
     );
   });
 });

@@ -6,6 +6,12 @@
  */
 
 import { isDevBuild } from '../shared/build';
+import { connectRuntimePort } from '../platform/chrome/runtime';
+import {
+  addStorageChangedListener,
+  getSessionStorageValues,
+  removeStorageChangedListener,
+} from '../platform/chrome/storage';
 import {
   buildCaptionsText,
   buildRecorderText,
@@ -64,9 +70,9 @@ export class DebugDashboard {
       return;
     }
 
-    this.debugPort = chrome.runtime.connect({ name: 'debug-dashboard' });
+    this.debugPort = connectRuntimePort('debug-dashboard');
     this.el.downloadBtn?.addEventListener('click', () => this.downloadSnapshot());
-    chrome.storage?.onChanged?.addListener?.(this.storageListener);
+    addStorageChangedListener(this.storageListener);
 
     void buildSystemInfoText().then((text) => {
       this.systemInfoText = text;
@@ -82,14 +88,14 @@ export class DebugDashboard {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
-    chrome.storage?.onChanged?.removeListener?.(this.storageListener);
+    removeStorageChangedListener(this.storageListener);
     try { this.debugPort?.disconnect(); } catch {}
     this.debugPort = null;
   }
 
   private async refreshSnapshot() {
     try {
-      const res = await chrome.storage.session.get(PERF_DEBUG_SNAPSHOT_STORAGE_KEY);
+      const res = await getSessionStorageValues(PERF_DEBUG_SNAPSHOT_STORAGE_KEY);
       this.renderSnapshot(res?.[PERF_DEBUG_SNAPSHOT_STORAGE_KEY] as PerfDebugSnapshot | undefined);
     } catch {
       this.renderMessage('Diagnostics are temporarily unavailable.');
