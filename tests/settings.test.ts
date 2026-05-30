@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-import type { ExtensionSettings } from '../src/shared/extensionSettings';
+import type { ExtensionSettings } from '../src/shared/settings';
 
 const settingsHtml = readFileSync(
   resolve(__dirname, '../static/settings.html'),
@@ -42,7 +42,7 @@ describe('settings page', () => {
     const saveExtensionSettingsToStorage = jest.fn().mockImplementation(async (value: unknown) => value);
     const resetExtensionSettingsToDefaults = jest.fn().mockResolvedValue(savedSettings);
 
-    jest.doMock('../src/shared/extensionSettings', () => ({
+    jest.doMock('../src/shared/settings', () => ({
       DEFAULT_EXTENSION_SETTINGS: savedSettings,
       loadExtensionSettingsFromStorage,
       saveExtensionSettingsToStorage,
@@ -89,7 +89,7 @@ describe('settings page', () => {
   });
 
   it('toggles tooltips on click and closes them on outside click or Escape', async () => {
-    jest.doMock('../src/shared/extensionSettings', () => ({
+    jest.doMock('../src/shared/settings', () => ({
       DEFAULT_EXTENSION_SETTINGS: savedSettings,
       loadExtensionSettingsFromStorage: jest.fn().mockResolvedValue(savedSettings),
       saveExtensionSettingsToStorage: jest.fn().mockResolvedValue(savedSettings),

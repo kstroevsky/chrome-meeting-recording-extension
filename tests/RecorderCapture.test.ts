@@ -2,7 +2,7 @@ import { captureTabStreamFromId, maybeGetSelfVideoStream } from '../src/offscree
 import {
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
-} from '../src/shared/extensionSettings';
+} from '../src/shared/settings';
 import {
   formatSelfVideoProfile,
   SELF_VIDEO_CONSTRAINTS,

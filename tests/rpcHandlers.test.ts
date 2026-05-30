@@ -1,5 +1,5 @@
 import { wirePortHandlers, wireRuntimeListener } from '../src/offscreen/rpcHandlers';
-import { buildRecorderRuntimeSettingsSnapshot } from '../src/shared/extensionSettings';
+import { buildRecorderRuntimeSettingsSnapshot } from '../src/shared/settings';
 import type { RecordingPhase } from '../src/shared/recording';
 
 function makePort() {

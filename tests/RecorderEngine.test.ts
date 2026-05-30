@@ -5,7 +5,7 @@ import {
   normalizeExtensionSettings,
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
-} from '../src/shared/extensionSettings';
+} from '../src/shared/settings';
 import { PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
 import type { RecordingRunConfig } from '../src/shared/recording';
 

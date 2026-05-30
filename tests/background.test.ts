@@ -68,8 +68,7 @@ describe('background runtime messages', () => {
         extendedTimesliceMs: 4500,
       },
     };
-    const loadExtensionSettingsFromStorage = jest.fn().mockResolvedValue({ stored: true });
-    const buildRecorderRuntimeSettingsSnapshot = jest.fn().mockReturnValue(recorderSettings);
+    const loadRecorderRuntimeSettingsSnapshot = jest.fn().mockResolvedValue(recorderSettings);
     const getMediaStreamIdForTab = jest.fn().mockResolvedValue('stream-1');
     const getCapturedTabs = jest.fn().mockResolvedValue([]);
     const offscreenInstance = {
@@ -83,10 +82,9 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/shared/extensionSettings', () => ({
-      ...jest.requireActual('../src/shared/extensionSettings'),
-      loadExtensionSettingsFromStorage,
-      buildRecorderRuntimeSettingsSnapshot,
+    jest.doMock('../src/shared/settings', () => ({
+      ...jest.requireActual('../src/shared/settings'),
+      loadRecorderRuntimeSettingsSnapshot,
     }));
     jest.doMock('../src/platform/chrome/tabs', () => ({
       ...jest.requireActual('../src/platform/chrome/tabs'),
@@ -116,8 +114,7 @@ describe('background runtime messages', () => {
       }, {}, resolve);
     });
 
-    expect(loadExtensionSettingsFromStorage).toHaveBeenCalledTimes(1);
-    expect(buildRecorderRuntimeSettingsSnapshot).toHaveBeenCalledWith({ stored: true });
+    expect(loadRecorderRuntimeSettingsSnapshot).toHaveBeenCalledTimes(1);
     expect(offscreenInstance.rpc).toHaveBeenCalledWith({
       type: 'OFFSCREEN_START',
       streamId: 'stream-1',

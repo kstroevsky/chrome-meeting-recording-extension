@@ -5,9 +5,9 @@ import {
   getTabOutputSettings,
   normalizeRecorderRuntimeSettingsSnapshot,
   normalizeExtensionSettings,
-} from '../src/shared/extensionSettings';
+} from '../src/shared/settings';
 
-describe('extensionSettings', () => {
+describe('settings', () => {
   it('uses preset-based defaults for camera and tab resolution', () => {
     expect(DEFAULT_EXTENSION_SETTINGS.basic.selfVideoResolutionPreset).toBe('1920x1080');
     expect(DEFAULT_EXTENSION_SETTINGS.professional.tabResolutionPreset).toBe('1920x1080');
