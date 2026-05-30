@@ -7,14 +7,12 @@
 import { addTabRemovedListener, addTabUpdatedListener } from '../platform/chrome/tabs';
 import type { ContentMeetingEnded } from '../shared/protocol';
 import type { RecordingSessionSnapshot } from '../shared/recording';
-import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
-import { isStoppablePhase, stopRecordingFlow } from './stopRecordingFlow';
+import { isStoppablePhase, type RecordingController } from './RecordingController';
 
 type AutoStopDeps = {
-  L: { log: (...a: any[]) => void; warn: (...a: any[]) => void };
-  offscreen: OffscreenManager;
   session: RecordingSession;
+  controller: RecordingController;
 };
 
 function getMeetSlug(url: string): string | null {
@@ -51,7 +49,7 @@ async function stopIfTargetMatches(
     return { ok: true, stopped: false, reason: 'meeting-mismatch' };
   }
 
-  const result = await stopRecordingFlow(deps, reason);
+  const result = await deps.controller.stop(reason);
   if (result.ok) return { ok: true, stopped: true, reason };
   return { ok: false, stopped: false, error: result.error };
 }
@@ -77,7 +75,7 @@ export function registerRecordingAutoStop(deps: AutoStopDeps): void {
   addTabRemovedListener((tabId) => {
     const snapshot = deps.session.getSnapshot();
     if (!isSameRecordingTab(snapshot, tabId)) return;
-    void stopRecordingFlow(deps, 'recorded tab closed');
+    void deps.controller.stop('recorded tab closed');
   });
 
   addTabUpdatedListener((tabId, changeInfo) => {
@@ -87,6 +85,6 @@ export function registerRecordingAutoStop(deps: AutoStopDeps): void {
 
     const nextSlug = getMeetSlug(changeInfo.url);
     if (nextSlug === snapshot.meetingSlug) return;
-    void stopRecordingFlow(deps, 'recorded tab navigated away from meeting');
+    void deps.controller.stop('recorded tab navigated away from meeting');
   });
 }

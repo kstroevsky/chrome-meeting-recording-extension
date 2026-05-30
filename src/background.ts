@@ -16,6 +16,7 @@
 
 import { OffscreenManager } from './background/OffscreenManager';
 import { PerfDebugStore } from './background/PerfDebugStore';
+import { RecordingController } from './background/RecordingController';
 import { RecordingSession } from './background/RecordingSession';
 import { registerMessageHandlers } from './background/messageHandlers';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
@@ -77,9 +78,12 @@ offscreen.onStateChanged = (msg) => {
 };
 registerSaveHandler(offscreen, L);
 
+// The recording control plane: every start/stop trigger drives this one seam.
+const controller = new RecordingController({ L, offscreen, session });
+
 // Register all popup message handlers.
-registerMessageHandlers({ L, offscreen, session, perfDebugStore });
-registerRecordingAutoStop({ L, offscreen, session });
+registerMessageHandlers({ L, session, perfDebugStore, controller });
+registerRecordingAutoStop({ session, controller });
 
 // Register port listeners for offscreen and debug dashboard connections.
 chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {

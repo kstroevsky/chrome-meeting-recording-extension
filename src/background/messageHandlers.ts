@@ -10,17 +10,15 @@ import { handleMeetingEndedMessage } from './recordingAutoStop';
 import { isMeetingEndedMessage, isPerfEventMessage, isPopupToBgMessage, type CommandResult } from '../shared/protocol';
 import { toStatusView } from '../shared/recording';
 import { type PerfEventEntry } from '../shared/perf';
-import type { OffscreenManager } from './OffscreenManager';
+import type { RecordingController } from './RecordingController';
 import type { RecordingSession } from './RecordingSession';
 import type { PerfDebugStore } from './PerfDebugStore';
-import { handleStartRecording } from './commands/handleStartRecording';
-import { handleStopRecording } from './commands/handleStopRecording';
 
 export type MessageHandlersDeps = {
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
-  offscreen: OffscreenManager;
   session: RecordingSession;
   perfDebugStore: PerfDebugStore;
+  controller: RecordingController;
 };
 
 /**
@@ -28,7 +26,7 @@ export type MessageHandlersDeps = {
  * commands to PERF_EVENT, GET_DRIVE_TOKEN, START_RECORDING, STOP_RECORDING,
  * and GET_RECORDING_STATUS handlers.
  */
-export function registerMessageHandlers({ L, offscreen, session, perfDebugStore }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -41,7 +39,7 @@ export function registerMessageHandlers({ L, offscreen, session, perfDebugStore 
     }
 
     if (isMeetingEndedMessage(msg)) {
-      handleMeetingEndedMessage(msg, sender, { L, offscreen, session })
+      handleMeetingEndedMessage(msg, sender, { session, controller })
         .then((res) => sendResponse(res))
         .catch((e: any) => sendResponse({ ok: false, stopped: false, error: e?.message || String(e) }));
       return true;
@@ -63,12 +61,11 @@ export function registerMessageHandlers({ L, offscreen, session, perfDebugStore 
       return true;
     }
 
-    const deps = { L, offscreen, session, perfDebugStore };
     const send = sendResponse as (r: CommandResult) => void;
 
     (async () => {
-      if (msg.type === 'START_RECORDING')    return handleStartRecording(msg, deps, send);
-      if (msg.type === 'STOP_RECORDING')     return handleStopRecording(deps, send);
+      if (msg.type === 'START_RECORDING')    { send(await controller.start(msg)); return; }
+      if (msg.type === 'STOP_RECORDING')     { send(await controller.stop('popup stop button')); return; }
       if (msg.type === 'GET_RECORDING_STATUS') { sendResponse({ session: toStatusView(session.getSnapshot()) }); return; }
     })().catch((err) => {
       console.error('[background] top-level error', err);
