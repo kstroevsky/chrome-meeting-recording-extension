@@ -8,7 +8,7 @@
 
 import { AudioPlaybackBridge, MixedAudioMixer } from '../RecorderAudio';
 import { maybeGetMicStream } from '../RecorderCapture';
-import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSettings';
+import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
 import { PERF_FLAGS } from '../../shared/perf';
 import type { MicMode } from '../../shared/recording';
 import type { RecorderEngineDeps } from './RecorderEngineTypes';

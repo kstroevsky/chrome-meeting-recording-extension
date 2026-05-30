@@ -1,7 +1,10 @@
 /**
- * @file shared/utils/settingsNormalizer.ts
+ * @file shared/settings/normalize.ts
  *
- * Helper utilities for migrating, sanitizing, and cloning extension settings.
+ * Migration, sanitization, and cloning of persisted extension settings, plus
+ * validation of frozen recorder snapshots received over RPC. Internal to the
+ * Settings module except for the two normalize* entry points re-exported by the
+ * module index.
  */
 
 import { isRecord } from '../typeGuards';
@@ -14,22 +17,22 @@ import {
   RECORDING_MODE_OPTIONS,
   RESOLUTION_PRESET_DIMENSIONS,
   RESOLUTION_PRESET_OPTIONS,
-} from '../constants/settingsConstants';
+} from './defaults';
 import {
   validateChunkingSettings,
   validateMicrophoneSettings,
   validateSelfVideoProfile,
   validateTabOutput,
-} from './settingsValidators';
+} from './validate';
 import type {
   ExtensionSettings,
   LegacyVideoFormat,
   RecorderRuntimeSettingsSnapshot,
   ResolutionDimensions,
   ResolutionPreset,
-} from '../types/settingsTypes';
+} from './model';
 
-export { readBoundedPositiveInt } from './settingsValidators';
+export { readBoundedPositiveInt } from './validate';
 
 /** Returns true when a string exactly matches one of the allowed option values. */
 export function hasAllowedString<T extends string>(value: unknown, allowedValues: readonly T[]): value is T {

@@ -15,7 +15,7 @@ import {
   type MicrophoneCaptureSettings,
   type SelfVideoProfileSettings,
   type TabCaptureSettings,
-} from '../shared/extensionSettings';
+} from '../shared/settings';
 import { TIMEOUTS } from '../shared/timeouts';
 import { describeMediaError } from './RecorderSupport';
 import {

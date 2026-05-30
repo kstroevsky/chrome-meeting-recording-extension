@@ -17,7 +17,7 @@ import {
 } from '../RecorderProfiles';
 import { describeMediaError } from '../RecorderSupport';
 import { maybeGetSelfVideoStream } from '../RecorderCapture';
-import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSettings';
+import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
 import { logPerf } from '../../shared/perf';
 import {
   awaitRecorderStart,

@@ -8,7 +8,7 @@
 import { getAudioMime, getChunkTimesliceMs } from '../RecorderProfiles';
 import { describeMediaError } from '../RecorderSupport';
 import { maybeGetMicStream } from '../RecorderCapture';
-import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSettings';
+import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
 import type { MicMode } from '../../shared/recording';
 import {
   awaitRecorderStart,

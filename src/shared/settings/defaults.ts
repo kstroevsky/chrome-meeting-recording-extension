@@ -1,7 +1,9 @@
 /**
- * @file shared/constants/settingsConstants.ts
+ * @file shared/settings/defaults.ts
  *
- * Core constants, option lists, and immutable defaults for extension configuration.
+ * Storage key, option lists, and immutable defaults for extension configuration.
+ * Internal to the Settings module — only DEFAULT_EXTENSION_SETTINGS is re-exported
+ * publicly through the module index.
  */
 
 import { EXTENSION_DEFAULTS } from '../recordingConstants';
@@ -12,7 +14,7 @@ import type {
   RecordingModeDefault,
   ResolutionDimensions,
   ResolutionPreset,
-} from '../types/settingsTypes';
+} from './model';
 
 export const EXTENSION_SETTINGS_STORAGE_KEY = 'extensionSettings';
 export const RECORDING_MODE_OPTIONS = ['opfs', 'drive'] as const;

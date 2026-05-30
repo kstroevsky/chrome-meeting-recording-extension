@@ -6,7 +6,7 @@
 
 import { getChunkTimesliceMs, getVideoMime } from '../RecorderProfiles';
 import { describeMediaError } from '../RecorderSupport';
-import type { RecorderRuntimeSettingsSnapshot } from '../../shared/extensionSettings';
+import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
 import {
   awaitRecorderStart,
   buildRecordingFilename,

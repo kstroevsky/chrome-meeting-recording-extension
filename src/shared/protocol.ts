@@ -6,7 +6,7 @@
  */
 
 import type { MeetingProviderInfo } from './provider';
-import type { RecorderRuntimeSettingsSnapshot } from './extensionSettings';
+import type { RecorderRuntimeSettingsSnapshot } from './settings';
 import type {
   RecordingRunConfig,
   RecordingStatusView,

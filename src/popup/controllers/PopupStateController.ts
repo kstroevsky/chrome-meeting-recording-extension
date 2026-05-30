@@ -14,7 +14,7 @@ import {
 import {
   buildDefaultRunConfigFromSettings,
   loadExtensionSettingsFromStorage,
-} from '../../shared/extensionSettings';
+} from '../../shared/settings';
 import {
   createDefaultRunConfig,
   getRunConfigOrDefault,

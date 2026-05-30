@@ -1,7 +1,9 @@
 /**
- * @file shared/types/settingsTypes.ts
+ * @file shared/settings/model.ts
  *
- * Interfaces, types, and schemas for extension configuration and snapshots.
+ * Type definitions for extension configuration and the frozen recorder snapshot.
+ * Internal to the Settings module — callers import these types from the module
+ * index, not from here.
  */
 
 import type { MicMode } from '../recordingTypes';

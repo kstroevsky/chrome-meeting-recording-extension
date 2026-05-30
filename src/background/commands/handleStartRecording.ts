@@ -7,10 +7,8 @@
  */
 
 import { getCapturedTabs, getMediaStreamIdForTab } from '../../platform/chrome/tabs';
-import {
-  buildRecorderRuntimeSettingsSnapshot,
-  loadExtensionSettingsFromStorage,
-} from '../../shared/extensionSettings';
+import { loadRecorderRuntimeSettingsSnapshot } from '../../shared/settings';
+import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
 import { type CommandResult } from '../../shared/protocol';
 import { parseRunConfig, toStatusView } from '../../shared/recording';
 import type { MessageHandlersDeps } from '../messageHandlers';
@@ -79,9 +77,9 @@ export async function handleStartRecording(
     return;
   }
 
-  let recorderSettings: ReturnType<typeof buildRecorderRuntimeSettingsSnapshot>;
+  let recorderSettings: RecorderRuntimeSettingsSnapshot;
   try {
-    recorderSettings = buildRecorderRuntimeSettingsSnapshot(await loadExtensionSettingsFromStorage());
+    recorderSettings = await loadRecorderRuntimeSettingsSnapshot();
   } catch (e: any) {
     const error = `Failed to load recorder settings: ${e?.message || e}`;
     L.error(error);

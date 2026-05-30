@@ -1,11 +1,12 @@
 /**
- * @file shared/utils/settingsValidators.ts
+ * @file shared/settings/validate.ts
  *
  * Low-level guard functions for validating individual settings fields.
- * Used by settingsNormalizer.ts to keep per-section validation logic small.
+ * Used by normalize.ts to keep per-section validation logic small. Internal to
+ * the Settings module.
  */
 
-import type { ChunkingSettings, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings } from '../types/settingsTypes';
+import type { ChunkingSettings, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings } from './model';
 
 export type BoundedPositiveIntResult = number | null;
 

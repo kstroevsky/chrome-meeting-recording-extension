@@ -1,19 +1,20 @@
 /**
- * @file shared/extensionSettings.ts
+ * @file shared/settings/store.ts
  *
- * User-configurable extension settings with storage persistence and runtime
- * normalization helpers.
+ * In-memory runtime cache plus storage persistence and the derive helpers that
+ * turn user settings into the concrete numbers the recorder consumes. Internal
+ * to the Settings module — the public entry points are re-exported by the index.
  */
 
-import { getLocalStorageValues, hasLocalStorageArea, setLocalStorageValues } from '../platform/chrome/storage';
-import { DEFAULT_EXTENSION_SETTINGS, EXTENSION_SETTINGS_STORAGE_KEY } from './constants/settingsConstants';
-import type { RecordingRunConfig, StorageMode } from './recordingTypes';
+import { getLocalStorageValues, hasLocalStorageArea, setLocalStorageValues } from '../../platform/chrome/storage';
+import { DEFAULT_EXTENSION_SETTINGS, EXTENSION_SETTINGS_STORAGE_KEY } from './defaults';
+import type { RecordingRunConfig, StorageMode } from '../recordingTypes';
 import {
   cloneRecorderRuntimeSettingsSnapshot,
   cloneSettings,
   getResolutionPresetDimensions,
   normalizeExtensionSettings,
-} from './utils/settingsNormalizer';
+} from './normalize';
 import type {
   ChunkingSettings,
   ExtensionSettings,
@@ -21,12 +22,7 @@ import type {
   RecorderRuntimeSettingsSnapshot,
   SelfVideoProfileSettings,
   TabCaptureSettings,
-} from './types/settingsTypes';
-
-// Re-export constants, types, and normalizers so existing dependencies don't break.
-export * from './constants/settingsConstants';
-export * from './types/settingsTypes';
-export * from './utils/settingsNormalizer';
+} from './model';
 
 let runtimeSettings: ExtensionSettings = cloneSettings(DEFAULT_EXTENSION_SETTINGS);
 

@@ -7,7 +7,7 @@
  */
 
 import { captureTabStreamFromId } from './RecorderCapture';
-import { buildRecorderRuntimeSettingsSnapshot, type RecorderRuntimeSettingsSnapshot } from '../shared/extensionSettings';
+import { buildRecorderRuntimeSettingsSnapshot, type RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { DEFAULT_RECORDING_RUN_CONFIG, type MicMode, type RecordingRunConfig } from '../shared/recording';
 import { describeMediaError } from './RecorderSupport';
 import type { MixedAudioMixer } from './RecorderAudio';

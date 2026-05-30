@@ -9,7 +9,7 @@ import {
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
   type ExtensionSettings,
-} from './shared/extensionSettings';
+} from './shared/settings';
 
 type SettingsElements = {
   recordingMode: HTMLSelectElement | null;

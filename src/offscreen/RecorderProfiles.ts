@@ -11,7 +11,7 @@ import {
   DEFAULT_EXTENSION_SETTINGS,
   getChunkingSettings,
   getSelfVideoProfileSettings,
-} from '../shared/extensionSettings';
+} from '../shared/settings';
 
 export type RecorderChunkStream = 'tab' | 'mic' | 'self-video';
 

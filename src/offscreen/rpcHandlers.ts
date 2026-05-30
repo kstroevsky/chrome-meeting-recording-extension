@@ -7,7 +7,7 @@
  */
 
 import { createPortRpcServer } from '../shared/rpc';
-import { normalizeRecorderRuntimeSettingsSnapshot } from '../shared/extensionSettings';
+import { normalizeRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { parseRunConfig, type RecordingPhase, type RecordingRunConfig } from '../shared/recording';
 import { isBgToOffscreenRuntimeMessage } from '../shared/protocol';
 import type {
