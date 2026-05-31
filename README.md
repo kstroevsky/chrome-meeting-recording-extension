@@ -41,7 +41,8 @@ Everything happens in your browser. Capture is **local-first**: recording data s
 ```
 User
  └─ Popup ──────────────────────────────► Background Service Worker
-                                           ├─ RecordingSession (lifecycle owner)
+                                           ├─ RecordingController (start/stop orchestrator)
+                                           ├─ RecordingSession (lifecycle/state owner)
                                            ├─ OffscreenManager (transport)
                                            └─ Offscreen Document
                                                ├─ RecorderEngine (task-based)
@@ -397,7 +398,9 @@ Files: `src/background.ts`, `src/background/*`
 
 **Module decomposition:**
 
-- `src/background/messageHandlers.ts` — routes `START_RECORDING`, `STOP_RECORDING`, `GET_RECORDING_STATUS`, and `GET_DRIVE_TOKEN` messages from the popup; owns `successResult`/`failureResult` helpers.
+- `src/background/RecordingController.ts` — single start/stop orchestrator for the recording control plane. Owns the start/stop decisions, the session transitions they imply, and the `OFFSCREEN_START`/`OFFSCREEN_STOP` RPC handshake. Every trigger — popup commands, auto-stop tab listeners, and the content-script meeting-ended signal — drives recording through this one seam.
+- `src/background/recordingAutoStop.ts` — conservative automatic stop triggers. `registerRecordingAutoStop` binds tab-removed / tab-updated listeners (recorded tab closed or navigated away from the meeting); `handleMeetingEndedMessage` handles the content-script `MEETING_ENDED` signal. Both call into `RecordingController.stop()`.
+- `src/background/messageHandlers.ts` — routes popup messages, delegating `START_RECORDING`/`STOP_RECORDING` to `RecordingController` and serving `GET_RECORDING_STATUS` and `GET_DRIVE_TOKEN`; also forwards the content-script `MEETING_ENDED` message to the auto-stop handler. Owns `successResult`/`failureResult` helpers.
 - `src/background/sessionLifecycle.ts` — manages the service-worker keep-alive loop (`startKeepAlive` / `stopKeepAlive`) and perf-diagnostics clearing driven by session phase transitions. Isolates all `setInterval` keep-alive logic.
 - `src/background/legacySession.ts` — hydrates old single-key session storage shapes (`phase`, `activeRunConfig`) into the current `RecordingSessionSnapshot` layout so in-flight sessions are not lost during extension upgrades.
 - `src/background/perf/PerfDebugReducers.ts` — reduces incoming `PERF_EVENT` messages into the debug snapshot state.
@@ -525,6 +528,25 @@ Responsibilities:
 - applying offscreen phase updates without leaking offscreen-specific state shape into the rest of the background runtime
 
 This is the main architectural improvement over the older design, where lifecycle state was distributed across module globals.
+
+### 1.1 Recording Control Plane Orchestrator
+
+Files: `src/background/RecordingController.ts`, `src/background/recordingAutoStop.ts`
+
+`RecordingController` is the single orchestrator for start and stop. It owns the start/stop decisions and the offscreen RPC handshake, and delegates the state transitions to `RecordingSession` (component 1).
+
+Responsibilities:
+
+- validate `START_RECORDING` (tabId + run config), reject when the tab already has an active tab capture, load the frozen recorder settings snapshot, resolve the meeting slug, transition the session to `starting`, and fire `OFFSCREEN_START`
+- guard `stop()` against stopping when no session is active, mark the session `stopping`, and fire `OFFSCREEN_STOP`
+- shape every failure into a `CommandResult` carrying the current popup-facing status view
+
+Every recording trigger drives this one interface:
+
+- the popup `START_RECORDING` / `STOP_RECORDING` commands (via `messageHandlers.ts`)
+- the auto-stop tab listeners and the content-script meeting-ended signal (via `recordingAutoStop.ts`)
+
+`recordingAutoStop.ts` registers the conservative automatic stop triggers — recorded tab closed, navigated away from the meeting, or the content script reporting `MEETING_ENDED` — and routes each through `RecordingController.stop()` so failure shaping and RPC sequencing stay in one place.
 
 ### 2. Offscreen Lifecycle Manager
 
@@ -747,7 +769,7 @@ Files:
 **`PopupStateController`** (`src/popup/controllers/PopupStateController.ts`):
 
 - manages internal popup state that does not belong in the main controller: active run config, warning accumulation, upload summary deduplication, and idle-phase status line computation
-- loads `extensionSettings` on init and builds a default `RecordingRunConfig` from the stored presets
+- loads the persisted extension settings on init and builds a default `RecordingRunConfig` from the stored presets
 - exposes typed state accessors consumed by `PopupController`
 
 ### 7.1 Settings Page
@@ -756,7 +778,7 @@ Files:
 
 - `static/settings.html`
 - `src/settings.ts`
-- `src/shared/extensionSettings.ts`
+- `src/shared/settings/` — the settings deep module (load, persist, normalize, and derive recorder configuration); its public interface is `src/shared/settings/index.ts`, and internal files (`defaults.ts`, `model.ts`, `validate.ts`, `normalize.ts`, `store.ts`) are not imported directly
 
 Purpose:
 
@@ -843,6 +865,10 @@ These files define the extension's inter-context contracts.
 - `OFFSCREEN_STATE`
 - `OFFSCREEN_SAVE`
 
+#### Content Script → Background
+
+- `MEETING_ENDED`
+
 #### Cross-Cutting Perf Event
 
 - `PERF_EVENT`
@@ -866,6 +892,8 @@ Purpose:
 - reduce direct `chrome.*` coupling in business modules
 - make runtime boundaries more explicit
 - improve testability and architectural readability
+
+This is a **thin normalization layer, not a substitutable port**: all Chrome *operations* route through it, while entry-point listener *registration* (`onMessage` / `onConnect` / `onSuspend`) stays inline. Recent additions closed the remaining operation leaks — `getTab` and tab-lifecycle listeners (`addTabRemovedListener` / `addTabUpdatedListener`) in `tabs.ts`, and `addStorageChangedListener` / `removeStorageChangedListener` in `storage.ts` — so callers no longer reach past the layer. See [ADR-0001](docs/adr/0001-platform-chrome-is-a-utility-layer-not-a-port.md) for the rationale and why this is deliberately not a fake-able ports-and-adapters seam.
 
 ### 11. Diagnostics and Debug Dashboard
 
@@ -1210,6 +1238,12 @@ flowchart TD
 | `OFFSCREEN_STATE` | phase transition or finalize result |
 | `OFFSCREEN_SAVE` | request a local save through background |
 
+### Content Script → Background
+
+| Message | Meaning |
+| :--- | :--- |
+| `MEETING_ENDED` | Meet page entered a post-call state; routed to auto-stop, which stops any active recording |
+
 ### Background → Offscreen
 
 | Message | Meaning |
@@ -1234,6 +1268,7 @@ flowchart TD
 ```
 .
 ├─ static/       # source HTML shells and manifest (webpack copies to dist/)
+├─ public/       # shared static assets copied to dist/ (e.g. gear.png)
 ├─ src/
 │  ├─ background.ts / background/    # service worker and session lifecycle
 │  ├─ offscreen.ts / offscreen/      # media runtime (recorder engine, OPFS, Drive upload)
@@ -1258,6 +1293,8 @@ flowchart TD
 | File | Role |
 | :--- | :--- |
 | `src/background.ts` | top-level MV3 orchestration entrypoint |
+| `src/background/RecordingController.ts` | single start/stop orchestrator (control plane seam) |
+| `src/background/recordingAutoStop.ts` | automatic stop triggers (tab closed/navigated, meeting ended) |
 | `src/background/RecordingSession.ts` | canonical session lifecycle owner |
 | `src/background/OffscreenManager.ts` | offscreen lifecycle + port RPC transport |
 | `src/background/PerfDebugStore.ts` | aggregated diagnostics snapshot store |
@@ -1319,7 +1356,7 @@ flowchart TD
 | `src/popup/MicPermissionService.ts` | microphone permission flow |
 | `src/popup/CameraPermissionService.ts` | camera permission flow |
 | `src/settings.ts` | settings page controller |
-| `src/shared/extensionSettings.ts` | preset-based settings normalization and runtime accessors |
+| `src/shared/settings/` | settings deep module: load/persist/normalize/derive recorder config (interface in `index.ts`) |
 | `src/micsetup.ts` | dedicated mic permission setup page |
 | `src/camsetup.ts` | dedicated camera permission setup page |
 
@@ -1347,9 +1384,12 @@ flowchart TD
 
 | File | Role |
 | :--- | :--- |
-| `src/shared/recording.ts` | recording domain model and normalization helpers |
+| `src/shared/recording.ts` | recording domain barrel (re-exports types, constants, normalizers, factories) |
 | `src/shared/recordingTypes.ts` | recording domain types |
 | `src/shared/recordingConstants.ts` | recording defaults and allowed values |
+| `src/shared/recordingNormalizers.ts` | `normalize*`/`parse*` helpers for recording values |
+| `src/shared/recordingFactories.ts` | `create*`/`get*`/status-view factory helpers |
+| `src/shared/settings/` | settings deep module — load/persist/normalize/derive recorder configuration (interface in `index.ts`) |
 | `src/shared/protocol.ts` | typed inter-context message contracts |
 | `src/shared/protocolMessageTypes.ts` | runtime message type constants |
 | `src/shared/typeGuards.ts` | shared runtime type guards |
@@ -1357,12 +1397,8 @@ flowchart TD
 | `src/shared/rpc.ts` | port RPC transport |
 | `src/shared/perf.ts` | perf event types and helpers |
 | `src/shared/types/perfTypes.ts` | perf event type definitions |
-| `src/shared/types/settingsTypes.ts` | settings type definitions |
 | `src/shared/constants/perfConstants.ts` | perf event name constants |
-| `src/shared/constants/settingsConstants.ts` | settings key and default constants |
 | `src/shared/utils/mathUtils.ts` | math helpers |
-| `src/shared/utils/settingsNormalizer.ts` | settings normalization helpers |
-| `src/shared/utils/settingsValidators.ts` | settings validation helpers |
 | `src/shared/provider.ts` | meeting provider metadata |
 | `src/shared/timeouts.ts` | timeout constants |
 | `src/shared/logger.ts` | prefixed logger |
@@ -1378,8 +1414,8 @@ flowchart TD
 | `src/platform/chrome/identity.ts` | OAuth token wrapper |
 | `src/platform/chrome/offscreen.ts` | offscreen document wrapper |
 | `src/platform/chrome/runtime.ts` | runtime messaging and URL helpers |
-| `src/platform/chrome/storage.ts` | local/session storage wrapper |
-| `src/platform/chrome/tabs.ts` | active tab, tab messages, and stream ID |
+| `src/platform/chrome/storage.ts` | local/session storage wrapper + storage-change listener registration |
+| `src/platform/chrome/tabs.ts` | active tab, tab lookup, tab messages, tab-lifecycle listeners, and stream ID |
 
 ---
 
@@ -1390,7 +1426,7 @@ File: `static/manifest.json`
 - `oauth2.client_id` in source control is a placeholder.
 - Webpack injects the real value from `.env` / shell env key `GOOGLE_OAUTH_CLIENT_ID` into `dist/manifest.json` at build time.
 - If the env var is missing, build keeps the placeholder and logs a warning; Drive auth will fail until configured.
-- Source HTML shells and the source manifest live under `static/`. The emitted extension layout in `dist/` is flat because Chrome requires entrypoints at the extension root.
+- Source HTML shells and the source manifest live under `static/`, shared static assets (e.g. `gear.png`) live under `public/`, and both are copied to `dist/` at build time. The emitted extension layout in `dist/` is flat because Chrome requires entrypoints at the extension root.
 
 Extension entrypoints:
 
