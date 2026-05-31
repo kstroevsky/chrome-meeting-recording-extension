@@ -26,6 +26,18 @@ export type CompletedRecordingArtifact = {
   artifact: SealedStorageFile;
 };
 
+/**
+ * A started MediaRecorder for one stream, held uniformly by the engine so that
+ * starting, stopping, ref-counting, and cleanup iterate a single collection
+ * instead of touching per-stream fields. `stopStream` is an idempotent eager
+ * stop for streams the track owns outright (e.g. the self-video camera).
+ */
+export interface RecorderTrack {
+  readonly stream: RecordingStream;
+  readonly recorder: MediaRecorder;
+  readonly stopStream?: () => void;
+}
+
 export type RecorderEngineDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;

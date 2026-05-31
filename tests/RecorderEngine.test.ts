@@ -218,32 +218,64 @@ describe('RecorderEngine', () => {
     expect(await toText(artifact?.file)).toBe('abc');
   });
 
-  it('notifies recording phase only when the first recorder starts', () => {
-    (engine as any).onRecorderStarted();
-    (engine as any).onRecorderStarted();
+  it('notifies the recording phase exactly once even when several recorders start', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
 
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return makeStream({ audioTracks: [makeTrack('audio')] });
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
+    await flushAsyncWork();
+
+    expect(engine.getActiveRecorderCount()).toBe(2);
     expect(deps.notifyPhase).toHaveBeenCalledTimes(1);
     expect(deps.notifyPhase).toHaveBeenCalledWith('recording');
+
+    await engine.stop();
   });
 
-  it('resolves the pending stop promise when the last recorder stops', () => {
-    const artifact = {
-      filename: 'test.webm',
-      file: chunk('x'),
-      cleanup: jest.fn().mockResolvedValue(undefined),
-    };
-    const resolveStop = jest.fn();
+  it('returns to idle once the last recorder stops and is ready for a new run', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
 
-    (engine as any).activeRecorders = 1;
-    (engine as any).resolveStop = resolveStop;
-    (engine as any).stopPromise = Promise.resolve([]);
-    (engine as any).finalizedArtifacts = [{ stream: 'tab', artifact }];
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return makeStream({ audioTracks: [makeTrack('audio')] });
+      throw new Error('Unexpected getUserMedia call');
+    });
 
-    (engine as any).onRecorderStopped();
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
 
-    expect(resolveStop).toHaveBeenCalledWith([{ stream: 'tab', artifact }]);
-    expect((engine as any).finalizedArtifacts).toEqual([]);
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
+    await flushAsyncWork();
+    expect(engine.isRecording()).toBe(true);
+    expect(engine.getActiveRecorderCount()).toBe(2);
+
+    const artifacts = await engine.stop();
+
+    expect(artifacts.map((entry) => entry.stream).sort()).toEqual(['mic', 'tab']);
     expect(engine.isRecording()).toBe(false);
+    expect(engine.getActiveRecorderCount()).toBe(0);
+    expect(engine.getDebugState()).toBe('idle');
+
+    // The run fully resolved, so a redundant stop is a clean no-op...
+    await expect(engine.stop()).resolves.toEqual([]);
+
+    // ...and the cleared track set lets a fresh run start.
+    await engine.startFromStreamId('stream-id', makeRunConfig());
+    await flushAsyncWork();
+    expect(engine.isRecording()).toBe(true);
+    await engine.stop();
   });
 
   it('waits for target close() to drain pending writes without dropping chunks', async () => {

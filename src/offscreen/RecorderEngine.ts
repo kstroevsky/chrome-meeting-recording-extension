@@ -8,7 +8,7 @@
 
 import { captureTabStreamFromId } from './RecorderCapture';
 import { buildRecorderRuntimeSettingsSnapshot, type RecorderRuntimeSettingsSnapshot } from '../shared/settings';
-import { DEFAULT_RECORDING_RUN_CONFIG, isStoppablePhase, type MicMode, type RecordingRunConfig } from '../shared/recording';
+import { DEFAULT_RECORDING_RUN_CONFIG, isStoppablePhase, type MicMode, type RecordingRunConfig, type RecordingStream } from '../shared/recording';
 import { describeMediaError } from './RecorderSupport';
 import type { MixedAudioMixer } from './RecorderAudio';
 import type { AudioPlaybackBridge } from './RecorderAudio';
@@ -27,6 +27,7 @@ import type {
   CompletedRecordingArtifact,
   EngineState,
   RecorderEngineDeps,
+  RecorderTrack,
 } from './engine/RecorderEngineTypes';
 
 // Re-export types for consumers that import from the engine root.
@@ -44,9 +45,7 @@ export class RecorderEngine {
   private activeRecorders = 0;
   private runId = 0;
 
-  private tabRecorder: MediaRecorder | null = null;
-  private micRecorder: MediaRecorder | null = null;
-  private selfVideoRecorder: MediaRecorder | null = null;
+  private tracks: RecorderTrack[] = [];
 
   private tabCaptureStream: MediaStream | null = null;
   private tabRecordingStream: MediaStream | null = null;
@@ -62,7 +61,6 @@ export class RecorderEngine {
   private resolveStop: ((artifacts: CompletedRecordingArtifact[]) => void) | null = null;
   private finalizedArtifacts: CompletedRecordingArtifact[] = [];
   private pendingStartPromises: Promise<void>[] = [];
-  private stopSelfVideoStream: (() => void) | null = null;
 
   constructor(deps: RecorderEngineDeps) {
     this.deps = deps;
@@ -151,28 +149,31 @@ export class RecorderEngine {
     const tasks: Promise<void>[] = [
       startTabRecorder(tabRecorderStream, this.suffix, runStartedAt, recorderSettings, this.deps, {
         onStarted: () => this.onRecorderStarted(),
-        onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.tabRecorder = null; this.onRecorderStopped(); },
+        onStopped: (artifact) => this.onTrackStopped('tab', artifact),
         onError: () => this.stopAllRecorders(),
-      }).then((rec) => { this.tabRecorder = rec; }),
+      }).then((recorder) => this.registerTrack({ stream: 'tab', recorder })),
     ];
 
     if (this.micMode === 'separate') {
       tasks.push(
         startMicRecorder(runId, () => this.runId, isStale, this.suffix, runStartedAt, this.micMode, recorderSettings, this.micStream, this.deps, {
           onStarted: () => this.onRecorderStarted(),
-          onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.micRecorder = null; this.micStream = null; this.onRecorderStopped(); },
-        }).then((rec) => { this.micRecorder = rec; }).catch((e) => this.deps.warn('Mic recorder start failed', describeMediaError(e)))
+          onStopped: (artifact) => { this.micStream = null; this.onTrackStopped('mic', artifact); },
+        }).then((recorder) => { if (recorder) this.registerTrack({ stream: 'mic', recorder }); })
+          .catch((e) => this.deps.warn('Mic recorder start failed', describeMediaError(e)))
       );
     }
 
     if (this.recordSelfVideo) {
+      let stopStream: (() => void) | undefined;
       tasks.push(
         startSelfVideoRecorder(runId, () => this.runId, isStale, this.suffix, runStartedAt, this.recordSelfVideo, recorderSettings, this.deps, {
           onStarted: () => this.onRecorderStarted(),
-          onStopped: (artifact) => { if (artifact) this.finalizedArtifacts.push(artifact); this.selfVideoRecorder = null; this.stopSelfVideoStream = null; this.onRecorderStopped(); },
+          onStopped: (artifact) => this.onTrackStopped('self-video', artifact),
           onWarning: (msg) => this.deps.reportWarning?.(msg),
-          onStreamAcquired: (stopFn) => { this.stopSelfVideoStream = stopFn; },
-        }).then((rec) => { this.selfVideoRecorder = rec; }).catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
+          onStreamAcquired: (stopFn) => { stopStream = stopFn; },
+        }).then((recorder) => { if (recorder) this.registerTrack({ stream: 'self-video', recorder, stopStream }); })
+          .catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
       );
     }
 
@@ -180,7 +181,7 @@ export class RecorderEngine {
   }
 
   async stop(): Promise<CompletedRecordingArtifact[]> {
-    if (!this.tabRecorder || !this.isRecording()) {
+    if (!this.tracks.some((t) => t.stream === 'tab') || !this.isRecording()) {
       this.deps.warn('Stop called but not recording');
       return Promise.resolve([]);
     }
@@ -207,10 +208,22 @@ export class RecorderEngine {
   }
 
   private stopAllRecorders() {
-    try { this.tabRecorder?.stop(); } catch (e) { this.deps.error('Tab stop error', describeMediaError(e)); }
-    try { this.micRecorder?.stop(); } catch (e) { this.deps.error('Mic stop error', describeMediaError(e)); }
-    this.stopSelfVideoStream?.();
-    try { this.selfVideoRecorder?.stop(); } catch (e) { this.deps.error('Self video stop error', describeMediaError(e)); }
+    for (const track of [...this.tracks]) {
+      track.stopStream?.();
+      try { track.recorder.stop(); } catch (e) { this.deps.error(`${track.stream} stop error`, describeMediaError(e)); }
+    }
+  }
+
+  /** Adds a started recorder to the active track set. */
+  private registerTrack(track: RecorderTrack): void {
+    this.tracks.push(track);
+  }
+
+  /** Collects a stopped track's artifact, drops it from the set, then advances stop accounting. */
+  private onTrackStopped(stream: RecordingStream, artifact: CompletedRecordingArtifact | null): void {
+    if (artifact) this.finalizedArtifacts.push(artifact);
+    this.tracks = this.tracks.filter((track) => track.stream !== stream);
+    this.onRecorderStopped();
   }
 
   private onRecorderStarted() {
@@ -247,7 +260,7 @@ export class RecorderEngine {
   private resetRunState() {
     this.stopAllRecorders();
     this.activeRecorders = 0;
-    this.tabRecorder = null; this.micRecorder = null; this.selfVideoRecorder = null; this.stopSelfVideoStream = null;
+    this.tracks = [];
     this.safeStopStream(this.tabCaptureStream);
     this.safeStopStream(this.tabRecordingStream);
     this.safeStopStream(this.micStream);
