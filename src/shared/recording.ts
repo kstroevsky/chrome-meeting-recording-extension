@@ -36,6 +36,7 @@ export {
 export {
   createIdleSession,
   isBusyPhase,
+  isStoppablePhase,
   normalizeMicMode,
   normalizePhase,
   normalizeSessionSnapshot,

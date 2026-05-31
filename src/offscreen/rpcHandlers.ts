@@ -8,7 +8,7 @@
 
 import { createPortRpcServer } from '../shared/rpc';
 import { normalizeRecorderRuntimeSettingsSnapshot } from '../shared/settings';
-import { parseRunConfig, type RecordingPhase, type RecordingRunConfig } from '../shared/recording';
+import { isBusyPhase, parseRunConfig, type RecordingPhase, type RecordingRunConfig } from '../shared/recording';
 import { isBgToOffscreenRuntimeMessage } from '../shared/protocol';
 import type {
   BgToOffscreenOneWay,
@@ -53,7 +53,7 @@ async function handleOffscreenStart(
   if (!runConfig)       return { ok: false, error: 'Missing run configuration' };
   if (!recorderSettings) return { ok: false, error: 'Missing or invalid recorder settings snapshot' };
   const currentPhase = deps.currentPhase();
-  if ((currentPhase !== 'idle' && currentPhase !== 'failed') || deps.isFinalizing()) {
+  if (isBusyPhase(currentPhase) || deps.isFinalizing()) {
     return { ok: false, error: `Recorder is busy (${currentPhase})` };
   }
 

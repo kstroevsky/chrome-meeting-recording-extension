@@ -2,6 +2,8 @@ import {
   DEFAULT_RECORDING_RUN_CONFIG,
   createDefaultRunConfig,
   getRunConfigOrDefault,
+  isBusyPhase,
+  isStoppablePhase,
   normalizeMicMode,
   normalizeUploadSummary,
   normalizeWarnings,
@@ -18,6 +20,16 @@ describe('shared/recording helpers', () => {
     expect(fallback).toEqual(DEFAULT_RECORDING_RUN_CONFIG);
     expect(fallback).not.toBe(DEFAULT_RECORDING_RUN_CONFIG);
     expect(createDefaultRunConfig()).toEqual(DEFAULT_RECORDING_RUN_CONFIG);
+  });
+
+  it('treats only active capture phases as stoppable', () => {
+    expect((['starting', 'recording', 'stopping'] as const).map(isStoppablePhase)).toEqual([true, true, true]);
+    expect((['idle', 'uploading', 'failed'] as const).map(isStoppablePhase)).toEqual([false, false, false]);
+  });
+
+  it('treats every non-terminal working phase as busy', () => {
+    expect((['starting', 'recording', 'stopping', 'uploading'] as const).map(isBusyPhase)).toEqual([true, true, true, true]);
+    expect((['idle', 'failed'] as const).map(isBusyPhase)).toEqual([false, false]);
   });
 
   it('normalizes warning lists into trimmed unique entries', () => {

@@ -169,3 +169,8 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
 export function isBusyPhase(phase: RecordingPhase): boolean {
   return (BUSY_RECORDING_PHASES as readonly RecordingPhase[]).includes(phase);
 }
+
+/** True when a stop request can act on the phase (active capture in progress). */
+export function isStoppablePhase(phase: RecordingPhase): boolean {
+  return phase === 'starting' || phase === 'recording' || phase === 'stopping';
+}

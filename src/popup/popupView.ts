@@ -4,7 +4,7 @@
  * Pure DOM-focused helpers for syncing popup controls with recording state.
  */
 
-import { isBusyPhase, type RecordingPhase } from '../shared/recording';
+import { isBusyPhase, isStoppablePhase, type RecordingPhase } from '../shared/recording';
 
 export type PopupElements = {
   saveBtn: HTMLButtonElement | null;
@@ -33,7 +33,7 @@ export function setControlsForPhase(elements: PopupElements, phase: RecordingPha
 
   const busy = isBusyPhase(phase);
   startBtn.disabled = busy;
-  stopBtn.disabled = !(phase === 'starting' || phase === 'recording' || phase === 'stopping');
+  stopBtn.disabled = !isStoppablePhase(phase);
 
   if (micModeSelect) micModeSelect.disabled = busy;
   if (storageModeSelect) storageModeSelect.disabled = busy;

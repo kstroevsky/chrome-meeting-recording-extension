@@ -8,7 +8,8 @@ import { addTabRemovedListener, addTabUpdatedListener } from '../platform/chrome
 import type { ContentMeetingEnded } from '../shared/protocol';
 import type { RecordingSessionSnapshot } from '../shared/recording';
 import type { RecordingSession } from './RecordingSession';
-import { isStoppablePhase, type RecordingController } from './RecordingController';
+import { isStoppablePhase } from '../shared/recording';
+import type { RecordingController } from './RecordingController';
 
 type AutoStopDeps = {
   session: RecordingSession;

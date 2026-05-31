@@ -22,7 +22,7 @@ import { isOffscreenToBgMessage } from '../shared/protocol';
 export type OffscreenStateListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_STATE' }>) => void;
 export type OffscreenSaveListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>) => void;
 import { TIMEOUTS } from '../shared/timeouts';
-import type { RecordingPhase } from '../shared/recording';
+import { isStoppablePhase, normalizePhase, type RecordingPhase } from '../shared/recording';
 
 const L = makeLogger('background');
 
@@ -103,7 +103,7 @@ export class OffscreenManager {
   /** Best-effort stop request used when Chrome is about to suspend the worker. */
   async stopIfPossibleOnSuspend(): Promise<void> {
     try {
-      if (this.port && (this.lastKnownPhase === 'starting' || this.lastKnownPhase === 'recording' || this.lastKnownPhase === 'stopping')) {
+      if (this.port && isStoppablePhase(this.lastKnownPhase)) {
         await this.rpc({ type: 'OFFSCREEN_STOP' });
       }
     } catch {}
@@ -136,14 +136,7 @@ export class OffscreenManager {
     }
 
     if (msg.type === 'OFFSCREEN_STATE') {
-      const phase =
-        msg.phase === 'starting'
-        || msg.phase === 'recording'
-        || msg.phase === 'stopping'
-        || msg.phase === 'uploading'
-        || msg.phase === 'failed'
-          ? msg.phase
-          : 'idle';
+      const phase = normalizePhase(msg.phase);
       this.lastKnownPhase = phase;
       this.setBadge(phase);
       this.onStateChanged?.({ ...msg, phase });

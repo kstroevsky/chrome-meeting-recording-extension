@@ -8,7 +8,7 @@
 
 import { captureTabStreamFromId } from './RecorderCapture';
 import { buildRecorderRuntimeSettingsSnapshot, type RecorderRuntimeSettingsSnapshot } from '../shared/settings';
-import { DEFAULT_RECORDING_RUN_CONFIG, type MicMode, type RecordingRunConfig } from '../shared/recording';
+import { DEFAULT_RECORDING_RUN_CONFIG, isStoppablePhase, type MicMode, type RecordingRunConfig } from '../shared/recording';
 import { describeMediaError } from './RecorderSupport';
 import type { MixedAudioMixer } from './RecorderAudio';
 import type { AudioPlaybackBridge } from './RecorderAudio';
@@ -69,7 +69,7 @@ export class RecorderEngine {
   }
 
   isRecording(): boolean {
-    return this.state === 'recording' || this.state === 'starting' || this.state === 'stopping';
+    return isStoppablePhase(this.state);
   }
 
   getActiveRecorderCount(): number { return this.activeRecorders; }

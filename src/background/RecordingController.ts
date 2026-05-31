@@ -16,7 +16,7 @@ import { getCapturedTabs, getMediaStreamIdForTab, getTab } from '../platform/chr
 import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { type CommandResult } from '../shared/protocol';
-import { parseRunConfig, type RecordingPhase, toStatusView } from '../shared/recording';
+import { isStoppablePhase, parseRunConfig, toStatusView } from '../shared/recording';
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
 
@@ -31,11 +31,6 @@ export type StartRecordingMessage = {
   tabId: unknown;
   runConfig: unknown;
 };
-
-/** True when the session is in a phase that a stop request can act on. */
-export function isStoppablePhase(phase: RecordingPhase): boolean {
-  return phase === 'starting' || phase === 'recording' || phase === 'stopping';
-}
 
 export class RecordingController {
   private readonly L: RecordingControllerDeps['L'];
