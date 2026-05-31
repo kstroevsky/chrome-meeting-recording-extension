@@ -40,22 +40,33 @@ Everything happens in your browser. Capture is **local-first**: recording data s
 
 ```
 User
- └─ Popup ──────────────────────────────► Background Service Worker
-                                           ├─ RecordingController (start/stop orchestrator)
-                                           ├─ RecordingSession (lifecycle/state owner)
-                                           ├─ OffscreenManager (transport)
-                                           └─ Offscreen Document
-                                               ├─ RecorderEngine (task-based)
-                                               │   ├─ TabRecorderTask
-                                               │   ├─ MicRecorderTask
-                                               │   └─ SelfVideoRecorderTask
-                                               ├─ LocalFileTarget (OPFS)
-                                               └─ RecordingFinalizer
-                                                   ├─ local: Chrome Downloads API
-                                                   └─ drive: DriveTarget → Drive API
+ ├─ Popup ────────────────────────────────► Background Service Worker
+ │    START_RECORDING / STOP_RECORDING        │   canonical state owner · MV3 keep-alive · re-hydrates after suspend
+ │    GET_TRANSCRIPT → Content Script          ├─ RecordingController    single start/stop orchestrator (one seam)
+ │                                             ├─ RecordingSession       phase state machine (idle…uploading…failed)
+ │                                             ├─ OffscreenManager       reconnecting Port RPC + action badge
+ │                                             ├─ recordingAutoStop      tab closed / navigated / MEETING_ENDED
+ │                                             ├─ driveAuth              OAuth token (silent → interactive)
+ │                                             ├─ PerfDebugStore         aggregates PERF_EVENTs
+ │                                             └─ Offscreen Document  ◄── only MV3 context allowed media APIs
+ │                                                 │   OFFSCREEN_START/STOP ▸ OFFSCREEN_READY/STATE/SAVE
+ │                                                 ├─ RecorderEngine (facade + state machine)
+ │                                                 │   ├─ TabRecorderTask       ◄── tabCapture streamId (video + system audio)
+ │                                                 │   ├─ MicRecorderTask       ◄── getUserMedia(microphone)
+ │                                                 │   ├─ SelfVideoRecorderTask ◄── getUserMedia(camera)
+ │                                                 │   └─ MixedAudioMixer / AudioPlaybackBridge (AudioContext audio graph)
+ │                                                 ├─ StorageTarget: LocalFileTarget (OPFS) ▸ InMemory fallback
+ │                                                 └─ RecordingFinalizer (runs only after capture stops)
+ │                                                     ├─ local : blob URL ─OFFSCREEN_SAVE→ Chrome Downloads API
+ │                                                     └─ drive : DriveTarget ─resumable upload→ Google Drive API
+ │
+ ├─ Content Script (meet.google.com tab)
+ │    ├─ GoogleMeetAdapter → CaptionBuffer ─(GET_TRANSCRIPT)→ Popup
+ │    └─ MeetingEndDetector ─MEETING_ENDED→ Background (auto-stop)
+ │
+ └─ Debug Dashboard (dev builds) ─reads aggregated perf snapshot→ Background
 
-Content Script (Google Meet tab)
- └─ GoogleMeetAdapter → captionBuffer → GET_TRANSCRIPT → Popup
+State persistence:  chrome.storage.session → RecordingSessionSnapshot + perf snapshot   ·   chrome.storage.local → user settings
 ```
 
 1. **Content script** observes the Google Meet caption DOM, debounces speech fragments into committed transcript lines, and serves them on demand.
@@ -975,118 +986,272 @@ Files:
 
 ## Architecture diagrams
 
+These diagrams are the canonical visual reference for the runtime. They are grouped
+so you can read them in dependency order: **topology** (what runs where), then the
+**control plane** (who decides start/stop), then the **media engine** (how capture
+works), then **persistence** (where bytes go after stop), then **transcript /
+auto-stop**, and finally **permissions and diagnostics**. Every box and edge maps to
+a named symbol or file in `src/` so the picture stays honest against the code.
+
+---
+
+**Topology — what runs where**
+
 ### 1. Runtime Context Map
+
+Four isolated MV3 contexts plus the optional debug page, the media sources they pull
+from, and the persistence/sinks they write to. Solid edges are commands/data; dashed
+edges are best-effort or diagnostic.
 
 ```mermaid
 graph TB
-    U[User]
+    U["User"]
 
-    subgraph EXT[Chrome Extension]
-        P[Popup]
-        B[Background Service Worker]
-        O[Offscreen Document]
-        C[Content Script]
-        Dbg[Debug Dashboard]
+    subgraph EXT["Chrome Extension (Manifest V3)"]
+        P["Popup<br/><i>disposable UI · owns no state</i>"]
+        SET["Settings Page<br/><i>presets + tooltips</i>"]
+        MIC["micsetup.html"]
+        CAM["camsetup.html"]
+        B["Background Service Worker<br/><b>canonical session · privileged APIs</b>"]
+        O["Offscreen Document<br/><b>only MV3 media runtime</b>"]
+        C["Content Script<br/><i>meet.google.com</i>"]
+        Dbg["Debug Dashboard<br/><i>dev builds only</i>"]
     end
 
-    T[Google Meet Tab]
-    OPFS[OPFS Temp Files]
-    DL[Chrome Downloads]
-    Drive[Google Drive API]
+    subgraph SRC["Media sources"]
+        T["Google Meet Tab<br/>(tabCapture streamId)"]
+        MICDEV["Microphone<br/>(getUserMedia)"]
+        CAMDEV["Camera<br/>(getUserMedia)"]
+    end
 
-    U --> P
-    U --> Dbg
-    P -->|popup->background| B
-    P -->|popup->content| C
-    C --> T
-    B <-->|Port RPC + events| O
-    O --> OPFS
-    B --> DL
-    O --> Drive
-    Dbg -->|session perf snapshot| B
+    subgraph PERSIST["Persistence & sinks"]
+        SES["chrome.storage.session<br/>session + perf snapshot"]
+        LOC["chrome.storage.local<br/>user settings"]
+        OPFS["OPFS temp files<br/>(live capture buffer)"]
+        DL["Chrome Downloads"]
+        Drive["Google Drive API"]
+    end
+
+    U -->|click action| P
+    U -->|dev link| Dbg
+    P -->|gear| SET
+    P -.->|on denied mic| MIC
+    P -.->|on denied camera| CAM
+
+    P -->|"START/STOP · GET_DRIVE_TOKEN"| B
+    P -->|"GET/RESET_TRANSCRIPT"| C
+    C -->|observe captions DOM| T
+    C -->|"MEETING_ENDED"| B
+
+    B <-->|"Port RPC + OFFSCREEN_STATE/SAVE"| O
+    B -->|"acquire streamId"| T
+    B <-->|persist / hydrate| SES
+    SET <-->|load / save| LOC
+    B -->|"download (local mode)"| DL
+
+    O -->|"MediaRecorder chunks"| OPFS
+    O -->|"getUserMedia"| MICDEV
+    O -->|"getUserMedia"| CAMDEV
+    O -->|"capture stream"| T
+    O -->|"resumable upload (drive mode)"| Drive
+    O -.->|"OFFSCREEN_SAVE → background downloads"| B
+
+    C -.->|"PERF_EVENT"| B
+    O -.->|"PERF_EVENT"| B
+    Dbg -->|read snapshot| B
 ```
 
-### 2. Recording Control Plane
+### 2. Module Layering and Dependency Direction
+
+Dependencies point **downward only**. Feature modules depend on shared contracts and
+the platform wrappers; nothing in a feature module calls `chrome.*` directly. The
+offscreen layer is the only one that touches raw Web media APIs.
+
+```mermaid
+graph TD
+    subgraph ENTRY["Entrypoints (webpack bundles to dist/)"]
+        bg["background.ts"]
+        off["offscreen.ts"]
+        pop["popup.ts"]
+        scr["scrapingScript.ts"]
+        setp["settings.ts"]
+        dbg["debug.ts"]
+    end
+
+    subgraph FEAT["Feature modules"]
+        bgmod["background/*<br/>Controller · Session · OffscreenManager"]
+        offmod["offscreen/*<br/>RecorderEngine · Finalizer · Drive"]
+        popmod["popup/*<br/>controllers · permission services"]
+        cont["content/*<br/>adapter · buffer · end detector"]
+    end
+
+    subgraph SHARED["src/shared — typed contracts (no chrome.* I/O)"]
+        sh["protocol · messages · rpc<br/>recording domain · settings · perf"]
+    end
+
+    subgraph PLAT["src/platform/chrome — thin Chrome wrappers"]
+        pl["action · downloads · identity · offscreen<br/>runtime · storage · tabs"]
+    end
+
+    subgraph HOST["Browser / Chrome APIs"]
+        ch["chrome.*"]
+        web["MediaRecorder · AudioContext<br/>OPFS · getUserMedia"]
+    end
+
+    bg --> bgmod
+    off --> offmod
+    pop --> popmod
+    scr --> cont
+    setp --> sh
+    dbg --> sh
+
+    bgmod --> sh
+    offmod --> sh
+    popmod --> sh
+    cont --> sh
+
+    bgmod --> pl
+    offmod --> pl
+    popmod --> pl
+    cont --> pl
+
+    pl --> ch
+    offmod --> web
+```
+
+> The platform layer wraps Chrome **operations** only. Entry-point listener
+> *registration* (`onMessage` / `onConnect` / `onSuspend`) stays inline in the
+> entrypoints — see [ADR-0001](docs/adr/0001-platform-chrome-is-a-utility-layer-not-a-port.md).
+
+### 3. Service Worker Lifecycle, Keep-Alive & Rehydration
+
+The MV3 worker is disposable: Chrome can suspend it mid-recording. State survives in
+`chrome.storage.session`, and the worker re-attaches the offscreen document and restarts
+the keep-alive loop when it wakes into a busy phase.
+
+```mermaid
+flowchart TD
+    A["SW (re)start — event or Chrome wake"] --> B["configurePerfRuntime()"]
+    B --> C["read chrome.storage.session<br/>(session snapshot + legacy keys + perf)"]
+    C --> D["session.hydrate(snapshot or legacy shape)"]
+    D --> E{"isBusyPhase?<br/>starting / recording / stopping / uploading"}
+    E -->|no| F["idle/failed — clear stale perf diagnostics, badge cleared"]
+    E -->|yes| G["offscreen.ensureReady() — re-attach offscreen Port"]
+    G --> H["startKeepAlive(): setInterval pokeRuntime() every 20s"]
+    H --> I["session change → persist snapshot + broadcast RECORDING_STATE + set badge"]
+    I --> J{"phase still busy?"}
+    J -->|yes| H
+    J -->|no| K["stopKeepAlive()"]
+
+    L["chrome.runtime.onSuspend"] --> M["offscreen.stopIfPossibleOnSuspend()<br/>best-effort OFFSCREEN_STOP if still recording"]
+```
+
+---
+
+**Control plane — who decides start/stop**
+
+### 4. Recording Start / Stop Control Plane
+
+Every start and stop — popup buttons, tab auto-stop, and the content-script
+meeting-ended signal — funnels through `RecordingController`, which owns the
+session transitions and the offscreen RPC handshake.
 
 ```mermaid
 sequenceDiagram
     actor User
     participant P as Popup
     participant C as Content Script
-    participant B as Background
+    participant B as RecordingController
     participant S as RecordingSession
+    participant OM as OffscreenManager
     participant O as Offscreen
     participant E as RecorderEngine
 
+    rect rgba(238,246,255,0)
+    note over User,E: START
     User->>P: Start recording
+    P->>P: ensure mic / camera permission ready
     P->>C: RESET_TRANSCRIPT
     P->>B: START_RECORDING(tabId, runConfig)
-    B->>S: start(runConfig)
-    B->>B: ensureReady + getMediaStreamId
-    B->>O: OFFSCREEN_START(streamId, runConfig)
+    B->>B: parseRunConfig + tabCapture conflict check
+    B->>B: loadRecorderRuntimeSettingsSnapshot()
+    B->>B: resolveMeetingSlug(tabId)
+    B->>S: start(runConfig) → starting
+    S-->>B: persist + broadcast RECORDING_STATE
+    B->>OM: ensureReady()
+    OM-->>B: offscreen ready (Port)
+    B->>OM: getMediaStreamIdForTab(tabId)
+    B->>O: OFFSCREEN_START(streamId, slug, runConfig, recorderSettings)
     O->>E: startFromStreamId(...)
-    E-->>O: first recorder started
+    E->>E: acquire tab stream + mic/mixer + start tasks
+    E-->>O: first recorder onstart → notifyPhase(recording)
     O-->>B: OFFSCREEN_STATE(recording)
     B->>S: applyOffscreenPhase(recording)
-    B-->>P: RECORDING_STATE(session)
+    S-->>P: RECORDING_STATE + badge REC
+    end
 
+    rect rgba(255,245,238,0)
+    note over User,E: STOP (also fired by auto-stop / MEETING_ENDED)
     User->>P: Stop recording
     P->>B: STOP_RECORDING
     B->>S: markStopping()
     B->>O: OFFSCREEN_STOP
     O->>E: stop()
+    E->>E: release camera eagerly, seal tab / mic / self-video
     O-->>B: OFFSCREEN_STATE(stopping)
-    opt Drive mode
-        O-->>B: OFFSCREEN_STATE(uploading)
+    opt storageMode = drive and artifacts > 0
+        O-->>B: OFFSCREEN_STATE(uploading) + badge UP
     end
-    O-->>B: OFFSCREEN_STATE(idle or failed)
+    O-->>B: OFFSCREEN_STATE(idle, uploadSummary?) or (failed, error)
     B->>S: applyOffscreenPhase(...)
-    B-->>P: RECORDING_STATE(session)
+    S-->>P: RECORDING_STATE + badge cleared / ERR
+    end
 ```
 
-### 3. Recording Session State Machine
+### 5. Recording Session State Machine (Background)
+
+The canonical, persisted session phase owned by `RecordingSession`. This is the
+**control-plane** state — distinct from the offscreen engine's own machine (#8).
 
 ```mermaid
 stateDiagram-v2
     [*] --> idle
-    idle --> starting: START_RECORDING
+    idle --> starting: START_RECORDING (session.start)
     starting --> recording: OFFSCREEN_STATE(recording)
-    starting --> failed: startup error
-    failed --> starting: START_RECORDING
-    recording --> stopping: STOP_RECORDING
-    recording --> failed: runtime error
+    starting --> failed: ensureReady / OFFSCREEN_START error
+    recording --> stopping: STOP_RECORDING / auto-stop (markStopping)
+    recording --> failed: offscreen runtime error
     stopping --> uploading: drive finalize begins
     stopping --> idle: local finalize completes
     stopping --> failed: finalize error
-    uploading --> idle: uploads complete
+    uploading --> idle: uploads complete (uploadSummary)
     uploading --> failed: upload pipeline error
+    failed --> starting: START_RECORDING (retry)
     failed --> idle: next successful idle transition
+
+    note right of recording
+        Busy phases (starting / recording /
+        stopping / uploading):
+        - keep-alive loop running
+        - popup controls disabled
+        - badge REC / UP
+        Snapshot persisted to chrome.storage.session
+        on every transition.
+    end note
+
+    note left of failed
+        fail() preserves the last runConfig,
+        targetTabId and meetingSlug so the popup
+        can still show meaningful context.
+    end note
 ```
 
-### 4. Post-Stop Persistence Pipeline
+### 6. Offscreen Ready / Reconnect Handshake
 
-```mermaid
-flowchart TD
-    A[RecorderEngine returns sealed artifacts] --> B{storageMode}
-
-    B -->|local| C[RecordingFinalizer creates blob URLs]
-    C --> D[Offscreen emits OFFSCREEN_SAVE]
-    D --> E[Background downloads file]
-    E --> F[Background asks offscreen to revoke blob URL / cleanup OPFS]
-
-    B -->|drive| G[Sort artifacts tab -> mic -> selfVideo]
-    G --> H[Resolve Drive folder once]
-    H --> I[Upload file]
-    I --> J{Upload succeeded}
-    J -->|yes| K[Cleanup OPFS artifact]
-    J -->|no| L[Fallback to OFFSCREEN_SAVE]
-    K --> M{More files}
-    L --> M
-    M -->|yes| I
-    M -->|no| N[Emit idle with uploadSummary]
-```
-
-### 5. Offscreen Ready / Reconnect Handshake
+`OffscreenManager.ensureReady()` either creates the offscreen document or asks an
+existing one to reconnect, then waits (Promise, not poll) for the `OFFSCREEN_READY`
+handshake. The offscreen side reconnects its port with exponential backoff after the
+worker sleeps or the page is torn down.
 
 ```mermaid
 sequenceDiagram
@@ -1094,120 +1259,407 @@ sequenceDiagram
     participant API as Chrome Offscreen API
     participant O as Offscreen Script
 
-    B->>B: ensureReady()
+    B->>B: ensureReady() — resolve immediately if port + ready
     B->>API: hasOffscreenDocument()
-
     alt no offscreen context
-        B->>API: createOffscreenDocument(offscreen.html)
-    else context exists but no live port
-        B->>O: OFFSCREEN_CONNECT
+        B->>API: createOffscreenDocument(reasons: BLOBS, AUDIO_PLAYBACK, USER_MEDIA)
+    else context exists, no live port
+        B->>O: OFFSCREEN_CONNECT (runtime message)
     end
 
     O->>B: runtime.connect(name=offscreen)
     O->>B: OFFSCREEN_READY
-    O->>B: OFFSCREEN_STATE(currentPhase)
-    B->>B: resolve readyPromise
+    O->>B: OFFSCREEN_STATE(currentPhase, warnings?)
+    B->>B: ready=true, resolve readyPromise, set badge
+    Note over B: withTimeout(READY_TIMEOUT_MS = 5s) outer safety net
+
+    opt Port drops (SW idle / crash)
+        O->>O: onDisconnect → reconnect backoff 1s, 2s ... capped 30s
+        O->>B: runtime.connect + OFFSCREEN_READY (re-handshake)
+    end
 ```
 
-### 6. Transcript Collection Pipeline
+---
+
+**Media engine — how capture works**
+
+### 7. Recorder Engine Internal Architecture
+
+`RecorderEngine` is a facade: setup acquires streams and the optional audio graph,
+then up to three per-stream tasks run in parallel. Tab is required; mic and
+self-video are best-effort. Each task streams chunks to its own `StorageTarget`.
 
 ```mermaid
-flowchart TD
-    A[Content script starts] --> B[Provider finds captions region]
-    B --> C{Region available}
-    C -->|no| D[Observe document for region appearance]
-    C -->|yes| E[Attach region observer]
-    D --> E
-    E --> F[Collect caption blocks]
-    F --> G[Extract speaker and text nodes via provider adapter]
-    G --> H[Observe text mutations]
-    H --> I[Update open chunk and reset silence timer]
-    I --> J{Silence threshold reached}
-    J -->|yes| K[Commit transcript line]
-    K --> L[GET_TRANSCRIPT flushes all open chunks]
+flowchart TB
+    subgraph IN["Inputs (from OFFSCREEN_START)"]
+        SID["tabCapture streamId"]
+        RC["RecordingRunConfig<br/>(storageMode, micMode, recordSelfVideo)"]
+        RS["RecorderRuntimeSettingsSnapshot<br/>(presets, bitrates, chunking)"]
+    end
+
+    subgraph ENGINE["RecorderEngine (facade + state machine)"]
+        SETUP["RecorderEngineSetup<br/>acquire streams · mixer · playback bridge"]
+        CAP["RecorderCapture<br/>tab / mic / camera getUserMedia"]
+        PROF["RecorderProfiles<br/>MIME · bitrate · timeslice · fallback ladder"]
+        TRACKS["tracks[] + activeRecorders ref-count"]
+    end
+
+    subgraph TASKS["Per-stream tasks (started in parallel)"]
+        TAB["TabRecorderTask<br/><b>required</b> · vp8/opus · 1.5 Mbps + 96 kbps"]
+        MICT["MicRecorderTask<br/>micMode=separate · best-effort"]
+        SV["SelfVideoRecorderTask<br/>recordSelfVideo · best-effort"]
+    end
+
+    subgraph AUDIO["RecorderAudio (AudioContext)"]
+        MIX["MixedAudioMixer<br/>micMode=mixed"]
+        BR["AudioPlaybackBridge<br/>re-route tab audio to speakers"]
+    end
+
+    subgraph STORE["StorageTarget per stream"]
+        OPFS["LocalFileTarget (OPFS)"]
+        MEM["InMemoryStorageTarget<br/>(RAM fallback)"]
+    end
+
+    OUT["CompletedRecordingArtifact[]<br/>→ RecordingFinalizer"]
+
+    SID --> SETUP
+    RC --> SETUP
+    RS --> PROF
+    SETUP --> CAP
+    SETUP --> MIX
+    SETUP --> BR
+    SETUP --> TAB
+    SETUP --> MICT
+    SETUP --> SV
+    PROF --> TAB
+    PROF --> MICT
+    PROF --> SV
+    TAB --> TRACKS
+    MICT --> TRACKS
+    SV --> TRACKS
+    MIX -->|mixed stream| TAB
+    TAB -->|ondataavailable chunks| OPFS
+    MICT --> OPFS
+    SV --> OPFS
+    OPFS -. on create failure .-> MEM
+    TRACKS -->|"stop → seal + fix-webm-duration"| OUT
 ```
 
-### 7. Recorder Engine State Machine
+### 8. Recorder Engine State Machine (Offscreen)
+
+The engine's own lifecycle. Note it has **no** `uploading` or `failed` phase — upload
+lives entirely in the finalizer, and startup errors reset back to `idle` and rethrow.
 
 ```mermaid
 stateDiagram-v2
     [*] --> idle
-
     idle --> starting: startFromStreamId(streamId, runConfig)
-    starting --> recording: first recorder onstart
-    starting --> idle: startup error
-
+    starting --> recording: first recorder onstart (notifyPhase)
+    starting --> idle: startup error (resetRunState + throw)
     recording --> stopping: stop()
-    recording --> stopping: captured tab video track ended
+    recording --> stopping: captured tab video track 'ended'
+    stopping --> idle: all active recorders sealed (activeRecorders to 0)
 
-    stopping --> idle: all active recorders finalized
+    note right of starting
+        Tab recorder is required; mic and self-video
+        start in parallel and are best-effort
+        (failures logged, not fatal). Stale runs
+        (runId / state changed) abort and clean up.
+    end note
 
     note right of recording
-        Live chunks go only to local StorageTarget
-        implementations such as LocalFileTarget
-        or the in-memory fallback target.
+        Live chunks stream ONLY to local
+        StorageTargets (OPFS or RAM fallback).
+        activeRecorders ref-counts the live
+        tab / mic / self-video tracks.
     end note
 
     note right of stopping
-        Drive upload is outside RecorderEngine.
-        It begins only after sealed artifacts are returned.
+        Camera released eagerly. Each track seals its
+        file (+ fix-webm-duration). Audio graph and
+        playback bridge torn down. Drive upload is
+        OUTSIDE the engine — see the Finalizer.
     end note
 ```
 
-### 8. Drive OAuth Token Fallback
+### 9. Mixed-Mic Audio Graph
+
+`micMode=mixed` builds a real Web Audio graph: tab and mic audio are summed into one
+`MediaStreamDestination` track, recombined with the tab video, and recorded as a
+single `.webm`. A separate `AudioPlaybackBridge` restores tab audio to the speakers
+when Chrome suppresses local playback during capture.
+
+```mermaid
+flowchart LR
+    subgraph CAP["Captured tracks"]
+        TV["Tab video track"]
+        TA["Tab audio track"]
+        MA["Mic audio track<br/>(getUserMedia)"]
+    end
+
+    subgraph CTX["AudioContext — MixedAudioMixer"]
+        S1["MediaStreamSource(tab audio)"]
+        S2["MediaStreamSource(mic audio)"]
+        DST["MediaStreamDestination"]
+        S1 --> DST
+        S2 --> DST
+    end
+
+    TA --> S1
+    MA --> S2
+    OUT["new MediaStream<br/>= tab video + mixed audio"]
+    DST -->|mixed audio track| OUT
+    TV -->|video track| OUT
+    OUT --> MR["Tab MediaRecorder<br/>→ single .webm"]
+
+    subgraph BRIDGE["AudioPlaybackBridge — separate AudioContext"]
+        BSRC["MediaStreamSource(tab audio)"]
+        BDST["ctx.destination (speakers)"]
+        BSRC --> BDST
+    end
+    TA -.->|"if suppressLocalAudioPlayback"| BSRC
+```
+
+### 10. OPFS Streaming & Storage-Target Fallback
+
+The long-meeting safety mechanism. Chunks stream straight to an OPFS file through a
+serialized write chain, so memory stays bounded; if OPFS can't be opened for a stream,
+the engine transparently falls back to a RAM buffer.
 
 ```mermaid
 flowchart TD
-    A[Offscreen or Drive helper requests token] --> B[Popup/Offscreen sends GET_DRIVE_TOKEN]
-    B --> C[Background fetchDriveTokenWithFallback]
-    C --> D[identity.getAuthToken interactive=false]
+    A["MediaRecorder.start(timesliceMs)<br/>tab & self-video on extended cadence"] --> B["ondataavailable(chunk)"]
+    B --> C["makeChunkHandler → target.write(chunk)"]
+    C --> D{"target type"}
+    D -->|LocalFileTarget| E["serialize via writeChain promise<br/>→ OPFS FileSystemWritableFileStream"]
+    D -->|InMemoryStorageTarget| F["push Blob into RAM array"]
+    E --> G["bounded memory: small working buffer"]
+    F --> G
+    G -.->|repeat per chunk| B
 
-    D -->|success| E[Return token]
-    D -->|fails| F{Error contains bad client id}
+    H["stop() → recorder.onstop"] --> I["target.close()"]
+    I --> J{"bytes written > 0?"}
+    J -->|no| K["discard temp file → artifact = null"]
+    J -->|yes| L["seal File handle"]
+    L --> M["fix-webm-duration patch"]
+    M --> N["SealedStorageFile<br/>{ filename, file, opfsFilename, cleanup() }"]
 
-    F -->|yes| G[Return explicit OAuth misconfiguration guidance]
-    F -->|no| H[identity.getAuthToken interactive=true]
+    O["OPFS create fails"] -.->|fallback| F
+```
 
+---
+
+**Persistence — where bytes go after stop**
+
+### 11. Post-Stop Persistence Pipeline
+
+Runs only after `RecorderEngine.stop()` returns sealed artifacts. Local mode hands
+blob URLs to the background downloader; Drive mode uploads with bounded concurrency and
+falls back to a local download per file on any failure.
+
+```mermaid
+flowchart TD
+    A["RecorderEngine.stop() → sealed artifacts"] --> A2["sort: tab → mic → self-video"]
+    A2 --> B{"storageMode"}
+
+    B -->|local| C["for each artifact: URL.createObjectURL"]
+    C --> D["OFFSCREEN_SAVE(filename, blobUrl, opfsFilename)"]
+    D --> E["Background chrome.downloads.download"]
+    E --> E2["broadcast RECORDING_SAVED / RECORDING_SAVE_ERROR"]
+    E2 --> F["after 10s: revoke blob URL + cleanup OPFS<br/>(deferred so the download handoff isn't cut off)"]
+
+    B -->|drive| G["pushState(uploading) + badge UP"]
+    G --> H["resolve shared Drive folder ONCE"]
+    H --> H2{"folder setup ok?"}
+    H2 -->|no| Hx["record shared setup error<br/>→ every artifact falls back to local"]
+    H2 -->|yes| I["runWithConcurrency<br/>(min(parallelUploadConcurrency, 2))"]
+    I --> JJ["DriveTarget.upload(file)<br/>resumable + adaptive chunks"]
+    JJ --> KK{"upload ok?"}
+    KK -->|yes| L["cleanup OPFS artifact<br/>push to summary.uploaded"]
+    KK -->|no| Mx["fallback OFFSCREEN_SAVE<br/>push to summary.localFallbacks"]
+    Hx --> Mx
+    L --> N["UploadSummary { uploaded, localFallbacks }"]
+    Mx --> N
+    N --> Z["OFFSCREEN_STATE(idle, uploadSummary)"]
+```
+
+### 12. Drive Folder Resolution & Resumable Upload Session
+
+The shared parent folder is resolved once per finalize run (and cached statically
+across files), then each file opens its own resumable session and streams chunks whose
+size adapts to observed throughput.
+
+```mermaid
+flowchart TD
+    A["Finalizer (drive mode)"] --> B["DriveFolderResolver.resolveUploadParentId<br/>(memoized per resolver + static recordingFolderCache)"]
+    B --> C["getOrCreateFolder('Google Meet Records', parent=null)"]
+    C --> C1{"findFolder query hit?"}
+    C1 -->|yes| C2["reuse root folderId"]
+    C1 -->|no| C3["createFolder → root folderId"]
+    C2 --> Dd["getOrCreateFolder('meet-id-timestamp', parent=rootId)"]
+    C3 --> Dd
+    Dd --> E["parentFolderId cached for the finalize run"]
+    E --> F["DriveTarget.initSession()"]
+    F --> G["POST resumable session<br/>metadata { name, mimeType, parents:[id] }"]
+    G --> H{"Location header?"}
+    H -->|yes| I["store sessionUri → start chunk loop"]
+    H -->|no| K["parse Drive error → throw → per-file local fallback"]
+
+    subgraph LOOP["Resumable chunk loop (DriveChunkUploader)"]
+        I --> Ld["PUT slice [start,end) — 2 MB to start"]
+        Ld --> Md["adaptive sizing: fast×2 → +1 MB ·<br/>slow or retry → -1 MB (clamp 1–8 MB)"]
+        Md --> Nd{"more bytes?"}
+        Nd -->|yes| Ld
+        Nd -->|no| Pd["file_uploaded ✓"]
+    end
+```
+
+### 13. Drive OAuth Token Fallback
+
+`fetchDriveTokenWithFallback` tries a silent token first, escalates to interactive,
+and short-circuits to actionable guidance the moment Google reports a bad client ID.
+The offscreen side requests tokens via `GET_DRIVE_TOKEN` through a cached provider.
+
+```mermaid
+flowchart TD
+    A["DriveTarget / FolderResolver need a token<br/>(cached provider)"] --> B["offscreen → GET_DRIVE_TOKEN(refresh?)"]
+    B --> Cc["background fetchDriveTokenWithFallback"]
+    Cc --> R{"refresh requested?"}
+    R -->|yes| R1["removeCachedAuthToken(lastIssued)"]
+    R -->|no| D
+    R1 --> D["getAuthToken(interactive=false) — silent"]
+    D -->|success| E["return { ok, token }"]
+    D -->|fails| F{"error matches /bad client id/?"}
+    F -->|yes| G["buildBadClientIdError<br/>(extension id + manifest client id + fix steps)"]
+    F -->|no| H["getAuthToken(interactive=true)"]
     H -->|success| E
-    H -->|fails with bad client id| G
-    H -->|other failure| I[Return combined silent and interactive error]
+    H -->|fails: bad client id| G
+    H -->|other failure| I["combined silent + interactive error"]
+    E --> ZZ["fetchWithAuthRetry reuses the token;<br/>refreshes only on explicit auth rejection"]
 ```
 
-### 9. Microphone Permission Flow
+---
+
+**Transcript & auto-stop**
+
+### 14. Transcript Collection Pipeline
+
+A tiered observer tree feeds a grace-timer buffer. The region observer waits for the
+captions panel; the caption observer tracks speaker blocks; per-block text observers
+catch Meet's incremental refinements; the buffer commits an utterance after a short
+silence and de-duplicates via text normalization.
 
 ```mermaid
 flowchart TD
-    A[User enables mic or starts recording with mic mode] --> B[MicPermissionService.ensureReadyForRecording]
-    B --> C{micMode = off}
-    C -->|yes| D[Permission not required]
-    C -->|no| E[Query microphone permission state]
+    A["Content script injected (document_idle)"] --> B["regionObserver on document.body<br/>wait for captions region"]
+    B --> C{"region present?<br/>div[role=region][aria-label=Captions]"}
+    C -->|no| B
+    C -->|yes| D["attachRegion()"]
+    D --> Ep["regionParentObserver<br/>(region removed → re-arm appearance)"]
+    D --> Fp["captionObserver on region<br/>(added/removed speaker blocks .nMcdL)"]
+    Fp --> G["scanSpeakerBlock(block)"]
+    G --> Hp["getCaptionBlockData → { key, speakerName, textNode }"]
+    Hp --> I["per-block text observer<br/>(characterData on .ygicle)"]
+    I --> J["CaptionBuffer.handleCaption(key, name, text)"]
+    J --> Kp["normalizeCaptionText → dedup vs lastSeen"]
+    Kp --> L["restart per-speaker grace timer<br/>(CAPTION_GRACE_MS = 2s)"]
+    L --> M{"silence for 2s?"}
+    M -->|yes| N["commit line: [startISO] [endISO] speaker : text"]
+    M -->|new text first| L
 
-    E -->|granted| F[Continue recording flow]
-    E -->|prompt or unknown| G[Try inline getUserMedia]
-    E -->|denied| H[Open micsetup.html tab]
+    O["Popup: GET_TRANSCRIPT"] --> Pp["flushOpenChunks() commits in-flight utterances"]
+    Pp --> Q["return transcript text + provider info"]
 
-    G --> I{Inline grant succeeded}
-    I -->|yes| J[Stop tracks and continue]
-    I -->|no| H
-
-    H --> K[User grants permission in setup page]
-    K --> F
+    Fp -.->|count change| RR["PERF_EVENT observer_count"]
+    Ep -.->|region gone| B
 ```
 
-### 10. Drive Folder Resolution and Upload Session Init
+### 15. Meeting-End Auto-Stop
+
+A deliberately conservative content-script detector: it only arms after a live call is
+seen, then requires a 30-second grace window of "ended" state before signalling. Two
+hard background triggers (tab closed, tab navigated away) bypass the grace entirely.
+
+```mermaid
+stateDiagram-v2
+    [*] --> watching
+    watching --> active: leave-call control present
+    active --> active: still in call
+    active --> pendingEnd: control gone or ended-text (scheduleEnd, grace 30s)
+    pendingEnd --> active: call controls reappear (cancel)
+    pendingEnd --> ended: grace elapsed and still not active
+    ended --> [*]: emit MEETING_ENDED (once)
+
+    note right of watching
+        Observes body mutations + polls every
+        MEETING_END_POLL_MS (2s). Never fires unless
+        an active call was seen first — favors late
+        stops over false auto-stops.
+    end note
+
+    note right of ended
+        Background recordingAutoStop also hard-stops on:
+        - recorded tab closed (tab-removed)
+        - tab navigated away from the meeting
+        Each routes through RecordingController.stop(),
+        guarded by matching tabId + meetingSlug.
+    end note
+```
+
+---
+
+**Permissions & diagnostics**
+
+### 16. Microphone & Camera Permission Readiness
+
+Both permission services share one ladder: check state, try an inline `getUserMedia`
+prime, and fall back to a dedicated setup tab if Chrome blocks the inline prompt. The
+only difference is the mic's `off` short-circuit.
 
 ```mermaid
 flowchart TD
-    A[RecordingFinalizer begins Drive finalize] --> B[Resolve shared upload parent folder]
-    B --> C[DriveFolderResolver resolveUploadParentId]
-    C --> D[Find or create root folder Google Meet Records]
-    D --> E[Find or create recording folder meeting-id-timestamp]
-    E --> F[DriveTarget init upload for one artifact]
-    F --> G[Build file metadata with parent folderId]
-    G --> H[POST resumable upload session]
-    H --> I{Session created}
-    I -->|yes| J[Store upload session URI and stream chunks]
-    I -->|no| K[Parse Drive error and fail or fallback]
+    A["Popup: enable button OR start with mic / self-video"] --> B{"which path?"}
+    B -->|"mic, micMode=off"| Z["not required → continue"]
+    B -->|"mic, mixed/separate"| C["MicPermissionService.ensureReadyForRecording"]
+    B -->|"camera, recordSelfVideo"| C2["CameraPermissionService.ensureReadyForRecording"]
+
+    C --> D["navigator.permissions.query(microphone)"]
+    C2 --> D2["navigator.permissions.query(camera)"]
+    D --> E{"state"}
+    D2 --> E
+    E -->|granted| F["continue recording flow"]
+    E -->|denied| G["open micsetup.html / camsetup.html tab"]
+    E -->|prompt / unknown| H["tryPrimeInline: getUserMedia then stop tracks"]
+    H --> I{"granted inline?"}
+    I -->|yes| F
+    I -->|no| G
+    G --> Jp["user clicks Enable on setup page → grants"]
+    Jp --> F
+```
+
+### 17. Diagnostics / Perf Event Flow
+
+All runtime contexts emit structured `PERF_EVENT`s through `configurePerfRuntime`. The
+background store reduces them into a session-scoped snapshot that the dev dashboard
+renders; the snapshot is cleared when idle and no dashboard is open.
+
+```mermaid
+flowchart LR
+    subgraph SRC["PERF_EVENT sources (configurePerfRuntime)"]
+        CS["content<br/>observer_count"]
+        OS["offscreen<br/>recorder_started · chunk_persisted<br/>drive_* · runtime sample"]
+        BG["background"]
+    end
+    CS -->|PERF_EVENT| RT["runtime.sendMessage"]
+    OS -->|PERF_EVENT| RT
+    BG --> STORE
+    RT --> STORE["PerfDebugStore.record()"]
+    STORE --> RED["PerfDebugReducers"]
+    RED --> ST["PerfDebugState<br/>(session-scoped snapshot)"]
+    ST --> PERSIST["chrome.storage.session"]
+    ST --> DASH["DebugDashboard (dev)<br/>EventTableRenderer + SystemInfoReader"]
+    PERSIST -.->|hydrate on SW restart| STORE
+    ST -.->|cleared when idle & no dashboard open| X["maybeClearPerfDiagnostics"]
 ```
 
 ---
