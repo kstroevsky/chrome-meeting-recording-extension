@@ -21,13 +21,9 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { RuntimeSampler } from './offscreen/RuntimeSampler';
+import { OffscreenController } from './offscreen/OffscreenController';
 import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
-import type { OffscreenPhaseUpdate } from './shared/protocol';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
-import {
-  DEFAULT_RECORDING_RUN_CONFIG,
-  type RecordingPhase,
-} from './shared/recording';
 
 const L = makeLogger('offscreen');
 const RUNTIME_SAMPLE_INTERVAL_MS = 2_000;
@@ -50,14 +46,19 @@ void configurePerfRuntime({
 
 let portRef: chrome.runtime.Port | null = null;
 let reconnectEnabled = true;
-let currentStorageMode: 'local' | 'drive' = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
-let currentPhase: RecordingPhase = 'idle';
-let currentWarnings: string[] = [];
-let finalizeRunPromise: Promise<void> | null = null;
 
 // ─── Runtime diagnostics ─────────────────────────────────────────────────────
 
 const runtimeSampler = new RuntimeSampler(RUNTIME_SAMPLE_INTERVAL_MS, nowMs());
+
+// Phase/warning state machine and stop→finalize coordinator. Services are
+// attached below once the engine and finalizer exist.
+const controller = new OffscreenController({
+  postMessage: (message) => getPort().postMessage(message),
+  sampler: runtimeSampler,
+  error: L.error,
+  now: nowMs,
+});
 
 if (typeof PerformanceObserver !== 'undefined') {
   try {
@@ -82,16 +83,12 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     engine,
     getPort,
     connectPort,
-    currentPhase: () => currentPhase,
-    isFinalizing: () => !!finalizeRunPromise,
-    clearWarnings: () => { currentWarnings = []; },
-    onStartRequested: (_runConfig, storageMode) => {
-      currentStorageMode = storageMode;
-    },
-    onStopRequested: () => {
-      void finalizeCurrentRecordingRun();
-    },
-    pushState,
+    currentPhase: controller.currentPhase,
+    isFinalizing: controller.isFinalizing,
+    clearWarnings: controller.clearWarnings,
+    onStartRequested: controller.onStartRequested,
+    onStopRequested: controller.onStopRequested,
+    pushState: controller.pushState,
     log: L.log,
     error: L.error,
   });
@@ -106,10 +103,11 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   });
 
   port.postMessage({ type: 'OFFSCREEN_READY' });
+  const warnings = controller.currentWarnings();
   port.postMessage({
     type: 'OFFSCREEN_STATE',
-    phase: currentPhase,
-    ...(currentWarnings.length ? { warnings: currentWarnings } : {}),
+    phase: controller.currentPhase(),
+    ...(warnings.length ? { warnings } : {}),
   });
   L.log('READY signaled via Port');
   portRef = port;
@@ -121,26 +119,6 @@ function getPort(): chrome.runtime.Port {
 }
 
 // ─── State helpers ───────────────────────────────────────────────────────────
-
-function pushState(phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>) {
-  if (phase !== currentPhase && phase !== 'idle') {
-    runtimeSampler.markActivePhaseStart(nowMs());
-  }
-  currentPhase = phase;
-  getPort().postMessage({
-    type: 'OFFSCREEN_STATE',
-    phase,
-    ...(currentWarnings.length ? { warnings: currentWarnings } : {}),
-    ...(extra ?? {}),
-  });
-}
-
-function reportWarning(warning: string) {
-  const normalized = warning.trim();
-  if (!normalized || currentWarnings.includes(normalized)) return;
-  currentWarnings = [...currentWarnings, normalized];
-  pushState(currentPhase);
-}
 
 function requestSave(filename: string, blobUrl: string, opfsFilename?: string) {
   getPort().postMessage({ type: 'OFFSCREEN_SAVE', filename, blobUrl, opfsFilename });
@@ -159,15 +137,15 @@ const finalizer = new RecordingFinalizer({
   warn: L.warn,
   requestSave,
   getDriveToken,
-  reportWarning,
+  reportWarning: controller.reportWarning,
 });
 
 const engine = new RecorderEngine({
   log: L.log,
   warn: L.warn,
   error: L.error,
-  notifyPhase: pushState,
-  reportWarning,
+  notifyPhase: controller.pushState,
+  reportWarning: controller.reportWarning,
   openTarget: async (filename: string) => {
     try {
       return await LocalFileTarget.create(filename);
@@ -178,37 +156,17 @@ const engine = new RecorderEngine({
   },
 });
 
-async function finalizeCurrentRecordingRun(): Promise<void> {
-  if (finalizeRunPromise) return finalizeRunPromise;
-
-  finalizeRunPromise = (async () => {
-    const artifacts = await engine.stop();
-    if (currentStorageMode === 'drive' && artifacts.length > 0) {
-      pushState('uploading');
-    }
-    const summary = await finalizer.finalize({ artifacts, storageMode: currentStorageMode });
-    pushState('idle', summary ? { uploadSummary: summary } : undefined);
-  })()
-    .catch((e) => {
-      L.error('Stop/finalize pipeline failed', describeRuntimeError(e));
-      pushState('failed', { error: describeRuntimeError(e) });
-    })
-    .finally(() => {
-      finalizeRunPromise = null;
-    });
-
-  return finalizeRunPromise;
-}
+controller.attachServices(engine, finalizer);
 
 // ─── Runtime diagnostics sampling ─────────────────────────────────────────────
 
 function sampleRuntimeMetrics() {
-  if (!isPerfDebugMode() || currentPhase === 'idle') return;
+  if (!isPerfDebugMode() || controller.currentPhase() === 'idle') return;
   const diagnostics = runtimeSampler.sample(nowMs());
   const perfMemory = (performance as any)?.memory;
   const nav = navigator as Navigator & { deviceMemory?: number };
   debugPerf(L.log, 'runtime', 'sample', {
-    phase: currentPhase,
+    phase: controller.currentPhase(),
     recorderState: engine.getDebugState(),
     activeRecorders: engine.getActiveRecorderCount(),
     hardwareConcurrency: typeof nav.hardwareConcurrency === 'number' ? nav.hardwareConcurrency : undefined,

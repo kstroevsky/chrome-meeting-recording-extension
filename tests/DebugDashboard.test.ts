@@ -253,4 +253,62 @@ describe('DebugDashboard', () => {
     expect(elements.summaryEl.textContent).toContain('npm run dev');
     expect(elements.downloadBtn.disabled).toBe(true);
   });
+
+  it('renders a waiting state when diagnostics are not yet enabled', async () => {
+    (globalThis as any).__DEV_BUILD__ = true;
+    const elements = makeElements();
+    const dashboard = new DebugDashboard(elements);
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({});
+
+    dashboard.init();
+    await new Promise(process.nextTick);
+
+    expect(elements.summaryEl.textContent).toContain('Waiting for diagnostics data');
+    expect(elements.updatedAtEl.textContent).toBe('No data yet');
+    expect(elements.downloadBtn.disabled).toBe(true);
+
+    dashboard.destroy();
+  });
+
+  it('shows an unavailable message when the snapshot read fails', async () => {
+    (globalThis as any).__DEV_BUILD__ = true;
+    const elements = makeElements();
+    const dashboard = new DebugDashboard(elements);
+    (chrome.storage.session.get as jest.Mock).mockRejectedValue(new Error('storage gone'));
+
+    dashboard.init();
+    await new Promise(process.nextTick);
+
+    expect(elements.summaryEl.textContent).toContain('Diagnostics are temporarily unavailable');
+
+    dashboard.destroy();
+  });
+
+  it('re-renders from a session storage change and ignores other areas', async () => {
+    (globalThis as any).__DEV_BUILD__ = true;
+    const elements = makeElements();
+    const dashboard = new DebugDashboard(elements);
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({});
+
+    dashboard.init();
+    await new Promise(process.nextTick);
+
+    const calls = (chrome.storage.onChanged.addListener as jest.Mock).mock.calls;
+    const storageListener = calls[calls.length - 1][0];
+
+    // A non-session area change is ignored.
+    elements.summaryEl.textContent = 'unchanged-marker';
+    storageListener({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: { newValue: { enabled: false } } }, 'local');
+    expect(elements.summaryEl.textContent).toBe('unchanged-marker');
+
+    // A session change without the perf key is ignored too.
+    storageListener({ other: { newValue: 1 } }, 'session');
+    expect(elements.summaryEl.textContent).toBe('unchanged-marker');
+
+    // A session change carrying a disabled snapshot re-renders the waiting state.
+    storageListener({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: { newValue: { enabled: false } } }, 'session');
+    expect(elements.summaryEl.textContent).toContain('Waiting for diagnostics data');
+
+    dashboard.destroy();
+  });
 });

@@ -1,6 +1,7 @@
 import { CameraPermissionService } from '../src/popup/CameraPermissionService';
 import { MicPermissionService } from '../src/popup/MicPermissionService';
 import { PopupController } from '../src/popup/PopupController';
+import { POPUP_TOAST_DURATION_MS } from '../src/popup/popupMessages';
 import type { RecordingRunConfig } from '../src/shared/recording';
 
 jest.mock('../src/popup/MicPermissionService');
@@ -334,5 +335,115 @@ describe('PopupController', () => {
     await new Promise(process.nextTick);
 
     expect(elements.openDiagnosticsBtn.hidden).toBe(true);
+  });
+
+  it('downloads the transcript from the active meeting tab', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    (chrome.tabs.sendMessage as jest.Mock).mockImplementation(async (_id: number, message: { type: string }) => {
+      if (message.type === 'GET_TRANSCRIPT') return { transcript: 'Alice : hi', provider: { meetingId: 'abc-defg' } };
+      return { ok: true };
+    });
+    (URL as any).createObjectURL = jest.fn().mockReturnValue('blob:tx');
+    (URL as any).revokeObjectURL = jest.fn();
+    (chrome.downloads.download as jest.Mock).mockImplementation((_opts: unknown, cb: (id?: number) => void) => cb(1));
+
+    elements.saveBtn.click();
+    await new Promise(process.nextTick);
+    await new Promise(process.nextTick);
+
+    expect(chrome.downloads.download).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'blob:tx',
+        filename: expect.stringContaining('google-meet-transcript-abc-defg'),
+        saveAs: true,
+      }),
+      expect.any(Function)
+    );
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:tx');
+  });
+
+  it('shows a toast when the transcript is empty and skips the download', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    (chrome.tabs.sendMessage as jest.Mock).mockImplementation(async (_id: number, message: { type: string }) => {
+      if (message.type === 'GET_TRANSCRIPT') return { transcript: '   ', provider: { meetingId: 'x' } };
+      return { ok: true };
+    });
+    (chrome.downloads.download as jest.Mock).mockClear();
+
+    elements.saveBtn.click();
+    await new Promise(process.nextTick);
+    await new Promise(process.nextTick);
+
+    expect(elements.recordingStatusEl.textContent).toContain('Transcript is empty');
+    expect(chrome.downloads.download).not.toHaveBeenCalled();
+  });
+
+  it('shows a toast when the page has no content script to read the transcript', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    (chrome.tabs.sendMessage as jest.Mock).mockImplementation(async (_id: number, message: { type: string }) => {
+      if (message.type === 'GET_TRANSCRIPT') throw new Error('no content script');
+      return { ok: true };
+    });
+
+    elements.saveBtn.click();
+    await new Promise(process.nextTick);
+    await new Promise(process.nextTick);
+
+    // The catch branch toasts "No transcript on this page" (logged in test runtime).
+    expect(console.log).toHaveBeenCalledWith('[popup]', expect.stringContaining('No transcript on this page'));
+  });
+
+  // onMessage.addListener accumulates across tests (chrome mock is not reset),
+  // so the current controller's listener is the most recently registered one.
+  const currentRuntimeListener = () => {
+    const calls = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls;
+    return calls[calls.length - 1][0];
+  };
+
+  it('toasts the saved-locally confirmation on RECORDING_SAVED', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+
+    currentRuntimeListener()({ type: 'RECORDING_SAVED', filename: 'tab.webm' });
+
+    expect(elements.recordingStatusEl.textContent).toContain('Saved locally: tab.webm');
+  });
+
+  it('restores the persistent status after a toast expires', async () => {
+    controller.init();
+    await new Promise(process.nextTick);
+    const persistent = elements.recordingStatusEl.textContent;
+    const runtimeListener = currentRuntimeListener();
+
+    jest.useFakeTimers();
+    try {
+      runtimeListener({ type: 'RECORDING_SAVED', filename: 'tab.webm' });
+      expect(elements.recordingStatusEl.textContent).toContain('Saved locally');
+      // A second toast clears the first pending restore timer before scheduling its own.
+      runtimeListener({ type: 'RECORDING_SAVED', filename: 'mic.webm' });
+
+      jest.advanceTimersByTime(POPUP_TOAST_DURATION_MS);
+      expect(elements.recordingStatusEl.textContent).toBe(persistent);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('alerts and resets to idle when the start command throws', async () => {
+    (MicPermissionService.prototype.ensureReadyForRecording as jest.Mock).mockResolvedValue(false);
+    controller.init();
+    await new Promise(process.nextTick);
+    elements.micModeSelect.value = 'mixed';
+
+    elements.startBtn.click();
+    await new Promise(process.nextTick);
+    await new Promise(process.nextTick);
+
+    expect(console.error).toHaveBeenCalledWith('[popup] START_RECORDING error', expect.any(Error));
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Failed to start recording'));
+    expect(elements.startBtn.disabled).toBe(false);
   });
 });
