@@ -20,6 +20,7 @@ import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
+import { RuntimeSampler } from './offscreen/RuntimeSampler';
 import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
 import type { OffscreenPhaseUpdate } from './shared/protocol';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
@@ -56,13 +57,7 @@ let finalizeRunPromise: Promise<void> | null = null;
 
 // ─── Runtime diagnostics ─────────────────────────────────────────────────────
 
-let expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
-let runtimeSampleCount = 0;
-let cumulativeEventLoopLagMs = 0;
-let maxEventLoopLagMs = 0;
-let longTaskCount = 0;
-let lastLongTaskMs: number | null = null;
-let maxLongTaskMs = 0;
+const runtimeSampler = new RuntimeSampler(RUNTIME_SAMPLE_INTERVAL_MS, nowMs());
 
 if (typeof PerformanceObserver !== 'undefined') {
   try {
@@ -70,10 +65,7 @@ if (typeof PerformanceObserver !== 'undefined') {
     if (Array.isArray(supportedEntryTypes) && supportedEntryTypes.includes('longtask')) {
       const observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
-          const durationMs = roundMs(entry.duration);
-          longTaskCount += 1;
-          lastLongTaskMs = durationMs;
-          maxLongTaskMs = Math.max(maxLongTaskMs, durationMs);
+          runtimeSampler.recordLongTask(roundMs(entry.duration));
         }
       });
       observer.observe({ entryTypes: ['longtask'] as any });
@@ -132,7 +124,7 @@ function getPort(): chrome.runtime.Port {
 
 function pushState(phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>) {
   if (phase !== currentPhase && phase !== 'idle') {
-    expectedRuntimeSampleAt = nowMs() + RUNTIME_SAMPLE_INTERVAL_MS;
+    runtimeSampler.markActivePhaseStart(nowMs());
   }
   currentPhase = phase;
   getPort().postMessage({
@@ -212,12 +204,7 @@ async function finalizeCurrentRecordingRun(): Promise<void> {
 
 function sampleRuntimeMetrics() {
   if (!isPerfDebugMode() || currentPhase === 'idle') return;
-  const now = nowMs();
-  const eventLoopLagMs = Math.max(0, roundMs(now - expectedRuntimeSampleAt));
-  runtimeSampleCount += 1;
-  cumulativeEventLoopLagMs += eventLoopLagMs;
-  maxEventLoopLagMs = Math.max(maxEventLoopLagMs, eventLoopLagMs);
-  expectedRuntimeSampleAt = now + RUNTIME_SAMPLE_INTERVAL_MS;
+  const diagnostics = runtimeSampler.sample(nowMs());
   const perfMemory = (performance as any)?.memory;
   const nav = navigator as Navigator & { deviceMemory?: number };
   debugPerf(L.log, 'runtime', 'sample', {
@@ -229,12 +216,12 @@ function sampleRuntimeMetrics() {
     usedJSHeapSizeMb: perfMemory?.usedJSHeapSize != null ? roundMs(perfMemory.usedJSHeapSize / 1024 / 1024) : undefined,
     totalJSHeapSizeMb: perfMemory?.totalJSHeapSize != null ? roundMs(perfMemory.totalJSHeapSize / 1024 / 1024) : undefined,
     jsHeapSizeLimitMb: perfMemory?.jsHeapSizeLimit != null ? roundMs(perfMemory.jsHeapSizeLimit / 1024 / 1024) : undefined,
-    eventLoopLagMs,
-    avgEventLoopLagMs: runtimeSampleCount > 0 ? roundMs(cumulativeEventLoopLagMs / runtimeSampleCount) : undefined,
-    maxEventLoopLagMs: roundMs(maxEventLoopLagMs),
-    longTaskCount,
-    lastLongTaskMs: lastLongTaskMs ?? undefined,
-    maxLongTaskMs: longTaskCount > 0 ? roundMs(maxLongTaskMs) : undefined,
+    eventLoopLagMs: diagnostics.eventLoopLagMs,
+    avgEventLoopLagMs: diagnostics.avgEventLoopLagMs,
+    maxEventLoopLagMs: diagnostics.maxEventLoopLagMs,
+    longTaskCount: diagnostics.longTaskCount,
+    lastLongTaskMs: diagnostics.lastLongTaskMs,
+    maxLongTaskMs: diagnostics.maxLongTaskMs,
   });
 }
 
