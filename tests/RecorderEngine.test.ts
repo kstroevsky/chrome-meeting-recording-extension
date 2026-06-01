@@ -203,21 +203,6 @@ describe('RecorderEngine', () => {
     expect(deps.warn).toHaveBeenCalledWith('Stop called but not recording');
   });
 
-  it('falls back to in-memory storage when local target creation fails', async () => {
-    deps.openTarget = jest.fn().mockRejectedValue(new Error('OPFS unavailable'));
-
-    const target = await openStorageTarget('test.webm', 'video/webm', deps);
-    await target.write(chunk('abc'));
-    const artifact = await target.close();
-
-    expect(deps.warn).toHaveBeenCalledWith(
-      'Failed to open storage target, falling back to RAM buffer',
-      expect.stringContaining('OPFS unavailable')
-    );
-    expect(artifact?.filename).toBe('test.webm');
-    expect(await toText(artifact?.file)).toBe('abc');
-  });
-
   it('notifies the recording phase exactly once even when several recorders start', async () => {
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
@@ -671,5 +656,27 @@ describe('RecorderEngine', () => {
     expect(deps.reportWarning).toHaveBeenCalledWith(
       expect.stringContaining('Camera recording requested 1920x1080@30fps, but browser delivered 640x360@15fps.')
     );
+  });
+});
+
+// openStorageTarget is a RecorderTaskUtils helper, not part of the engine facade;
+// kept in its own describe so its behavior is not framed as engine state-machine logic.
+describe('openStorageTarget (RecorderTaskUtils)', () => {
+  it('falls back to an in-memory RAM buffer when the local target cannot be opened', async () => {
+    const deps = {
+      warn: jest.fn(),
+      openTarget: jest.fn().mockRejectedValue(new Error('OPFS unavailable')),
+    } as any;
+
+    const target = await openStorageTarget('test.webm', 'video/webm', deps);
+    await target.write(chunk('abc'));
+    const artifact = await target.close();
+
+    expect(deps.warn).toHaveBeenCalledWith(
+      'Failed to open storage target, falling back to RAM buffer',
+      expect.stringContaining('OPFS unavailable')
+    );
+    expect(artifact?.filename).toBe('test.webm');
+    expect(await toText(artifact?.file)).toBe('abc');
   });
 });

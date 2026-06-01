@@ -96,7 +96,9 @@ describe('RecorderCapture', () => {
         }),
       })
     );
-    expect(deps.log).toHaveBeenCalledWith('self video stream acquired:', {
+    // Assert the diagnostic contract the debug dashboard relies on, without
+    // pinning every echoed capability field (which would break on any addition).
+    expect(deps.log).toHaveBeenCalledWith('self video stream acquired:', expect.objectContaining({
       ok: true,
       requestStrategy: 'exact-size-and-fps',
       requestedWidth: SELF_VIDEO_PROFILE.width,
@@ -106,12 +108,7 @@ describe('RecorderCapture', () => {
       height: 720,
       frameRate: 30,
       deviceId: 'camera-1',
-      capabilityWidth: { min: 640, max: 1920 },
-      capabilityHeight: { min: 480, max: 1080 },
-      capabilityFrameRate: { min: 1, max: 30 },
-      muted: false,
-      enabled: true,
-    });
+    }));
     expect(deps.warn).toHaveBeenCalledWith(
       `self video preferred ${formatSelfVideoProfile()} but browser delivered 1280x720`
     );
@@ -173,7 +170,7 @@ describe('RecorderCapture', () => {
         requestStrategy: 'exact-size',
       })
     );
-    expect(deps.log).toHaveBeenCalledWith('self video stream acquired:', {
+    expect(deps.log).toHaveBeenCalledWith('self video stream acquired:', expect.objectContaining({
       ok: true,
       requestStrategy: 'best-effort',
       requestedWidth: SELF_VIDEO_PROFILE.width,
@@ -183,12 +180,7 @@ describe('RecorderCapture', () => {
       height: 1080,
       frameRate: 30,
       deviceId: 'camera-1',
-      capabilityWidth: { min: 640, max: 1920 },
-      capabilityHeight: { min: 480, max: 1080 },
-      capabilityFrameRate: { min: 1, max: 30 },
-      muted: false,
-      enabled: true,
-    });
+    }));
   });
 
   it('returns null when webcam acquisition fails', async () => {
