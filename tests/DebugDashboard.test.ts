@@ -134,6 +134,8 @@ describe('DebugDashboard', () => {
     expect(elements.eventsBodyEl.textContent).toContain('chunk_uploaded');
     expect(elements.eventsBodyEl.textContent).toContain('.321');
     expect(elements.runtimeEl.textContent).toContain('CPU pressure proxy');
+    expect(elements.recorderEl.textContent).toContain('OPFS:');
+    expect(elements.captionsEl.textContent).toContain('Caption mutations: 0');
     expect(elements.systemEl.textContent).toContain('Chrome extension APIs');
 
     elements.downloadBtn.click();

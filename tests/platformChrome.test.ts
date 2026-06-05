@@ -4,7 +4,6 @@ import {
   getTab,
 } from '../src/platform/chrome/tabs';
 import { downloadFile } from '../src/platform/chrome/downloads';
-import { E2E_MOCK_TAB_STREAM_ID } from '../src/shared/build';
 
 function setLastError(message?: string) {
   (chrome.runtime as any).lastError = message ? { message } : undefined;
@@ -20,7 +19,7 @@ describe('platform/chrome/tabs', () => {
   describe('getMediaStreamIdForTab', () => {
     it('returns a synthetic stream id for E2E mock-capture builds', async () => {
       (globalThis as any).__E2E_MOCK_CAPTURE__ = true;
-      await expect(getMediaStreamIdForTab(7)).resolves.toBe(`${E2E_MOCK_TAB_STREAM_ID}:7`);
+      await expect(getMediaStreamIdForTab(7)).resolves.toBe('__E2E_MOCK_TAB_CAPTURE__:7');
     });
 
     it('resolves the stream id from chrome.tabCapture', async () => {

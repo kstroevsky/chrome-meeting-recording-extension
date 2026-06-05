@@ -243,10 +243,20 @@ Drive mode requires a **Chrome Extension** OAuth 2.0 client. A Desktop or Web cl
 | `npm run dev` | Development build to `dist/` (unminified, source maps) |
 | `npm run watch` | Rebuild on every file save (development) |
 | `npm run typecheck` | Strict TypeScript check across `src/` without emitting |
+| `npm run typecheck:e2e` | TypeScript check for Playwright specs and helpers |
 | `npm run lint` | Alias for `typecheck` |
 | `npm test` / `npm run test:unit` | Unit test suite (skips E2E) |
-| `npm run test:e2e` | Browser-dependent E2E flow |
+| `npm run test:e2e` / `npm run test:e2e:mock` | Functional mocked-Meet E2E plus performance smoke |
+| `npm run test:e2e:perf:smoke` | Three critical browser/extension performance cases |
+| `npm run test:e2e:perf:full` / `npm run test:e2e:perf` | Complete pairwise matrix and repeated benchmarks |
+| `npm run test:e2e:perf:endurance` | Ten-minute local and two-minute throttled-Drive runs |
+| `npm run test:e2e:perf:hardware` | Headed physical microphone/camera tier |
+| `npm run test:production-guards` | Proves E2E capture, fake OAuth, and Drive bridge markers are absent from `dist/` |
+| `npm run test:e2e:live` | Alias for the live Google Meet smoke test |
 | `npm run test:real-meet` | Live Google Meet validation (`scripts/validate-real-meet.mjs`) |
+
+See the [Scenario A testing guide](docs/testing-scenario-a.md) for matrix design,
+new-scenario examples, reports, hardware setup, and CI schedules.
 
 ---
 

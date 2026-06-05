@@ -1,6 +1,7 @@
 import { wirePortHandlers, wireRuntimeListener } from '../src/offscreen/rpcHandlers';
 import { buildRecorderRuntimeSettingsSnapshot } from '../src/shared/settings';
 import type { RecordingPhase } from '../src/shared/recording';
+import { normalizePerfSettings, PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
 
 function makePort() {
   return {
@@ -45,6 +46,7 @@ const validStart = () => ({
   meetingSlug: 'abc-defg-hij',
   runConfig: { storageMode: 'local' as const, micMode: 'off' as const, recordSelfVideo: false },
   recorderSettings: buildRecorderRuntimeSettingsSnapshot(),
+  perfSettings: normalizePerfSettings({ parallelUploadConcurrency: 2 }),
 });
 
 function responseFor(port: any, reqId: string) {
@@ -53,6 +55,10 @@ function responseFor(port: any, reqId: string) {
 }
 
 describe('offscreen rpc handlers', () => {
+  afterEach(() => {
+    resetPerfFlags();
+  });
+
   it('allows OFFSCREEN_START to retry after a failed start without reloading offscreen', async () => {
     const port = makePort();
     let phase: RecordingPhase = 'failed';
@@ -83,6 +89,7 @@ describe('offscreen rpc handlers', () => {
       meetingSlug: 'abc-defg-hij',
       runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
       recorderSettings: buildRecorderRuntimeSettingsSnapshot(),
+      perfSettings: normalizePerfSettings({ parallelUploadConcurrency: 2 }),
     });
 
     expect(deps.clearWarnings).toHaveBeenCalledTimes(1);
@@ -93,6 +100,7 @@ describe('offscreen rpc handlers', () => {
       buildRecorderRuntimeSettingsSnapshot(),
       'abc-defg-hij'
     );
+    expect(PERF_FLAGS.parallelUploadConcurrency).toBe(2);
     expect(port.postMessage).toHaveBeenCalledWith({
       __respFor: 'retry-1',
       payload: { ok: true },

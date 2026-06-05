@@ -6,7 +6,12 @@ import {
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
 } from '../src/shared/settings';
-import { PERF_FLAGS, resetPerfFlags } from '../src/shared/perf';
+import {
+  configurePerfRuntime,
+  PERF_FLAGS,
+  resetPerfFlags,
+  type PerfEventEntry,
+} from '../src/shared/perf';
 import type { RecordingRunConfig } from '../src/shared/recording';
 
 function chunk(text: string, type = 'video/webm'): Blob {
@@ -189,6 +194,7 @@ describe('RecorderEngine', () => {
     (global as any).MediaRecorder = originalMediaRecorder;
     (global as any).AudioContext = originalAudioContext;
     (global as any).MediaStream = originalMediaStream;
+    (globalThis as any).__DEV_BUILD__ = false;
     document.createElement = originalCreateElement;
     resetPerfFlags();
     await resetExtensionSettingsToDefaults();
@@ -196,6 +202,41 @@ describe('RecorderEngine', () => {
 
   it('starts as idle and isRecording() is false', () => {
     expect(engine.isRecording()).toBe(false);
+  });
+
+  it('measures recorder start latency with one monotonic clock', async () => {
+    (globalThis as any).__DEV_BUILD__ = true;
+    const events: PerfEventEntry[] = [];
+    await configurePerfRuntime({
+      source: 'offscreen',
+      sink: (entry) => { events.push(entry); },
+    });
+    const nowSpy = jest.spyOn(performance, 'now');
+    nowSpy
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(125)
+      .mockReturnValue(130);
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockResolvedValue(baseStream);
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) =>
+      new BufferedTarget(filename, mimeType || 'video/webm')
+    );
+
+    await engine.startFromStreamId('stream-id', makeRunConfig());
+
+    const started = events.find(
+      (entry) => entry.scope === 'recorder' && entry.event === 'recorder_started'
+    );
+    expect(started?.fields.latencyMs).toEqual(expect.any(Number));
+    expect(started!.fields.latencyMs as number).toBeGreaterThanOrEqual(0);
+    expect(started!.fields.latencyMs as number).toBeLessThan(1_000);
+
+    await engine.stop();
+    (globalThis as any).__DEV_BUILD__ = false;
   });
 
   it('returns an empty result if stopped while not recording', async () => {
@@ -570,6 +611,12 @@ describe('RecorderEngine', () => {
   });
 
   it('skips the audio playback bridge in auto mode when local tab audio is not suppressed', async () => {
+    (globalThis as any).__DEV_BUILD__ = true;
+    const events: PerfEventEntry[] = [];
+    await configurePerfRuntime({
+      source: 'offscreen',
+      sink: (entry) => { events.push(entry); },
+    });
     PERF_FLAGS.audioPlaybackBridgeMode = 'auto';
     const createMediaStreamSource = jest.fn().mockReturnValue({ connect: jest.fn() });
     const audioContextCtor = jest.fn().mockImplementation(() => ({
@@ -595,9 +642,26 @@ describe('RecorderEngine', () => {
     await engine.startFromStreamId('stream-id', makeRunConfig());
 
     expect(audioContextCtor).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      scope: 'recorder',
+      event: 'tab_audio_bridge_check',
+      fields: expect.objectContaining({
+        mode: 'auto',
+        hasAudioTrack: true,
+        suppressLocalAudioPlayback: false,
+        willBridge: false,
+      }),
+    }));
+    (globalThis as any).__DEV_BUILD__ = false;
   });
 
   it('preserves always mode parity when the suppression flag is missing', async () => {
+    (globalThis as any).__DEV_BUILD__ = true;
+    const events: PerfEventEntry[] = [];
+    await configurePerfRuntime({
+      source: 'offscreen',
+      sink: (entry) => { events.push(entry); },
+    });
     PERF_FLAGS.audioPlaybackBridgeMode = 'always';
     const connect = jest.fn();
     const createMediaStreamSource = jest.fn().mockReturnValue({ connect });
@@ -626,6 +690,17 @@ describe('RecorderEngine', () => {
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
     expect(createMediaStreamSource).toHaveBeenCalledTimes(1);
     expect(connect).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      scope: 'recorder',
+      event: 'tab_audio_bridge_check',
+      fields: expect.objectContaining({
+        mode: 'always',
+        hasAudioTrack: true,
+        suppressLocalAudioPlayback: null,
+        willBridge: true,
+      }),
+    }));
+    (globalThis as any).__DEV_BUILD__ = false;
   });
 
   it('uses capability-aware self video bitrate ceilings when adaptive profiling is enabled', async () => {

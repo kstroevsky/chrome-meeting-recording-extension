@@ -15,6 +15,7 @@ function mockAuthReplies(replies: AuthReply[]) {
 describe('driveAuth', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (globalThis as any).__E2E_MOCK_DRIVE__ = false;
     (chrome.runtime as any).id = 'abcdefghabcdefghabcdefghabcdefgh';
     (chrome.runtime.getManifest as jest.Mock).mockReturnValue({
       oauth2: {
@@ -22,6 +23,19 @@ describe('driveAuth', () => {
       },
     });
     (chrome.identity.removeCachedAuthToken as jest.Mock).mockImplementation((_details: any, cb?: () => void) => cb?.());
+  });
+
+  afterEach(() => {
+    (globalThis as any).__E2E_MOCK_DRIVE__ = false;
+  });
+
+  it('returns a deterministic token only in the E2E mock Drive build', async () => {
+    (globalThis as any).__E2E_MOCK_DRIVE__ = true;
+
+    const result = await fetchDriveTokenWithFallback();
+
+    expect(result).toEqual({ ok: true, token: 'e2e-mock-drive-token' });
+    expect(chrome.identity.getAuthToken).not.toHaveBeenCalled();
   });
 
   it('returns token when silent auth succeeds', async () => {

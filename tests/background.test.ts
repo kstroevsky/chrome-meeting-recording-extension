@@ -125,6 +125,9 @@ describe('background runtime messages', () => {
         recordSelfVideo: false,
       },
       recorderSettings,
+      perfSettings: expect.objectContaining({
+        parallelUploadConcurrency: 1,
+      }),
     });
     expect(response).toEqual(expect.objectContaining({ ok: true }));
   });

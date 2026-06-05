@@ -1,6 +1,7 @@
 import { RecordingController } from '../src/background/RecordingController';
 import { RecordingSession } from '../src/background/RecordingSession';
 import type { OffscreenManager } from '../src/background/OffscreenManager';
+import { getPerfSettingsSnapshot } from '../src/shared/perf';
 
 jest.mock('../src/platform/chrome/tabs', () => ({
   getCapturedTabs: jest.fn().mockResolvedValue([]),
@@ -60,6 +61,7 @@ describe('RecordingController', () => {
         meetingSlug: 'abc-defg-hij',
         runConfig: RUN_CONFIG,
         recorderSettings: { recorder: 'snapshot' },
+        perfSettings: getPerfSettingsSnapshot(),
       });
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('starting');

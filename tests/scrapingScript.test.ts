@@ -57,6 +57,7 @@ function getCollector(): any {
 describe('scrapingScript', () => {
   beforeEach(() => {
     jest.useFakeTimers();
+    (globalThis as any).__DEV_BUILD__ = true;
     document.body.innerHTML = '';
     jest.resetModules();
     require('../src/scrapingScript');
@@ -65,6 +66,7 @@ describe('scrapingScript', () => {
 
   afterEach(() => {
     getCollector()?.stop?.();
+    (globalThis as any).__DEV_BUILD__ = false;
     jest.useRealTimers();
     jest.clearAllMocks();
   });
@@ -133,6 +135,36 @@ describe('scrapingScript', () => {
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('John Doe : Hello world');
+  });
+
+  it('reports caption mutation processing and coalescing diagnostics', async () => {
+    const region = mountCaptionsRegion(createCaptionBlock('user1', 'John Doe', 'Hello'));
+    await flushMutations();
+    (chrome.runtime.sendMessage as jest.Mock).mockClear();
+
+    const textNode = region.querySelector('.ygicle') as HTMLElement;
+    textNode.textContent = 'Hello world';
+    await flushMutations();
+    textNode.textContent = 'Hello world';
+    await flushMutations();
+
+    const perfMessages = (chrome.runtime.sendMessage as jest.Mock).mock.calls
+      .map(([message]) => message)
+      .filter((message) =>
+        message?.type === 'PERF_EVENT'
+        && message.entry?.scope === 'captions'
+        && message.entry?.event === 'mutation_processed'
+      );
+
+    expect(perfMessages).toHaveLength(2);
+    expect(perfMessages[0].entry.fields).toEqual(expect.objectContaining({
+      changed: true,
+      coalesced: false,
+    }));
+    expect(perfMessages[1].entry.fields).toEqual(expect.objectContaining({
+      changed: false,
+      coalesced: true,
+    }));
   });
 
   it('cleans up block observers when caption blocks are removed', async () => {

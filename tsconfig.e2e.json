@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "playwright.config.ts",
+    "src/buildFlags.d.ts",
+    "tests/e2e/**/*.ts"
+  ]
+}

@@ -1,4 +1,9 @@
 import { LocalFileTarget } from '../src/offscreen/LocalFileTarget';
+import {
+  configurePerfRuntime,
+  resetPerfFlags,
+  type PerfEventEntry,
+} from '../src/shared/perf';
 
 async function toText(payload: unknown): Promise<string> {
   const asAny = payload as any;
@@ -52,7 +57,40 @@ describe('LocalFileTarget', () => {
   });
 
   afterEach(() => {
+    resetPerfFlags();
+    (globalThis as any).__DEV_BUILD__ = false;
     jest.restoreAllMocks();
+  });
+
+  it('emits OPFS open, write, close, and cleanup diagnostics', async () => {
+    (globalThis as any).__DEV_BUILD__ = true;
+    const events: PerfEventEntry[] = [];
+    await configurePerfRuntime({
+      source: 'offscreen',
+      sink: (entry) => { events.push(entry); },
+    });
+
+    const target = await LocalFileTarget.create('test.webm', 'tab');
+    await target.write(new Blob(['abc']));
+    const artifact = await target.close();
+    await artifact?.cleanup();
+
+    expect(events.map((entry) => `${entry.scope}:${entry.event}`)).toEqual(
+      expect.arrayContaining([
+        'storage:opfs_opened',
+        'storage:opfs_write_complete',
+        'storage:opfs_closed',
+        'storage:opfs_cleanup',
+      ])
+    );
+    for (const entry of events) {
+      if (typeof entry.fields.durationMs === 'number') {
+        expect(entry.fields.durationMs).toBeGreaterThanOrEqual(0);
+      }
+    }
+    const writeEvent = events.find((entry) => entry.event === 'opfs_write_complete');
+    expect(writeEvent?.fields.pendingWrites).toBe(0);
+    expect(writeEvent?.fields.peakPendingWrites).toBe(1);
   });
 
   it('creates and writes chunks', async () => {

@@ -10,7 +10,10 @@ export default defineConfig({
     timeout: 15_000,
   },
   outputDir: 'output/playwright/test-results',
-  reporter: [['list']],
+  reporter: [
+    ['list'],
+    ['html', { outputFolder: 'output/playwright/html-report', open: 'never' }],
+  ],
   use: {
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
