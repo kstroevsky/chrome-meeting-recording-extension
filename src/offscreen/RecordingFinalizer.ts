@@ -69,17 +69,36 @@ export class RecordingFinalizer {
 
   /** Persists sealed artifacts locally or uploads them to Drive after recording stops. */
   async finalize(options: FinalizeArtifactsOptions): Promise<UploadSummary | undefined> {
+    const startedAt = nowMs();
     const orderedArtifacts = this.sortArtifacts(options.artifacts);
-    if (!orderedArtifacts.length) return undefined;
+    if (!orderedArtifacts.length) {
+      logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
+        durationMs: roundMs(nowMs() - startedAt),
+        artifactCount: 0,
+        storageMode: options.storageMode,
+      });
+      return undefined;
+    }
 
     if (options.storageMode === 'drive') {
       const recordingFolderName = inferDriveRecordingFolderName(orderedArtifacts[0].artifact.filename);
-      return await this.uploadArtifactsToDrive(orderedArtifacts, recordingFolderName);
+      const summary = await this.uploadArtifactsToDrive(orderedArtifacts, recordingFolderName);
+      logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
+        durationMs: roundMs(nowMs() - startedAt),
+        artifactCount: orderedArtifacts.length,
+        storageMode: options.storageMode,
+      });
+      return summary;
     }
 
     for (const entry of orderedArtifacts) {
-      this.saveArtifactLocally(entry.artifact);
+      this.saveArtifactLocally(entry.artifact, entry.stream, 'local');
     }
+    logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
+      durationMs: roundMs(nowMs() - startedAt),
+      artifactCount: orderedArtifacts.length,
+      storageMode: options.storageMode,
+    });
     return undefined;
   }
 
@@ -87,8 +106,18 @@ export class RecordingFinalizer {
     return [...artifacts].sort((a, b) => STREAM_UPLOAD_ORDER.indexOf(a.stream) - STREAM_UPLOAD_ORDER.indexOf(b.stream));
   }
 
-  private saveArtifactLocally(artifact: SealedStorageFile) {
+  private saveArtifactLocally(
+    artifact: SealedStorageFile,
+    stream: RecordingStream,
+    reason: 'local' | 'fallback'
+  ) {
     const blobUrl = URL.createObjectURL(artifact.file);
+    logPerf(this.deps.log, 'finalizer', 'local_save_requested', {
+      filename: artifact.filename,
+      artifactBytes: artifact.file.size,
+      stream,
+      reason,
+    });
     this.deps.requestSave(artifact.filename, blobUrl, artifact.opfsFilename);
   }
 
@@ -122,7 +151,7 @@ export class RecordingFinalizer {
       async ({ artifact, stream }) => {
         const startedAt = nowMs();
         if (sharedSetupError) {
-          this.saveArtifactLocally(artifact);
+          this.saveArtifactLocally(artifact, stream, 'fallback');
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: false, error: sharedSetupError } satisfies UploadOutcome;
         }
@@ -141,7 +170,7 @@ export class RecordingFinalizer {
         } catch (e) {
           const error = describeRuntimeError(e);
           this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
-          this.saveArtifactLocally(artifact);
+          this.saveArtifactLocally(artifact, stream, 'fallback');
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: false, error } satisfies UploadOutcome;
         }

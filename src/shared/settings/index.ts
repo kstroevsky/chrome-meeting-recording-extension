@@ -43,6 +43,7 @@ export type {
   TabCaptureSettings,
   MicrophoneCaptureSettings,
   ChunkingSettings,
+  ResolutionPreset,
 } from './model';
 
 /**

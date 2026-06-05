@@ -52,13 +52,13 @@ export class CaptionBuffer {
    * Receives new caption text for a speaker. Deduplicates via normalization,
    * then restarts the speaker's grace timer on any change.
    */
-  handleCaption(speakerKey: string, speakerName: string, rawText: string) {
+  handleCaption(speakerKey: string, speakerName: string, rawText: string): boolean {
     const text = rawText.trim();
-    if (!text) return;
+    if (!text) return false;
 
     const norm = normalizeCaptionText(text);
     const prev = this.lastSeen.get(speakerKey);
-    if (prev === norm) return;
+    if (prev === norm) return false;
 
     this.lastSeen.set(speakerKey, norm);
     const now = Date.now();
@@ -67,7 +67,7 @@ export class CaptionBuffer {
     if (!existing) {
       const timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
       this.prior.set(speakerKey, { startTime: now, endTime: now, speaker: speakerName, text, timer });
-      return;
+      return true;
     }
 
     existing.endTime = now;
@@ -75,6 +75,7 @@ export class CaptionBuffer {
     existing.speaker = speakerName;
     clearTimeout(existing.timer);
     existing.timer = window.setTimeout(() => this.commit(speakerKey), TIMEOUTS.CAPTION_GRACE_MS);
+    return true;
   }
 
   private commit(key: string) {

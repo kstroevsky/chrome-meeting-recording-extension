@@ -12,6 +12,7 @@ import { broadcastToPopup } from '../shared/messages';
 import type { RecordingSession } from './RecordingSession';
 import type { PerfDebugStore } from './PerfDebugStore';
 import type { OffscreenManager } from './OffscreenManager';
+import { debugPerf, nowMs, roundMs } from '../shared/perf';
 
 export type SessionLifecycleDeps = {
   session: RecordingSession;
@@ -54,9 +55,19 @@ export function registerSaveHandler(
     L.log('Saving OFFSCREEN_SAVE via blobUrl', resolvedFilename);
     void (async () => {
       let cleanupOpfsFilename: string | undefined;
+      const downloadStartedAt = nowMs();
 
       try {
         await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
+        debugPerf(L.log, 'finalizer', 'download_complete', {
+          filename: resolvedFilename,
+          durationMs: roundMs(nowMs() - downloadStartedAt),
+          stream: resolvedFilename.endsWith('-mic.webm')
+            ? 'mic'
+            : resolvedFilename.endsWith('-self-video.webm')
+              ? 'self-video'
+              : 'tab',
+        });
         cleanupOpfsFilename = opfsFilename;
         await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
       } catch (error) {

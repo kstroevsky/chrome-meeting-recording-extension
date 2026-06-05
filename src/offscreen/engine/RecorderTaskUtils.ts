@@ -37,12 +37,13 @@ export function buildRecordingFilename(slug: string, type: 'recording' | 'mic' |
 export async function openStorageTarget(
   filename: string,
   mimeType: string,
-  deps: Pick<RecorderEngineDeps, 'warn' | 'openTarget'>
+  deps: Pick<RecorderEngineDeps, 'warn' | 'openTarget'>,
+  stream?: RecordingStream
 ): Promise<StorageTarget> {
   if (!deps.openTarget) return new InMemoryStorageTarget(filename, mimeType);
 
   try {
-    return await deps.openTarget(filename);
+    return await deps.openTarget(filename, stream);
   } catch (e) {
     deps.warn('Failed to open storage target, falling back to RAM buffer', describeMediaError(e));
     return new InMemoryStorageTarget(filename, mimeType);
@@ -60,10 +61,14 @@ export function makeChunkHandler(
     const writeStartedAt = nowMs();
     void target.write(e.data)
       .then(() => {
+        const durationMs = roundMs(nowMs() - writeStartedAt);
         debugPerf(deps.log, 'recorder', 'chunk_persisted', {
           stream,
           chunkBytes: e.data.size,
-          durationMs: roundMs(nowMs() - writeStartedAt),
+          durationMs,
+          throughputMbps: durationMs > 0
+            ? Math.round(((e.data.size / 1024 / 1024) / (durationMs / 1000)) * 10) / 10
+            : null,
         });
       })
       .catch((err) => deps.error(`${stream} target write error`, describeMediaError(err)));
@@ -118,8 +123,10 @@ export async function sealAndFixArtifact(
   started: boolean,
   actualStartTimeMs: number,
   label: string,
-  deps: Pick<RecorderEngineDeps, 'warn' | 'error'>
+  deps: Pick<RecorderEngineDeps, 'warn' | 'error' | 'log'>,
+  stream: RecordingStream
 ): Promise<SealedStorageFile | null> {
+  const sealStartedAt = nowMs();
   const artifact = await target.close();
   if (!artifact) return null;
   if (started && actualStartTimeMs > 0) {
@@ -130,5 +137,10 @@ export async function sealAndFixArtifact(
       deps.warn(`${label} duration fix failed`, e);
     }
   }
+  debugPerf(deps.log, 'recorder', 'artifact_sealed', {
+    stream,
+    durationMs: roundMs(nowMs() - sealStartedAt),
+    artifactBytes: artifact.file.size,
+  });
   return artifact;
 }

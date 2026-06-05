@@ -136,7 +136,12 @@ async function startWiredSelfVideoRecorder(
   );
 
   const recorder = new MediaRecorder(selfVideo, { mimeType: mime, videoBitsPerSecond });
-  const target = await openStorageTarget(buildRecordingFilename(suffix, 'self-video'), mime, deps);
+  const target = await openStorageTarget(
+    buildRecordingFilename(suffix, 'self-video'),
+    mime,
+    deps,
+    'self-video'
+  );
 
   let selfVideoStreamStopped = false;
   const stopSelfVideoStream = () => {
@@ -151,7 +156,14 @@ async function startWiredSelfVideoRecorder(
 
   const finalize = async (label: string) => {
     try {
-      const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps);
+      const artifact = await sealAndFixArtifact(
+        target,
+        started,
+        actualStartTimeMs,
+        label,
+        deps,
+        'self-video'
+      );
       stopSelfVideoStream();
       callbacks.onStopped(artifact ? { stream: 'self-video', artifact } : null);
     } catch (e) {

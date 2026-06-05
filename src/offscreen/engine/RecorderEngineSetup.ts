@@ -9,7 +9,7 @@
 import { AudioPlaybackBridge, MixedAudioMixer } from '../RecorderAudio';
 import { maybeGetMicStream } from '../RecorderCapture';
 import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
-import { PERF_FLAGS } from '../../shared/perf';
+import { debugPerf, PERF_FLAGS } from '../../shared/perf';
 import type { MicMode } from '../../shared/recording';
 import type { RecorderEngineDeps } from './RecorderEngineTypes';
 
@@ -28,6 +28,12 @@ export async function ensureAudiblePlayback(
   stream.getAudioTracks().forEach((t) => { try { t.enabled = true; } catch {} });
 
   if (!rawAudio) {
+    debugPerf(deps.log, 'recorder', 'tab_audio_bridge_check', {
+      mode: PERF_FLAGS.audioPlaybackBridgeMode,
+      hasAudioTrack: false,
+      suppressLocalAudioPlayback: null,
+      willBridge: false,
+    });
     deps.warn('WARNING: tab stream has NO audio track — tab recording will be silent');
     return null;
   }
@@ -37,6 +43,12 @@ export async function ensureAudiblePlayback(
   const shouldBridge = PERF_FLAGS.audioPlaybackBridgeMode === 'always'
     ? (suppress ?? true)
     : suppress === true;
+  debugPerf(deps.log, 'recorder', 'tab_audio_bridge_check', {
+    mode: PERF_FLAGS.audioPlaybackBridgeMode,
+    hasAudioTrack: true,
+    suppressLocalAudioPlayback: typeof suppress === 'boolean' ? suppress : null,
+    willBridge: shouldBridge,
+  });
 
   if (!shouldBridge) return null;
 

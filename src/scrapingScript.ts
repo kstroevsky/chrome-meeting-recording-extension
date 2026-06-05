@@ -26,7 +26,13 @@ import { GoogleMeetAdapter } from './content/GoogleMeetAdapter';
 import type { MeetingProviderAdapter } from './content/MeetingProviderAdapter';
 import { trySendRuntimeMessage } from './platform/chrome/runtime';
 import { isPopupToContentMessage } from './shared/protocol';
-import { configurePerfRuntime, logPerf, type PerfEventEntry } from './shared/perf';
+import {
+  configurePerfRuntime,
+  logPerf,
+  nowMs,
+  roundMs,
+  type PerfEventEntry,
+} from './shared/perf';
 import { CaptionBuffer } from './content/captionBuffer';
 import { MeetingEndDetector, type MeetingEndedPayload } from './content/MeetingEndDetector';
 
@@ -125,8 +131,21 @@ class TranscriptCollector {
     const { textNode: txtNode, speakerName, key } = data;
 
     const push = () => {
+      const startedAt = nowMs();
       const trimmed = txtNode.textContent?.trim() ?? '';
-      if (trimmed) this.buffer.handleCaption(key, speakerName, trimmed);
+      const changed = trimmed
+        ? this.buffer.handleCaption(key, speakerName, trimmed)
+        : false;
+      const emittedAt = Number(txtNode.dataset.emittedAt);
+      logPerf(console.log, 'captions', 'mutation_processed', {
+        durationMs: roundMs(nowMs() - startedAt),
+        sourceLatencyMs: Number.isFinite(emittedAt)
+          ? Math.max(0, Date.now() - emittedAt)
+          : undefined,
+        changed,
+        coalesced: !changed,
+        textLength: trimmed.length,
+      });
     };
 
     push();

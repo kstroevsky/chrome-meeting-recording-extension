@@ -21,8 +21,13 @@ export function buildSummaryText(snapshot: PerfDebugSnapshot): string {
 
 export function buildRecorderText(snapshot: PerfDebugSnapshot): string {
   const { summary } = snapshot;
+  const capture = summary.capture;
+  const storage = summary.storage;
+  const finalization = summary.finalization;
+  const lifecycle = summary.lifecycle;
   return [
     `Active recorders: ${summary.runtime.activeRecorders}`,
+    `Capture latency: tab=${formatMetric(capture?.lastDurationMsByStream?.tab, 'ms')}, mic=${formatMetric(capture?.lastDurationMsByStream?.mic, 'ms')}, camera=${formatMetric(capture?.lastDurationMsByStream?.['self-video'], 'ms')}`,
     `Timeslice: ${summary.recorder.lastTimesliceMs ?? 'n/a'} ms`,
     `Tab start latency: ${formatMetric(summary.recorder.lastStartLatencyMsByStream.tab, 'ms')}`,
     `Mic start latency: ${formatMetric(summary.recorder.lastStartLatencyMsByStream.mic, 'ms')}`,
@@ -30,6 +35,9 @@ export function buildRecorderText(snapshot: PerfDebugSnapshot): string {
     `Persisted chunks: ${summary.recorder.persistedChunkCount}`,
     `Persisted bytes: ${formatBytes(summary.recorder.persistedChunkBytes)}`,
     `Average chunk write: ${formatMetric(summary.recorder.avgPersistedChunkDurationMs, 'ms')}`,
+    `OPFS: opens=${storage?.openCount ?? 0}, writes=${storage?.writeCount ?? 0}, closes=${storage?.closeCount ?? 0}, cleanups=${storage?.cleanupCount ?? 0}, queuePeak=${storage?.peakPendingWrites ?? 0}`,
+    `Finalization: completed=${finalization?.count ?? 0}, downloads=${finalization?.downloadCount ?? 0}, latest=${formatMetric(finalization?.lastDurationMs, 'ms')}`,
+    `Lifecycle: starts=${lifecycle?.startCompletedCount ?? 0}, stops=${lifecycle?.stopCompletedCount ?? 0}, failures=${lifecycle?.failureCount ?? 0}, activeTracks=${lifecycle?.activeTracks ?? 0}`,
     `Self-video bitrate: ${formatBitrate(summary.recorder.lastSelfVideoBitrate)}`,
     `Audio bridge: mode=${summary.recorder.lastAudioBridgeMode ?? 'n/a'}, suppressed=${formatBool(summary.recorder.lastAudioBridgeSuppressed)}, enabled=${formatBool(summary.recorder.lastAudioBridgeEnabled)}`,
   ].join('\n');
@@ -58,6 +66,10 @@ export function buildCaptionsText(snapshot: PerfDebugSnapshot): string {
   return [
     `Current block observers: ${summary.captions.currentObserverCount}`,
     `Peak block observers: ${summary.captions.maxObserverCount}`,
+    `Caption mutations: ${summary.captions.mutationCount ?? 0}`,
+    `Mutation throughput: ${formatMetric(summary.captions.mutationThroughputPerSecond, 'events/s')}`,
+    `Changed/coalesced: ${summary.captions.changedMutationCount ?? 0}/${summary.captions.coalescedMutationCount ?? 0}`,
+    `Processing latency: p50=${formatMetric(summary.captions.processingDurationMs?.p50, 'ms')}, p95=${formatMetric(summary.captions.processingDurationMs?.p95, 'ms')}`,
   ].join('\n');
 }
 

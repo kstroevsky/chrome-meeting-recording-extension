@@ -5,7 +5,7 @@
  */
 
 import { withTimeout } from '../shared/async';
-import { E2E_MOCK_TAB_STREAM_ID, isE2EMockCaptureBuild } from '../shared/build';
+import { isE2EMockCaptureBuild } from '../shared/build';
 import type { MicMode } from '../shared/recording';
 import { EXTENSION_DEFAULTS } from '../shared/recordingConstants';
 import {
@@ -23,6 +23,7 @@ import {
   getSelfVideoConstraintRequests,
   matchesSelfVideoProfile,
 } from './RecorderProfiles';
+import { debugPerf, nowMs, roundMs } from '../shared/perf';
 
 type RecorderCaptureDeps = {
   log: (...a: any[]) => void;
@@ -134,11 +135,15 @@ function createE2EMockTabStream(
   tabOutput: Readonly<TabCaptureSettings>,
   deps: RecorderCaptureDeps
 ): MediaStream {
+  const captureStartedAt = nowMs();
   const canvas = document.createElement('canvas');
   canvas.width = tabOutput.maxWidth;
   canvas.height = tabOutput.maxHeight;
   const ctx = canvas.getContext('2d');
   let frame = 0;
+  const captureFrameRate = Math.max(1, Math.min(tabOutput.maxFrameRate, 30));
+  let markerGain: GainNode | null = null;
+  let markerOscillator: OscillatorNode | null = null;
 
   const draw = () => {
     if (!ctx) return;
@@ -150,12 +155,19 @@ function createE2EMockTabStream(
     ctx.fillText('E2E mock tab capture', 32, 72);
     ctx.font = '24px sans-serif';
     ctx.fillText(`Frame ${frame}`, 32, 116);
+    const markerActive = frame % captureFrameRate < Math.max(1, Math.round(captureFrameRate / 10));
+    ctx.fillStyle = markerActive ? '#ffffff' : '#000000';
+    ctx.fillRect(canvas.width - 96, 32, 64, 64);
+    if (markerGain && markerOscillator) {
+      markerGain.gain.value = markerActive ? 0.08 : 0;
+      markerOscillator.frequency.value = markerActive ? 880 : 440;
+    }
     frame += 1;
   };
 
   draw();
-  const timer = window.setInterval(draw, 1000 / Math.max(1, Math.min(tabOutput.maxFrameRate, 30)));
-  const stream = canvas.captureStream(Math.max(1, Math.min(tabOutput.maxFrameRate, 30)));
+  const timer = window.setInterval(draw, 1000 / captureFrameRate);
+  const stream = canvas.captureStream(captureFrameRate);
   const cleanupCallbacks: Array<() => void> = [() => clearInterval(timer)];
 
   try {
@@ -165,11 +177,13 @@ function createE2EMockTabStream(
       const oscillator = audio.createOscillator();
       const gain = audio.createGain();
       const destination = audio.createMediaStreamDestination();
-      gain.gain.value = 0.02;
+      gain.gain.value = 0;
       oscillator.frequency.value = 440;
       oscillator.connect(gain);
       gain.connect(destination);
       oscillator.start();
+      markerGain = gain;
+      markerOscillator = oscillator;
       const audioTrack = destination.stream.getAudioTracks()[0];
       if (audioTrack) stream.addTrack(audioTrack);
       cleanupCallbacks.push(() => {
@@ -185,6 +199,18 @@ function createE2EMockTabStream(
     while (cleanupCallbacks.length) cleanupCallbacks.shift()?.();
   };
   stream.getTracks().forEach((track) => patchTrackStop(track, cleanup));
+  const videoSettings = stream.getVideoTracks()[0]?.getSettings?.();
+  debugPerf(deps.log, 'capture', 'stream_acquired', {
+    stream: 'tab',
+    durationMs: roundMs(nowMs() - captureStartedAt),
+    requestedWidth: tabOutput.maxWidth,
+    requestedHeight: tabOutput.maxHeight,
+    requestedFrameRate: tabOutput.maxFrameRate,
+    width: videoSettings?.width ?? tabOutput.maxWidth,
+    height: videoSettings?.height ?? tabOutput.maxHeight,
+    frameRate: videoSettings?.frameRate ?? Math.min(tabOutput.maxFrameRate, 30),
+    synthetic: true,
+  });
   deps.log('Using E2E mock tab capture stream');
   return stream;
 }
@@ -198,27 +224,65 @@ export async function captureTabStreamFromId(
   const tabOutput = deps ? tabOutputOrDeps as Readonly<TabCaptureSettings> : getTabOutputSettings();
   const captureDeps = (deps ?? tabOutputOrDeps) as RecorderCaptureDeps;
 
-  if (isE2EMockCaptureBuild() && streamId.startsWith(E2E_MOCK_TAB_STREAM_ID)) {
+  const mockCaptureEnabled = typeof __E2E_MOCK_CAPTURE_BUILD__ !== 'undefined'
+    ? __E2E_MOCK_CAPTURE_BUILD__
+    : isE2EMockCaptureBuild();
+  if (mockCaptureEnabled && streamId.startsWith('__E2E_MOCK_TAB_CAPTURE__')) {
     return createE2EMockTabStream(tabOutput, captureDeps);
   }
 
+  const captureStartedAt = nowMs();
   captureDeps.log(`Attempting getUserMedia with streamId ${streamId} source=tab`);
   try {
-    return await withTimeout(
+    const stream = await withTimeout(
       navigator.mediaDevices.getUserMedia(makeTabCaptureConstraints(streamId, 'tab', tabOutput)),
       TIMEOUTS.GUM_MS,
       'tab getUserMedia'
     );
+    const settings = stream.getVideoTracks()[0]?.getSettings?.();
+    debugPerf(captureDeps.log, 'capture', 'stream_acquired', {
+      stream: 'tab',
+      durationMs: roundMs(nowMs() - captureStartedAt),
+      requestedWidth: tabOutput.maxWidth,
+      requestedHeight: tabOutput.maxHeight,
+      requestedFrameRate: tabOutput.maxFrameRate,
+      width: settings?.width,
+      height: settings?.height,
+      frameRate: settings?.frameRate,
+      source: 'tab',
+    });
+    return stream;
   } catch (error: any) {
     captureDeps.warn('[gUM] failed for chromeMediaSource=tab:', error?.name || error, error?.message || error);
   }
 
   captureDeps.log(`Attempting getUserMedia with streamId ${streamId} source=desktop`);
-  return await withTimeout(
-    navigator.mediaDevices.getUserMedia(makeTabCaptureConstraints(streamId, 'desktop', tabOutput)),
-    TIMEOUTS.GUM_MS,
-    'desktop getUserMedia'
-  );
+  try {
+    const stream = await withTimeout(
+      navigator.mediaDevices.getUserMedia(makeTabCaptureConstraints(streamId, 'desktop', tabOutput)),
+      TIMEOUTS.GUM_MS,
+      'desktop getUserMedia'
+    );
+    const settings = stream.getVideoTracks()[0]?.getSettings?.();
+    debugPerf(captureDeps.log, 'capture', 'stream_acquired', {
+      stream: 'tab',
+      durationMs: roundMs(nowMs() - captureStartedAt),
+      requestedWidth: tabOutput.maxWidth,
+      requestedHeight: tabOutput.maxHeight,
+      requestedFrameRate: tabOutput.maxFrameRate,
+      width: settings?.width,
+      height: settings?.height,
+      frameRate: settings?.frameRate,
+      source: 'desktop',
+    });
+    return stream;
+  } catch (error) {
+    debugPerf(captureDeps.log, 'capture', 'stream_failed', {
+      stream: 'tab',
+      durationMs: roundMs(nowMs() - captureStartedAt),
+    });
+    throw error;
+  }
 }
 
 /** Requests a microphone stream when the active run configuration needs one. */
@@ -230,6 +294,7 @@ export async function maybeGetMicStream(
   if (micMode === 'off') return null;
   const microphone = deps ? microphoneOrDeps as Readonly<MicrophoneCaptureSettings> : getMicrophoneCaptureSettings();
   const captureDeps = (deps ?? microphoneOrDeps) as RecorderCaptureDeps;
+  const captureStartedAt = nowMs();
 
   try {
     const mic = await withTimeout(
@@ -241,9 +306,20 @@ export async function maybeGetMicStream(
     );
 
     const track = mic.getAudioTracks()[0];
+    const settings = track?.getSettings?.();
+    debugPerf(captureDeps.log, 'capture', 'stream_acquired', {
+      stream: 'mic',
+      durationMs: roundMs(nowMs() - captureStartedAt),
+      sampleRate: settings?.sampleRate,
+      channelCount: settings?.channelCount,
+    });
     captureDeps.log('mic stream acquired:', !!track, 'muted:', track?.muted, 'enabled:', track?.enabled);
     return mic;
   } catch (error) {
+    debugPerf(captureDeps.log, 'capture', 'stream_failed', {
+      stream: 'mic',
+      durationMs: roundMs(nowMs() - captureStartedAt),
+    });
     const label = micMode === 'mixed'
       ? 'mic getUserMedia failed (mixed mode requires microphone)'
       : 'mic getUserMedia failed (continuing without separate mic file)';
@@ -262,6 +338,7 @@ export async function maybeGetSelfVideoStream(
   const profile = deps ? profileOrDeps as Readonly<SelfVideoProfileSettings> : getSelfVideoProfileSettings();
   const captureDeps = (deps ?? profileOrDeps) as RecorderCaptureDeps;
   const requests = getSelfVideoConstraintRequests(profile);
+  const captureStartedAt = nowMs();
 
   for (const request of requests) {
     try {
@@ -276,6 +353,17 @@ export async function maybeGetSelfVideoStream(
       const track = stream.getVideoTracks()[0];
       const { diagnostics, settings } = buildSelfVideoDiagnostics(profile, track, request.label);
 
+      debugPerf(captureDeps.log, 'capture', 'stream_acquired', {
+        stream: 'self-video',
+        durationMs: roundMs(nowMs() - captureStartedAt),
+        requestedWidth: profile.width,
+        requestedHeight: profile.height,
+        requestedFrameRate: profile.frameRate,
+        width: settings?.width,
+        height: settings?.height,
+        frameRate: settings?.frameRate,
+        requestStrategy: request.label,
+      });
       captureDeps.log('self video stream acquired:', diagnostics);
 
       if (!matchesSelfVideoProfile(settings, profile)) {
@@ -301,6 +389,13 @@ export async function maybeGetSelfVideoStream(
         'self video getUserMedia failed (continuing without self video):',
         formattedError
       );
+      debugPerf(captureDeps.log, 'capture', 'stream_failed', {
+        stream: 'self-video',
+        durationMs: roundMs(nowMs() - captureStartedAt),
+        requestedWidth: profile.width,
+        requestedHeight: profile.height,
+        requestedFrameRate: profile.frameRate,
+      });
       return null;
     }
   }

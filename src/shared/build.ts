@@ -13,7 +13,15 @@ export function isTestRuntime(): boolean {
 }
 
 export function isE2EMockCaptureBuild(): boolean {
+  if (typeof __E2E_MOCK_CAPTURE_BUILD__ !== 'undefined') {
+    return __E2E_MOCK_CAPTURE_BUILD__ === true;
+  }
   return (globalThis as any).__E2E_MOCK_CAPTURE__ === true;
 }
 
-export const E2E_MOCK_TAB_STREAM_ID = '__E2E_MOCK_TAB_CAPTURE__';
+export function isE2EMockDriveBuild(): boolean {
+  if (typeof __E2E_MOCK_DRIVE_BUILD__ !== 'undefined') {
+    return __E2E_MOCK_DRIVE_BUILD__ === true;
+  }
+  return (globalThis as any).__E2E_MOCK_DRIVE__ === true;
+}

@@ -4,7 +4,60 @@
  * Small helpers for Drive requests that need token reuse and a single auth retry.
  */
 
+import { isE2EMockDriveBuild } from '../../shared/build';
+
 export type TokenProvider = (options?: { refresh?: boolean }) => Promise<string>;
+
+type E2EDriveFetchResponse = {
+  ok: boolean;
+  status?: number;
+  statusText?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  error?: string;
+};
+
+function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
+  if (!headers) return {};
+  const normalized: Record<string, string> = {};
+  new Headers(headers).forEach((value, name) => {
+    normalized[name] = value;
+  });
+  return normalized;
+}
+
+export async function driveFetch(
+  input: string | URL | Request,
+  init: RequestInit = {}
+): Promise<Response> {
+  const mockDriveEnabled = typeof __E2E_MOCK_DRIVE_BUILD__ !== 'undefined'
+    ? __E2E_MOCK_DRIVE_BUILD__
+    : isE2EMockDriveBuild();
+  if (!mockDriveEnabled) return await fetch(input, init);
+
+  const isRequest = typeof Request !== 'undefined' && input instanceof Request;
+  const url = isRequest ? input.url : String(input);
+  const method = init.method ?? (isRequest ? input.method : 'GET');
+  const headers = normalizeHeaders(
+    init.headers ?? (isRequest ? input.headers : undefined)
+  );
+  const body = typeof init.body === 'string' ? init.body : undefined;
+  const response = await chrome.runtime.sendMessage({
+    type: 'E2E_DRIVE_FETCH',
+    url,
+    method,
+    headers,
+    body,
+  }) as E2EDriveFetchResponse;
+  if (!response?.ok || response.status == null) {
+    throw new TypeError(response?.error ?? 'E2E Drive fetch bridge failed');
+  }
+  return new Response(response.body ?? '', {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 /**
  * Wraps a token provider with in-memory per-upload caching.

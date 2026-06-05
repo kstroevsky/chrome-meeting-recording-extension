@@ -70,6 +70,21 @@
       font-size: 18px;
       font-weight: 700;
     }
+
+    #participants {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    .participant-tile {
+      min-height: 42px;
+      padding: 6px;
+      background: #263238;
+      border: 1px solid #455a64;
+      overflow: hidden;
+    }
   </style>
 </head>
 <body>
@@ -89,19 +104,33 @@
       </div>
     </div>
 
+    <div id="participants"></div>
     <div id="ended-state" hidden>You left the meeting Rejoin</div>
   </main>
 
   <script>
     const canvas = document.getElementById('stage');
     const ctx = canvas.getContext('2d');
-    const textNode = document.querySelector('.ygicle');
+    let textNode = document.querySelector('.ygicle');
     const leaveButton = document.getElementById('leave-call');
     const captionsRegion = document.getElementById('captions-region');
+    const participants = document.getElementById('participants');
     const endedState = document.getElementById('ended-state');
     let frame = 0;
+    let animationComplexity = 1;
+    let captionSequence = 0;
+    let captionTimer = null;
+    let replacementTimer = null;
+    let markerUntil = 0;
 
     function draw() {
+      if (performance.now() < markerUntil) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        frame += 1;
+        requestAnimationFrame(draw);
+        return;
+      }
       const hue = (frame * 4) % 360;
       ctx.fillStyle = `hsl(${hue}, 58%, 22%)`;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -112,15 +141,98 @@
       ctx.fillText(`Frame ${frame}`, 48, 154);
       ctx.fillStyle = '#38bdf8';
       ctx.fillRect(48, 210, 220 + ((frame * 9) % 560), 32);
+      for (let index = 0; index < animationComplexity; index += 1) {
+        ctx.fillStyle = `hsla(${(frame * 7 + index * 31) % 360}, 80%, 55%, 0.55)`;
+        ctx.fillRect(
+          48 + ((frame * 13 + index * 97) % 1100),
+          280 + ((index * 43) % 360),
+          16 + (index % 8) * 5,
+          16 + (index % 6) * 7
+        );
+      }
       frame += 1;
       requestAnimationFrame(draw);
     }
 
     function setCaption(text) {
       textNode.textContent = text;
+      textNode.dataset.emittedAt = String(Date.now());
+      captionSequence += 1;
+    }
+
+    function setParticipants(count) {
+      participants.replaceChildren();
+      for (let index = 0; index < count; index += 1) {
+        const tile = document.createElement('div');
+        tile.className = 'participant-tile';
+        tile.dataset.participantIndex = String(index);
+        tile.textContent = `Participant ${index + 1} frame ${frame}`;
+        participants.appendChild(tile);
+      }
+    }
+
+    function replaceCaptionDom() {
+      const current = document.querySelector('.ygicle');
+      if (!current) return;
+      const replacement = current.cloneNode(false);
+      replacement.textContent = current.textContent;
+      replacement.dataset.emittedAt = String(Date.now());
+      current.replaceWith(replacement);
+      textNode = replacement;
+    }
+
+    function burstCaptions(count, prefix = 'Burst caption') {
+      for (let index = 0; index < count; index += 1) {
+        setCaption(`${prefix} ${captionSequence + 1}`);
+      }
+    }
+
+    function stopWorkload() {
+      if (captionTimer) clearInterval(captionTimer);
+      if (replacementTimer) clearInterval(replacementTimer);
+      captionTimer = null;
+      replacementTimer = null;
+    }
+
+    function emitHardwareMarker() {
+      markerUntil = performance.now() + 500;
+      try {
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        const audio = new AudioContextCtor();
+        const oscillator = audio.createOscillator();
+        const gain = audio.createGain();
+        oscillator.frequency.value = 1000;
+        gain.gain.value = 0.15;
+        oscillator.connect(gain);
+        gain.connect(audio.destination);
+        oscillator.start();
+        oscillator.stop(audio.currentTime + 0.35);
+        oscillator.addEventListener('ended', () => audio.close());
+      } catch {}
+    }
+
+    function scheduleHardwareMarker(delayMs) {
+      setTimeout(emitHardwareMarker, Math.max(0, delayMs));
+    }
+
+    function startWorkload(options = {}) {
+      stopWorkload();
+      setParticipants(options.participants ?? 1);
+      animationComplexity = Math.max(1, options.animationComplexity ?? 1);
+      const captionIntervalMs = options.captionIntervalMs ?? 0;
+      const replacementIntervalMs = options.replacementIntervalMs ?? 0;
+      if (captionIntervalMs > 0) {
+        captionTimer = setInterval(() => {
+          setCaption(`Sustained caption ${captionSequence + 1}`);
+        }, captionIntervalMs);
+      }
+      if (replacementIntervalMs > 0) {
+        replacementTimer = setInterval(replaceCaptionDom, replacementIntervalMs);
+      }
     }
 
     function endMeeting() {
+      stopWorkload();
       leaveButton.remove();
       captionsRegion.remove();
       endedState.hidden = false;
@@ -131,7 +243,24 @@
     });
     document.getElementById('end-meeting').addEventListener('click', endMeeting);
 
-    window.mockMeet = { setCaption, endMeeting };
+    window.mockMeet = {
+      setCaption,
+      setParticipants,
+      replaceCaptionDom,
+      burstCaptions,
+      startWorkload,
+      stopWorkload,
+      emitHardwareMarker,
+      scheduleHardwareMarker,
+      endMeeting,
+      getStats: () => ({
+        frame,
+        captionSequence,
+        participants: participants.childElementCount,
+        animationComplexity,
+      }),
+    };
+    setParticipants(1);
     draw();
   </script>
 </body>

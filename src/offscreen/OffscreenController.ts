@@ -41,6 +41,7 @@ export type OffscreenControllerDeps = {
   postMessage: (message: OffscreenStateMessage) => void;
   sampler: Pick<RuntimeSampler, 'markActivePhaseStart'>;
   error: (...args: unknown[]) => void;
+  onWarning?: (warning: string) => void;
   /** Monotonic clock; defaults to Date.now for tests. */
   now?: () => number;
 };
@@ -94,6 +95,7 @@ export class OffscreenController {
     const normalized = warning.trim();
     if (!normalized || this.warnings.includes(normalized)) return;
     this.warnings = [...this.warnings, normalized];
+    this.deps.onWarning?.(normalized);
     this.pushState(this.phase);
   };
 

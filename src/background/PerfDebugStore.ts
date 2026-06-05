@@ -17,18 +17,24 @@ import {
   removeSessionStorageValues,
   setSessionStorageValues,
 } from '../platform/chrome/storage';
-import { createEmptySnapshot, createEmptySummary } from './perf/PerfDebugState';
+import { createEmptySnapshot, normalizeSummary } from './perf/PerfDebugState';
 import {
   applyAudioBridge,
+  applyArtifactSealed,
+  applyCaptionMutation,
+  applyCapture,
   applyDriveChunk,
   applyDriveFile,
   applyDriveFileComplete,
   applyDriveFinalize,
+  applyFinalization,
+  applyLifecycle,
   applyObserverCount,
   applyRecorderChunk,
   applyRecorderStarted,
   applyRuntimeSample,
   applySelfVideoStream,
+  applyStorage,
 } from './perf/PerfDebugReducers';
 
 export class PerfDebugStore {
@@ -50,7 +56,7 @@ export class PerfDebugStore {
       updatedAt: typeof snapshot.updatedAt === 'number' ? snapshot.updatedAt : null,
       droppedEvents: typeof snapshot.droppedEvents === 'number' ? snapshot.droppedEvents : 0,
       entries: Array.isArray(snapshot.entries) ? snapshot.entries : [],
-      summary: snapshot.summary ?? createEmptySummary(),
+      summary: normalizeSummary(snapshot.summary),
     };
   }
 
@@ -88,6 +94,9 @@ export class PerfDebugStore {
       case 'recorder:chunk_persisted':
         applyRecorderChunk(this.snapshot, entry);
         break;
+      case 'recorder:artifact_sealed':
+        applyArtifactSealed(this.snapshot, entry);
+        break;
       case 'recorder:tab_audio_bridge_check':
         applyAudioBridge(this.snapshot, entry);
         break;
@@ -96,6 +105,20 @@ export class PerfDebugStore {
         break;
       case 'captions:observer_count':
         applyObserverCount(this.snapshot, entry);
+        break;
+      case 'captions:mutation_processed':
+        applyCaptionMutation(this.snapshot, entry);
+        break;
+      case 'capture:stream_acquired':
+      case 'capture:stream_failed':
+        applyCapture(this.snapshot, entry);
+        break;
+      case 'storage:opfs_opened':
+      case 'storage:opfs_open_failed':
+      case 'storage:opfs_write_complete':
+      case 'storage:opfs_closed':
+      case 'storage:opfs_cleanup':
+        applyStorage(this.snapshot, entry);
         break;
       case 'drive:chunk_uploaded':
         applyDriveChunk(this.snapshot, entry);
@@ -108,6 +131,19 @@ export class PerfDebugStore {
         break;
       case 'finalizer:drive_finalize_complete':
         applyDriveFinalize(this.snapshot, entry);
+        break;
+      case 'finalizer:local_save_requested':
+      case 'finalizer:download_complete':
+      case 'finalizer:finalize_complete':
+        applyFinalization(this.snapshot, entry);
+        break;
+      case 'lifecycle:start_requested':
+      case 'lifecycle:start_completed':
+      case 'lifecycle:stop_requested':
+      case 'lifecycle:stop_completed':
+      case 'lifecycle:failure':
+      case 'lifecycle:warning':
+        applyLifecycle(this.snapshot, entry);
         break;
       case 'runtime:sample':
         applyRuntimeSample(this.snapshot, entry);

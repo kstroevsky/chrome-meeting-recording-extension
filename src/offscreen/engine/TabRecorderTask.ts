@@ -51,11 +51,11 @@ export async function startTabRecorder(
   });
 
   const filename = buildRecordingFilename(suffix, 'recording');
-  const target = await openStorageTarget(filename, mime, deps);
+  const target = await openStorageTarget(filename, mime, deps, 'tab');
 
   const finalize = async (label: string) => {
     try {
-      const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps);
+      const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps, 'tab');
       if (artifact) {
         callbacks.onStopped({
           stream: 'tab',

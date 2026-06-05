@@ -80,6 +80,7 @@ State persistence:  chrome.storage.session → RecordingSessionSnapshot + perf s
 
 - **Google Chrome** (or Chromium-based browser) with Manifest V3 and the Offscreen API. Chrome 116+ is sufficient.
 - **Node.js 18+** and **npm** to build the extension.
+- **FFmpeg and FFprobe** for performance E2E artifact analysis.
 
 The extension requests the following Chrome permissions:
 `activeTab`, `downloads`, `tabCapture`, `offscreen`, `storage`, `tabs`, `desktopCapture`

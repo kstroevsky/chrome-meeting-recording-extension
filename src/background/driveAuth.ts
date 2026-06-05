@@ -7,6 +7,7 @@
 
 import { getAuthToken, removeCachedAuthToken } from '../platform/chrome/identity';
 import { getRuntimeId, getRuntimeManifest } from '../platform/chrome/runtime';
+import { isE2EMockDriveBuild } from '../shared/build';
 
 type DriveTokenOk = { ok: true; token: string };
 type DriveTokenErr = { ok: false; error: string };
@@ -47,6 +48,14 @@ function buildBadClientIdError(rawError: string): string {
 }
 
 export async function fetchDriveTokenWithFallback(options: DriveTokenOptions = {}): Promise<DriveTokenResponse> {
+  if (
+    (typeof __E2E_MOCK_DRIVE_BUILD__ !== 'undefined'
+      ? __E2E_MOCK_DRIVE_BUILD__
+      : isE2EMockDriveBuild())
+  ) {
+    return { ok: true, token: 'e2e-mock-drive-token' };
+  }
+
   if (options.refresh) {
     await invalidateLastIssuedToken();
   }

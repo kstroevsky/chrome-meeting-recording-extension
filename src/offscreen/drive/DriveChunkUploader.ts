@@ -13,6 +13,7 @@ import {
 } from './constants';
 import { formatDriveError, readDriveErrorDetail } from './errors';
 import type { TokenProvider } from './request';
+import { driveFetch } from './request';
 import { nowMs, roundMs } from '../../shared/perf';
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -31,7 +32,7 @@ export async function fetchWithTimeout(url: string, init: RequestInit): Promise<
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), DRIVE_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: ac.signal });
+    return await driveFetch(url, { ...init, signal: ac.signal });
   } finally {
     clearTimeout(timeout);
   }

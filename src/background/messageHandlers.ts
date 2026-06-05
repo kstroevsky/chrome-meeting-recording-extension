@@ -6,8 +6,15 @@
  */
 
 import { fetchDriveTokenWithFallback } from './driveAuth';
+import { isE2EMockDriveBuild } from '../shared/build';
 import { handleMeetingEndedMessage } from './recordingAutoStop';
-import { isMeetingEndedMessage, isPerfEventMessage, isPopupToBgMessage, type CommandResult } from '../shared/protocol';
+import {
+  isE2EDriveFetchMessage,
+  isMeetingEndedMessage,
+  isPerfEventMessage,
+  isPopupToBgMessage,
+  type CommandResult,
+} from '../shared/protocol';
 import { toStatusView } from '../shared/recording';
 import { type PerfEventEntry } from '../shared/perf';
 import type { RecordingController } from './RecordingController';
@@ -32,6 +39,43 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
     sender: chrome.runtime.MessageSender,
     sendResponse: (response?: unknown) => void
   ) => {
+    if (
+      (typeof __E2E_MOCK_DRIVE_BUILD__ !== 'undefined'
+        ? __E2E_MOCK_DRIVE_BUILD__
+        : isE2EMockDriveBuild())
+      && isE2EDriveFetchMessage(msg)
+    ) {
+      if (!msg.url.startsWith('https://www.googleapis.com/')) {
+        sendResponse({ ok: false, error: 'E2E Drive bridge rejected non-Google URL' });
+        return false;
+      }
+      fetch(msg.url, {
+        method: msg.method,
+        headers: msg.headers,
+        body: msg.body,
+      })
+        .then(async (response) => {
+          const headers: Record<string, string> = {};
+          response.headers.forEach((value, name) => {
+            headers[name] = value;
+          });
+          sendResponse({
+            ok: true,
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+            body: await response.text(),
+          });
+        })
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      return true;
+    }
+
     if (isPerfEventMessage(msg)) {
       perfDebugStore.record(msg.entry as PerfEventEntry);
       sendResponse({ ok: true });

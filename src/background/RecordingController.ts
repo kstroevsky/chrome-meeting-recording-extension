@@ -15,6 +15,7 @@
 import { getCapturedTabs, getMediaStreamIdForTab, getTab } from '../platform/chrome/tabs';
 import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
+import { getPerfSettingsSnapshot } from '../shared/perf';
 import { type CommandResult } from '../shared/protocol';
 import { isStoppablePhase, parseRunConfig, toStatusView } from '../shared/recording';
 import type { OffscreenManager } from './OffscreenManager';
@@ -94,6 +95,7 @@ export class RecordingController {
         meetingSlug,
         runConfig,
         recorderSettings,
+        perfSettings: getPerfSettingsSnapshot(),
       });
 
       this.L.log('rpc(OFFSCREEN_START) response', r);

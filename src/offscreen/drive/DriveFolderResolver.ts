@@ -9,7 +9,7 @@
  */
 import { DRIVE_FILES_URL, DRIVE_FOLDER_MIME } from './constants';
 import { formatDriveError, readDriveErrorDetail } from './errors';
-import { fetchWithAuthRetry, type TokenProvider } from './request';
+import { driveFetch, fetchWithAuthRetry, type TokenProvider } from './request';
 
 export type DriveFolderHierarchy = {
   rootFolderName?: string;
@@ -81,7 +81,7 @@ export class DriveFolderResolver {
     const url = `${DRIVE_FILES_URL}&q=${q}&fields=files(id,name)&spaces=drive&includeItemsFromAllDrives=true&pageSize=1`;
 
     const res = await fetchWithAuthRetry(this.getToken, (token) =>
-      fetch(url, {
+      driveFetch(url, {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -105,7 +105,7 @@ export class DriveFolderResolver {
     if (parentId) body.parents = [parentId];
 
     const res = await fetchWithAuthRetry(this.getToken, (token) =>
-      fetch(DRIVE_FILES_URL, {
+      driveFetch(DRIVE_FILES_URL, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,

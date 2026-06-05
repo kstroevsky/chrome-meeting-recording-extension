@@ -7,6 +7,7 @@
 
 import type { MeetingProviderInfo } from './provider';
 import type { RecorderRuntimeSettingsSnapshot } from './settings';
+import type { PerfSettings } from './perf';
 import type {
   RecordingRunConfig,
   RecordingStatusView,
@@ -101,6 +102,7 @@ export type BgToOffscreenRpc =
       meetingSlug: string;
       runConfig: RecordingRunConfig;
       recorderSettings: RecorderRuntimeSettingsSnapshot;
+      perfSettings: PerfSettings;
     }>
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>;
 
@@ -124,6 +126,14 @@ export type PerfEventMessage = {
     ts: number;
     fields: Record<string, string | number | boolean | null>;
   };
+};
+
+export type E2EDriveFetchMessage = {
+  type: 'E2E_DRIVE_FETCH';
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
 };
 
 /** Checks whether a runtime message belongs to the popup -> background command set. */
@@ -154,6 +164,10 @@ export function isBgToOffscreenRuntimeMessage(value: unknown): value is BgToOffs
 /** Checks whether a message is a structured performance event emitted by another context. */
 export function isPerfEventMessage(value: unknown): value is PerfEventMessage {
   return getMessageType(value) === PERF_EVENT_MESSAGE_TYPE;
+}
+
+export function isE2EDriveFetchMessage(value: unknown): value is E2EDriveFetchMessage {
+  return getMessageType(value) === 'E2E_DRIVE_FETCH';
 }
 
 /** Creates a lightweight random request id for port-based RPC messages. */

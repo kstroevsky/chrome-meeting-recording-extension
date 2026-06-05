@@ -44,7 +44,7 @@ export type RecorderEngineDeps = {
   error: (...a: any[]) => void;
   notifyPhase: (phase: RecordingPhase) => void;
   reportWarning?: (warning: string) => void;
-  openTarget?: (filename: string) => Promise<StorageTarget>;
+  openTarget?: (filename: string, stream?: RecordingStream) => Promise<StorageTarget>;
 };
 
 /** RAM-backed fallback target used when OPFS is unavailable for a stream. */

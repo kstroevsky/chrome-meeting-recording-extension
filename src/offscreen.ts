@@ -37,9 +37,18 @@ window.addEventListener('unhandledrejection', (e: any) => {
 });
 L.log('script loaded');
 
-void configurePerfRuntime({
+const perfRuntimeReady = configurePerfRuntime({
   source: 'offscreen',
   sink: (entry: PerfEventEntry) => void trySendRuntimeMessage({ type: 'PERF_EVENT', entry }),
+  onSettingsChanged: (settings) => {
+    debugPerf(L.log, 'runtime', 'settings_applied', {
+      audioPlaybackBridgeMode: settings.audioPlaybackBridgeMode,
+      adaptiveSelfVideoProfile: settings.adaptiveSelfVideoProfile,
+      extendedTimeslice: settings.extendedTimeslice,
+      dynamicDriveChunkSizing: settings.dynamicDriveChunkSizing,
+      parallelUploadConcurrency: settings.parallelUploadConcurrency,
+    });
+  },
 });
 
 // ─── Runtime state ───────────────────────────────────────────────────────────
@@ -58,6 +67,9 @@ const controller = new OffscreenController({
   sampler: runtimeSampler,
   error: L.error,
   now: nowMs,
+  onWarning: (warning) => {
+    debugPerf(L.log, 'lifecycle', 'warning', { warning });
+  },
 });
 
 if (typeof PerformanceObserver !== 'undefined') {
@@ -146,9 +158,9 @@ const engine = new RecorderEngine({
   error: L.error,
   notifyPhase: controller.pushState,
   reportWarning: controller.reportWarning,
-  openTarget: async (filename: string) => {
+  openTarget: async (filename: string, stream) => {
     try {
-      return await LocalFileTarget.create(filename);
+      return await LocalFileTarget.create(filename, stream);
     } catch (e) {
       L.warn('OPFS local target create failed', describeRuntimeError(e));
       throw e;
@@ -185,5 +197,11 @@ function sampleRuntimeMetrics() {
 
 setInterval(sampleRuntimeMetrics, RUNTIME_SAMPLE_INTERVAL_MS);
 
-wireRuntimeListener(connectPort);
-getPort();
+void perfRuntimeReady
+  .catch((error) => {
+    L.warn('Failed to initialize performance settings; continuing with defaults', error);
+  })
+  .finally(() => {
+    wireRuntimeListener(connectPort);
+    getPort();
+  });

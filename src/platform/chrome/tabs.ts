@@ -6,7 +6,7 @@
  */
 
 import { getRuntimeUrl } from './runtime';
-import { E2E_MOCK_TAB_STREAM_ID, isE2EMockCaptureBuild } from '../../shared/build';
+import { isE2EMockCaptureBuild } from '../../shared/build';
 
 export async function queryActiveTab(): Promise<chrome.tabs.Tab | undefined> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -31,8 +31,11 @@ export async function sendTabMessage<T = unknown>(tabId: number, message: unknow
 }
 
 export function getMediaStreamIdForTab(tabId: number): Promise<string> {
-  if (isE2EMockCaptureBuild()) {
-    return Promise.resolve(`${E2E_MOCK_TAB_STREAM_ID}:${tabId}`);
+  const mockCaptureEnabled = typeof __E2E_MOCK_CAPTURE_BUILD__ !== 'undefined'
+    ? __E2E_MOCK_CAPTURE_BUILD__
+    : isE2EMockCaptureBuild();
+  if (mockCaptureEnabled) {
+    return Promise.resolve(`__E2E_MOCK_TAB_CAPTURE__:${tabId}`);
   }
 
   return new Promise((resolve, reject) => {

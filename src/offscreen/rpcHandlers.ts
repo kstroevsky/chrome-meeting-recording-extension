@@ -10,6 +10,7 @@ import { createPortRpcServer } from '../shared/rpc';
 import { normalizeRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { isBusyPhase, parseRunConfig, type RecordingPhase, type RecordingRunConfig } from '../shared/recording';
 import { isBgToOffscreenRuntimeMessage } from '../shared/protocol';
+import { applyPerfSettings } from '../shared/perf';
 import type {
   BgToOffscreenOneWay,
   BgToOffscreenRpc,
@@ -58,6 +59,7 @@ async function handleOffscreenStart(
   }
 
   deps.clearWarnings();
+  applyPerfSettings(msg.perfSettings);
   deps.onStartRequested(runConfig, runConfig.storageMode);
   deps.pushState('starting');
 

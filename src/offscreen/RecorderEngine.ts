@@ -29,6 +29,7 @@ import type {
   RecorderEngineDeps,
   RecorderTrack,
 } from './engine/RecorderEngineTypes';
+import { debugPerf, nowMs, roundMs } from '../shared/perf';
 
 // Re-export types for consumers that import from the engine root.
 export type {
@@ -88,7 +89,13 @@ export class RecorderEngine {
     this.micMode = options.micMode;
     this.recordSelfVideo = options.recordSelfVideo;
     this.suffix = meetingSlug;
-    const runStartedAt = Date.now();
+    const runStartedAt = nowMs();
+    debugPerf(this.deps.log, 'lifecycle', 'start_requested', {
+      activeTracks: this.tracks.length,
+      micMode: options.micMode,
+      recordSelfVideo: options.recordSelfVideo,
+      storageMode: options.storageMode,
+    });
 
     try {
       const tabRecorderStream = await this.acquireRecordingStreams(streamId, options, recorderSettings, runId);
@@ -97,7 +104,15 @@ export class RecorderEngine {
       await Promise.all(startTasks);
       this.pendingStartPromises = [];
       if (this.runId === runId && this.state === 'starting') this.state = 'recording';
+      debugPerf(this.deps.log, 'lifecycle', 'start_completed', {
+        durationMs: roundMs(nowMs() - runStartedAt),
+        activeTracks: this.tracks.length,
+      });
     } catch (e) {
+      debugPerf(this.deps.log, 'lifecycle', 'failure', {
+        stage: 'start',
+        durationMs: roundMs(nowMs() - runStartedAt),
+      });
       this.state = 'idle';
       this.resetRunState();
       throw e;
@@ -187,6 +202,10 @@ export class RecorderEngine {
     }
     if (this.stopPromise) return this.stopPromise;
 
+    const stopStartedAt = nowMs();
+    debugPerf(this.deps.log, 'lifecycle', 'stop_requested', {
+      activeTracks: this.tracks.length,
+    });
     this.state = 'stopping';
     this.stopPromise = new Promise<CompletedRecordingArtifact[]>((resolve) => {
       this.resolveStop = resolve;
@@ -200,7 +219,13 @@ export class RecorderEngine {
     this.stopAllRecorders();
     this.playback?.stop(); this.playback = null;
     this.mixedAudio?.stop(); this.mixedAudio = null;
-    return this.stopPromise;
+    const artifacts = await this.stopPromise;
+    debugPerf(this.deps.log, 'lifecycle', 'stop_completed', {
+      durationMs: roundMs(nowMs() - stopStartedAt),
+      activeTracks: this.tracks.length,
+      artifactCount: artifacts.length,
+    });
+    return artifacts;
   }
 
   revokeBlobUrl(blobUrl: string) {

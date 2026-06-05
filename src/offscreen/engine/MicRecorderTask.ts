@@ -63,11 +63,11 @@ export async function startMicRecorder(
   const recorder = new MediaRecorder(mic, { mimeType: mime, audioBitsPerSecond: 96_000 });
 
   const filename = buildRecordingFilename(suffix, 'mic');
-  const target = await openStorageTarget(filename, mime, deps);
+  const target = await openStorageTarget(filename, mime, deps, 'mic');
 
   const finalize = async (label: string) => {
     try {
-      const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps);
+      const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps, 'mic');
       callbacks.onStopped(artifact ? { stream: 'mic', artifact } : null);
     } catch (e) {
       deps.error(`${label} finalize/save failed`, describeMediaError(e));
