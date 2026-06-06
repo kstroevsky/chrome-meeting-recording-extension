@@ -124,11 +124,12 @@ chrome.runtime.onUpdateAvailable?.addListener(() => {
 });
 
 // On update, discard any stale offscreen document so the next recording runs new code.
-chrome.runtime.onInstalled?.addListener((details) => {
-  if (details.reason === 'update') {
-    L.log('Extension updated; discarding stale offscreen document');
-    void offscreen.closeForUpdate();
-  }
+// If work is in flight, defer to a reload after it finishes rather than tearing it down.
+chrome.runtime.onInstalled?.addListener(async (details) => {
+  if (details.reason !== 'update') return;
+  L.log('Extension updated; refreshing offscreen document');
+  const closed = await offscreen.closeForUpdate();
+  if (!closed) pendingReload = true;
 });
 
 // Hydrate persisted session on service-worker (re)start.

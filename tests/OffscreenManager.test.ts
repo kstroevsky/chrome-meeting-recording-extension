@@ -93,6 +93,28 @@ describe('OffscreenManager', () => {
     await expect(ensureReadyPromise).resolves.toBeUndefined();
   });
 
+  it('refuses to close the offscreen document for update while work is in flight', async () => {
+    const closeDocumentSpy = jest
+      .spyOn(chrome.offscreen, 'closeDocument')
+      .mockImplementation(async () => {});
+
+    manager.hydratePhase('recording');
+
+    await expect(manager.closeForUpdate()).resolves.toBe(false);
+    expect(closeDocumentSpy).not.toHaveBeenCalled();
+  });
+
+  it('closes the offscreen document for update when idle', async () => {
+    const closeDocumentSpy = jest
+      .spyOn(chrome.offscreen, 'closeDocument')
+      .mockImplementation(async () => {});
+
+    manager.hydratePhase('idle');
+
+    await expect(manager.closeForUpdate()).resolves.toBe(true);
+    expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('syncs phase updates from offscreen to the badge and listener callback', () => {
     manager.attachPort(mockPort);
     manager.onStateChanged = jest.fn();

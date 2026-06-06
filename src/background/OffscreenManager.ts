@@ -24,7 +24,7 @@ import { isOffscreenToBgMessage } from '../shared/protocol';
 export type OffscreenStateListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_STATE' }>) => void;
 export type OffscreenSaveListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>) => void;
 import { TIMEOUTS } from '../shared/timeouts';
-import { isStoppablePhase, normalizePhase, type RecordingPhase } from '../shared/recording';
+import { isBusyPhase, isStoppablePhase, normalizePhase, type RecordingPhase } from '../shared/recording';
 
 const L = makeLogger('background');
 
@@ -159,11 +159,20 @@ export class OffscreenManager {
     this.readyPromise = null;
   }
 
-  /** Discards any existing offscreen document so the next recording uses fresh code. */
-  async closeForUpdate(): Promise<void> {
+  /**
+   * Discards any existing offscreen document so the next recording uses fresh code.
+   * Refuses while a recording or upload is in flight (returns false) so an update
+   * can never tear down active work; the caller defers the refresh in that case.
+   */
+  async closeForUpdate(): Promise<boolean> {
+    if (isBusyPhase(this.lastKnownPhase)) {
+      L.log('Update arrived during active work; deferring offscreen refresh');
+      return false;
+    }
     this.ready = false;
     await closeOffscreenDocument();
     L.log('Discarded stale offscreen document after extension update');
+    return true;
   }
 
   /** Sends an RPC command across the offscreen port once the document is connected. */
