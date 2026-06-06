@@ -23,6 +23,15 @@ export async function requestOffscreenReconnect(): Promise<void> {
   await trySendRuntimeMessage({ type: 'OFFSCREEN_CONNECT' });
 }
 
+/** Closes the offscreen document if one exists; swallows "no document"/already-closed errors. */
+export async function closeOffscreenDocument(): Promise<void> {
+  try {
+    await chrome.offscreen.closeDocument();
+  } catch {
+    // No offscreen document or already closed — nothing to do.
+  }
+}
+
 export async function hasOffscreenDocument(): Promise<boolean> {
   try {
     const getContexts = (chrome.runtime as any).getContexts as

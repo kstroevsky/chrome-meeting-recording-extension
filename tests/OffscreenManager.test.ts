@@ -1,4 +1,5 @@
 import { OffscreenManager } from '../src/background/OffscreenManager';
+import { getBuildId } from '../src/shared/build';
 
 describe('OffscreenManager', () => {
   let manager: OffscreenManager;
@@ -27,7 +28,7 @@ describe('OffscreenManager', () => {
     manager.attachPort(mockPort);
 
     const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
-    onMessageListener({ type: 'OFFSCREEN_READY' });
+    onMessageListener({ type: 'OFFSCREEN_READY', version: getBuildId() });
 
     await ensureReadyPromise;
 
@@ -48,12 +49,48 @@ describe('OffscreenManager', () => {
 
     manager.attachPort(mockPort);
     const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
-    onMessageListener({ type: 'OFFSCREEN_READY' });
+    onMessageListener({ type: 'OFFSCREEN_READY', version: getBuildId() });
 
     await ensureReadyPromise;
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'OFFSCREEN_CONNECT' });
     expect(chrome.offscreen.createDocument).not.toHaveBeenCalled();
+  });
+
+  it('recreates a stale offscreen document whose READY reports a mismatched version', async () => {
+    (chrome.offscreen.hasDocument as jest.Mock).mockResolvedValue(false);
+    const createDocumentSpy = jest
+      .spyOn(chrome.offscreen, 'createDocument')
+      .mockImplementation(async () => {});
+    const closeDocumentSpy = jest
+      .spyOn(chrome.offscreen, 'closeDocument')
+      .mockImplementation(async () => {});
+
+    const ensureReadyPromise = manager.ensureReady();
+    manager.attachPort(mockPort);
+
+    // A stale offscreen (old build) connects and reports an outdated version.
+    const staleListener = mockPort.onMessage.addListener.mock.calls[0][0];
+    staleListener({ type: 'OFFSCREEN_READY', version: '0.0.1-old' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The manager should have closed the stale doc and created a fresh one,
+    // without resolving ensureReady yet.
+    expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+    expect(createDocumentSpy).toHaveBeenCalledTimes(2);
+
+    // The fresh document connects and reports the current version → ready resolves.
+    const freshPort: any = {
+      name: 'offscreen',
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+    };
+    manager.attachPort(freshPort);
+    const freshListener = freshPort.onMessage.addListener.mock.calls[0][0];
+    freshListener({ type: 'OFFSCREEN_READY', version: getBuildId() });
+
+    await expect(ensureReadyPromise).resolves.toBeUndefined();
   });
 
   it('syncs phase updates from offscreen to the badge and listener callback', () => {

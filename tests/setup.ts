@@ -1,4 +1,5 @@
 ;(globalThis as any).__DEV_BUILD__ = false;
+;(globalThis as any).__BUILD_ID__ = 'test-build';
 
 // structuredClone is available in Node 17+ but not always exposed in jsdom globals.
 if (typeof (globalThis as any).structuredClone !== 'function') {
@@ -25,11 +26,19 @@ Object.assign(global, {
         },
       }),
       getManifest: jest.fn(() => ({
+        version: '1.1.0',
         oauth2: {
           client_id: 'manifest-client-id.apps.googleusercontent.com',
         },
       })),
       getURL: (path: string) => `chrome-extension://mock-id/${path}`,
+      reload: jest.fn(),
+      onInstalled: {
+        addListener: jest.fn(),
+      },
+      onUpdateAvailable: {
+        addListener: jest.fn(),
+      },
     },
     offscreen: {
       createDocument: jest.fn(),

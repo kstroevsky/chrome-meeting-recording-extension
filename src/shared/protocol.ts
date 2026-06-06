@@ -113,7 +113,7 @@ export type BgToOffscreenRuntime =
   | { type: 'OFFSCREEN_CONNECT' };
 
 export type OffscreenToBg =
-  | { type: 'OFFSCREEN_READY' }
+  | { type: 'OFFSCREEN_READY'; version?: string }
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string };
 

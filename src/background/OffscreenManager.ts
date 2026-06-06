@@ -6,11 +6,13 @@
  */
 import { setActionBadgeText } from '../platform/chrome/action';
 import {
+  closeOffscreenDocument,
   createOffscreenDocument,
   hasOffscreenDocument,
   requestOffscreenReconnect,
 } from '../platform/chrome/offscreen';
 import { withTimeout } from '../shared/async';
+import { getBuildId } from '../shared/build';
 import { makeLogger } from '../shared/logger';
 import { createPortRpcClient } from '../shared/rpc';
 import type {
@@ -32,6 +34,9 @@ export class OffscreenManager {
   private lastKnownPhase: RecordingPhase = 'idle';
   private readyPromise: Promise<void> | null = null;
   private resolveReady: (() => void) | null = null;
+  private rejectReady: ((reason?: unknown) => void) | null = null;
+  /** Set while an intentional close+recreate is in flight so we keep the pending ready promise. */
+  private recreating = false;
 
   public onStateChanged?: OffscreenStateListener;
   public onSaveRequested?: OffscreenSaveListener;
@@ -52,11 +57,15 @@ export class OffscreenManager {
     port.onMessage.addListener((msg: OffscreenToBg | unknown) => this.onOffscreenMessage(msg));
     port.onDisconnect.addListener(() => {
       L.warn('Offscreen disconnected');
-      this.port = null;
+      // Don't clobber a newer port that may have attached during a recreate.
+      if (this.port === port) this.port = null;
       this.ready = false;
+      this.setBadge('idle');
+      // During an intentional recreate, keep the in-flight ready promise so the
+      // fresh document's READY can still resolve the original ensureReady() call.
+      if (this.recreating) return;
       this.readyPromise = null;
       this.resolveReady = null;
-      this.setBadge('idle');
     });
   }
 
@@ -76,23 +85,85 @@ export class OffscreenManager {
     if (this.port && this.ready) return;
 
     if (!this.readyPromise) {
-      this.readyPromise = new Promise<void>((resolve) => {
+      this.readyPromise = new Promise<void>((resolve, reject) => {
         this.resolveReady = resolve;
+        this.rejectReady = reject;
       });
     }
 
     const have = await this.hasOffscreenContext();
     if (!have) {
       L.log('Creating offscreen document…');
-      await createOffscreenDocument('offscreen.html', {
-        reasons: ['BLOBS', 'AUDIO_PLAYBACK', 'USER_MEDIA'],
-        justification: 'Record tab audio+video in offscreen using MediaRecorder',
-      });
+      await this.createDoc();
     } else {
       await requestOffscreenReconnect();
     }
 
     await withTimeout(this.readyPromise, TIMEOUTS.READY_TIMEOUT_MS, 'Offscreen ready');
+  }
+
+  /** Creates the offscreen document with the media-capture reasons it requires. */
+  private async createDoc(): Promise<void> {
+    await createOffscreenDocument('offscreen.html', {
+      reasons: ['BLOBS', 'AUDIO_PLAYBACK', 'USER_MEDIA'],
+      justification: 'Record tab audio+video in offscreen using MediaRecorder',
+    });
+  }
+
+  /** The build identifier both contexts compare against; empty if unavailable. */
+  private currentVersion(): string {
+    return getBuildId();
+  }
+
+  /**
+   * Closes a stale offscreen document and creates a fresh one. The pending
+   * ready promise is preserved (see the disconnect guard) so the new document's
+   * matching OFFSCREEN_READY resolves the in-flight ensureReady() call.
+   */
+  private async recreateStaleOffscreen(): Promise<void> {
+    try {
+      this.ready = false;
+      try { this.port?.disconnect(); } catch {}
+      this.port = null;
+      await closeOffscreenDocument();
+      // closeDocument can resolve a tick before Chrome stops listing the context;
+      // wait until it's gone so createDocument doesn't throw "single offscreen document".
+      await this.waitUntilOffscreenGone();
+      await this.createDoc();
+      L.log('Recreated offscreen document from current code; awaiting fresh READY');
+      // The fresh document connects and posts a versioned READY, which resolves the
+      // in-flight ensureReady() via the match branch in onOffscreenMessage().
+    } catch (e) {
+      L.error('Offscreen recreate after version mismatch failed', e);
+      this.recreating = false;
+      // Fail the in-flight ensureReady() fast. The stale doc is already closed, so the
+      // next start creates a fresh offscreen instead of re-hitting the mismatch loop.
+      this.failReady(e);
+    }
+  }
+
+  /** Polls until Chrome reports no offscreen document, bounded by maxMs. */
+  private async waitUntilOffscreenGone(maxMs = 1_500): Promise<void> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < maxMs) {
+      if (!(await this.hasOffscreenContext())) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /** Rejects and clears the pending ready promise so ensureReady() fails fast. */
+  private failReady(reason: unknown): void {
+    this.rejectReady?.(reason);
+    this.rejectReady = null;
+    this.resolveReady = null;
+    this.readyPromise = null;
+  }
+
+  /** Discards any existing offscreen document so the next recording uses fresh code. */
+  async closeForUpdate(): Promise<void> {
+    this.ready = false;
+    await closeOffscreenDocument();
+    L.log('Discarded stale offscreen document after extension update');
   }
 
   /** Sends an RPC command across the offscreen port once the document is connected. */
@@ -121,6 +192,7 @@ export class OffscreenManager {
   private signalReady() {
     this.resolveReady?.();
     this.resolveReady = null;
+    this.rejectReady = null;
     this.readyPromise = null;
   }
 
@@ -129,6 +201,16 @@ export class OffscreenManager {
     if (!isOffscreenToBgMessage(msg)) return;
 
     if (msg.type === 'OFFSCREEN_READY') {
+      const expected = this.currentVersion();
+      if (expected && msg.version !== expected && !this.recreating) {
+        this.recreating = true;
+        L.warn(
+          `Offscreen version mismatch (offscreen=${msg.version ?? 'none'}, extension=${expected}); recreating offscreen`
+        );
+        void this.recreateStaleOffscreen();
+        return;
+      }
+      this.recreating = false;
       this.ready = true;
       this.signalReady();
       L.log('Offscreen is READY (Port)');

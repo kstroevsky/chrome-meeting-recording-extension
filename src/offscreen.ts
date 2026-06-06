@@ -14,6 +14,7 @@
  */
 
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
+import { getBuildId } from './shared/build';
 import { makeLogger } from './shared/logger';
 import { sendToBackground } from './shared/messages';
 import { RecorderEngine } from './offscreen/RecorderEngine';
@@ -114,7 +115,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     }
   });
 
-  port.postMessage({ type: 'OFFSCREEN_READY' });
+  port.postMessage({ type: 'OFFSCREEN_READY', version: getBuildId() });
   const warnings = controller.currentWarnings();
   port.postMessage({
     type: 'OFFSCREEN_STATE',

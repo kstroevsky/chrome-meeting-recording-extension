@@ -41,6 +41,8 @@ const offscreen = new OffscreenManager();
 
 let activeDebugDashboards = 0;
 let sessionHydrated = false;
+// Set when an extension update arrives mid-recording; applied once work finishes.
+let pendingReload = false;
 
 const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), L.warn);
 const session = new RecordingSession(
@@ -61,6 +63,10 @@ const session = new RecordingSession(
     perfDebugStore.setPhase(snapshot.phase);
     if (!isBusyPhase(snapshot.phase)) {
       maybeClearPerfDiagnostics({ session, perfDebugStore, isSessionHydrated: () => sessionHydrated, getActiveDebugDashboards: () => activeDebugDashboards });
+      if (pendingReload) {
+        L.log('Applying deferred update reload now that work has finished');
+        chrome.runtime.reload();
+      }
     }
     void import('./shared/messages').then(({ broadcastToPopup }) =>
       broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) })
@@ -104,6 +110,25 @@ chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
 // Register suspend handler for graceful stop on service-worker sleep.
 chrome.runtime.onSuspend?.addListener(async () => {
   await offscreen.stopIfPossibleOnSuspend();
+});
+
+// Apply downloaded updates promptly, without interrupting an active recording.
+chrome.runtime.onUpdateAvailable?.addListener(() => {
+  if (!isBusyPhase(session.getSnapshot().phase)) {
+    L.log('Update available; reloading to apply');
+    chrome.runtime.reload();
+  } else {
+    L.log('Update available; deferring reload until current work finishes');
+    pendingReload = true;
+  }
+});
+
+// On update, discard any stale offscreen document so the next recording runs new code.
+chrome.runtime.onInstalled?.addListener((details) => {
+  if (details.reason === 'update') {
+    L.log('Extension updated; discarding stale offscreen document');
+    void offscreen.closeForUpdate();
+  }
 });
 
 // Hydrate persisted session on service-worker (re)start.

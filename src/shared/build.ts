@@ -8,6 +8,11 @@ export function isDevBuild(): boolean {
   return (globalThis as any).__DEV_BUILD__ === true;
 }
 
+/** Unique per-build identifier stamped in by webpack; '' when unavailable (e.g. tests). */
+export function getBuildId(): string {
+  return (globalThis as any).__BUILD_ID__ ?? '';
+}
+
 export function isTestRuntime(): boolean {
   return typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 }

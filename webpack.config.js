@@ -67,6 +67,9 @@ module.exports = (_env, argv) => {
     : 'dist'
   const configuredGoogleOauthClientId = resolveGoogleOauthClientId(__dirname)
   const googleOauthClientId = configuredGoogleOauthClientId || OAUTH_CLIENT_ID_PLACEHOLDER
+  // Unique per build run; stamped into every bundle so the SW can detect a stale
+  // offscreen document running code from an earlier build (see OffscreenManager).
+  const buildId = String(Date.now())
 
   if (!configuredGoogleOauthClientId) {
     console.warn(
@@ -107,6 +110,7 @@ module.exports = (_env, argv) => {
         '__E2E_MOCK_CAPTURE_BUILD__': JSON.stringify(e2eMockCapture),
         '__E2E_MOCK_DRIVE_BUILD__': JSON.stringify(e2eMockDrive),
         'globalThis.__DEV_BUILD__': JSON.stringify(isDevBuild),
+        'globalThis.__BUILD_ID__': JSON.stringify(buildId),
         'globalThis.__E2E_MOCK_CAPTURE__': JSON.stringify(e2eMockCapture),
         'globalThis.__E2E_MOCK_DRIVE__': JSON.stringify(e2eMockDrive),
         'process.env.NODE_ENV': JSON.stringify(mode),
