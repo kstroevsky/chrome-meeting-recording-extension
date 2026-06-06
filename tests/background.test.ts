@@ -466,6 +466,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
+      closeForUpdate: jest.fn().mockResolvedValue(true),
     };
   }
 
@@ -541,5 +542,71 @@ describe('background runtime messages', () => {
       expect.objectContaining({ ok: false, error: 'Stop requested but no recording session is active' })
     );
     expect(offscreenInstance.rpc).not.toHaveBeenCalled();
+  });
+
+  it('reloads immediately when an update is available and the session is idle', async () => {
+    await importBackgroundWith(makeOffscreenInstance());
+
+    const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+    onUpdate({ version: '2.0.0' });
+
+    expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers the update reload while recording and applies it after work finishes', async () => {
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
+    const offscreenInstance = makeOffscreenInstance();
+    await importBackgroundWith(offscreenInstance);
+
+    const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+    onUpdate({ version: '2.0.0' });
+
+    // Busy → no immediate reload.
+    expect(chrome.runtime.reload).not.toHaveBeenCalled();
+
+    // Recording finishes → offscreen reports idle → deferred reload fires.
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
+    await Promise.resolve();
+
+    expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the offscreen document when an update installs while idle', async () => {
+    const offscreenInstance = makeOffscreenInstance();
+    await importBackgroundWith(offscreenInstance);
+
+    const onInstalled = (chrome.runtime.onInstalled.addListener as jest.Mock).mock.calls[0][0];
+    await onInstalled({ reason: 'update' });
+
+    expect(offscreenInstance.closeForUpdate).toHaveBeenCalledTimes(1);
+    expect(chrome.runtime.reload).not.toHaveBeenCalled();
+  });
+
+  it('ignores onInstalled events that are not updates', async () => {
+    const offscreenInstance = makeOffscreenInstance();
+    await importBackgroundWith(offscreenInstance);
+
+    const onInstalled = (chrome.runtime.onInstalled.addListener as jest.Mock).mock.calls[0][0];
+    await onInstalled({ reason: 'install' });
+
+    expect(offscreenInstance.closeForUpdate).not.toHaveBeenCalled();
+  });
+
+  it('defers the reload when an update installs during active work', async () => {
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
+    const offscreenInstance = makeOffscreenInstance();
+    // Busy → closeForUpdate refuses to tear down the offscreen.
+    offscreenInstance.closeForUpdate = jest.fn().mockResolvedValue(false);
+    await importBackgroundWith(offscreenInstance);
+
+    const onInstalled = (chrome.runtime.onInstalled.addListener as jest.Mock).mock.calls[0][0];
+    await onInstalled({ reason: 'update' });
+
+    expect(chrome.runtime.reload).not.toHaveBeenCalled();
+
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
+    await Promise.resolve();
+
+    expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
   });
 });

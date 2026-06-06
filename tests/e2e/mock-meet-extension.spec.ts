@@ -94,6 +94,91 @@ test.describe('mock Meet extension E2E', () => {
     }
   });
 
+  test('recreates a stale offscreen document on build-id mismatch and still records', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage); // local, mic off, no camera → 1 file/run
+
+      const getServiceWorker = async () => {
+        let [sw] = harness.context.serviceWorkers();
+        if (!sw) sw = await harness.context.waitForEvent('serviceworker', { timeout: 30_000 });
+        return sw;
+      };
+      const offscreenDocumentId = async (): Promise<string | null> => {
+        const sw = await getServiceWorker();
+        return await sw.evaluate(async () => {
+          const contexts = await (chrome.runtime as any).getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT'],
+          });
+          return contexts[0]?.documentId ?? null;
+        });
+      };
+      const waitForRecreatedOffscreen = async (
+        previous: string | null,
+        timeoutMs = 15_000
+      ): Promise<string> => {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < timeoutMs) {
+          const id = await offscreenDocumentId();
+          if (id && id !== previous) return id;
+          await harness.controlPage.waitForTimeout(200);
+        }
+        throw new Error('Offscreen document was not recreated after build-id mismatch');
+      };
+
+      // First recording creates the offscreen document.
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      const firstDocId = await offscreenDocumentId();
+      expect(typeof firstDocId).toBe('string');
+      await harness.controlPage.waitForTimeout(1_500);
+      await stopRecording(harness.controlPage);
+      expect(await waitForCompletedDownloads(
+        harness.controlPage,
+        harness.downloadsDir,
+        1,
+        45_000
+      )).toHaveLength(1);
+
+      // Simulate a rebuild/update: make the service worker expect a different
+      // build id than the still-alive offscreen reports, then drive the same
+      // reconnect handshake the SW runs after a restart. This is exactly the
+      // skew that occurs after `npm run dev` + reload or a production update.
+      const sw = await getServiceWorker();
+      await sw.evaluate(() => {
+        (globalThis as any).__BUILD_ID__ = `forced-stale-${Date.now()}`;
+        chrome.runtime.sendMessage({ type: 'OFFSCREEN_CONNECT' });
+      });
+
+      // The handshake must detect the stale offscreen and recreate it from
+      // current code (new documentId).
+      const secondDocId = await waitForRecreatedOffscreen(firstDocId);
+      expect(secondDocId).not.toBe(firstDocId); // proves the offscreen was recreated
+
+      // Recording must still work end-to-end on the recreated offscreen.
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      await harness.controlPage.waitForTimeout(1_500);
+      await stopRecording(harness.controlPage);
+      expect(await waitForCompletedDownloads(
+        harness.controlPage,
+        harness.downloadsDir,
+        2,
+        45_000
+      )).toHaveLength(2);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
   test('records separate microphone and self-video artifacts with fake media devices', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
     try {

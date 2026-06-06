@@ -93,6 +93,50 @@ describe('OffscreenManager', () => {
     await expect(ensureReadyPromise).resolves.toBeUndefined();
   });
 
+  it('rejects ensureReady when recreating a stale offscreen fails (no deadlock)', async () => {
+    (chrome.offscreen.hasDocument as jest.Mock).mockResolvedValue(false);
+    jest
+      .spyOn(chrome.offscreen, 'createDocument')
+      .mockImplementationOnce(async () => {}) // initial create succeeds
+      .mockImplementation(async () => { throw new Error('create failed'); }); // recreate fails
+    jest.spyOn(chrome.offscreen, 'closeDocument').mockImplementation(async () => {});
+
+    const ensureReadyPromise = manager.ensureReady();
+    manager.attachPort(mockPort);
+    const listener = mockPort.onMessage.addListener.mock.calls[0][0];
+    listener({ type: 'OFFSCREEN_READY', version: '0.0.1-old' }); // mismatch → recreate → create throws
+
+    await expect(ensureReadyPromise).rejects.toThrow('create failed');
+  });
+
+  it('recreates at most once even if the fresh offscreen also mismatches (no loop)', async () => {
+    (chrome.offscreen.hasDocument as jest.Mock).mockResolvedValue(false);
+    jest.spyOn(chrome.offscreen, 'createDocument').mockImplementation(async () => {});
+    const closeDocumentSpy = jest
+      .spyOn(chrome.offscreen, 'closeDocument')
+      .mockImplementation(async () => {});
+
+    const ensureReadyPromise = manager.ensureReady();
+    manager.attachPort(mockPort);
+    const staleListener = mockPort.onMessage.addListener.mock.calls[0][0];
+    staleListener({ type: 'OFFSCREEN_READY', version: 'stale-1' }); // mismatch → recreate
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const freshPort: any = {
+      name: 'offscreen',
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+    };
+    manager.attachPort(freshPort);
+    const freshListener = freshPort.onMessage.addListener.mock.calls[0][0];
+    // Even though this id still mismatches, the recreate-once guard accepts it.
+    freshListener({ type: 'OFFSCREEN_READY', version: 'stale-2' });
+
+    await expect(ensureReadyPromise).resolves.toBeUndefined();
+    expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses to close the offscreen document for update while work is in flight', async () => {
     const closeDocumentSpy = jest
       .spyOn(chrome.offscreen, 'closeDocument')
