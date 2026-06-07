@@ -89,6 +89,9 @@ describe('RecordingFinalizer', () => {
   });
 
   it('reuses one cached Drive token across a finalize run', async () => {
+    // Pin serial uploads so the sequenced fetch mock (session→PUT, session→PUT)
+    // stays deterministic; this case verifies token reuse, not concurrency.
+    PERF_FLAGS.parallelUploadConcurrency = 1;
     jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({

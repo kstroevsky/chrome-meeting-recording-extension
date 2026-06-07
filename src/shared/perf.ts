@@ -47,8 +47,8 @@ export function normalizePerfSettings(raw?: unknown): PerfSettings {
     audioPlaybackBridgeMode: value.audioPlaybackBridgeMode === 'auto' ? 'auto' : DEFAULT_PERF_SETTINGS.audioPlaybackBridgeMode,
     adaptiveSelfVideoProfile: value.adaptiveSelfVideoProfile === true,
     extendedTimeslice: value.extendedTimeslice === true,
-    dynamicDriveChunkSizing: value.dynamicDriveChunkSizing === true,
-    parallelUploadConcurrency: value.parallelUploadConcurrency === 2 ? 2 : DEFAULT_PERF_SETTINGS.parallelUploadConcurrency,
+    dynamicDriveChunkSizing: value.dynamicDriveChunkSizing === false ? false : DEFAULT_PERF_SETTINGS.dynamicDriveChunkSizing,
+    parallelUploadConcurrency: value.parallelUploadConcurrency === 1 ? 1 : DEFAULT_PERF_SETTINGS.parallelUploadConcurrency,
     debugMode: isDevBuild(),
   };
 }

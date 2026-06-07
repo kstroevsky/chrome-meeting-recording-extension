@@ -16,8 +16,8 @@ export const DEFAULT_PERF_SETTINGS: PerfSettings = {
   audioPlaybackBridgeMode: 'always',
   adaptiveSelfVideoProfile: false,
   extendedTimeslice: false,
-  dynamicDriveChunkSizing: false,
-  parallelUploadConcurrency: 1,
+  dynamicDriveChunkSizing: true,
+  parallelUploadConcurrency: 2,
   debugMode: isDevBuild(),
 };
 
