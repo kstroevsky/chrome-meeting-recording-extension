@@ -4,6 +4,7 @@ import type { OffscreenManager } from '../src/background/OffscreenManager';
 import { getPerfSettingsSnapshot } from '../src/shared/perf';
 
 jest.mock('../src/platform/chrome/tabs', () => ({
+  activateTab: jest.fn().mockResolvedValue(undefined),
   getCapturedTabs: jest.fn().mockResolvedValue([]),
   getMediaStreamIdForTab: jest.fn().mockResolvedValue('stream-xyz'),
   getTab: jest.fn().mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' }),
@@ -12,7 +13,12 @@ jest.mock('../src/shared/settings', () => ({
   loadRecorderRuntimeSettingsSnapshot: jest.fn().mockResolvedValue({ recorder: 'snapshot' }),
 }));
 
-import { getCapturedTabs, getMediaStreamIdForTab, getTab } from '../src/platform/chrome/tabs';
+import {
+  activateTab,
+  getCapturedTabs,
+  getMediaStreamIdForTab,
+  getTab,
+} from '../src/platform/chrome/tabs';
 import { loadRecorderRuntimeSettingsSnapshot } from '../src/shared/settings';
 
 const RUN_CONFIG = { storageMode: 'local', micMode: 'off', recordSelfVideo: false } as const;
@@ -25,20 +31,27 @@ const startMsg = (overrides: Record<string, unknown> = {}) => ({
 
 describe('RecordingController', () => {
   let session: RecordingSession;
-  let offscreen: { ensureReady: jest.Mock; rpc: jest.Mock };
+  let offscreen: { ensureReady: jest.Mock; rpc: jest.Mock; ensureRecorderTabReady: jest.Mock };
   let controller: RecordingController;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (getCapturedTabs as jest.Mock).mockResolvedValue([]);
-    (getMediaStreamIdForTab as jest.Mock).mockResolvedValue('stream-xyz');
-    (getTab as jest.Mock).mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' });
-    (loadRecorderRuntimeSettingsSnapshot as jest.Mock).mockResolvedValue({ recorder: 'snapshot' });
+    (globalThis as any).__E2E_REAL_CAPTURE_TAB__ = false;
+    (getCapturedTabs as jest.Mock).mockReset().mockResolvedValue([]);
+    (activateTab as jest.Mock).mockReset().mockResolvedValue(undefined);
+    (getMediaStreamIdForTab as jest.Mock).mockReset().mockResolvedValue('stream-xyz');
+    (getTab as jest.Mock)
+      .mockReset()
+      .mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' });
+    (loadRecorderRuntimeSettingsSnapshot as jest.Mock)
+      .mockReset()
+      .mockResolvedValue({ recorder: 'snapshot' });
 
     session = new RecordingSession(() => {});
     offscreen = {
       ensureReady: jest.fn().mockResolvedValue(undefined),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
+      ensureRecorderTabReady: jest.fn().mockResolvedValue(99),
     };
     const L = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     controller = new RecordingController({
@@ -65,6 +78,26 @@ describe('RecordingController', () => {
       });
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('starting');
+    });
+
+    it('selects the recorder extension tab before requesting the first stream in live E2E builds', async () => {
+      (globalThis as any).__E2E_REAL_CAPTURE_TAB__ = true;
+      (getMediaStreamIdForTab as jest.Mock).mockResolvedValue('extension-tab-stream');
+
+      const result = await controller.start(startMsg());
+
+      expect(offscreen.ensureReady).not.toHaveBeenCalled();
+      expect(offscreen.ensureRecorderTabReady).toHaveBeenCalledTimes(1);
+      expect(getMediaStreamIdForTab).toHaveBeenCalledTimes(1);
+      expect(getMediaStreamIdForTab).toHaveBeenCalledWith(42);
+      expect(activateTab).toHaveBeenCalledWith(42);
+      expect(offscreen.rpc).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'OFFSCREEN_START',
+          streamId: 'extension-tab-stream',
+        })
+      );
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
     });
 
     it('rejects a non-numeric tabId before touching offscreen or the session', async () => {
@@ -103,7 +136,26 @@ describe('RecordingController', () => {
       const result = await controller.start(startMsg());
 
       expect(result).toEqual(expect.objectContaining({ ok: false, error: 'boom' }));
+      expect(offscreen.ensureRecorderTabReady).not.toHaveBeenCalled();
       expect(session.getSnapshot().phase).toBe('failed');
+    });
+
+    it('surfaces recorder failures without changing runtime', async () => {
+      offscreen.rpc.mockResolvedValue({
+        ok: false,
+        error: 'MediaRecorder constructor failed for video/webm',
+      });
+
+      const result = await controller.start(startMsg());
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          ok: false,
+          error: 'MediaRecorder constructor failed for video/webm',
+        })
+      );
+      expect(offscreen.ensureRecorderTabReady).not.toHaveBeenCalled();
+      expect(getMediaStreamIdForTab).toHaveBeenCalledTimes(1);
     });
   });
 

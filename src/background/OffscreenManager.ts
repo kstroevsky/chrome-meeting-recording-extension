@@ -11,6 +11,7 @@ import {
   hasOffscreenDocument,
   requestOffscreenReconnect,
 } from '../platform/chrome/offscreen';
+import { createRuntimeTab, removeTab } from '../platform/chrome/tabs';
 import { withTimeout } from '../shared/async';
 import { getBuildId } from '../shared/build';
 import { makeLogger } from '../shared/logger';
@@ -27,6 +28,7 @@ import { TIMEOUTS } from '../shared/timeouts';
 import { isBusyPhase, isStoppablePhase, normalizePhase, type RecordingPhase } from '../shared/recording';
 
 const L = makeLogger('background');
+const RECORDER_TAB_CLEANUP_DELAY_MS = 15_000;
 
 export class OffscreenManager {
   private port: chrome.runtime.Port | null = null;
@@ -37,6 +39,9 @@ export class OffscreenManager {
   private rejectReady: ((reason?: unknown) => void) | null = null;
   /** Set while an intentional close+recreate is in flight so we keep the pending ready promise. */
   private recreating = false;
+  private runtimeTransitioning = false;
+  private recorderTabId: number | null = null;
+  private recorderTabCleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
   public onStateChanged?: OffscreenStateListener;
   public onSaveRequested?: OffscreenSaveListener;
@@ -63,9 +68,10 @@ export class OffscreenManager {
       this.setBadge('idle');
       // During an intentional recreate, keep the in-flight ready promise so the
       // fresh document's READY can still resolve the original ensureReady() call.
-      if (this.recreating) return;
+      if (this.recreating || this.runtimeTransitioning) return;
       this.readyPromise = null;
       this.resolveReady = null;
+      this.rejectReady = null;
     });
   }
 
@@ -84,12 +90,7 @@ export class OffscreenManager {
   async ensureReady(): Promise<void> {
     if (this.port && this.ready) return;
 
-    if (!this.readyPromise) {
-      this.readyPromise = new Promise<void>((resolve, reject) => {
-        this.resolveReady = resolve;
-        this.rejectReady = reject;
-      });
-    }
+    const readyPromise = this.getOrCreateReadyPromise();
 
     const have = await this.hasOffscreenContext();
     if (!have) {
@@ -99,7 +100,49 @@ export class OffscreenManager {
       await requestOffscreenReconnect();
     }
 
-    await withTimeout(this.readyPromise, TIMEOUTS.READY_TIMEOUT_MS, 'Offscreen ready');
+    await withTimeout(readyPromise, TIMEOUTS.READY_TIMEOUT_MS, 'Offscreen ready');
+  }
+
+  /**
+   * Replaces the offscreen document with the same recorder runtime hosted in a
+   * normal extension tab. Chrome can scope a tab-capture stream ID to this tab,
+   * which avoids versions where offscreen documents cannot consume the ID.
+   */
+  async ensureRecorderTabReady(): Promise<number> {
+    if (this.recorderTabId != null && this.port && this.ready) {
+      this.cancelRecorderTabCleanup();
+      return this.recorderTabId;
+    }
+
+    this.cancelRecorderTabCleanup();
+    this.runtimeTransitioning = true;
+    this.ready = false;
+    this.resetReadyPromise();
+    const readyPromise = this.getOrCreateReadyPromise();
+
+    try {
+      try { this.port?.disconnect(); } catch {}
+      this.port = null;
+      await closeOffscreenDocument();
+      await this.waitUntilOffscreenGone();
+      await this.closeRecorderTab();
+
+      const tab = await createRuntimeTab('offscreen.html?runtime=tab', { active: true });
+      if (typeof tab.id !== 'number') {
+        throw new Error('Chrome did not return an id for the recorder extension tab');
+      }
+      this.recorderTabId = tab.id;
+
+      await withTimeout(readyPromise, TIMEOUTS.READY_TIMEOUT_MS, 'Recorder extension tab ready');
+      L.warn('Using normal extension tab runtime for tab capture compatibility', tab.id);
+      return tab.id;
+    } catch (error) {
+      await this.closeRecorderTab();
+      this.failReady(error);
+      throw error;
+    } finally {
+      this.runtimeTransitioning = false;
+    }
   }
 
   /** Creates the offscreen document with the media-capture reasons it requires. */
@@ -169,14 +212,24 @@ export class OffscreenManager {
       L.log('Update arrived during active work; deferring offscreen refresh');
       return false;
     }
+    this.runtimeTransitioning = true;
     this.ready = false;
+    this.cancelRecorderTabCleanup();
+    try { this.port?.disconnect(); } catch {}
+    this.port = null;
     await closeOffscreenDocument();
+    await this.closeRecorderTab();
+    this.runtimeTransitioning = false;
+    this.resetReadyPromise();
     L.log('Discarded stale offscreen document after extension update');
     return true;
   }
 
   /** Sends an RPC command across the offscreen port once the document is connected. */
   async rpc<TRes = any>(msg: BgToOffscreenRpc): Promise<TRes> {
+    if (msg.type === 'OFFSCREEN_START') {
+      this.cancelRecorderTabCleanup();
+    }
     return await this.rpcClient<BgToOffscreenRpc, TRes>(msg);
   }
 
@@ -205,6 +258,50 @@ export class OffscreenManager {
     this.readyPromise = null;
   }
 
+  private getOrCreateReadyPromise(): Promise<void> {
+    if (!this.readyPromise) {
+      this.readyPromise = new Promise<void>((resolve, reject) => {
+        this.resolveReady = resolve;
+        this.rejectReady = reject;
+      });
+    }
+    return this.readyPromise;
+  }
+
+  private resetReadyPromise(): void {
+    this.readyPromise = null;
+    this.resolveReady = null;
+    this.rejectReady = null;
+  }
+
+  private cancelRecorderTabCleanup(): void {
+    if (this.recorderTabCleanupTimer == null) return;
+    clearTimeout(this.recorderTabCleanupTimer);
+    this.recorderTabCleanupTimer = null;
+  }
+
+  private scheduleRecorderTabCleanup(): void {
+    if (this.recorderTabId == null) return;
+    this.cancelRecorderTabCleanup();
+    this.recorderTabCleanupTimer = setTimeout(() => {
+      this.recorderTabCleanupTimer = null;
+      if (this.lastKnownPhase !== 'idle') return;
+      void this.closeRecorderTab();
+    }, RECORDER_TAB_CLEANUP_DELAY_MS);
+  }
+
+  private async closeRecorderTab(): Promise<void> {
+    this.cancelRecorderTabCleanup();
+    const tabId = this.recorderTabId;
+    this.recorderTabId = null;
+    if (tabId == null) return;
+    try {
+      await removeTab(tabId);
+    } catch {
+      // The tab may already have been closed manually or with its browser window.
+    }
+  }
+
   /** Routes validated offscreen messages into readiness, phase, and save handlers. */
   private onOffscreenMessage(msg: unknown) {
     if (!isOffscreenToBgMessage(msg)) return;
@@ -230,6 +327,8 @@ export class OffscreenManager {
       const phase = normalizePhase(msg.phase);
       this.lastKnownPhase = phase;
       this.setBadge(phase);
+      if (phase === 'idle') this.scheduleRecorderTabCleanup();
+      else this.cancelRecorderTabCleanup();
       this.onStateChanged?.({ ...msg, phase });
       return;
     }

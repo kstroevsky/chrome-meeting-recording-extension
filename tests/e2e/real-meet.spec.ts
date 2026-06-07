@@ -13,7 +13,6 @@ import {
   getDownloads,
   probeHardwareMedia,
   sendTabMessage,
-  startRecording,
   stopRecording,
   type TranscriptResponse,
 } from './helpers/extensionHarness';
@@ -26,7 +25,9 @@ import {
   launchRealMeetHarness,
   readMeetMediaState,
   resetRealMeetDiagnostics,
+  saveNamedRecordings,
   startRecordingFromExtensionAction,
+  waitForFailureInspection,
   waitForCurrentPerfSnapshot,
   waitForNewCompletedDownloads,
   type MeetMediaMode,
@@ -59,9 +60,7 @@ type IterationResult = {
   artifacts?: MediaArtifactAnalysis[];
   signalFindings?: MediaSignalFinding[];
   artifactPaths?: string[];
-  hardwareAfterStop?: Awaited<ReturnType<typeof probeHardwareMedia>>;
-  browserBefore?: Awaited<ReturnType<typeof collectBrowserMetrics>>;
-  browserAfter?: Awaited<ReturnType<typeof collectBrowserMetrics>>;
+  namedRecordingPaths?: string[];
 };
 
 function lastEntry(
@@ -309,7 +308,6 @@ async function runIteration(
     assertMeetMediaState(result.meetBefore, harness.meetMedia);
 
     const meetTabId = await findRealMeetTabId(harness.controlPage);
-    result.browserBefore = await collectBrowserMetrics(harness, harness.meetPage);
 
     await startRecordingFromExtensionAction(harness, meetTabId);
     result.meetDuring = await readMeetMediaState(harness.meetPage);
@@ -321,7 +319,6 @@ async function runIteration(
     assertScenarioSnapshot(result.snapshot, scenario);
     result.meetAfter = await readMeetMediaState(harness.meetPage);
     assertMeetMediaState(result.meetAfter, harness.meetMedia);
-    result.browserAfter = await collectBrowserMetrics(harness, harness.meetPage);
 
     const downloads = await waitForNewCompletedDownloads(
       harness.controlPage,
@@ -343,6 +340,11 @@ async function runIteration(
     assert.deepEqual(actualStreams, [...scenario.expectedStreams].sort());
     for (const artifact of artifacts) assertArtifact(artifact, scenario);
     result.artifacts = artifacts;
+    result.namedRecordingPaths = await saveNamedRecordings(
+      scenario.id,
+      iteration,
+      artifacts
+    );
     result.signalFindings = artifacts.flatMap(collectMediaSignalFindings);
     if (strictMedia && result.signalFindings.length > 0) {
       throw new Error(
@@ -352,14 +354,6 @@ async function runIteration(
       );
     }
 
-    result.hardwareAfterStop = await probeHardwareMedia(harness);
-    if (!result.hardwareAfterStop.ok) {
-      throw new Error(
-        `Camera/microphone could not be reacquired after stop: ${
-          result.hardwareAfterStop.error ?? 'missing tracks'
-        }`
-      );
-    }
     result.status = 'passed';
   } catch (error) {
     result.error = error instanceof Error ? error.stack ?? error.message : String(error);
@@ -450,6 +444,8 @@ test('runs the reusable real Google Meet calibration matrix with one admission',
 
   let harness: RealMeetHarness | null = null;
   const results: IterationResult[] = [];
+  let hardwareAfterMatrix: Awaited<ReturnType<typeof probeHardwareMedia>> | null = null;
+  let browserAfterMatrix: Awaited<ReturnType<typeof collectBrowserMetrics>> | null = null;
   let setupError: string | null = null;
   try {
     const launched = await launchRealMeetHarness(testInfo, {
@@ -489,13 +485,30 @@ test('runs the reusable real Google Meet calibration matrix with one admission',
         );
       }
     }
+    browserAfterMatrix = await collectBrowserMetrics(harness, harness.meetPage);
+    await attachJson(testInfo, 'browser-after-matrix', browserAfterMatrix);
+    hardwareAfterMatrix = await probeHardwareMedia(harness);
+    await attachJson(testInfo, 'hardware-after-matrix', hardwareAfterMatrix);
+    if (!hardwareAfterMatrix.ok) {
+      throw new Error(
+        `Camera/microphone could not be reacquired after the live matrix: ${
+          hardwareAfterMatrix.error ?? 'missing tracks'
+        }`
+      );
+    }
   } catch (error) {
     setupError = error instanceof Error ? error.stack ?? error.message : String(error);
   } finally {
     const failed = results.filter((result) => result.status === 'failed');
+    const failureReason = setupError
+      ?? failed[0]?.error
+      ?? null;
     if (harness) {
-      await closeRealMeetHarness(harness, failed.length > 0 || setupError != null);
-      if (failed.length > 0 || setupError != null) {
+      if (failureReason) {
+        await waitForFailureInspection(failureReason);
+      }
+      await closeRealMeetHarness(harness, failureReason != null);
+      if (failureReason) {
         await testInfo.attach('real-meet-trace', {
           path: harness.tracePath,
           contentType: 'application/zip',
@@ -511,6 +524,11 @@ test('runs the reusable real Google Meet calibration matrix with one admission',
     meetMedia,
     browserChannel,
     accountMode: harness?.accountMode ?? null,
+    traceAvailable: false,
+    traceUnavailableReason:
+      'Starting Playwright tracing invalidates real Chrome tab-capture stream IDs in this context.',
+    hardwareAfterMatrix,
+    browserAfterMatrix,
     strictMedia,
     setupError,
     startedScenarios: scenarios.map((scenario) => scenario.id),

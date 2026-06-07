@@ -1,4 +1,5 @@
 import {
+  activateTab,
   getCapturedTabs,
   getMediaStreamIdForTab,
   getTab,
@@ -85,6 +86,13 @@ describe('platform/chrome/tabs', () => {
       (chrome.tabs.get as jest.Mock).mockRejectedValueOnce(new Error('No tab with id'));
       await expect(getTab(42)).resolves.toBeNull();
     });
+  });
+
+  it('activates a tab without changing its URL', async () => {
+    (chrome.tabs.update as jest.Mock).mockResolvedValueOnce({ id: 42, active: true });
+
+    await expect(activateTab(42)).resolves.toBeUndefined();
+    expect(chrome.tabs.update).toHaveBeenCalledWith(42, { active: true });
   });
 });
 

@@ -6,6 +6,7 @@ const forbiddenMarkers = [
   'e2e-mock-drive-token',
   '__E2E_MOCK_TAB_CAPTURE__',
   'E2E_DRIVE_FETCH',
+  'E2E real capture tab runtime selected',
 ];
 
 async function collectFiles(directory) {
@@ -37,5 +38,7 @@ if (violations.length) {
   console.error(`Production build contains E2E-only capabilities:\n${violations.join('\n')}`);
   process.exitCode = 1;
 } else {
-  console.log('Production build excludes synthetic capture, fake OAuth, and Drive fetch bridge markers.');
+  console.log(
+    'Production build excludes synthetic capture, fake OAuth, Drive fetch bridge, and live-E2E recorder-tab markers.'
+  );
 }

@@ -90,14 +90,14 @@ async function ensureExtensionInstalled(
   );
 }
 
-async function ensureExtensionActionShortcut(
+async function ensureRecordingShortcut(
   context,
   extensionPage,
   extensionName
 ) {
   const readShortcut = () => extensionPage.evaluate(async () => {
     const commands = await chrome.commands.getAll();
-    return commands.find((command) => command.name === '_execute_action')
+    return commands.find((command) => command.name === 'start-recording')
       ?.shortcut ?? '';
   });
   const existingShortcut = await readShortcut();
@@ -106,8 +106,17 @@ async function ensureExtensionActionShortcut(
   const shortcutsPage = await context.newPage();
   try {
     await shortcutsPage.goto('chrome://extensions/shortcuts');
+    const legacyActionInput = shortcutsPage.locator(
+      `cr-shortcut-input[input-aria-label="Shortcut Activate the extension for ${extensionName}"]`
+    );
+    if (await legacyActionInput.isVisible().catch(() => false)) {
+      const clearLegacyShortcut = legacyActionInput.locator('#clear');
+      if ((await clearLegacyShortcut.getAttribute('aria-disabled')) !== 'true') {
+        await clearLegacyShortcut.click();
+      }
+    }
     const shortcutInput = shortcutsPage.locator(
-      `cr-shortcut-input[input-aria-label*="${extensionName}"]`
+      `cr-shortcut-input[input-aria-label="Shortcut Start recording the active tab for ${extensionName}"]`
     );
     await shortcutInput.waitFor({ state: 'visible', timeout: 15_000 });
     await shortcutInput.locator('#edit').click();
@@ -120,9 +129,9 @@ async function ensureExtensionActionShortcut(
   const assignedShortcut = await readShortcut();
   if (!assignedShortcut) {
     throw new Error(
-      'Chrome did not bind the extension action shortcut. Open '
+      'Chrome did not bind the recording shortcut. Open '
       + 'chrome://extensions/shortcuts and assign Control+Shift+9 to '
-      + `"Activate the extension" for ${extensionName}.`
+      + `"Start recording the active tab" for ${extensionName}.`
     );
   }
   return assignedShortcut;
@@ -174,12 +183,12 @@ async function main() {
       extensionId,
       extensionPath
     );
-    const actionShortcut = await ensureExtensionActionShortcut(
+    const recordingShortcut = await ensureRecordingShortcut(
       context,
       extensionPage,
       manifest.name
     );
-    console.log(`Extension action shortcut ready: ${actionShortcut}`);
+    console.log(`Recording shortcut ready: ${recordingShortcut}`);
     const accountPage = await context.newPage();
     await accountPage.goto(
       'https://accounts.google.com/AccountChooser?continue=https%3A%2F%2Fmeet.google.com%2F',

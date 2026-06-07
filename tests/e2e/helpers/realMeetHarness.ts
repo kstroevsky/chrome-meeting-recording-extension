@@ -35,6 +35,7 @@ export type RealMeetHarness = ExtensionHarness & {
   browserChannel: RealMeetBrowserChannel;
   accountMode: 'signed-in' | 'anonymous';
   tracePath: string;
+  traceActive: boolean;
   preserveUserDataDir: boolean;
 };
 
@@ -42,6 +43,63 @@ export type RealMeetHardwareState = {
   preflight: HardwareProbeResult;
   concurrentWithMeet: HardwareProbeResult;
 };
+
+const DEFAULT_FAILURE_INSPECTION_DELAY_MS = 30_000;
+
+function failureInspectionDelayMs(): number {
+  const configured = Number(
+    process.env.REAL_MEET_FAILURE_HOLD_MS
+      ?? DEFAULT_FAILURE_INSPECTION_DELAY_MS
+  );
+  return Number.isFinite(configured) && configured >= 0
+    ? configured
+    : DEFAULT_FAILURE_INSPECTION_DELAY_MS;
+}
+
+export async function waitForFailureInspection(reason: string): Promise<void> {
+  const delayMs = failureInspectionDelayMs();
+  if (delayMs === 0) return;
+
+  console.error('');
+  console.error('============================================================');
+  console.error(`LIVE TEST FAILED: ${reason.split('\n')[0]}`);
+  console.error(
+    `Chrome will remain open for ${Math.ceil(delayMs / 1_000)} seconds for inspection.`
+  );
+  console.error('============================================================');
+  console.error('');
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function inspectHardwareAvailability(controlPage: Page): Promise<HardwareProbeResult> {
+  return await controlPage.evaluate(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((device) => device.kind === 'audioinput');
+      const videoInputs = devices.filter((device) => device.kind === 'videoinput');
+      return {
+        ok: audioInputs.length > 0 && videoInputs.length > 0,
+        labels: [...audioInputs, ...videoInputs]
+          .map((device) => device.label)
+          .filter(Boolean),
+        ...(
+          audioInputs.length > 0 && videoInputs.length > 0
+            ? {}
+            : {
+              error:
+                `enumerateDevices found ${audioInputs.length} audio input(s) `
+                + `and ${videoInputs.length} video input(s)`,
+            }
+        ),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      };
+    }
+  });
+}
 
 function extensionIdFromKey(base64Key: string): string {
   const digest = crypto
@@ -59,7 +117,8 @@ function extensionIdFromKey(base64Key: string): string {
 const execFileAsync = promisify(execFile);
 
 async function invokeChromeActionWithNativeInput(
-  browserChannel: RealMeetBrowserChannel
+  browserChannel: RealMeetBrowserChannel,
+  meetUrl: string
 ): Promise<void> {
   try {
     if (process.platform === 'darwin') {
@@ -67,14 +126,30 @@ async function invokeChromeActionWithNativeInput(
         ? 'Google Chrome'
         : 'Google Chrome for Testing';
       await execFileAsync('/usr/bin/osascript', [
-        '-e', `tell application "${applicationName}" to activate`,
-        '-e', 'delay 0.2',
-        '-e', 'tell application "System Events" to key code 25 using {control down, shift down}',
-        '-e', 'delay 0.5',
-        '-e', 'tell application "System Events" to repeat 7 times',
-        '-e', 'key code 48',
+        '-e', 'on run argv',
+        '-e', 'set targetUrl to item 1 of argv',
+        '-e', `tell application "${applicationName}"`,
+        '-e', 'set foundTarget to false',
+        '-e', 'repeat with browserWindow in windows',
+        '-e', 'set tabIndex to 0',
+        '-e', 'repeat with browserTab in tabs of browserWindow',
+        '-e', 'set tabIndex to tabIndex + 1',
+        '-e', 'if URL of browserTab starts with targetUrl then',
+        '-e', 'set active tab index of browserWindow to tabIndex',
+        '-e', 'set index of browserWindow to 1',
+        '-e', 'set foundTarget to true',
+        '-e', 'exit repeat',
+        '-e', 'end if',
         '-e', 'end repeat',
-        '-e', 'tell application "System Events" to key code 36',
+        '-e', 'if foundTarget then exit repeat',
+        '-e', 'end repeat',
+        '-e', 'if not foundTarget then error "Meet tab not found"',
+        '-e', 'activate',
+        '-e', 'end tell',
+        '-e', 'delay 1',
+        '-e', 'tell application "System Events" to key code 25 using {control down, shift down}',
+        '-e', 'end run',
+        meetUrl,
       ]);
       return;
     }
@@ -88,10 +163,8 @@ async function invokeChromeActionWithNativeInput(
         '-Command',
         `$shell = New-Object -ComObject WScript.Shell; `
           + `$null = $shell.AppActivate('${windowName}'); `
-          + 'Start-Sleep -Milliseconds 200; '
-          + `$shell.SendKeys('^+9'); `
-          + 'Start-Sleep -Milliseconds 500; '
-          + `$shell.SendKeys('{TAB 7}{ENTER}')`,
+          + 'Start-Sleep -Milliseconds 1000; '
+          + `$shell.SendKeys('^+9')`,
       ]);
       return;
     }
@@ -101,24 +174,6 @@ async function invokeChromeActionWithNativeInput(
         'key',
         '--clearmodifiers',
         'ctrl+shift+9',
-        'sleep',
-        '0.5',
-        'key',
-        'Tab',
-        'key',
-        'Tab',
-        'key',
-        'Tab',
-        'key',
-        'Tab',
-        'key',
-        'Tab',
-        'key',
-        'Tab',
-        'key',
-        'Tab',
-        'key',
-        'Return',
       ]);
       return;
     }
@@ -217,14 +272,31 @@ async function openExtensionControlPage(
   );
 }
 
-async function ensureExtensionActionShortcut(
+async function reloadExtensionControlPage(
+  context: BrowserContext,
+  controlPage: Page,
+  extensionId: string
+): Promise<Page> {
+  await controlPage.evaluate(() => chrome.runtime.reload()).catch(() => {});
+  await controlPage.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+  const reloadedPage = await context.newPage();
+  await reloadedPage.goto(`chrome-extension://${extensionId}/settings.html`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await reloadedPage.waitForSelector('#save-settings', { timeout: 15_000 });
+  return reloadedPage;
+}
+
+async function ensureRecordingShortcut(
   context: BrowserContext,
   controlPage: Page,
   extensionPath: string
 ): Promise<string> {
   const readShortcut = () => controlPage.evaluate(async () => {
     const commands = await chrome.commands.getAll();
-    return commands.find((command) => command.name === '_execute_action')
+    return commands.find((command) => command.name === 'start-recording')
       ?.shortcut ?? '';
   });
   const existingShortcut = await readShortcut();
@@ -236,8 +308,17 @@ async function ensureExtensionActionShortcut(
   const shortcutsPage = await context.newPage();
   try {
     await shortcutsPage.goto('chrome://extensions/shortcuts');
+    const legacyActionInput = shortcutsPage.locator(
+      `cr-shortcut-input[input-aria-label="Shortcut Activate the extension for ${manifest.name}"]`
+    );
+    if (await legacyActionInput.isVisible().catch(() => false)) {
+      const clearLegacyShortcut = legacyActionInput.locator('#clear');
+      if ((await clearLegacyShortcut.getAttribute('aria-disabled')) !== 'true') {
+        await clearLegacyShortcut.click();
+      }
+    }
     const shortcutInput = shortcutsPage.locator(
-      `cr-shortcut-input[input-aria-label*="${manifest.name}"]`
+      `cr-shortcut-input[input-aria-label="Shortcut Start recording the active tab for ${manifest.name}"]`
     );
     await shortcutInput.waitFor({ state: 'visible', timeout: 15_000 });
     await shortcutInput.locator('#edit').click();
@@ -250,9 +331,9 @@ async function ensureExtensionActionShortcut(
   const assignedShortcut = await readShortcut();
   if (!assignedShortcut) {
     throw new Error(
-      'Chrome did not bind the extension action shortcut. Open '
+      'Chrome did not bind the recording shortcut. Open '
       + 'chrome://extensions/shortcuts and assign Control+Shift+9 to '
-      + `"Activate the extension" for ${manifest.name}.`
+      + `"Start recording the active tab" for ${manifest.name}.`
     );
   }
   return assignedShortcut;
@@ -534,7 +615,7 @@ export async function launchRealMeetHarness(
           `--disable-extensions-except=${extensionPath}`,
           `--load-extension=${extensionPath}`,
         ]),
-      '--use-fake-ui-for-media-stream',
+      '--auto-accept-camera-and-microphone-capture',
       '--autoplay-policy=no-user-gesture-required',
       '--disable-blink-features=AutomationControlled',
       '--enable-precise-memory-info',
@@ -543,35 +624,41 @@ export async function launchRealMeetHarness(
   await context.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
-  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 
   try {
     const extensionId = await resolveExtensionId(context, extensionPath);
-    await Promise.all([
-      context
-        .grantPermissions(['camera', 'microphone'], {
-          origin: `chrome-extension://${extensionId}`,
-        })
-        .catch(() => {}),
-      context
-        .grantPermissions(['camera', 'microphone'], {
-          origin: new URL(options.meetUrl).origin,
-        })
-        .catch(() => {}),
-    ]);
+    if (options.browserChannel === 'chrome-for-testing') {
+      await Promise.all([
+        context
+          .grantPermissions(['camera', 'microphone'], {
+            origin: `chrome-extension://${extensionId}`,
+          })
+          .catch(() => {}),
+        context
+          .grantPermissions(['camera', 'microphone'], {
+            origin: new URL(options.meetUrl).origin,
+          })
+          .catch(() => {}),
+      ]);
+    }
 
-    const controlPage = await openExtensionControlPage(
+    let controlPage = await openExtensionControlPage(
       context,
       extensionId,
       extensionPath,
       options.browserChannel
     );
-    const actionShortcut = await ensureExtensionActionShortcut(
+    controlPage = await reloadExtensionControlPage(
+      context,
+      controlPage,
+      extensionId
+    );
+    const recordingShortcut = await ensureRecordingShortcut(
       context,
       controlPage,
       extensionPath
     );
-    console.log(`Extension action shortcut ready: ${actionShortcut}`);
+    console.log(`Recording shortcut ready: ${recordingShortcut}`);
     await setPerfSettings(controlPage, {
       adaptiveSelfVideoProfile: false,
       extendedTimeslice: false,
@@ -591,7 +678,7 @@ export async function launchRealMeetHarness(
       extensionPath,
       deviceMode: 'hardware',
     };
-    const initialHardware = await probeHardwareMedia(preflightHarness);
+    const initialHardware = await inspectHardwareAvailability(controlPage);
     const preflightPath = testInfo.outputPath('hardware-preflight.json');
     await fs.writeFile(preflightPath, JSON.stringify(initialHardware, null, 2));
     await testInfo.attach('hardware-preflight', {
@@ -600,7 +687,7 @@ export async function launchRealMeetHarness(
     });
     if (!initialHardware.ok) {
       throw new Error(
-        `Real camera/microphone preflight failed: ${initialHardware.error ?? 'missing tracks'}`
+        `Real camera/microphone inventory failed: ${initialHardware.error ?? 'missing devices'}`
       );
     }
 
@@ -615,7 +702,7 @@ export async function launchRealMeetHarness(
       'Google Meet is fully active: Leave call, microphone, and camera controls are available.'
     );
 
-    const concurrentHardware = await probeHardwareMedia(preflightHarness);
+    const concurrentHardware = await inspectHardwareAvailability(controlPage);
     const concurrentPath = testInfo.outputPath('hardware-concurrent-with-meet.json');
     await fs.writeFile(concurrentPath, JSON.stringify(concurrentHardware, null, 2));
     await testInfo.attach('hardware-concurrent-with-meet', {
@@ -624,8 +711,8 @@ export async function launchRealMeetHarness(
     });
     if (!concurrentHardware.ok) {
       throw new Error(
-        `Extension could not reacquire camera/microphone while Meet was active: ${
-          concurrentHardware.error ?? 'missing tracks'
+        `Camera/microphone inventory disappeared while Meet was active: ${
+          concurrentHardware.error ?? 'missing devices'
         }`
       );
     }
@@ -641,6 +728,7 @@ export async function launchRealMeetHarness(
         browserChannel: options.browserChannel,
         accountMode,
         tracePath,
+        traceActive: false,
         preserveUserDataDir,
       },
       hardware: {
@@ -649,11 +737,9 @@ export async function launchRealMeetHarness(
       },
     };
   } catch (error) {
-    await context.tracing.stop({ path: tracePath }).catch(() => {});
-    await testInfo.attach('real-meet-setup-trace', {
-      path: tracePath,
-      contentType: 'application/zip',
-    }).catch(() => {});
+    await waitForFailureInspection(
+      error instanceof Error ? error.message : String(error)
+    );
     await context.close().catch(() => {});
     if (!preserveUserDataDir) {
       await fs.rm(userDataDir, { recursive: true, force: true }).catch(() => {});
@@ -689,14 +775,40 @@ export async function startRecordingFromExtensionAction(
     (targetTabId) => chrome.tabs.update(targetTabId, { active: true }),
     tabId
   );
-  await harness.meetPage.bringToFront();
-  await harness.meetPage.locator('body').click({ position: { x: 8, y: 8 } }).catch(() => {});
 
-  // Keep the action popup open and activate its real Start button so Chrome's
-  // user gesture remains valid through getMediaStreamId and offscreen capture.
-  await invokeChromeActionWithNativeInput(harness.browserChannel);
-  await waitForSessionPhase(harness.controlPage, 'recording', 30_000);
-  await harness.meetPage.bringToFront();
+  // The native keystroke can intermittently miss Chrome's foreground focus, so
+  // the command never reaches the service worker and the session stays idle.
+  // The start-recording command is start-only (a press while busy is ignored),
+  // so it is safe to re-issue it while the session is still idle.
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await harness.meetPage.bringToFront();
+    await harness.meetPage.locator('body').click({ position: { x: 8, y: 8 } }).catch(() => {});
+
+    // The named command starts in the service worker and keeps Chrome's
+    // activeTab grant tied to the real shortcut invocation.
+    await invokeChromeActionWithNativeInput(harness.browserChannel, harness.meetUrl);
+
+    try {
+      await waitForSessionPhase(harness.controlPage, 'recording', 12_000);
+      await harness.meetPage.bringToFront();
+      return;
+    } catch (error) {
+      const status = await sendRuntimeMessage<{ session?: { phase?: string } }>(
+        harness.controlPage,
+        { type: 'GET_RECORDING_STATUS' }
+      ).catch(() => null);
+      const phase = status?.session?.phase;
+      // The keystroke landed and the session is progressing — wait it out.
+      if (phase && phase !== 'idle') {
+        await waitForSessionPhase(harness.controlPage, 'recording', 20_000);
+        await harness.meetPage.bringToFront();
+        return;
+      }
+      // Still idle: the keystroke missed. Retry unless this was the last attempt.
+      if (attempt === maxAttempts) throw error;
+    }
+  }
 }
 
 export async function waitForNewCompletedDownloads(
@@ -732,6 +844,36 @@ export async function waitForNewCompletedDownloads(
   throw new Error(`Timed out waiting for ${expectedCount} new completed download(s)`);
 }
 
+/**
+ * Copies discovered recording artifacts to human-named `.webm` files.
+ *
+ * Extension downloads are initiated by the service worker, so Playwright stores
+ * them under opaque GUIDs and emits no `download` event to rename them. Instead
+ * we copy the already-validated artifacts into a stable, discoverable folder
+ * keyed by scenario, iteration, and stream.
+ */
+export async function saveNamedRecordings(
+  scenarioId: string,
+  iteration: number,
+  artifacts: ReadonlyArray<{ path: string; recordingStream: string | null }>,
+  baseDir = path.resolve('output/real-meet/recordings')
+): Promise<string[]> {
+  await fs.mkdir(baseDir, { recursive: true });
+  const saved: string[] = [];
+  for (const artifact of artifacts) {
+    const stream = artifact.recordingStream ?? 'stream';
+    const target = path.join(baseDir, `${scenarioId}-${iteration}-${stream}.webm`);
+    try {
+      await fs.copyFile(artifact.path, target);
+      saved.push(target);
+    } catch {
+      // A missing source artifact is already surfaced by the iteration asserts.
+    }
+  }
+  if (saved.length) console.log(`Saved named recordings: ${saved.join(', ')}`);
+  return saved;
+}
+
 export async function bestEffortStop(harness: RealMeetHarness): Promise<void> {
   const response = await sendRuntimeMessage<{
     session?: { phase?: string };
@@ -751,7 +893,18 @@ export async function closeRealMeetHarness(
     .getByRole('button', { name: /Leave call/i })
     .click()
     .catch(() => {});
-  await harness.context.tracing.stop({ path: harness.tracePath }).catch(() => {});
+  await harness.meetPage
+    .getByRole('button', { name: /Just leave the call/i })
+    .click({ timeout: 5_000 })
+    .catch(() => {});
+  await harness.meetPage
+    .getByRole('button', { name: /Leave call/i })
+    .waitFor({ state: 'hidden', timeout: 10_000 })
+    .catch(() => {});
+  if (harness.traceActive) {
+    await harness.context.tracing.stop({ path: harness.tracePath }).catch(() => {});
+    harness.traceActive = false;
+  }
   await harness.context.close().catch(() => {});
   if (!harness.preserveUserDataDir) {
     await fs.rm(harness.userDataDir, { recursive: true, force: true }).catch(() => {});

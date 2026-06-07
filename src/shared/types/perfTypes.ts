@@ -32,6 +32,16 @@ export type PerfEventEntry = {
   fields: Record<string, string | number | boolean | null>;
 };
 
+/** Requested vs. delivered microphone DSP constraints for one acquired mic stream. */
+export type PerfMicConstraints = {
+  requestedEchoCancellation: boolean | null;
+  requestedNoiseSuppression: boolean | null;
+  requestedAutoGainControl: boolean | null;
+  echoCancellation: boolean | null;
+  noiseSuppression: boolean | null;
+  autoGainControl: boolean | null;
+};
+
 export type PerfDebugSummary = {
   currentPhase: PerfPhase;
   totalEvents: number;
@@ -44,6 +54,7 @@ export type PerfDebugSummary = {
     durationMsByStream: Partial<Record<RecordingStream, PerfDistribution>>;
     lastRequestedProfileByStream: Partial<Record<RecordingStream, PerfMediaProfile>>;
     lastDeliveredProfileByStream: Partial<Record<RecordingStream, PerfMediaProfile>>;
+    lastMicConstraints: PerfMicConstraints | null;
   };
   recorder: {
     startCountByStream: Partial<Record<RecordingStream, number>>;
@@ -61,7 +72,9 @@ export type PerfDebugSummary = {
     lastSealDurationMsByStream: Partial<Record<RecordingStream, number>>;
     lastArtifactBytesByStream: Partial<Record<RecordingStream, number>>;
     lastTimesliceMs: number | null;
+    lastTimesliceMsByStream: Partial<Record<RecordingStream, number>>;
     lastSelfVideoBitrate: number | null;
+    lastVideoBitsPerSecondByStream: Partial<Record<RecordingStream, number>>;
     lastAudioBridgeMode: AudioPlaybackBridgeMode | null;
     lastAudioBridgeSuppressed: boolean | null;
     lastAudioBridgeEnabled: boolean | null;

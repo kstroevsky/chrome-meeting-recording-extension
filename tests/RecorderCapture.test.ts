@@ -73,6 +73,16 @@ describe('RecorderCapture', () => {
     );
   });
 
+  it('reports both tab and desktop capture failures', async () => {
+    (navigator.mediaDevices.getUserMedia as jest.Mock)
+      .mockRejectedValueOnce(new DOMException('tab unavailable', 'NotReadableError'))
+      .mockRejectedValueOnce(new DOMException('desktop unavailable', 'AbortError'));
+
+    await expect(captureTabStreamFromId('stream-id', deps)).rejects.toThrow(
+      /tab=NotReadableError: tab unavailable.*desktop=AbortError: desktop unavailable/
+    );
+  });
+
   it('requests the deterministic camera constraint ladder and logs delivered settings', async () => {
     const stream = makeStream(
       makeVideoTrack(

@@ -12,7 +12,13 @@
  * across separate command handlers.
  */
 
-import { getCapturedTabs, getMediaStreamIdForTab, getTab } from '../platform/chrome/tabs';
+import {
+  activateTab,
+  getCapturedTabs,
+  getMediaStreamIdForTab,
+  getTab,
+} from '../platform/chrome/tabs';
+import { isE2ERealCaptureTabBuild } from '../shared/build';
 import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { getPerfSettingsSnapshot } from '../shared/perf';
@@ -32,6 +38,17 @@ export type StartRecordingMessage = {
   tabId: unknown;
   runConfig: unknown;
 };
+
+function isBlockingCapture(
+  capture: chrome.tabCapture.CaptureInfo,
+  tabId: number
+): boolean {
+  return (
+    capture.tabId === tabId
+    && capture.status !== 'stopped'
+    && capture.status !== 'error'
+  );
+}
 
 export class RecordingController {
   private readonly L: RecordingControllerDeps['L'];
@@ -72,37 +89,52 @@ export class RecordingController {
     }
 
     const meetingSlug = await this.resolveMeetingSlug(msg.tabId);
-    this.session.start(runConfig, {
+    const target = {
       targetTabId: msg.tabId,
       meetingSlug: meetingSlug || undefined,
-    });
+    };
+    this.session.start(runConfig, target);
     this.L.log('Popup requested START_RECORDING for tabId', msg.tabId);
 
+    const useLiveRecorderTab = isE2ERealCaptureTabBuild();
+    let recorderRuntimeTabId: number | undefined;
     try {
-      await this.offscreen.ensureReady();
-      this.L.log('ensureReady() completed');
+      if (useLiveRecorderTab) {
+        recorderRuntimeTabId = await this.offscreen.ensureRecorderTabReady();
+        this.L.warn(
+          'E2E real capture tab runtime selected before requesting the first stream ID'
+        );
+      } else {
+        await this.offscreen.ensureReady();
+        this.L.log('ensureReady() completed');
+      }
     } catch (e: any) {
-      const error = `Offscreen not ready: ${e?.message || e}`;
+      const error = `Recording runtime not ready: ${e?.message || e}`;
       this.session.fail(error);
       return this.fail(error);
     }
 
     try {
       const streamId = await getMediaStreamIdForTab(msg.tabId);
-      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
+      const startRequest = {
         type: 'OFFSCREEN_START',
         streamId,
         meetingSlug,
         runConfig,
         recorderSettings,
         perfSettings: getPerfSettingsSnapshot(),
-      });
+      } as const;
+      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>(startRequest);
+      await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);
 
       this.L.log('rpc(OFFSCREEN_START) response', r);
       if (r?.ok) return this.ok();
-      this.session.fail(r?.error || 'Failed to start');
-      return this.fail(r?.error || 'Failed to start');
+
+      const error = r?.error || 'Failed to start';
+      this.session.fail(error);
+      return this.fail(error);
     } catch (e: any) {
+      await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);
       this.L.error('OFFSCREEN_START failed', e);
       const error = `OFFSCREEN_START failed: ${e?.message || e}`;
       this.session.fail(error);
@@ -151,12 +183,20 @@ export class RecordingController {
   private async findTabCaptureConflict(tabId: number): Promise<chrome.tabCapture.CaptureInfo | null> {
     try {
       const captures = await getCapturedTabs();
-      return captures.find(
-        (c) => c.tabId === tabId && c.status !== 'stopped' && c.status !== 'error'
-      ) ?? null;
+      return captures.find((capture) => isBlockingCapture(capture, tabId)) ?? null;
     } catch (error) {
       this.L.warn('tabCapture.getCapturedTabs preflight failed; continuing without conflict check', error);
       return null;
+    }
+  }
+
+  /** Restores Meet after the recorder extension tab has acquired its stream. */
+  private async restoreTargetTab(tabId: number, recorderRuntimeTabId?: number): Promise<void> {
+    if (recorderRuntimeTabId == null) return;
+    try {
+      await activateTab(tabId);
+    } catch (error) {
+      this.L.warn('Failed to restore the captured tab after stream acquisition', error);
     }
   }
 

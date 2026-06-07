@@ -159,6 +159,61 @@ describe('OffscreenManager', () => {
     expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('switches capture work to a ready normal extension tab and returns its consumer tab id', async () => {
+    (chrome.tabs.create as jest.Mock).mockResolvedValue({
+      id: 99,
+      url: 'chrome-extension://mock-id/offscreen.html?runtime=tab',
+    });
+
+    const switchPromise = manager.ensureRecorderTabReady();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(chrome.offscreen.closeDocument).toHaveBeenCalledTimes(1);
+    expect(chrome.tabs.create).toHaveBeenCalledWith({
+      url: 'chrome-extension://mock-id/offscreen.html?runtime=tab',
+      active: true,
+    });
+
+    const recorderTabPort: any = {
+      name: 'offscreen',
+      sender: { tab: { id: 99 } },
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+      disconnect: jest.fn(),
+    };
+    manager.attachPort(recorderTabPort);
+    const onMessageListener = recorderTabPort.onMessage.addListener.mock.calls[0][0];
+    onMessageListener({ type: 'OFFSCREEN_READY', version: getBuildId() });
+
+    await expect(switchPromise).resolves.toBe(99);
+  });
+
+  it('closes the recorder runtime tab when discarding idle runtime state for an update', async () => {
+    (chrome.tabs.create as jest.Mock).mockResolvedValue({ id: 99 });
+    const switchPromise = manager.ensureRecorderTabReady();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const recorderTabPort: any = {
+      name: 'offscreen',
+      sender: { tab: { id: 99 } },
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+      disconnect: jest.fn(),
+    };
+    manager.attachPort(recorderTabPort);
+    recorderTabPort.onMessage.addListener.mock.calls[0][0]({
+      type: 'OFFSCREEN_READY',
+      version: getBuildId(),
+    });
+    await switchPromise;
+
+    manager.hydratePhase('idle');
+    await expect(manager.closeForUpdate()).resolves.toBe(true);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(99);
+  });
+
   it('syncs phase updates from offscreen to the badge and listener callback', () => {
     manager.attachPort(mockPort);
     manager.onStateChanged = jest.fn();

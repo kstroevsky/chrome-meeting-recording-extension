@@ -232,6 +232,7 @@ export async function captureTabStreamFromId(
   }
 
   const captureStartedAt = nowMs();
+  let tabCaptureError = 'unknown';
   captureDeps.log(`Attempting getUserMedia with streamId ${streamId} source=tab`);
   try {
     const stream = await withTimeout(
@@ -253,7 +254,8 @@ export async function captureTabStreamFromId(
     });
     return stream;
   } catch (error: any) {
-    captureDeps.warn('[gUM] failed for chromeMediaSource=tab:', error?.name || error, error?.message || error);
+    tabCaptureError = describeMediaError(error);
+    captureDeps.warn('[gUM] failed for chromeMediaSource=tab:', tabCaptureError);
   }
 
   captureDeps.log(`Attempting getUserMedia with streamId ${streamId} source=desktop`);
@@ -277,11 +279,14 @@ export async function captureTabStreamFromId(
     });
     return stream;
   } catch (error) {
+    const desktopCaptureError = describeMediaError(error);
     debugPerf(captureDeps.log, 'capture', 'stream_failed', {
       stream: 'tab',
       durationMs: roundMs(nowMs() - captureStartedAt),
     });
-    throw error;
+    throw new Error(
+      `Tab capture acquisition failed: tab=${tabCaptureError}; desktop=${desktopCaptureError}`
+    );
   }
 }
 
@@ -312,6 +317,14 @@ export async function maybeGetMicStream(
       durationMs: roundMs(nowMs() - captureStartedAt),
       sampleRate: settings?.sampleRate,
       channelCount: settings?.channelCount,
+      // Requested DSP constraints (from settings) vs. what the device applied,
+      // so the echo/noise/AGC toggles are observable in the perf snapshot.
+      requestedEchoCancellation: microphone.echoCancellation,
+      requestedNoiseSuppression: microphone.noiseSuppression,
+      requestedAutoGainControl: microphone.autoGainControl,
+      echoCancellation: settings?.echoCancellation,
+      noiseSuppression: settings?.noiseSuppression,
+      autoGainControl: settings?.autoGainControl,
     });
     captureDeps.log('mic stream acquired:', !!track, 'muted:', track?.muted, 'enabled:', track?.enabled);
     return mic;

@@ -13,8 +13,19 @@ export async function queryActiveTab(): Promise<chrome.tabs.Tab | undefined> {
   return tabs[0];
 }
 
-export async function createRuntimeTab(path: string): Promise<chrome.tabs.Tab> {
-  return await chrome.tabs.create({ url: getRuntimeUrl(path) });
+export async function createRuntimeTab(
+  path: string,
+  options: Pick<chrome.tabs.CreateProperties, 'active'> = {}
+): Promise<chrome.tabs.Tab> {
+  return await chrome.tabs.create({ url: getRuntimeUrl(path), ...options });
+}
+
+export async function removeTab(tabId: number): Promise<void> {
+  await chrome.tabs.remove(tabId);
+}
+
+export async function activateTab(tabId: number): Promise<void> {
+  await chrome.tabs.update(tabId, { active: true });
 }
 
 /** Resolves a tab by id, returning null when it no longer exists. */
