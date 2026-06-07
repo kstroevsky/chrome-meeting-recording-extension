@@ -1,5 +1,6 @@
 ;(globalThis as any).__DEV_BUILD__ = false;
 ;(globalThis as any).__BUILD_ID__ = 'test-build';
+;(globalThis as any).__E2E_REAL_CAPTURE_TAB__ = false;
 
 // structuredClone is available in Node 17+ but not always exposed in jsdom globals.
 if (typeof (globalThis as any).structuredClone !== 'function') {
@@ -70,6 +71,8 @@ Object.assign(global, {
       query: jest.fn().mockResolvedValue([{ url: 'https://meet.google.com/abc-defg-hij' }]),
       get: jest.fn().mockResolvedValue({ url: 'https://meet.google.com/abc-defg-hij' }),
       create: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue(undefined),
       sendMessage: jest.fn().mockResolvedValue(undefined),
       onRemoved: {
         addListener: jest.fn(),
@@ -89,6 +92,13 @@ Object.assign(global, {
     },
     action: {
       setBadgeText: jest.fn().mockResolvedValue(undefined),
+    },
+    commands: {
+      onCommand: {
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+      },
+      getAll: jest.fn().mockResolvedValue([]),
     },
     identity: {
       getAuthToken: jest.fn(),

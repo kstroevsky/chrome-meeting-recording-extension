@@ -36,6 +36,7 @@ export function createEmptySummary(): PerfDebugSummary {
       durationMsByStream: {},
       lastRequestedProfileByStream: {},
       lastDeliveredProfileByStream: {},
+      lastMicConstraints: null,
     },
     recorder: {
       startCountByStream: {},
@@ -53,7 +54,9 @@ export function createEmptySummary(): PerfDebugSummary {
       lastSealDurationMsByStream: {},
       lastArtifactBytesByStream: {},
       lastTimesliceMs: null,
+      lastTimesliceMsByStream: {},
       lastSelfVideoBitrate: null,
+      lastVideoBitsPerSecondByStream: {},
       lastAudioBridgeMode: null,
       lastAudioBridgeSuppressed: null,
       lastAudioBridgeEnabled: null,

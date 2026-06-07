@@ -27,7 +27,8 @@
     "default_popup": "popup.html"
   },
   "commands": {
-    "_execute_action": {
+    "start-recording": {
+      "description": "Start recording the active tab",
       "suggested_key": {
         "default": "Ctrl+Shift+9",
         "mac": "MacCtrl+Shift+9"

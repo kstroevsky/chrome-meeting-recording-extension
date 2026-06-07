@@ -86,6 +86,16 @@ export function applyCapture(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfE
     capture.successCountByStream[stream] = (capture.successCountByStream[stream] ?? 0) + 1;
     capture.lastRequestedProfileByStream[stream] = readProfile(entry, 'requested');
     capture.lastDeliveredProfileByStream[stream] = readProfile(entry, '');
+    if (stream === 'mic') {
+      capture.lastMicConstraints = {
+        requestedEchoCancellation: toBoolean(entry.fields.requestedEchoCancellation),
+        requestedNoiseSuppression: toBoolean(entry.fields.requestedNoiseSuppression),
+        requestedAutoGainControl: toBoolean(entry.fields.requestedAutoGainControl),
+        echoCancellation: toBoolean(entry.fields.echoCancellation),
+        noiseSuppression: toBoolean(entry.fields.noiseSuppression),
+        autoGainControl: toBoolean(entry.fields.autoGainControl),
+      };
+    }
   } else {
     capture.failureCountByStream[stream] = (capture.failureCountByStream[stream] ?? 0) + 1;
   }
@@ -117,8 +127,15 @@ export function applyRecorderStarted(snapshot: Readonly<PerfDebugSnapshot>, entr
       ((prevAvg * (startCount - 1)) + latencyMs) / startCount
     );
   }
-  if (timesliceMs != null) recorder.lastTimesliceMs = timesliceMs;
-  if (videoBitsPerSecond != null) recorder.lastSelfVideoBitrate = videoBitsPerSecond;
+  if (timesliceMs != null) {
+    recorder.lastTimesliceMs = timesliceMs;
+    recorder.lastTimesliceMsByStream[stream] = timesliceMs;
+  }
+  if (videoBitsPerSecond != null) {
+    recorder.lastVideoBitsPerSecondByStream[stream] = videoBitsPerSecond;
+    // Preserve the legacy single field as the camera bitrate specifically.
+    if (stream === 'self-video') recorder.lastSelfVideoBitrate = videoBitsPerSecond;
+  }
 }
 
 export function applyRecorderChunk(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfEventEntry): void {

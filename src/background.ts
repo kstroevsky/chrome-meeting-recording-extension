@@ -19,6 +19,7 @@ import { PerfDebugStore } from './background/PerfDebugStore';
 import { RecordingController } from './background/RecordingController';
 import { RecordingSession } from './background/RecordingSession';
 import { registerMessageHandlers } from './background/messageHandlers';
+import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { startKeepAlive, stopKeepAlive, maybeClearPerfDiagnostics, registerSaveHandler } from './background/sessionLifecycle';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
@@ -89,6 +90,7 @@ const controller = new RecordingController({ L, offscreen, session });
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller });
+registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 
 // Register port listeners for offscreen and debug dashboard connections.

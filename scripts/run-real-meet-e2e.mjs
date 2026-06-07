@@ -34,7 +34,13 @@ function main() {
 
   const env = buildRealMeetEnvironment(options);
   console.log(`Building the real-capture development extension for ${options.meetUrl}`);
-  if (run('npm', ['run', 'dev'], env) !== 0) {
+  if (
+    run(
+      'npm',
+      ['run', 'dev', '--', '--env', 'e2eRealCaptureTab=1'],
+      env
+    ) !== 0
+  ) {
     process.exitCode = 1;
     return;
   }

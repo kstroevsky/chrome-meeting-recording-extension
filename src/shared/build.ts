@@ -30,3 +30,15 @@ export function isE2EMockDriveBuild(): boolean {
   }
   return (globalThis as any).__E2E_MOCK_DRIVE__ === true;
 }
+
+/**
+ * Enables the normal extension-tab recorder host used only by the live
+ * Playwright tier. Capture and devices remain real; only the runtime context
+ * differs from production's offscreen document.
+ */
+export function isE2ERealCaptureTabBuild(): boolean {
+  if (typeof __E2E_REAL_CAPTURE_TAB_BUILD__ !== 'undefined') {
+    return __E2E_REAL_CAPTURE_TAB_BUILD__ === true;
+  }
+  return (globalThis as any).__E2E_REAL_CAPTURE_TAB__ === true;
+}
