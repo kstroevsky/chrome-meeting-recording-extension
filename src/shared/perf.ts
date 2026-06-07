@@ -45,7 +45,7 @@ export function normalizePerfSettings(raw?: unknown): PerfSettings {
   const value = (raw && typeof raw === 'object') ? raw as Partial<PerfSettings> : {};
   return {
     audioPlaybackBridgeMode: value.audioPlaybackBridgeMode === 'auto' ? 'auto' : DEFAULT_PERF_SETTINGS.audioPlaybackBridgeMode,
-    adaptiveSelfVideoProfile: value.adaptiveSelfVideoProfile === true,
+    adaptiveSelfVideoProfile: value.adaptiveSelfVideoProfile === false ? false : DEFAULT_PERF_SETTINGS.adaptiveSelfVideoProfile,
     extendedTimeslice: value.extendedTimeslice === true,
     dynamicDriveChunkSizing: value.dynamicDriveChunkSizing === false ? false : DEFAULT_PERF_SETTINGS.dynamicDriveChunkSizing,
     parallelUploadConcurrency: value.parallelUploadConcurrency === 1 ? 1 : DEFAULT_PERF_SETTINGS.parallelUploadConcurrency,

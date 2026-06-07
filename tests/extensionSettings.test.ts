@@ -95,6 +95,41 @@ describe('settings', () => {
     expect(settings.professional.tabResolutionPreset).toBe('1920x1080');
   });
 
+  it('scales the tab video bitrate with the selected resolution preset', () => {
+    // Default 1080p30 keeps the historical 1.5 Mbps bitrate exactly.
+    expect(getTabOutputSettings(DEFAULT_EXTENSION_SETTINGS).videoBitsPerSecond).toBe(1_500_000);
+
+    // 720p30 scales the reference bitrate down by the pixels-per-second ratio.
+    const at720p = normalizeExtensionSettings({ professional: { tabResolutionPreset: '1280x720' } });
+    expect(getTabOutputSettings(at720p).videoBitsPerSecond).toBe(
+      Math.round(1_500_000 * (1280 * 720 * 30) / (1920 * 1080 * 30))
+    );
+
+    // The smallest preset clamps to the bitrate floor instead of going arbitrarily low.
+    const at360p = normalizeExtensionSettings({ professional: { tabResolutionPreset: '640x360' } });
+    expect(getTabOutputSettings(at360p).videoBitsPerSecond).toBe(250_000);
+  });
+
+  it('honors a custom tab video bitrate while still scaling with resolution', () => {
+    const settings = normalizeExtensionSettings({
+      professional: { tabResolutionPreset: '1280x720', tabVideoBitrate: 3_000_000 },
+    });
+    expect(settings.professional.tabVideoBitrate).toBe(3_000_000);
+    expect(getTabOutputSettings(settings).videoBitsPerSecond).toBe(
+      Math.round(3_000_000 * (1280 * 720 * 30) / (1920 * 1080 * 30))
+    );
+  });
+
+  it('honors an in-range tab video bitrate but rejects values past the 8 Mbps ceiling', () => {
+    const inRange = normalizeExtensionSettings({ professional: { tabVideoBitrate: 4_000_000 } });
+    expect(inRange.professional.tabVideoBitrate).toBe(4_000_000);
+
+    const tooHigh = normalizeExtensionSettings({ professional: { tabVideoBitrate: 50_000_000 } });
+    expect(tooHigh.professional.tabVideoBitrate).toBe(
+      DEFAULT_EXTENSION_SETTINGS.professional.tabVideoBitrate
+    );
+  });
+
   it('caps persisted self-video bitrate settings at the new 3 Mbps ceiling', () => {
     const settings = normalizeExtensionSettings({
       professional: {
@@ -128,7 +163,8 @@ describe('settings', () => {
 
     expect(buildRecorderRuntimeSettingsSnapshot(settings)).toEqual({
       tab: {
-        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20 },
+        // 640x360@20 scales the 1080p reference bitrate below the floor → clamped.
+        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20, videoBitsPerSecond: 250_000 },
       },
       selfVideo: {
         profile: {

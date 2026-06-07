@@ -46,7 +46,7 @@ describe('background runtime messages', () => {
   it('loads and forwards the frozen recorder settings snapshot on START_RECORDING', async () => {
     const recorderSettings = {
       tab: {
-        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 24 },
+        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 24, videoBitsPerSecond: 600_000 },
       },
       selfVideo: {
         profile: {
@@ -126,7 +126,7 @@ describe('background runtime messages', () => {
       },
       recorderSettings,
       perfSettings: expect.objectContaining({
-        parallelUploadConcurrency: 1,
+        parallelUploadConcurrency: 2,
       }),
     });
     expect(response).toEqual(expect.objectContaining({ ok: true }));

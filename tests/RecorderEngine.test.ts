@@ -476,6 +476,8 @@ describe('RecorderEngine', () => {
       })
     );
     expect(tabRecorder?.stream).toBe(baseStream);
+    // 640x360@24 scales the tab bitrate below the floor → clamped to 250 kbps.
+    expect(tabRecorder?.options.videoBitsPerSecond).toBe(250_000);
     expect(createElementSpy).not.toHaveBeenCalled();
 
     await engine.stop();

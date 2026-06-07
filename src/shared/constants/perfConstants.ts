@@ -14,7 +14,7 @@ export const PERF_EVENT_MAX_AGE_MS = 15 * 60 * 1000;
 
 export const DEFAULT_PERF_SETTINGS: PerfSettings = {
   audioPlaybackBridgeMode: 'always',
-  adaptiveSelfVideoProfile: false,
+  adaptiveSelfVideoProfile: true,
   extendedTimeslice: false,
   dynamicDriveChunkSizing: true,
   parallelUploadConcurrency: 2,

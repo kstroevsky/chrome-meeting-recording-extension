@@ -7,7 +7,13 @@
  */
 
 import { getLocalStorageValues, hasLocalStorageArea, setLocalStorageValues } from '../../platform/chrome/storage';
-import { DEFAULT_EXTENSION_SETTINGS, EXTENSION_SETTINGS_STORAGE_KEY } from './defaults';
+import {
+  DEFAULT_EXTENSION_SETTINGS,
+  EXTENSION_SETTINGS_STORAGE_KEY,
+  MAX_TAB_VIDEO_BITRATE,
+  TAB_MIN_VIDEO_BITRATE,
+  TAB_VIDEO_BITRATE_REFERENCE_PIXELS_PER_SECOND,
+} from './defaults';
 import type { RecordingRunConfig, StorageMode } from '../recordingTypes';
 import {
   cloneRecorderRuntimeSettingsSnapshot,
@@ -63,15 +69,38 @@ export function getSelfVideoProfileSettings(
   };
 }
 
+/**
+ * Scales the configured 1080p reference tab bitrate to the selected resolution
+ * and frame rate, clamped to a sane floor/ceiling. Lowering the tab resolution
+ * preset therefore lowers the encoded bitrate proportionally.
+ */
+export function resolveTabVideoBitrate(
+  width: number,
+  height: number,
+  frameRate: number,
+  referenceBitrate: number
+): number {
+  const ratio = (width * height * frameRate) / TAB_VIDEO_BITRATE_REFERENCE_PIXELS_PER_SECOND;
+  const scaled = Math.round(referenceBitrate * ratio);
+  return Math.min(Math.max(scaled, TAB_MIN_VIDEO_BITRATE), MAX_TAB_VIDEO_BITRATE);
+}
+
 /** Returns the numeric tab-output target derived from the selected resolution preset. */
 export function getTabOutputSettings(
   settings: Readonly<ExtensionSettings> = runtimeSettings
 ): TabCaptureSettings {
   const dimensions = getResolutionPresetDimensions(settings.professional.tabResolutionPreset);
+  const maxFrameRate = settings.professional.tabMaxFrameRate;
   return {
     maxWidth: dimensions.width,
     maxHeight: dimensions.height,
-    maxFrameRate: settings.professional.tabMaxFrameRate,
+    maxFrameRate,
+    videoBitsPerSecond: resolveTabVideoBitrate(
+      dimensions.width,
+      dimensions.height,
+      maxFrameRate,
+      settings.professional.tabVideoBitrate
+    ),
   };
 }
 

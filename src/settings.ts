@@ -20,6 +20,7 @@ type SettingsElements = {
   selfVideoFrameRate: HTMLInputElement | null;
   selfVideoMinAdaptiveBitrate: HTMLInputElement | null;
   tabResolutionPreset: HTMLSelectElement | null;
+  tabVideoBitrate: HTMLInputElement | null;
   tabMaxFrameRate: HTMLInputElement | null;
   micEchoCancellation: HTMLInputElement | null;
   micNoiseSuppression: HTMLInputElement | null;
@@ -46,6 +47,7 @@ const el: SettingsElements = {
   selfVideoFrameRate: document.getElementById('self-video-frame-rate') as HTMLInputElement | null,
   selfVideoMinAdaptiveBitrate: document.getElementById('self-video-min-adaptive-bitrate') as HTMLInputElement | null,
   tabResolutionPreset: document.getElementById('tab-resolution-preset') as HTMLSelectElement | null,
+  tabVideoBitrate: document.getElementById('tab-video-bitrate') as HTMLInputElement | null,
   tabMaxFrameRate: document.getElementById('tab-max-frame-rate') as HTMLInputElement | null,
   micEchoCancellation: document.getElementById('mic-echo-cancellation') as HTMLInputElement | null,
   micNoiseSuppression: document.getElementById('mic-noise-suppression') as HTMLInputElement | null,
@@ -80,6 +82,7 @@ function applySettings(settings: Readonly<ExtensionSettings>): void {
   if (el.tabResolutionPreset) {
     el.tabResolutionPreset.value = settings.professional.tabResolutionPreset;
   }
+  if (el.tabVideoBitrate) el.tabVideoBitrate.value = String(settings.professional.tabVideoBitrate);
   if (el.tabMaxFrameRate) el.tabMaxFrameRate.value = String(settings.professional.tabMaxFrameRate);
   if (el.micEchoCancellation) el.micEchoCancellation.checked = settings.professional.microphoneEchoCancellation;
   if (el.micNoiseSuppression) el.micNoiseSuppression.checked = settings.professional.microphoneNoiseSuppression;
@@ -102,6 +105,7 @@ function readSettingsFromForm(): unknown {
       selfVideoFrameRate: Number(el.selfVideoFrameRate?.value),
       selfVideoMinAdaptiveBitrate: Number(el.selfVideoMinAdaptiveBitrate?.value),
       tabResolutionPreset: el.tabResolutionPreset?.value,
+      tabVideoBitrate: Number(el.tabVideoBitrate?.value),
       tabMaxFrameRate: Number(el.tabMaxFrameRate?.value),
       microphoneEchoCancellation: !!el.micEchoCancellation?.checked,
       microphoneNoiseSuppression: !!el.micNoiseSuppression?.checked,

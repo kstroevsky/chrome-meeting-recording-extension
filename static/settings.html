@@ -316,6 +316,15 @@
         </select>
 
         <div class="field-label">
+          <label for="tab-video-bitrate">Tab video bitrate (bits/s)</label>
+          <span class="tooltip-shell">
+            <button class="tooltip-toggle" type="button" aria-label="Explain tab video bitrate" aria-controls="tooltip-tab-video-bitrate" aria-expanded="false">?</button>
+            <span id="tooltip-tab-video-bitrate" class="tooltip-bubble" role="tooltip" hidden>The encoder bitrate at 1080p30. Lower tab resolutions automatically scale this down, so most users can leave it at the default.</span>
+          </span>
+        </div>
+        <input id="tab-video-bitrate" type="number" min="100000" max="8000000" step="1000" />
+
+        <div class="field-label">
           <label for="tab-max-frame-rate">Tab capture max frame rate (FPS)</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab frame rate" aria-controls="tooltip-tab-max-frame-rate" aria-expanded="false">?</button>

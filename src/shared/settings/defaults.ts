@@ -32,6 +32,13 @@ export const LEGACY_VIDEO_FORMAT_OPTIONS = [
 export const DEFAULT_RESOLUTION_PRESET: ResolutionPreset = '1920x1080';
 export const MAX_SELF_VIDEO_BITRATE = EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond;
 
+// Tab video bitrate scaling. `tabVideoBitrate` is the bitrate at the 1080p30
+// reference; the recorder scales it linearly by the selected pixels-per-second
+// (resolution × frame rate) and clamps the result to a sane floor/ceiling.
+export const TAB_VIDEO_BITRATE_REFERENCE_PIXELS_PER_SECOND = 1920 * 1080 * 30;
+export const TAB_MIN_VIDEO_BITRATE = 250_000;
+export const MAX_TAB_VIDEO_BITRATE = 8_000_000;
+
 export const RESOLUTION_PRESET_DIMENSIONS = Object.freeze({
   '640x360': Object.freeze({ width: 640, height: 360 }),
   '854x480': Object.freeze({ width: 854, height: 480 }),
@@ -64,6 +71,7 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     selfVideoMinAdaptiveBitrate: EXTENSION_DEFAULTS.capture.selfVideo.minAdaptiveBitsPerSecond,
     tabResolutionPreset: DEFAULT_RESOLUTION_PRESET,
     tabMaxFrameRate: EXTENSION_DEFAULTS.capture.tab.maxFrameRate,
+    tabVideoBitrate: EXTENSION_DEFAULTS.capture.tab.defaultBitsPerSecond,
     microphoneEchoCancellation: EXTENSION_DEFAULTS.capture.microphone.echoCancellation,
     microphoneNoiseSuppression: EXTENSION_DEFAULTS.capture.microphone.noiseSuppression,
     microphoneAutoGainControl: EXTENSION_DEFAULTS.capture.microphone.autoGainControl,

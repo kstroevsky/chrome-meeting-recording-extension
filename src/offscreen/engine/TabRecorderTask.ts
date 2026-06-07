@@ -46,7 +46,7 @@ export async function startTabRecorder(
 
   const recorder = new MediaRecorder(recordingStream, {
     mimeType: mime,
-    videoBitsPerSecond: 1_500_000,
+    videoBitsPerSecond: recorderSettings.tab.output.videoBitsPerSecond,
     audioBitsPerSecond: 96_000,
   });
 
@@ -89,7 +89,8 @@ export async function startTabRecorder(
     mime,
     timesliceMs,
     callbacks.onStarted,
-    deps.log
+    deps.log,
+    { videoBitsPerSecond: recorderSettings.tab.output.videoBitsPerSecond }
   );
   started = true;
   actualStartTimeMs = startMs;

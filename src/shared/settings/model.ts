@@ -30,6 +30,7 @@ export type ExtensionSettings = {
     selfVideoMinAdaptiveBitrate: number;
     tabResolutionPreset: ResolutionPreset;
     tabMaxFrameRate: number;
+    tabVideoBitrate: number;
     microphoneEchoCancellation: boolean;
     microphoneNoiseSuppression: boolean;
     microphoneAutoGainControl: boolean;
@@ -51,6 +52,8 @@ export type TabCaptureSettings = {
   maxWidth: number;
   maxHeight: number;
   maxFrameRate: number;
+  /** Resolved tab MediaRecorder video bitrate, scaled to the selected resolution. */
+  videoBitsPerSecond: number;
 };
 
 export type MicrophoneCaptureSettings = {
