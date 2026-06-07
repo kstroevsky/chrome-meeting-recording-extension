@@ -5,6 +5,12 @@ deterministic Playwright suite. It covers functional tests, the full performance
 matrix, mocked Drive uploads, media artifact analysis, and the optional physical
 microphone/camera tier.
 
+For testing against the **real** production Google Meet — real Chrome, real
+`chrome.tabCapture`, and concurrent real camera/microphone use — see
+[Scenario B: Real Google Meet Live Calibration](testing-scenario-b.md). Scenario
+A is the deterministic CI gate; Scenario B is a manual real-world calibration
+tier.
+
 ## What Scenario A Runs
 
 Playwright launches a persistent Chromium context with the real unpacked MV3
@@ -24,7 +30,8 @@ The test still crosses the extension's production runtime boundaries:
 
 Playwright cannot reliably grant the toolbar-triggered `activeTab` permission
 needed by `chrome.tabCapture`. The E2E build therefore uses a deterministic
-synthetic tab stream with synchronized visual and audio markers.
+synthetic tab stream with synchronized visual and audio markers. (Real
+`tabCapture` against a live meeting is exercised by [Scenario B](testing-scenario-b.md).)
 
 `dist-e2e/` contains two separately guarded capabilities:
 
@@ -64,8 +71,8 @@ sudo apt-get update && sudo apt-get install -y ffmpeg
 | `npm run test:e2e:perf:full` | Smoke, profiles, streams, cameras, workloads, flags, Drive, pairwise interactions, and reliability |
 | `npm run test:e2e:perf` | Alias for the full tier |
 | `npm run test:e2e:perf:endurance` | Ten-minute local recording and two-minute throttled Drive recording/upload |
-| `npm run test:e2e:perf:hardware` | Headed physical microphone/camera validation |
-| `npm run test:e2e:live` | Manual real-Meet calibration path |
+| `npm run test:e2e:perf:hardware` | Headed physical microphone/camera validation (mocked Meet, synthetic tab) |
+| `npm run test:e2e:real -- <meet-url>` | Real Google Meet live calibration — see [Scenario B](testing-scenario-b.md) |
 
 Use a visible browser for investigation:
 
@@ -121,6 +128,7 @@ reports the median and p95 of five measured runs after discarding one warm-up.
 | :--- | :--- |
 | `tests/e2e/mock-meet-extension.spec.ts` | Functional scenarios |
 | `tests/e2e/mock-meet-performance.spec.ts` | Tagged performance matrix |
+| `tests/e2e/settings-matrix.spec.ts` | Per-control settings verification (mock, real-device capable) |
 | `tests/e2e/helpers/extensionHarness.ts` | Typed browser/extension harness |
 | `tests/e2e/helpers/performanceRunner.ts` | One complete measured recording case |
 | `tests/e2e/helpers/driveSimulator.ts` | Stateful Drive protocol simulator |
@@ -341,6 +349,10 @@ This flashes and sounds a marker five seconds into the mocked meeting. Position
 the camera and microphone to observe it. The artifact analyzer reports marker
 drift when both detections are available.
 
+> This tier still uses the mocked Meet route and synthetic tab capture — only the
+> camera and microphone are real. For the real production Meet DOM and real
+> `tabCapture`, use [Scenario B](testing-scenario-b.md).
+
 ## CI Schedule
 
 - Pull requests and `main` pushes: unit tests, source and E2E type checks,
@@ -350,7 +362,7 @@ drift when both detections are available.
 - Manual dispatch: full, endurance, or labelled self-hosted hardware tier.
 
 JSON reports, snapshots, traces, FFmpeg analyses, and failed media are uploaded
-as workflow artifacts.
+as workflow artifacts. Scenario B is manual and is not part of the CI schedule.
 
 ## Limitations
 
@@ -359,5 +371,7 @@ login, invitations, host admission, or Chrome's real tab compositor. Synthetic
 tab capture validates the extension pipeline, not toolbar permission behavior.
 Hardware results vary by device, driver, room, and operating system.
 
-Keep `npm run test:e2e:live` as the manual production-DOM and real-tab-capture
-calibration tier. It complements Scenario A; it is not a deterministic CI gate.
+[Scenario B](testing-scenario-b.md) is the manual production-DOM,
+real-tab-capture, and simultaneous-device calibration tier. It complements
+Scenario A; it is not a deterministic CI gate and does not replace mock-only
+Drive failure injection, deterministic workloads, or synthetic marker tests.

@@ -252,11 +252,41 @@ Drive mode requires a **Chrome Extension** OAuth 2.0 client. A Desktop or Web cl
 | `npm run test:e2e:perf:endurance` | Ten-minute local and two-minute throttled-Drive runs |
 | `npm run test:e2e:perf:hardware` | Headed physical microphone/camera tier |
 | `npm run test:production-guards` | Proves E2E capture, fake OAuth, and Drive bridge markers are absent from `dist/` |
-| `npm run test:e2e:live` | Alias for the live Google Meet smoke test |
-| `npm run test:real-meet` | Live Google Meet validation (`scripts/validate-real-meet.mjs`) |
+| `npm run test:e2e:real:profile` | Prepare or verify the persistent signed-in Chrome profile |
+| `npm run test:e2e:real -- <meet-url>` | One-admission real Google Meet scenario matrix |
+| `npm run test:e2e:live -- <meet-url>` / `npm run test:real-meet -- <meet-url>` | Compatibility aliases for the real-Meet suite |
 
-See the [Scenario A testing guide](docs/testing-scenario-a.md) for matrix design,
-new-scenario examples, reports, hardware setup, and CI schedules.
+Two end-to-end testing scenarios exist:
+
+- **Scenario A** — the deterministic mocked-Meet Playwright suite and CI gate:
+  functional tests, the performance matrix, mocked Drive, media analysis, and the
+  physical camera/microphone tier. See the
+  [Scenario A guide](docs/testing-scenario-a.md).
+- **Scenario B** — manual real Google Meet calibration in stable Chrome with a
+  signed-in account, real `chrome.tabCapture`, and real devices. See the
+  [Scenario B guide](docs/testing-scenario-b.md).
+
+### Real Google Meet (Scenario B)
+
+Scenario B drives the **real** production Meet in stable Chrome with a signed-in
+account, real `chrome.tabCapture`, and the real camera/microphone used
+concurrently by Meet and the extension. It is a manual, headed tier — a host
+admits the test account — and is **not** a CI gate.
+
+```bash
+npm run test:e2e:real:profile                                  # one-time: sign in + install the extension
+npm run test:e2e:real -- https://meet.google.com/abc-defg-hij  # run the live matrix
+```
+
+It requires OS camera/microphone access for Google Chrome and **Accessibility**
+permission for the launching terminal/app, because the suite starts recording
+with a real `Control+Shift+9` keystroke so Chrome grants `activeTab` to
+`tabCapture`. Validated recordings are saved as named `.webm` files under
+`output/real-meet/recordings/`.
+
+Full setup, OS permissions, Google login, run options, scenarios, named
+recordings, reports, and troubleshooting are in the
+[Scenario B guide](docs/testing-scenario-b.md).
 
 ---
 
