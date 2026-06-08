@@ -197,6 +197,40 @@ test.describe('mock Meet performance E2E', () => {
     expect(result.drive?.sessionsCreated).toBe(3);
   });
 
+  test('@perf-smoke OPFS writes use the sync-access worker and stay drained under 1080p load', async ({}, testInfo) => {
+    const result = await runPerformanceCase(testInfo, baseCase('worker-storage-1080p', {
+      durationMs: SMOKE_MEDIA_MS,
+      micMode: 'separate',
+      recordSelfVideo: true,
+      tabResolution: '1920x1080',
+      tabFrameRate: 30,
+      selfVideoResolution: '1280x720',
+      selfVideoFrameRate: 30,
+      workload: workloads.normal,
+    }));
+
+    const storage = result.snapshot.summary.storage;
+    // Every OPFS write went through the off-main-thread sync-access worker.
+    expect(storage.writeCount).toBeGreaterThan(0);
+    expect(storage.workerWriteCount).toBe(storage.writeCount);
+    // No failures and the write queue fully drained — writes kept up, no backlog.
+    expect(storage.openFailureCount).toBe(0);
+    expect(storage.currentPendingWrites).toBe(0);
+    expect(storage.peakPendingWrites).toBeLessThanOrEqual(8);
+    // The main thread stayed responsive because disk I/O ran off-thread.
+    const maxLag = result.snapshot.summary.runtime.maxEventLoopLagMs;
+    if (maxLag != null) expect(maxLag).toBeLessThan(500);
+    expect(result.artifacts).toHaveLength(3);
+
+    // Each stream's duration fix ran inside the worker (off the main thread),
+    // not via the main-thread fallback — proving the Bonus is actually realized.
+    const sealed = result.snapshot.entries.filter(
+      (e) => e.scope === 'recorder' && e.event === 'artifact_sealed'
+    );
+    expect(sealed.length).toBeGreaterThan(0);
+    expect(sealed.every((e) => e.fields.durationFixedInWorker === true)).toBe(true);
+  });
+
   const resolutions: ResolutionPreset[] = [
     '640x360',
     '854x480',

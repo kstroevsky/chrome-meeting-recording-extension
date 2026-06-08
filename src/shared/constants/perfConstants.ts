@@ -18,6 +18,7 @@ export const DEFAULT_PERF_SETTINGS: PerfSettings = {
   extendedTimeslice: false,
   dynamicDriveChunkSizing: true,
   parallelUploadConcurrency: 2,
+  opfsWorkerStorage: true,
   debugMode: isDevBuild(),
 };
 
@@ -27,4 +28,5 @@ export const PERF_FLAGS: PerfFlags = {
   extendedTimeslice: DEFAULT_PERF_SETTINGS.extendedTimeslice,
   dynamicDriveChunkSizing: DEFAULT_PERF_SETTINGS.dynamicDriveChunkSizing,
   parallelUploadConcurrency: DEFAULT_PERF_SETTINGS.parallelUploadConcurrency,
+  opfsWorkerStorage: DEFAULT_PERF_SETTINGS.opfsWorkerStorage,
 };

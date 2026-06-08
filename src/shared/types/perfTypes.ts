@@ -16,6 +16,8 @@ export type PerfFlags = {
   extendedTimeslice: boolean;
   dynamicDriveChunkSizing: boolean;
   parallelUploadConcurrency: 1 | 2;
+  /** Route OPFS writes through the off-main-thread sync-access worker (kill-switch / A/B). */
+  opfsWorkerStorage: boolean;
 };
 
 export type PerfSettings = PerfFlags & {
@@ -94,6 +96,8 @@ export type PerfDebugSummary = {
     openCount: number;
     openFailureCount: number;
     writeCount: number;
+    /** Writes that went through the off-main-thread sync-access worker (vs the main-thread writable). */
+    workerWriteCount: number;
     closeCount: number;
     cleanupCount: number;
     currentPendingWrites: number;

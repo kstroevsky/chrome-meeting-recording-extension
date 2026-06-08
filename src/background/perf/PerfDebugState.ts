@@ -76,6 +76,7 @@ export function createEmptySummary(): PerfDebugSummary {
       openCount: 0,
       openFailureCount: 0,
       writeCount: 0,
+      workerWriteCount: 0,
       closeCount: 0,
       cleanupCount: 0,
       currentPendingWrites: 0,

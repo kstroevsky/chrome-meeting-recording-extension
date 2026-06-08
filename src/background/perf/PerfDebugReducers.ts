@@ -279,6 +279,7 @@ export function applyStorage(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfE
     storage.openFailureCount += 1;
   } else if (entry.event === 'opfs_write_complete') {
     storage.writeCount += 1;
+    if (entry.fields.worker === true) storage.workerWriteCount += 1;
     if (stream) {
       storage.writeCountByStream[stream] = (storage.writeCountByStream[stream] ?? 0) + 1;
       const chunkBytes = toNumber(entry.fields.chunkBytes);

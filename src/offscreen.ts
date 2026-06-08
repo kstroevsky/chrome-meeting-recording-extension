@@ -25,7 +25,7 @@ import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { RuntimeSampler } from './offscreen/RuntimeSampler';
 import { OffscreenController } from './offscreen/OffscreenController';
 import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
-import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, type PerfEventEntry } from './shared/perf';
+import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, PERF_FLAGS, type PerfEventEntry } from './shared/perf';
 
 const L = makeLogger('offscreen');
 const RUNTIME_SAMPLE_INTERVAL_MS = 2_000;
@@ -163,7 +163,8 @@ const engine = new RecorderEngine({
   openTarget: async (filename: string, stream) => {
     // Prefer the worker (sync-access OPFS, off the main thread). Fall back to the
     // main-thread writable, then RAM (handled by openStorageTarget) if both fail.
-    if (!WorkerStorageTarget.unsupported) {
+    // The opfsWorkerStorage flag is a kill-switch / A/B knob (default on).
+    if (PERF_FLAGS.opfsWorkerStorage && !WorkerStorageTarget.unsupported) {
       try {
         return await WorkerStorageTarget.create(filename, stream);
       } catch (e) {

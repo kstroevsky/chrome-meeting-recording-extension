@@ -49,6 +49,7 @@ export function normalizePerfSettings(raw?: unknown): PerfSettings {
     extendedTimeslice: value.extendedTimeslice === true,
     dynamicDriveChunkSizing: value.dynamicDriveChunkSizing === false ? false : DEFAULT_PERF_SETTINGS.dynamicDriveChunkSizing,
     parallelUploadConcurrency: value.parallelUploadConcurrency === 1 ? 1 : DEFAULT_PERF_SETTINGS.parallelUploadConcurrency,
+    opfsWorkerStorage: value.opfsWorkerStorage === false ? false : DEFAULT_PERF_SETTINGS.opfsWorkerStorage,
     debugMode: isDevBuild(),
   };
 }
@@ -60,6 +61,7 @@ export function getPerfSettingsSnapshot(): PerfSettings {
     extendedTimeslice: PERF_FLAGS.extendedTimeslice,
     dynamicDriveChunkSizing: PERF_FLAGS.dynamicDriveChunkSizing,
     parallelUploadConcurrency: PERF_FLAGS.parallelUploadConcurrency,
+    opfsWorkerStorage: PERF_FLAGS.opfsWorkerStorage,
     debugMode,
   };
 }
@@ -71,6 +73,7 @@ export function applyPerfSettings(raw?: unknown): PerfSettings {
   PERF_FLAGS.extendedTimeslice = settings.extendedTimeslice;
   PERF_FLAGS.dynamicDriveChunkSizing = settings.dynamicDriveChunkSizing;
   PERF_FLAGS.parallelUploadConcurrency = settings.parallelUploadConcurrency;
+  PERF_FLAGS.opfsWorkerStorage = settings.opfsWorkerStorage;
   debugMode = settings.debugMode;
   return settings;
 }
