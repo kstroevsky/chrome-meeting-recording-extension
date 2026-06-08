@@ -85,6 +85,7 @@ module.exports = (_env, argv) => {
       debug: './src/debug.ts',
       background: './src/background.ts',
       offscreen: './src/offscreen.ts',
+      opfsWorker: './src/offscreen/storage/opfsWorker.ts',
       micsetup: './src/micsetup.ts',
       camsetup: './src/camsetup.ts',
       settings: './src/settings.ts',

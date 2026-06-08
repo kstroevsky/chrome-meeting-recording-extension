@@ -10,6 +10,7 @@ import {
   startRecording,
   stopRecording,
   waitForCompletedDownloads,
+  waitForPerfSnapshot,
   waitForSessionPhase,
   type TranscriptResponse,
 } from './helpers/extensionHarness';
@@ -174,6 +175,39 @@ test.describe('mock Meet extension E2E', () => {
         2,
         45_000
       )).toHaveLength(2);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  test('writes OPFS chunks through the sync-access worker, off the main thread', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+
+      // Read the snapshot WHILE recording (it is reset around idle). Poll until a
+      // chunk has been persisted — the tab timeslice is 4s, so this waits past it.
+      const snapshot = await waitForPerfSnapshot(
+        harness.controlPage,
+        (s) => s.entries.some((e) => e.scope === 'storage' && e.event === 'opfs_write_complete'),
+        30_000
+      );
+      await stopRecording(harness.controlPage);
+
+      // If createSyncAccessHandle were unsupported, OPFS would fall back to the
+      // main-thread writable and these write events would lack worker:true.
+      const writes = snapshot.entries.filter(
+        (e) => e.scope === 'storage' && e.event === 'opfs_write_complete'
+      );
+      expect(writes.length).toBeGreaterThan(0);
+      expect(writes.every((e) => e.fields.worker === true)).toBe(true);
     } finally {
       await closeHarness(harness);
     }

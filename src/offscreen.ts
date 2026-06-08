@@ -19,6 +19,7 @@ import { makeLogger } from './shared/logger';
 import { sendToBackground } from './shared/messages';
 import { RecorderEngine } from './offscreen/RecorderEngine';
 import { LocalFileTarget } from './offscreen/LocalFileTarget';
+import { WorkerStorageTarget } from './offscreen/storage/WorkerStorageTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { RuntimeSampler } from './offscreen/RuntimeSampler';
@@ -160,6 +161,15 @@ const engine = new RecorderEngine({
   notifyPhase: controller.pushState,
   reportWarning: controller.reportWarning,
   openTarget: async (filename: string, stream) => {
+    // Prefer the worker (sync-access OPFS, off the main thread). Fall back to the
+    // main-thread writable, then RAM (handled by openStorageTarget) if both fail.
+    if (!WorkerStorageTarget.unsupported) {
+      try {
+        return await WorkerStorageTarget.create(filename, stream);
+      } catch (e) {
+        L.warn('OPFS worker target unavailable, using main-thread writable', describeRuntimeError(e));
+      }
+    }
     try {
       return await LocalFileTarget.create(filename, stream);
     } catch (e) {
