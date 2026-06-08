@@ -24,6 +24,7 @@ export class MeetingEndDetector {
   private observer: MutationObserver | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  private evalThrottleTimer: ReturnType<typeof setTimeout> | null = null;
   private hasSeenActiveMeeting = false;
   private reported = false;
   private pendingReason = '';
@@ -38,8 +39,14 @@ export class MeetingEndDetector {
     this.hasSeenActiveMeeting = false;
     this.evaluate();
 
-    this.observer = new MutationObserver(() => this.evaluate());
-    this.observer.observe(this.root.body, { childList: true, subtree: true, characterData: true });
+    // Wake only on structural DOM changes (node add/remove), not characterData:
+    // live caption text mutates the body on nearly every frame, and re-running
+    // the doc-wide leave-call querySelector on each of those is pure waste. An
+    // ended call restructures the DOM (controls removed, post-call text added),
+    // which childList+subtree still catches. Bursts are coalesced to one
+    // evaluation per throttle window; the poll backstop and grace own latency.
+    this.observer = new MutationObserver(() => this.scheduleEvaluate());
+    this.observer.observe(this.root.body, { childList: true, subtree: true });
     this.pollTimer = setInterval(() => this.evaluate(), TIMEOUTS.MEETING_END_POLL_MS);
   }
 
@@ -48,7 +55,18 @@ export class MeetingEndDetector {
     this.observer = null;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    if (this.evalThrottleTimer) clearTimeout(this.evalThrottleTimer);
+    this.evalThrottleTimer = null;
     this.cancelPendingEnd();
+  }
+
+  /** Coalesces a burst of observed mutations into one trailing-edge evaluation. */
+  private scheduleEvaluate(): void {
+    if (this.evalThrottleTimer) return;
+    this.evalThrottleTimer = setTimeout(() => {
+      this.evalThrottleTimer = null;
+      this.evaluate();
+    }, TIMEOUTS.MEETING_END_OBSERVER_THROTTLE_MS);
   }
 
   private evaluate(): void {

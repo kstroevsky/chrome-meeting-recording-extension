@@ -55,6 +55,16 @@ export const TIMEOUTS = {
   MEETING_END_POLL_MS: 2_000,
 
   /**
+   * Coalescing window for MeetingEndDetector's DOM-mutation observer. The
+   * observer wakes on structural DOM changes (node add/remove) during a call;
+   * bursts are collapsed to one evaluation per window so the doc-wide leave-call
+   * querySelector does not re-run on every mutation. Detection latency is
+   * unaffected — the 2 s poll backstop and 30 s grace own correctness. 0 in mock
+   * builds so the e2e tier keeps deterministic, near-immediate end detection.
+   */
+  MEETING_END_OBSERVER_THROTTLE_MS: isE2EMockCaptureBuild() ? 0 : 500,
+
+  /**
    * Maximum time ensureReady() will wait for the offscreen document to
    * connect its Port and signal OFFSCREEN_READY before giving up.
    * Uses a Promise-based signal (not polling) so the wait resolves

@@ -220,11 +220,16 @@ describe('scrapingScript', () => {
   it('reports meeting end only after the grace period', async () => {
     const leaveCall = mountLeaveCallControl();
     await flushMutations();
+    // The end-detector observer coalesces mutations into one trailing-edge
+    // evaluation, so advance the throttle window to register the active state.
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_OBSERVER_THROTTLE_MS);
     (chrome.runtime.sendMessage as jest.Mock).mockClear();
 
     leaveCall.remove();
     document.body.appendChild(document.createTextNode('You left the meeting Rejoin'));
     await flushMutations();
+    // Let the throttled evaluation fire so the pending end is scheduled.
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_OBSERVER_THROTTLE_MS);
 
     jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS - 1);
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
@@ -243,14 +248,17 @@ describe('scrapingScript', () => {
   it('cancels a pending meeting-end report when call controls return', async () => {
     const leaveCall = mountLeaveCallControl();
     await flushMutations();
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_OBSERVER_THROTTLE_MS);
     (chrome.runtime.sendMessage as jest.Mock).mockClear();
 
     leaveCall.remove();
     await flushMutations();
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_OBSERVER_THROTTLE_MS);
     jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS / 2);
 
     mountLeaveCallControl();
     await flushMutations();
+    jest.advanceTimersByTime(TIMEOUTS.MEETING_END_OBSERVER_THROTTLE_MS);
     jest.advanceTimersByTime(TIMEOUTS.MEETING_END_GRACE_MS);
 
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
