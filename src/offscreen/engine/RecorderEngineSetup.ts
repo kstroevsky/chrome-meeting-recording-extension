@@ -48,6 +48,9 @@ export async function ensureAudiblePlayback(
     hasAudioTrack: true,
     suppressLocalAudioPlayback: typeof suppress === 'boolean' ? suppress : null,
     willBridge: shouldBridge,
+    // Full track-settings dump so a real-Meet verification run can see whether
+    // Chrome exposes ANY suppression-related field on this capture path.
+    audioTrackSettings: settings ? JSON.stringify(settings) : null,
   });
 
   if (!shouldBridge) return null;

@@ -8,7 +8,7 @@
 import { describeMediaError } from '../RecorderSupport';
 import { debugPerf, logPerf, nowMs, roundMs } from '../../shared/perf';
 import { TIMEOUTS } from '../../shared/timeouts';
-import ysFixWebmDuration from 'fix-webm-duration';
+import fixWebmDuration from 'webm-duration-fix';
 import type { RecorderEngineDeps, SealedStorageFile, StorageTarget } from './RecorderEngineTypes';
 import { InMemoryStorageTarget } from './RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
@@ -131,8 +131,10 @@ export async function sealAndFixArtifact(
   if (!artifact) return null;
   if (started && actualStartTimeMs > 0) {
     try {
-      const durationMs = nowMs() - actualStartTimeMs;
-      artifact.file = await ysFixWebmDuration(artifact.file, durationMs, { logger: false });
+      // webm-duration-fix streams the file and derives duration from the media
+      // timeline (last block), keeping the body as a lazy Blob slice — so it
+      // never loads the whole recording into the heap (fixes the finalize spike).
+      artifact.file = await fixWebmDuration(artifact.file);
     } catch (e) {
       deps.warn(`${label} duration fix failed`, e);
     }
