@@ -13,6 +13,8 @@ export interface SealedStorageFile {
   filename: string;
   file: Blob;
   opfsFilename?: string;
+  /** True when the WebM duration fix already ran (e.g. inside the OPFS worker). */
+  durationFixed?: boolean;
   cleanup: () => Promise<void>;
 }
 

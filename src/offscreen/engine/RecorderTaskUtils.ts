@@ -8,7 +8,6 @@
 import { describeMediaError } from '../RecorderSupport';
 import { debugPerf, logPerf, nowMs, roundMs } from '../../shared/perf';
 import { TIMEOUTS } from '../../shared/timeouts';
-import fixWebmDuration from 'webm-duration-fix';
 import type { RecorderEngineDeps, SealedStorageFile, StorageTarget } from './RecorderEngineTypes';
 import { InMemoryStorageTarget } from './RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
@@ -129,11 +128,12 @@ export async function sealAndFixArtifact(
   const sealStartedAt = nowMs();
   const artifact = await target.close();
   if (!artifact) return null;
-  if (started && actualStartTimeMs > 0) {
+  // The OPFS worker fixes duration in-thread on close (artifact.durationFixed).
+  // Only the rare non-worker fallback (LocalFileTarget / RAM) reaches here, where
+  // we dynamic-import the fixer so webm-duration-fix stays out of offscreen.js.
+  if (!artifact.durationFixed && started && actualStartTimeMs > 0) {
     try {
-      // webm-duration-fix streams the file and derives duration from the media
-      // timeline (last block), keeping the body as a lazy Blob slice — so it
-      // never loads the whole recording into the heap (fixes the finalize spike).
+      const { default: fixWebmDuration } = await import('webm-duration-fix');
       artifact.file = await fixWebmDuration(artifact.file);
     } catch (e) {
       deps.warn(`${label} duration fix failed`, e);
@@ -143,6 +143,8 @@ export async function sealAndFixArtifact(
     stream,
     durationMs: roundMs(nowMs() - sealStartedAt),
     artifactBytes: artifact.file.size,
+    // True only when the OPFS worker fixed duration in-thread (not the main-thread fallback).
+    durationFixedInWorker: artifact.durationFixed === true,
   });
   return artifact;
 }

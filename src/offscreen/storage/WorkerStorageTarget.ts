@@ -13,10 +13,12 @@ import type { SealedStorageFile, StorageTarget } from '../engine/RecorderEngineT
 import type { RecordingStream } from '../../shared/recording';
 import { debugPerf, nowMs, roundMs } from '../../shared/perf';
 
+type SealResult = { file: File | null; durationFixed: boolean };
+
 type WorkerOutbound =
   | { type: 'opened' }
   | { type: 'written'; seq: number; bytes: number }
-  | { type: 'sealed'; file: File | null; bytes: number }
+  | { type: 'sealed'; file: File | null; bytes: number; durationFixed: boolean }
   | { type: 'discarded' }
   | { type: 'error'; op: string; message: string };
 
@@ -33,7 +35,7 @@ export class WorkerStorageTarget implements StorageTarget {
   private failure: Error | null = null;
   private sealed: SealedStorageFile | null = null;
   private readonly writeAcks = new Map<number, { resolve: () => void; reject: (e: unknown) => void }>();
-  private settleSeal: ((file: File | null) => void) | null = null;
+  private settleSeal: ((result: SealResult) => void) | null = null;
   private rejectSeal: ((e: unknown) => void) | null = null;
   private settleDiscard: (() => void) | null = null;
 
@@ -127,12 +129,15 @@ export class WorkerStorageTarget implements StorageTarget {
     await this.writeChain.catch(() => {});
 
     let file: File | null = null;
+    let durationFixed = false;
     try {
-      file = await new Promise<File | null>((resolve, reject) => {
+      const result = await new Promise<SealResult>((resolve, reject) => {
         this.settleSeal = resolve;
         this.rejectSeal = reject;
         this.worker.postMessage({ type: 'close' });
       });
+      file = result.file;
+      durationFixed = result.durationFixed;
     } catch (error) {
       debugPerf(console.log, 'storage', 'opfs_closed', {
         stream: this.stream,
@@ -164,6 +169,7 @@ export class WorkerStorageTarget implements StorageTarget {
       filename: this.filename,
       file,
       opfsFilename: this.filename,
+      durationFixed,
       cleanup: async () => {
         await this.discardInternal();
         this.worker.terminate();
@@ -198,7 +204,7 @@ export class WorkerStorageTarget implements StorageTarget {
         break;
       }
       case 'sealed': {
-        this.settleSeal?.(msg.file);
+        this.settleSeal?.({ file: msg.file, durationFixed: msg.durationFixed });
         this.settleSeal = null;
         this.rejectSeal = null;
         break;

@@ -8,7 +8,13 @@
  *
  * Protocol (main -> worker): open | write | close | discard
  * Protocol (worker -> main): opened | written | sealed | discarded | error
+ *
+ * On close the worker also runs the WebM duration fix here, so the streaming
+ * parse stays off the offscreen main thread (and keeps that dependency out of
+ * the offscreen bundle — the main thread only loads it on the rare fallback).
  */
+
+import fixWebmDuration from 'webm-duration-fix';
 
 // FileSystemSyncAccessHandle is worker-only and absent from the DOM lib we
 // target, so declare the minimal surface we use.
@@ -68,8 +74,19 @@ ctx.onmessage = async (event) => {
           accessHandle = null;
         }
         // The file is readable normally once the exclusive sync handle is closed.
-        const file = offset > 0 && fileHandle ? await fileHandle.getFile() : null;
-        ctx.postMessage({ type: 'sealed', file, bytes: offset });
+        let file: Blob | null = offset > 0 && fileHandle ? await fileHandle.getFile() : null;
+        let durationFixed = false;
+        if (file) {
+          try {
+            // Streams the file + lazy-slices the body, so the result crosses back
+            // to the main thread as a cheap Blob reference, not a full copy.
+            file = await fixWebmDuration(file);
+            durationFixed = true;
+          } catch {
+            // Leave it unfixed; the main thread will attempt the fix as a fallback.
+          }
+        }
+        ctx.postMessage({ type: 'sealed', file, bytes: offset, durationFixed });
         break;
       }
       case 'discard': {

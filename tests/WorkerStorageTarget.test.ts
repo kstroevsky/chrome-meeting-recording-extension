@@ -63,7 +63,8 @@ class FakeWorker {
         }
       } else if (msg.type === 'close') {
         const file = this.bytes > 0 ? new File([new Uint8Array(this.bytes)], 'seal', { type: 'video/webm' }) : null;
-        this.emit({ type: 'sealed', file, bytes: this.bytes });
+        // The worker runs the duration fix in-thread before sealing.
+        this.emit({ type: 'sealed', file, bytes: this.bytes, durationFixed: this.bytes > 0 });
       } else if (msg.type === 'discard') {
         this.emit({ type: 'discarded' });
       }
@@ -119,6 +120,7 @@ describe('WorkerStorageTarget', () => {
     expect(artifact?.filename).toBe('rec.webm');
     expect(artifact?.opfsFilename).toBe('rec.webm');
     expect(artifact?.file).toBeInstanceOf(File);
+    expect(artifact?.durationFixed).toBe(true); // worker fixed duration in-thread
     expect(worker.posted.some((m) => m.type === 'close')).toBe(true);
 
     await artifact?.cleanup();
