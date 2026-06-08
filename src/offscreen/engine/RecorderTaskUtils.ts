@@ -8,6 +8,7 @@
 import { describeMediaError } from '../RecorderSupport';
 import { debugPerf, logPerf, nowMs, roundMs } from '../../shared/perf';
 import { TIMEOUTS } from '../../shared/timeouts';
+import { WriteBackpressure } from '../storage/WriteBackpressure';
 import type { RecorderEngineDeps, SealedStorageFile, StorageTarget } from './RecorderEngineTypes';
 import { InMemoryStorageTarget } from './RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
@@ -53,24 +54,43 @@ export async function openStorageTarget(
 export function makeChunkHandler(
   target: StorageTarget,
   stream: RecordingStream,
-  deps: Pick<RecorderEngineDeps, 'log' | 'error'>
+  deps: Pick<RecorderEngineDeps, 'log' | 'error' | 'reportWarning'>
 ): (e: BlobEvent) => void {
+  // Bound the write queue: if storage falls behind, un-written chunks pile up in
+  // RAM, so surface a throttled warning (and diagnostics) instead of OOMing.
+  const backpressure = new WriteBackpressure((info) => {
+    deps.reportWarning?.(
+      `Recording is writing to disk slower than it is captured (${stream}); your storage may be slow `
+      + `and the recording could be at risk.`
+    );
+    debugPerf(deps.log, 'storage', 'write_backpressure', {
+      stream,
+      pendingBytes: info.pendingBytes,
+      pendingChunks: info.pendingChunks,
+      peakPendingBytes: info.peakPendingBytes,
+      warnCount: info.warnCount,
+    });
+  });
+
   return (e: BlobEvent) => {
     if (!e.data?.size) return;
+    const bytes = e.data.size;
     const writeStartedAt = nowMs();
+    backpressure.enqueue(bytes);
     void target.write(e.data)
       .then(() => {
         const durationMs = roundMs(nowMs() - writeStartedAt);
         debugPerf(deps.log, 'recorder', 'chunk_persisted', {
           stream,
-          chunkBytes: e.data.size,
+          chunkBytes: bytes,
           durationMs,
           throughputMbps: durationMs > 0
-            ? Math.round(((e.data.size / 1024 / 1024) / (durationMs / 1000)) * 10) / 10
+            ? Math.round(((bytes / 1024 / 1024) / (durationMs / 1000)) * 10) / 10
             : null,
         });
       })
-      .catch((err) => deps.error(`${stream} target write error`, describeMediaError(err)));
+      .catch((err) => deps.error(`${stream} target write error`, describeMediaError(err)))
+      .finally(() => backpressure.complete(bytes));
   };
 }
 

@@ -301,6 +301,12 @@ export function applyStorage(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfE
     storage.cleanupCount += 1;
     if (stream) storage.cleanupCountByStream[stream] = (storage.cleanupCountByStream[stream] ?? 0) + 1;
     distribution = storage.cleanupDurationMs;
+  } else if (entry.event === 'write_backpressure') {
+    storage.backpressureWarningCount += 1;
+    const peakPendingBytes = toNumber(entry.fields.peakPendingBytes);
+    if (peakPendingBytes != null) {
+      storage.maxPendingBytes = Math.max(storage.maxPendingBytes, peakPendingBytes);
+    }
   }
 
   if (distribution && durationMs != null) {

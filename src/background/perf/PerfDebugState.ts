@@ -81,6 +81,8 @@ export function createEmptySummary(): PerfDebugSummary {
       cleanupCount: 0,
       currentPendingWrites: 0,
       peakPendingWrites: 0,
+      backpressureWarningCount: 0,
+      maxPendingBytes: 0,
       openCountByStream: {},
       writeCountByStream: {},
       closeCountByStream: {},

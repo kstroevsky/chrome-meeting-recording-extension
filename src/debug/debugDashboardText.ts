@@ -35,7 +35,7 @@ export function buildRecorderText(snapshot: PerfDebugSnapshot): string {
     `Persisted chunks: ${summary.recorder.persistedChunkCount}`,
     `Persisted bytes: ${formatBytes(summary.recorder.persistedChunkBytes)}`,
     `Average chunk write: ${formatMetric(summary.recorder.avgPersistedChunkDurationMs, 'ms')}`,
-    `OPFS: opens=${storage?.openCount ?? 0}, writes=${storage?.writeCount ?? 0}(worker ${storage?.workerWriteCount ?? 0}), closes=${storage?.closeCount ?? 0}, cleanups=${storage?.cleanupCount ?? 0}, queuePeak=${storage?.peakPendingWrites ?? 0}`,
+    `OPFS: opens=${storage?.openCount ?? 0}, writes=${storage?.writeCount ?? 0}(worker ${storage?.workerWriteCount ?? 0}), closes=${storage?.closeCount ?? 0}, cleanups=${storage?.cleanupCount ?? 0}, queuePeak=${storage?.peakPendingWrites ?? 0}, backpressure=${storage?.backpressureWarningCount ?? 0}`,
     `Finalization: completed=${finalization?.count ?? 0}, downloads=${finalization?.downloadCount ?? 0}, latest=${formatMetric(finalization?.lastDurationMs, 'ms')}`,
     `Lifecycle: starts=${lifecycle?.startCompletedCount ?? 0}, stops=${lifecycle?.stopCompletedCount ?? 0}, failures=${lifecycle?.failureCount ?? 0}, activeTracks=${lifecycle?.activeTracks ?? 0}`,
     `Self-video bitrate: ${formatBitrate(summary.recorder.lastSelfVideoBitrate)}`,

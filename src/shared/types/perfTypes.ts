@@ -102,6 +102,10 @@ export type PerfDebugSummary = {
     cleanupCount: number;
     currentPendingWrites: number;
     peakPendingWrites: number;
+    /** Times the write-queue backlog crossed the backpressure threshold (slow disk). */
+    backpressureWarningCount: number;
+    /** Peak in-flight (dispatched-but-unwritten) bytes seen at a backpressure event. */
+    maxPendingBytes: number;
     openCountByStream: Partial<Record<RecordingStream, number>>;
     writeCountByStream: Partial<Record<RecordingStream, number>>;
     closeCountByStream: Partial<Record<RecordingStream, number>>;
