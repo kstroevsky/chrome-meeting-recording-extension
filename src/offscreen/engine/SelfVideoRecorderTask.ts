@@ -17,6 +17,7 @@ import {
 } from '../RecorderProfiles';
 import { describeMediaError } from '../RecorderSupport';
 import { maybeGetSelfVideoStream } from '../RecorderCapture';
+import { enforceSelfVideoResolution } from '../SelfVideoResize';
 import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
 import { logPerf } from '../../shared/perf';
 import {
@@ -135,7 +136,18 @@ async function startWiredSelfVideoRecorder(
     recorderSettings.selfVideo.profile.minAdaptiveBitsPerSecond
   );
 
-  const recorder = new MediaRecorder(selfVideo, { mimeType: mime, videoBitsPerSecond });
+  // Force the encoded resolution to match the selected preset even when another
+  // consumer (e.g. the live Meet call) holds the camera open at a higher native
+  // resolution; see SelfVideoResize for the underlying Chrome contention quirk.
+  const profile = getSelfVideoProfile(recorderSettings.selfVideo.profile);
+  const enforced = await enforceSelfVideoResolution(
+    selfVideo,
+    { width: profile.width, height: profile.height },
+    deps.log
+  );
+  const recordingStream = enforced.stream;
+
+  const recorder = new MediaRecorder(recordingStream, { mimeType: mime, videoBitsPerSecond });
   const target = await openStorageTarget(
     buildRecordingFilename(suffix, 'self-video'),
     mime,
@@ -147,6 +159,12 @@ async function startWiredSelfVideoRecorder(
   const stopSelfVideoStream = () => {
     if (selfVideoStreamStopped) return;
     selfVideoStreamStopped = true;
+    enforced.stop();
+    // When resized, recordingStream is a separate generator track that also
+    // needs stopping; otherwise it IS selfVideo, so avoid stopping it twice.
+    if (enforced.resized) {
+      try { recordingStream.getTracks().forEach((t) => t.stop()); } catch {}
+    }
     try { selfVideo.getTracks().forEach((t) => t.stop()); } catch {}
   };
   callbacks.onStreamAcquired?.(stopSelfVideoStream);

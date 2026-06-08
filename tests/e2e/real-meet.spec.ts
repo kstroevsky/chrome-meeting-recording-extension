@@ -257,6 +257,28 @@ function assertArtifact(
     assert.match(video.codecName ?? '', /vp8|vp9|av1/);
     assert.ok((video.width ?? 0) > 0 && (video.height ?? 0) > 0);
     assert.ok((video.frameCount ?? 0) > 0);
+    // The encoded resolution must match the requested preset — not merely be
+    // non-zero. This guards the camera-contention leak where a shared camera
+    // recorded its native size (e.g. 1280x720) instead of the chosen preset.
+    const preset =
+      artifact.recordingStream === 'tab'
+        ? scenario.settings.tabResolutionPreset
+        : artifact.recordingStream === 'self-video'
+          ? scenario.settings.selfVideoResolutionPreset
+          : null;
+    if (preset) {
+      const [expectedWidth, expectedHeight] = preset.split('x').map(Number);
+      assert.equal(
+        video.width,
+        expectedWidth,
+        `${artifact.recordingStream} encoded width ${video.width} != requested ${expectedWidth} (preset ${preset})`
+      );
+      assert.equal(
+        video.height,
+        expectedHeight,
+        `${artifact.recordingStream} encoded height ${video.height} != requested ${expectedHeight} (preset ${preset})`
+      );
+    }
   }
   if (audio) assert.match(audio.codecName ?? '', /opus|vorbis/);
 }
