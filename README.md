@@ -55,7 +55,7 @@ User
  │                                                 │   ├─ MicRecorderTask       ◄── getUserMedia(microphone)
  │                                                 │   ├─ SelfVideoRecorderTask ◄── getUserMedia(camera)
  │                                                 │   └─ MixedAudioMixer / AudioPlaybackBridge (AudioContext audio graph)
- │                                                 ├─ StorageTarget: LocalFileTarget (OPFS) ▸ InMemory fallback
+ │                                                 ├─ StorageTarget: WorkerStorageTarget (OPFS sync-handle worker) ▸ LocalFileTarget (OPFS) ▸ InMemory fallback
  │                                                 └─ RecordingFinalizer (runs only after capture stops)
  │                                                     ├─ local : blob URL ─OFFSCREEN_SAVE→ Chrome Downloads API
  │                                                     └─ drive : DriveTarget ─resumable upload→ Google Drive API
@@ -183,6 +183,7 @@ Open the settings page by clicking the gear icon in the popup. Settings persist 
 | Setting | Description |
 | :--- | :--- |
 | Tab capture preset | Output resolution for the tab recording: `640×360`, `854×480`, `1280×720`, or `1920×1080` |
+| Tab video bitrate | Encoder bitrate at the `1920×1080`@30 reference; the recorder scales it down automatically for smaller tab presets / frame rates |
 | Camera capture preset | Output resolution for the self-video recording, same preset options |
 
 The tab and camera capture presets control what size the final file targets, not what resolution Chrome delivers from the source. Actual resolution depends on Chrome, camera hardware, and sharing limits. The popup and debug dashboard warn when the delivered profile differs from the requested one.
@@ -296,7 +297,7 @@ recordings, reports, and troubleshooting are in the
 
 | Package | Purpose |
 | :--- | :--- |
-| `fix-webm-duration` | Patches missing duration metadata in WEBM files produced by `MediaRecorder` |
+| `webm-duration-fix` | Patches missing `MediaRecorder` duration metadata by streaming the file (no whole-file load into memory) and adds seek cues; runs inside the OPFS storage worker. Replaced `fix-webm-duration`, which loaded the entire file into the JS heap at finalize |
 
 **Development dependencies**
 
@@ -474,7 +475,7 @@ Files: `static/offscreen.html`, `src/offscreen.ts`, `src/offscreen/rpcHandlers.t
 
 - Maintains a reconnecting `chrome.runtime.Port` to background.
 - Runs `RecorderEngine`.
-- Writes chunks to local storage targets during capture.
+- Streams chunks to a storage target during capture — by default an OPFS sync-access-handle Worker, so disk writes stay off the offscreen main thread.
 - Runs `RecordingFinalizer` after stop.
 - Emits explicit runtime phase updates back to background: `starting`, `recording`, `stopping`, `uploading`, `failed`, `idle`.
 
@@ -517,6 +518,9 @@ File: `src/scrapingScript.ts`, `src/content/*`
 - Debounces speech fragments into committed transcript lines via `captionBuffer.ts`.
 - Serves transcript requests from popup.
 - Uses a provider adapter abstraction instead of hard-coding Meet logic into the collector itself.
+- Detects meeting end (`MeetingEndDetector`) and signals the background for auto-stop.
+
+**End-detector coalescing (F8):** `MeetingEndDetector` observes the page for the meeting ending, but its DOM observer wakes only on structural changes (`childList`/`subtree`), **not** `characterData` — live caption text mutates the body almost every frame, and re-running the doc-wide leave-call `querySelector` on each was pure waste. Mutation bursts are further coalesced to one throttled evaluation (`MEETING_END_OBSERVER_THROTTLE_MS`). A 2 s poll backstop and 30 s grace own detection latency, so the throttle costs nothing on correctness.
 
 ---
 
@@ -707,29 +711,29 @@ Result combinations:
 - tab + selfVideo
 - tab + mic + selfVideo
 
-### 5. Local Storage Target
+### 5. Storage Targets (worker, OPFS, RAM)
 
-Files: `src/offscreen/LocalFileTarget.ts`, `src/offscreen/engine/RecorderEngineTypes.ts`
+Files: `src/offscreen/storage/opfsWorker.ts`, `src/offscreen/storage/WorkerStorageTarget.ts`, `src/offscreen/storage/WriteBackpressure.ts`, `src/offscreen/LocalFileTarget.ts`, `src/offscreen/engine/RecorderEngineTypes.ts`
 
-This is the long-meeting safety mechanism.
+This is the long-meeting safety mechanism. All three implement the same `StorageTarget` interface (`write(chunk)` / `close()`), tried in a fallback ladder: **`WorkerStorageTarget` ▸ `LocalFileTarget` ▸ `InMemoryStorageTarget`**.
 
-**`LocalFileTarget` responsibilities:**
+**`WorkerStorageTarget` (default)** — writes OPFS off the main thread:
 
-- create a temp file in OPFS
-- serialize chunk writes through a promise chain
-- close and seal the file
-- expose `cleanup()` so later stages can remove temp files
+- spawns `opfsWorker.js`, which opens the file via `createSyncAccessHandle()` and appends each chunk synchronously, in place, off the offscreen main thread
+- each chunk's `ArrayBuffer` is transferred (zero-copy) to the worker; writes serialize so they can't reorder past `close()`
+- on `close()` the worker also runs the WebM duration fix (`webm-duration-fix`) in-thread, so the parse never touches the offscreen main thread, and returns the sealed `File`
+- gated by the `opfsWorkerStorage` perf flag (default on); `create()` doubles as the capability probe — if `Worker`/`createSyncAccessHandle` is unavailable it rejects and the factory falls back
 
-**`InMemoryStorageTarget`** (defined in `RecorderEngineTypes.ts`):
+**`LocalFileTarget` (fallback)** — main-thread OPFS via `createWritable()`:
 
-- RAM-backed fallback implementing the same `StorageTarget` interface
-- used when OPFS target creation fails for a stream
-- accumulates `Blob` chunks and assembles a `File` on `close()`
-- `cleanup()` is a no-op (no persistent resource to release)
+- create a temp file in OPFS, serialize chunk writes through a promise chain, close and seal, expose `cleanup()`
+- the duration fix runs on the main thread here (dynamic-imported `webm-duration-fix`, so it stays out of the offscreen bundle)
 
-**Fallback behavior:**
+**`InMemoryStorageTarget` (last resort)** — defined in `RecorderEngineTypes.ts`:
 
-- if OPFS target creation fails, `RecorderEngine` falls back to `InMemoryStorageTarget` for that stream
+- RAM-backed; used only when OPFS target creation fails entirely; accumulates `Blob` chunks and assembles a `File` on `close()`; `cleanup()` is a no-op
+
+**Backpressure (F9):** `makeChunkHandler` wraps every write with `WriteBackpressure`, which tracks in-flight bytes/chunks. If the disk falls behind (>64 MB or >16 chunks queued) it raises a throttled `reportWarning` and a `write_backpressure` diagnostic, so a slow disk degrades to a visible warning instead of an unbounded RAM backlog.
 
 ### 6. Recording Finalizer and Drive Upload
 
@@ -1357,8 +1361,9 @@ flowchart TB
     end
 
     subgraph STORE["StorageTarget per stream"]
-        OPFS["LocalFileTarget (OPFS)"]
-        MEM["InMemoryStorageTarget<br/>(RAM fallback)"]
+        WST["WorkerStorageTarget<br/>(OPFS sync-handle worker)"]
+        OPFS["LocalFileTarget (OPFS)<br/>main-thread fallback"]
+        MEM["InMemoryStorageTarget<br/>(RAM last resort)"]
     end
 
     OUT["CompletedRecordingArtifact[]<br/>→ RecordingFinalizer"]
@@ -1379,11 +1384,12 @@ flowchart TB
     MICT --> TRACKS
     SV --> TRACKS
     MIX -->|mixed stream| TAB
-    TAB -->|ondataavailable chunks| OPFS
-    MICT --> OPFS
-    SV --> OPFS
+    TAB -->|ondataavailable chunks| WST
+    MICT --> WST
+    SV --> WST
+    WST -. on create failure .-> OPFS
     OPFS -. on create failure .-> MEM
-    TRACKS -->|"stop → seal + fix-webm-duration"| OUT
+    TRACKS -->|"stop → seal + webm-duration-fix (in worker)"| OUT
 ```
 
 ### 8. Recorder Engine State Machine (Offscreen)
@@ -1417,9 +1423,9 @@ stateDiagram-v2
 
     note right of stopping
         Camera released eagerly. Each track seals its
-        file (+ fix-webm-duration). Audio graph and
-        playback bridge torn down. Drive upload is
-        OUTSIDE the engine — see the Finalizer.
+        file (+ webm-duration-fix, run in the worker).
+        Audio graph and playback bridge torn down. Drive
+        upload is OUTSIDE the engine — see the Finalizer.
     end note
 ```
 
@@ -1463,18 +1469,23 @@ flowchart LR
 
 ### 10. OPFS Streaming & Storage-Target Fallback
 
-The long-meeting safety mechanism. Chunks stream straight to an OPFS file through a
-serialized write chain, so memory stays bounded; if OPFS can't be opened for a stream,
-the engine transparently falls back to a RAM buffer.
+The long-meeting safety mechanism. Chunks stream straight to OPFS so memory stays
+bounded (a real 22-min / 507 MB recording peaks at ~23 MB JS heap). By default writes
+go to an off-main-thread sync-access-handle worker; `makeChunkHandler` guards the queue
+with `WriteBackpressure`; and the target degrades worker ▸ main-thread OPFS ▸ RAM.
 
 ```mermaid
 flowchart TD
     A["MediaRecorder.start(timesliceMs)<br/>tab & self-video on extended cadence"] --> B["ondataavailable(chunk)"]
-    B --> C["makeChunkHandler → target.write(chunk)"]
+    B --> C["makeChunkHandler → WriteBackpressure.enqueue<br/>+ target.write(chunk)"]
+    C --> BP{"pending > 64MB / 16 chunks?"}
+    BP -->|yes| W["reportWarning + write_backpressure event<br/>(throttled)"]
     C --> D{"target type"}
+    D -->|WorkerStorageTarget| WK["transfer ArrayBuffer to opfsWorker<br/>→ createSyncAccessHandle().write (off-thread)"]
     D -->|LocalFileTarget| E["serialize via writeChain promise<br/>→ OPFS FileSystemWritableFileStream"]
     D -->|InMemoryStorageTarget| F["push Blob into RAM array"]
-    E --> G["bounded memory: small working buffer"]
+    WK --> G["bounded memory: chunk streamed to disk"]
+    E --> G
     F --> G
     G -.->|repeat per chunk| B
 
@@ -1482,9 +1493,10 @@ flowchart TD
     I --> J{"bytes written > 0?"}
     J -->|no| K["discard temp file → artifact = null"]
     J -->|yes| L["seal File handle"]
-    L --> M["fix-webm-duration patch"]
-    M --> N["SealedStorageFile<br/>{ filename, file, opfsFilename, cleanup() }"]
+    L --> M["webm-duration-fix (in worker for WorkerStorageTarget,<br/>else dynamic-imported on main thread)"]
+    M --> N["SealedStorageFile<br/>{ filename, file, opfsFilename, durationFixed, cleanup() }"]
 
+    WK -. create fails .-> E
     O["OPFS create fails"] -.->|fallback| F
 ```
 
@@ -1801,7 +1813,10 @@ flowchart LR
 | `src/offscreen/rpcHandlers.ts` | background→offscreen RPC message wiring |
 | `src/offscreen/RecorderEngine.ts` | capture and recorder coordinator (facade) |
 | `src/offscreen/RecordingFinalizer.ts` | post-stop save/upload coordinator |
-| `src/offscreen/LocalFileTarget.ts` | OPFS-backed live storage target |
+| `src/offscreen/storage/opfsWorker.ts` | dedicated worker: OPFS `createSyncAccessHandle` writes + in-worker duration fix |
+| `src/offscreen/storage/WorkerStorageTarget.ts` | default storage target — drives `opfsWorker.js` off the main thread |
+| `src/offscreen/storage/WriteBackpressure.ts` | bounds the write queue; warns on slow-disk backlog (F9) |
+| `src/offscreen/LocalFileTarget.ts` | main-thread OPFS storage target (fallback when the worker is unavailable) |
 
 ### Recorder Task Sub-Modules
 

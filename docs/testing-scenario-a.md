@@ -214,7 +214,8 @@ Choose the tag based on execution cost:
 - `@perf-smoke`: required on every PR;
 - `@perf-full`: daily matrix and manually dispatched full runs;
 - `@perf-endurance`: weekly or manual long runs;
-- `@perf-hardware`: manually dispatched self-hosted hardware only.
+- `@perf-hardware`: manually dispatched self-hosted hardware only;
+- `@perf-contention`: manually dispatched A/B (`npm run test:e2e:perf:contention`) that records the same workload with the OPFS worker on vs off (`opfsWorkerStorage`) and compares main-thread metrics (event-loop lag, long tasks) across the recording and finalize phases. Excluded from the default mock run.
 
 Do not introduce E2E branches without a compile-time guard. Add a forbidden
 production marker to `scripts/check-production-build.mjs` when a new E2E-only
