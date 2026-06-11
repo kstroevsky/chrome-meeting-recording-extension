@@ -22,6 +22,8 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { WorkerStorageTarget } from './offscreen/storage/WorkerStorageTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
+import { createChromePendingUploadStore } from './offscreen/drive/PendingUploadStore';
+import { resumePendingDriveUploadsWithChrome } from './offscreen/drive/resumePendingUploads';
 import { RuntimeSampler } from './offscreen/RuntimeSampler';
 import { OffscreenController } from './offscreen/OffscreenController';
 import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
@@ -146,12 +148,15 @@ async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
 
 // ─── Core services ───────────────────────────────────────────────────────────
 
+const pendingUploadStore = createChromePendingUploadStore();
+
 const finalizer = new RecordingFinalizer({
   log: L.log,
   warn: L.warn,
   requestSave,
   getDriveToken,
   reportWarning: controller.reportWarning,
+  pendingUploads: pendingUploadStore,
 });
 
 const engine = new RecorderEngine({
@@ -181,6 +186,16 @@ const engine = new RecorderEngine({
 });
 
 controller.attachServices(engine, finalizer);
+
+// Recover any Drive upload interrupted by a previous crash/power-off. Fire and
+// forget: a no-op when nothing is pending, and any failure (e.g. not signed in
+// to Drive yet) just leaves the markers for the next launch to retry.
+void resumePendingDriveUploadsWithChrome({
+  store: pendingUploadStore,
+  getDriveToken,
+  log: L.log,
+  warn: L.warn,
+}).catch((e) => L.warn('Pending Drive upload recovery failed', describeRuntimeError(e)));
 
 // ─── Runtime diagnostics sampling ─────────────────────────────────────────────
 

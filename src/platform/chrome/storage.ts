@@ -28,6 +28,14 @@ export async function setLocalStorageValues(values: StorageValues): Promise<void
   await chrome.storage.local.set(values);
 }
 
+export async function getAllLocalStorageValues(): Promise<StorageValues> {
+  return await chrome.storage.local.get(null) as StorageValues;
+}
+
+export async function removeLocalStorageValues(keys: string | string[]): Promise<void> {
+  await chrome.storage.local.remove(keys as string[]);
+}
+
 export async function getSessionStorageValues(keys: string | string[]): Promise<StorageValues> {
   return await chrome.storage.session.get(keys as string[]) as StorageValues;
 }

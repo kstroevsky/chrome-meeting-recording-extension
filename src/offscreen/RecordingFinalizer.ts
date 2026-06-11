@@ -13,6 +13,7 @@ import { DriveFolderResolver } from './drive/DriveFolderResolver';
 import { DRIVE_ROOT_FOLDER_NAME } from './drive/constants';
 import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { createCachedTokenProvider, type TokenProvider } from './drive/request';
+import type { PendingUploadStore } from './drive/PendingUploadStore';
 import { describeRuntimeError } from './errors';
 import type { CompletedRecordingArtifact, SealedStorageFile } from './RecorderEngine';
 import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
@@ -32,6 +33,12 @@ export type RecordingFinalizerDeps = {
   requestSave: (filename: string, blobUrl: string, opfsFilename?: string) => void;
   getDriveToken: TokenProvider;
   reportWarning?: (warning: string) => void;
+  /**
+   * Records "mid-upload to Drive" markers so an upload interrupted by a crash is
+   * recovered on the next launch. Optional: absent in contexts that don't
+   * persist (e.g. unit tests).
+   */
+  pendingUploads?: PendingUploadStore;
 };
 
 export type FinalizeArtifactsOptions = {
@@ -162,13 +169,25 @@ export class RecordingFinalizer {
           shared: { getUploadToken: sharedGetUploadToken, folderResolver, log: this.deps.log },
         });
 
+        // Mark the upload as in-flight so a crash/power-off mid-upload is
+        // recovered on the next launch. Only files that actually live in OPFS
+        // can be recovered (a RAM-fallback artifact has nothing to re-read).
+        const opfsFilename = artifact.opfsFilename;
+        if (opfsFilename) {
+          await this.deps.pendingUploads?.put({ opfsFilename, filename: artifact.filename, stream, recordingFolderName });
+        }
+
         try {
           await driveTarget.upload(artifact.file);
+          if (opfsFilename) await this.deps.pendingUploads?.remove(opfsFilename);
           await this.cleanupArtifact(artifact);
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: true, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: true } satisfies UploadOutcome;
         } catch (e) {
           const error = describeRuntimeError(e);
+          // Falling back to a local download saves the file and cleans up OPFS,
+          // so there is nothing left to recover — drop the marker.
+          if (opfsFilename) await this.deps.pendingUploads?.remove(opfsFilename);
           this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
           this.saveArtifactLocally(artifact, stream, 'fallback');
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
