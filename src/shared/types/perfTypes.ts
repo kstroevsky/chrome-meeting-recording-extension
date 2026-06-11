@@ -173,6 +173,12 @@ export type PerfDebugSummary = {
     longTaskCount: number;
     lastLongTaskMs: number | null;
     maxLongTaskMs: number | null;
+    // System-wide CPU utilization (dev-only; null when the `system.cpu`
+    // permission is absent, i.e. production builds).
+    lastCpuPercent: number | null;
+    avgCpuPercent: number | null;
+    maxCpuPercent: number | null;
+    cpuSampleCount: number;
   };
 };
 

@@ -514,3 +514,24 @@ export function applyRuntimeSample(snapshot: Readonly<PerfDebugSnapshot>, entry:
       : Math.max(runtime.maxLongTaskMs, maxLongTaskMs);
   }
 }
+
+/**
+ * Reduces a `runtime:cpu` event (system-wide CPU %, fed by the background-side
+ * CpuSampler in dev builds). Tracks last / running-average / peak. Carries its
+ * own sample counter because CPU samples can be skipped (no baseline / read
+ * error) independently of the runtime samples.
+ */
+export function applyCpuSample(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfEventEntry): void {
+  const cpuPercent = toNumber(entry.fields.cpuPercent);
+  if (cpuPercent == null) return;
+
+  const runtime = snapshot.summary.runtime;
+  runtime.lastCpuPercent = cpuPercent;
+  runtime.cpuSampleCount += 1;
+  const n = runtime.cpuSampleCount;
+  const prevAvg = runtime.avgCpuPercent ?? cpuPercent;
+  runtime.avgCpuPercent = round(((prevAvg * (n - 1)) + cpuPercent) / n);
+  runtime.maxCpuPercent = runtime.maxCpuPercent == null
+    ? cpuPercent
+    : Math.max(runtime.maxCpuPercent, cpuPercent);
+}

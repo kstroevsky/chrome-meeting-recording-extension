@@ -150,6 +150,10 @@ export function createEmptySummary(): PerfDebugSummary {
       longTaskCount: 0,
       lastLongTaskMs: null,
       maxLongTaskMs: null,
+      lastCpuPercent: null,
+      avgCpuPercent: null,
+      maxCpuPercent: null,
+      cpuSampleCount: 0,
     },
   };
 }

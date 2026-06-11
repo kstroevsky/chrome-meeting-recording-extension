@@ -19,6 +19,7 @@ import { PerfDebugStore } from './background/PerfDebugStore';
 import { RecordingController } from './background/RecordingController';
 import { RecordingSession } from './background/RecordingSession';
 import { registerMessageHandlers } from './background/messageHandlers';
+import { createChromeCpuSampler } from './background/perf/CpuSampler';
 import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { startKeepAlive, stopKeepAlive, maybeClearPerfDiagnostics, registerSaveHandler } from './background/sessionLifecycle';
@@ -89,7 +90,7 @@ registerSaveHandler(offscreen, L);
 const controller = new RecordingController({ L, offscreen, session });
 
 // Register all popup message handlers.
-registerMessageHandlers({ L, session, perfDebugStore, controller });
+registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler() });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 

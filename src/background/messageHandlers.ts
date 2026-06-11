@@ -20,12 +20,15 @@ import { type PerfEventEntry } from '../shared/perf';
 import type { RecordingController } from './RecordingController';
 import type { RecordingSession } from './RecordingSession';
 import type { PerfDebugStore } from './PerfDebugStore';
+import type { CpuSampler } from './perf/CpuSampler';
 
 export type MessageHandlersDeps = {
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
   session: RecordingSession;
   perfDebugStore: PerfDebugStore;
   controller: RecordingController;
+  /** Dev-only system CPU sampler; null in production (no `system.cpu` permission). */
+  cpuSampler?: CpuSampler | null;
 };
 
 /**
@@ -33,7 +36,7 @@ export type MessageHandlersDeps = {
  * commands to PERF_EVENT, GET_DRIVE_TOKEN, START_RECORDING, STOP_RECORDING,
  * and GET_RECORDING_STATUS handlers.
  */
-export function registerMessageHandlers({ L, session, perfDebugStore, controller }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -77,7 +80,24 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
     }
 
     if (isPerfEventMessage(msg)) {
-      perfDebugStore.record(msg.entry as PerfEventEntry);
+      const entry = msg.entry as PerfEventEntry;
+      perfDebugStore.record(entry);
+      // Piggyback a system-CPU read on each runtime sample (dev builds only).
+      // chrome.system.cpu lives in the background context, so we sample here on
+      // the existing per-sample wake rather than running a separate SW timer.
+      if (cpuSampler && entry.scope === 'runtime' && entry.event === 'sample') {
+        void cpuSampler.sample().then((cpuPercent) => {
+          if (cpuPercent != null) {
+            perfDebugStore.record({
+              source: entry.source,
+              scope: 'runtime',
+              event: 'cpu',
+              ts: Date.now(),
+              fields: { cpuPercent },
+            });
+          }
+        });
+      }
       sendResponse({ ok: true });
       return false;
     }

@@ -86,6 +86,7 @@ export function buildRuntimeText(snapshot: PerfDebugSnapshot): string {
     `JS heap limit: ${formatMetric(summary.runtime.lastHeapLimitMb, 'MB')}`,
     `CPU pressure proxy (event loop lag): current=${formatMetric(summary.runtime.lastEventLoopLagMs, 'ms')}, avg=${formatMetric(summary.runtime.avgEventLoopLagMs, 'ms')}, max=${formatMetric(summary.runtime.maxEventLoopLagMs, 'ms')}`,
     `Long tasks: count=${summary.runtime.longTaskCount}, last=${formatMetric(summary.runtime.lastLongTaskMs, 'ms')}, max=${formatMetric(summary.runtime.maxLongTaskMs, 'ms')}`,
+    `System CPU (dev only): current=${formatMetric(summary.runtime.lastCpuPercent, '%')}, avg=${formatMetric(summary.runtime.avgCpuPercent, '%')}, max=${formatMetric(summary.runtime.maxCpuPercent, '%')}`,
   ].join('\n');
 }
 

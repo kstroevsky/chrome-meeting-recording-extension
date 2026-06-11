@@ -43,12 +43,18 @@ function resolveGoogleOauthClientId(projectRoot) {
   return value.trim()
 }
 
-function transformManifest(content, oauthClientId) {
+function transformManifest(content, oauthClientId, isDevBuild) {
   const manifest = JSON.parse(content.toString('utf8'))
   if (!manifest.oauth2 || typeof manifest.oauth2 !== 'object') {
     throw new Error('manifest.json is missing oauth2 configuration')
   }
   manifest.oauth2.client_id = oauthClientId
+  // Dev-only diagnostics: system-wide CPU sampling via chrome.system.cpu. Never
+  // shipped to production so the store listing keeps a minimal permission set
+  // and avoids a permission re-review prompt for users.
+  if (isDevBuild && Array.isArray(manifest.permissions) && !manifest.permissions.includes('system.cpu')) {
+    manifest.permissions.push('system.cpu')
+  }
   return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
 }
 
@@ -130,7 +136,7 @@ module.exports = (_env, argv) => {
           {
             from: path.join(STATIC_DIR, 'manifest.json'),
             to: 'manifest.json',
-            transform: (content) => transformManifest(content, googleOauthClientId),
+            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild),
           },
           { from: path.join(STATIC_DIR, 'popup.html'),     to: 'popup.html' },
           { from: path.join(STATIC_DIR, 'debug.html'),     to: 'debug.html' },

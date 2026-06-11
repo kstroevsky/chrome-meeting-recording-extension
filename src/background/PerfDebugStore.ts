@@ -30,6 +30,7 @@ import {
   applyFinalization,
   applyLifecycle,
   applyObserverCount,
+  applyCpuSample,
   applyRecorderChunk,
   applyRecorderStarted,
   applyRuntimeSample,
@@ -147,6 +148,9 @@ export class PerfDebugStore {
         break;
       case 'runtime:sample':
         applyRuntimeSample(this.snapshot, entry);
+        break;
+      case 'runtime:cpu':
+        applyCpuSample(this.snapshot, entry);
         break;
     }
 
