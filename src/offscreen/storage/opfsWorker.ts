@@ -15,6 +15,7 @@
  */
 
 import fixWebmDuration from 'webm-duration-fix';
+import { FlushPolicy } from './FlushPolicy';
 
 // FileSystemSyncAccessHandle is worker-only and absent from the DOM lib we
 // target, so declare the minimal surface we use.
@@ -44,6 +45,7 @@ let fileHandle: FileSystemFileHandle | null = null;
 let accessHandle: FileSystemSyncAccessHandle | null = null;
 let filename = '';
 let offset = 0;
+let flushPolicy: FlushPolicy | null = null;
 
 ctx.onmessage = async (event) => {
   const msg = event.data;
@@ -56,6 +58,7 @@ ctx.onmessage = async (event) => {
         accessHandle = await (fileHandle as SyncCapableFileHandle).createSyncAccessHandle();
         accessHandle.truncate(0);
         offset = 0;
+        flushPolicy = new FlushPolicy(Date.now());
         ctx.postMessage({ type: 'opened' });
         break;
       }
@@ -64,6 +67,17 @@ ctx.onmessage = async (event) => {
         const view = new Uint8Array(msg.buffer);
         accessHandle.write(view, { at: offset });
         offset += view.byteLength;
+        // Periodically force the page cache to disk so a hard power cut loses at
+        // most ~one flush interval of recording, not the whole unflushed tail.
+        // Best-effort: close() still does the authoritative flush, so a transient
+        // flush hiccup must not abort the write path.
+        if (flushPolicy?.onWrite(Date.now())) {
+          try {
+            accessHandle.flush();
+          } catch {
+            /* best-effort; close() will flush again */
+          }
+        }
         ctx.postMessage({ type: 'written', seq: msg.seq, bytes: view.byteLength });
         break;
       }
