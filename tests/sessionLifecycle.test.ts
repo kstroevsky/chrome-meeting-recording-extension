@@ -1,5 +1,6 @@
 jest.mock('../src/platform/chrome/downloads', () => ({
   downloadFile: jest.fn().mockResolvedValue(1),
+  awaitDownloadSettled: jest.fn().mockResolvedValue('complete'),
 }));
 jest.mock('../src/platform/chrome/runtime', () => ({
   pokeRuntime: jest.fn(),
@@ -14,7 +15,7 @@ import {
   startKeepAlive,
   stopKeepAlive,
 } from '../src/background/sessionLifecycle';
-import { downloadFile } from '../src/platform/chrome/downloads';
+import { awaitDownloadSettled, downloadFile } from '../src/platform/chrome/downloads';
 import { pokeRuntime } from '../src/platform/chrome/runtime';
 import { broadcastToPopup } from '../src/shared/messages';
 
@@ -28,29 +29,43 @@ describe('registerSaveHandler', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.useFakeTimers();
+    (awaitDownloadSettled as jest.Mock).mockResolvedValue('complete');
     offscreen = { onSaveRequested: undefined, revokeBlobUrl: jest.fn() };
     L = { log: jest.fn(), warn: jest.fn() };
     registerSaveHandler(offscreen, L);
   });
 
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  it('downloads the file, broadcasts success, then revokes the blob after a delay', async () => {
+  it('downloads the file, broadcasts success, then cleans up OPFS once the download completes', async () => {
     offscreen.onSaveRequested({ filename: 'tab.webm', blobUrl: 'blob:1', opfsFilename: 'tab.webm' });
     await flushMicrotasks();
 
     expect(downloadFile).toHaveBeenCalledWith({ url: 'blob:1', filename: 'tab.webm', saveAs: false });
     expect(broadcastToPopup).toHaveBeenCalledWith({ type: 'RECORDING_SAVED', filename: 'tab.webm' });
-    expect(offscreen.revokeBlobUrl).not.toHaveBeenCalled();
-
-    jest.advanceTimersByTime(10_000);
+    // Cleanup is gated on the real download completion, not a blind timer.
+    expect(awaitDownloadSettled).toHaveBeenCalledWith(1);
     expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1', 'tab.webm');
   });
 
-  it('broadcasts a save error and revokes without the opfs filename when the download fails', async () => {
+  it('keeps the OPFS file (revokes URL only) when the download is interrupted', async () => {
+    (awaitDownloadSettled as jest.Mock).mockResolvedValueOnce('interrupted');
+
+    offscreen.onSaveRequested({ filename: 'tab.webm', blobUrl: 'blob:1', opfsFilename: 'tab.webm' });
+    await flushMicrotasks();
+
+    expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1');
+    expect(offscreen.revokeBlobUrl).not.toHaveBeenCalledWith('blob:1', 'tab.webm');
+  });
+
+  it('leaves the URL and OPFS file untouched when the download never settles', async () => {
+    (awaitDownloadSettled as jest.Mock).mockResolvedValueOnce('timeout');
+
+    offscreen.onSaveRequested({ filename: 'tab.webm', blobUrl: 'blob:1', opfsFilename: 'tab.webm' });
+    await flushMicrotasks();
+
+    expect(offscreen.revokeBlobUrl).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts a save error and keeps the OPFS file when the download never starts', async () => {
     (downloadFile as jest.Mock).mockRejectedValueOnce(new Error('Download blocked'));
 
     offscreen.onSaveRequested({ filename: 'tab.webm', blobUrl: 'blob:1', opfsFilename: 'tab.webm' });
@@ -62,9 +77,9 @@ describe('registerSaveHandler', () => {
       filename: 'tab.webm',
       error: 'Download blocked',
     });
-
-    jest.advanceTimersByTime(10_000);
-    expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1', undefined);
+    // No download to wait on; free the URL but preserve the OPFS source for recovery.
+    expect(awaitDownloadSettled).not.toHaveBeenCalled();
+    expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1');
   });
 
   it('stringifies a non-Error download rejection', async () => {

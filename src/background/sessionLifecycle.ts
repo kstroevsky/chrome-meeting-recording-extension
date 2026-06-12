@@ -6,7 +6,7 @@
  */
 
 import { pokeRuntime } from '../platform/chrome/runtime';
-import { downloadFile } from '../platform/chrome/downloads';
+import { awaitDownloadSettled, downloadFile } from '../platform/chrome/downloads';
 import { isBusyPhase } from '../shared/recording';
 import { broadcastToPopup } from '../shared/messages';
 import type { RecordingSession } from './RecordingSession';
@@ -54,11 +54,11 @@ export function registerSaveHandler(
 
     L.log('Saving OFFSCREEN_SAVE via blobUrl', resolvedFilename);
     void (async () => {
-      let cleanupOpfsFilename: string | undefined;
       const downloadStartedAt = nowMs();
+      let downloadId: number | undefined;
 
       try {
-        await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
+        downloadId = await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
         debugPerf(L.log, 'finalizer', 'download_complete', {
           filename: resolvedFilename,
           durationMs: roundMs(nowMs() - downloadStartedAt),
@@ -68,17 +68,30 @@ export function registerSaveHandler(
               ? 'self-video'
               : 'tab',
         });
-        cleanupOpfsFilename = opfsFilename;
         await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         L.warn('downloads.download error:', message);
         await broadcastToPopup({ type: 'RECORDING_SAVE_ERROR', filename: resolvedFilename, error: message });
-      } finally {
-        setTimeout(() => {
-          offscreen.revokeBlobUrl(blobUrl, cleanupOpfsFilename);
-        }, 10_000);
+        // The download never started: free the in-memory URL but keep the OPFS
+        // source so crash recovery can retry it on a later launch.
+        offscreen.revokeBlobUrl(blobUrl);
+        return;
       }
+
+      // Clean up only once the download has *actually* settled. Event-driven, so a
+      // suspended worker can't drop the cleanup the way the old blind 10s timer
+      // could — which would leak a correctly-saved file into OPFS forever. The
+      // OPFS source is deleted ONLY on confirmed completion; an interrupted (or
+      // never-settling) download keeps it so crash recovery can reclaim it.
+      const settled = downloadId != null ? await awaitDownloadSettled(downloadId) : 'timeout';
+      if (settled === 'complete') {
+        offscreen.revokeBlobUrl(blobUrl, opfsFilename);
+      } else if (settled === 'interrupted') {
+        offscreen.revokeBlobUrl(blobUrl);
+      }
+      // 'timeout': the download may still be writing — leave both the URL and the
+      // OPFS file untouched; recovery reclaims the file later if it was saved.
     })();
   };
 }
