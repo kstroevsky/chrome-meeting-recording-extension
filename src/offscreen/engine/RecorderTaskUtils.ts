@@ -50,26 +50,64 @@ export async function openStorageTarget(
   }
 }
 
+/**
+ * Consecutive write rejections tolerated before a stream is treated as
+ * persistently broken and escalated to a protective stop. A small count rides
+ * out a transient blip; at the tab cadence (~4 s) this is ~12 s of dead writes
+ * before sealing — and the already-persisted prefix is safe the whole time.
+ */
+const MAX_CONSECUTIVE_WRITE_FAILURES = 3;
+
 /** Creates an ondataavailable handler that writes chunks to the target and logs perf events. */
 export function makeChunkHandler(
   target: StorageTarget,
   stream: RecordingStream,
-  deps: Pick<RecorderEngineDeps, 'log' | 'error' | 'reportWarning'>
+  deps: Pick<RecorderEngineDeps, 'log' | 'error' | 'reportWarning' | 'requestProtectiveStop'>
 ): (e: BlobEvent) => void {
+  let consecutiveWriteFailures = 0;
+  let escalated = false;
+
+  // Escalate a persistent storage failure (repeated write rejections, or a
+  // write backlog past the hard ceiling) to a protective stop: warn the user and
+  // ask the engine to seal+deliver the already-persisted prefix, rather than let
+  // the recorder run on as a phantom REC with nothing reaching disk. Fires at
+  // most once per stream; the engine de-dupes the stop across streams.
+  const escalate = (reason: string): void => {
+    if (escalated) return;
+    escalated = true;
+    deps.reportWarning?.(reason);
+    deps.requestProtectiveStop?.(reason);
+  };
+
   // Bound the write queue: if storage falls behind, un-written chunks pile up in
-  // RAM, so surface a throttled warning (and diagnostics) instead of OOMing.
-  const backpressure = new WriteBackpressure((info) => {
-    deps.reportWarning?.(
-      `Recording is writing to disk slower than it is captured (${stream}); your storage may be slow `
-      + `and the recording could be at risk.`
-    );
-    debugPerf(deps.log, 'storage', 'write_backpressure', {
-      stream,
-      pendingBytes: info.pendingBytes,
-      pendingChunks: info.pendingChunks,
-      peakPendingBytes: info.peakPendingBytes,
-      warnCount: info.warnCount,
-    });
+  // RAM, so surface a throttled warning (and diagnostics) before the hard ceiling
+  // forces a protective stop instead of OOMing.
+  const backpressure = new WriteBackpressure({
+    onWarn: (info) => {
+      deps.reportWarning?.(
+        `Recording is writing to disk slower than it is captured (${stream}); your storage may be slow `
+        + `and the recording could be at risk.`
+      );
+      debugPerf(deps.log, 'storage', 'write_backpressure', {
+        stream,
+        pendingBytes: info.pendingBytes,
+        pendingChunks: info.pendingChunks,
+        peakPendingBytes: info.peakPendingBytes,
+        warnCount: info.warnCount,
+      });
+    },
+    onCeiling: (info) => {
+      debugPerf(deps.log, 'storage', 'write_backpressure_ceiling', {
+        stream,
+        pendingBytes: info.pendingBytes,
+        pendingChunks: info.pendingChunks,
+        peakPendingBytes: info.peakPendingBytes,
+      });
+      escalate(
+        `Recording stopped to protect your data: the ${stream} stream fell too far behind on disk `
+        + `(${Math.round(info.pendingBytes / 1024 / 1024)} MB unwritten). The recording up to this point was saved.`
+      );
+    },
   });
 
   return (e: BlobEvent) => {
@@ -79,6 +117,7 @@ export function makeChunkHandler(
     backpressure.enqueue(bytes);
     void target.write(e.data)
       .then(() => {
+        consecutiveWriteFailures = 0;
         const durationMs = roundMs(nowMs() - writeStartedAt);
         debugPerf(deps.log, 'recorder', 'chunk_persisted', {
           stream,
@@ -89,7 +128,16 @@ export function makeChunkHandler(
             : null,
         });
       })
-      .catch((err) => deps.error(`${stream} target write error`, describeMediaError(err)))
+      .catch((err) => {
+        consecutiveWriteFailures += 1;
+        deps.error(`${stream} target write error`, describeMediaError(err));
+        if (consecutiveWriteFailures >= MAX_CONSECUTIVE_WRITE_FAILURES) {
+          escalate(
+            `Recording stopped to protect your data: the ${stream} stream could no longer be saved to disk `
+            + `(${consecutiveWriteFailures} consecutive write failures). The recording up to this point was saved.`
+          );
+        }
+      })
       .finally(() => backpressure.complete(bytes));
   };
 }

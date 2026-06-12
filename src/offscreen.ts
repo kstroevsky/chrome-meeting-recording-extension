@@ -167,6 +167,14 @@ const engine = new RecorderEngine({
   error: L.error,
   notifyPhase: controller.pushState,
   reportWarning: controller.reportWarning,
+  // Storage gave out mid-recording: route through the same finalize pipeline a
+  // user/background stop uses, so the already-persisted prefix is sealed and
+  // delivered (uploaded/saved) instead of the recorder running on with nothing
+  // landing on disk. The user-facing warning is already emitted by the engine.
+  requestProtectiveStop: (reason: string) => {
+    debugPerf(L.log, 'lifecycle', 'protective_stop', { reason });
+    void controller.finalize();
+  },
   openTarget: async (filename: string, stream) => {
     // Prefer the worker (sync-access OPFS, off the main thread). Fall back to the
     // main-thread writable, then RAM (handled by openStorageTarget) if both fail.

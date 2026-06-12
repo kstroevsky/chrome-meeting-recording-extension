@@ -47,6 +47,14 @@ export type RecorderEngineDeps = {
   notifyPhase: (phase: RecordingPhase) => void;
   reportWarning?: (warning: string) => void;
   openTarget?: (filename: string, stream?: RecordingStream) => Promise<StorageTarget>;
+  /**
+   * Escalates a persistent storage failure to a protective stop: seals and
+   * delivers the already-persisted prefix instead of letting the recorder run
+   * on as a phantom REC with nothing landing on disk. Wired to the offscreen
+   * finalize pipeline; `reason` is for diagnostics (the user-facing message is
+   * emitted via {@link reportWarning} at the call site).
+   */
+  requestProtectiveStop?: (reason: string) => void;
 };
 
 /** RAM-backed fallback target used when OPFS is unavailable for a stream. */
