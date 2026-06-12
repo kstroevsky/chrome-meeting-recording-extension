@@ -88,6 +88,63 @@ describe('RecordingFinalizer', () => {
     expect(mic.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it('marks an upload pending before it starts and clears it on both success and fallback', async () => {
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    jest.spyOn(DriveTarget.prototype, 'upload').mockImplementation(function (this: any) {
+      // tab fails -> local fallback; mic succeeds.
+      return this.filename === 'tab.webm'
+        ? Promise.reject(new DOMException('network timeout', 'AbortError'))
+        : Promise.resolve();
+    });
+
+    const pendingUploads = {
+      put: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn().mockResolvedValue(undefined),
+      list: jest.fn().mockResolvedValue([]),
+    };
+    const finalizerWithStore = new RecordingFinalizer({ ...deps, pendingUploads });
+
+    const tab = makeArtifact('tab.webm');
+    const mic = makeArtifact('mic.webm');
+
+    await finalizerWithStore.finalize({
+      storageMode: 'drive',
+      artifacts: [
+        { stream: 'mic', artifact: mic },
+        { stream: 'tab', artifact: tab },
+      ],
+    });
+
+    // A marker is written before each upload attempt...
+    expect(pendingUploads.put).toHaveBeenCalledWith(
+      expect.objectContaining({ opfsFilename: 'mic.webm', filename: 'mic.webm', stream: 'mic' })
+    );
+    expect(pendingUploads.put).toHaveBeenCalledWith(
+      expect.objectContaining({ opfsFilename: 'tab.webm', stream: 'tab' })
+    );
+    // ...and cleared whether the upload succeeds (mic) or falls back locally (tab).
+    expect(pendingUploads.remove).toHaveBeenCalledWith('mic.webm');
+    expect(pendingUploads.remove).toHaveBeenCalledWith('tab.webm');
+  });
+
+  it('does not write a pending marker when shared Drive setup fails before any upload', async () => {
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockRejectedValue(new Error('folder lookup failed'));
+    const pendingUploads = {
+      put: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn().mockResolvedValue(undefined),
+      list: jest.fn().mockResolvedValue([]),
+    };
+    const finalizerWithStore = new RecordingFinalizer({ ...deps, pendingUploads });
+
+    await finalizerWithStore.finalize({
+      storageMode: 'drive',
+      artifacts: [{ stream: 'tab', artifact: makeArtifact('tab.webm') }],
+    });
+
+    // No upload was attempted, so nothing should have been marked pending.
+    expect(pendingUploads.put).not.toHaveBeenCalled();
+  });
+
   it('reuses one cached Drive token across a finalize run', async () => {
     // Pin serial uploads so the sequenced fetch mock (session→PUT, session→PUT)
     // stays deterministic; this case verifies token reuse, not concurrency.
