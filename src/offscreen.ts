@@ -24,6 +24,7 @@ import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { createChromePendingUploadStore } from './offscreen/drive/PendingUploadStore';
 import { resumePendingDriveUploadsWithChrome } from './offscreen/drive/resumePendingUploads';
+import { recoverOrphanRecordingsWithChrome } from './offscreen/storage/recoverOrphanRecordings';
 import { RuntimeSampler } from './offscreen/RuntimeSampler';
 import { OffscreenController } from './offscreen/OffscreenController';
 import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
@@ -187,15 +188,36 @@ const engine = new RecorderEngine({
 
 controller.attachServices(engine, finalizer);
 
-// Recover any Drive upload interrupted by a previous crash/power-off. Fire and
-// forget: a no-op when nothing is pending, and any failure (e.g. not signed in
-// to Drive yet) just leaves the markers for the next launch to retry.
-void resumePendingDriveUploadsWithChrome({
-  store: pendingUploadStore,
-  getDriveToken,
-  log: L.log,
-  warn: L.warn,
-}).catch((e) => L.warn('Pending Drive upload recovery failed', describeRuntimeError(e)));
+// Recover anything a previous crash/power-off left behind, before any new
+// recording starts. Sequential so the orphan scan sees the upload-resume domain
+// already resolved; gated on idle so we never touch an active recording's files.
+// Fire and forget — both are no-ops when nothing is pending.
+void (async () => {
+  if (controller.currentPhase() !== 'idle') return;
+  // #1: re-upload a Drive upload interrupted mid-flight (sealed, marked files).
+  try {
+    await resumePendingDriveUploadsWithChrome({
+      store: pendingUploadStore,
+      getDriveToken,
+      log: L.log,
+      warn: L.warn,
+    });
+  } catch (e) {
+    L.warn('Pending Drive upload recovery failed', describeRuntimeError(e));
+  }
+  // #2: recover orphaned recordings — unmarked OPFS files left by a crash during
+  // capture or local save — by sealing (best-effort) and downloading them.
+  try {
+    await recoverOrphanRecordingsWithChrome({
+      pendingUploads: pendingUploadStore,
+      requestSave,
+      log: L.log,
+      warn: L.warn,
+    });
+  } catch (e) {
+    L.warn('Orphan recording recovery failed', describeRuntimeError(e));
+  }
+})();
 
 // ─── Runtime diagnostics sampling ─────────────────────────────────────────────
 

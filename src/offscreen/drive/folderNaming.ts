@@ -8,6 +8,11 @@
 // Matches: google-meet-{slug}-{datetime}-{type}.webm
 const RECORDING_FILENAME_RE = /^google-meet-(.+)-(\d{8}T\d{4})-(recording|mic|self-video)\.webm$/;
 
+/** True when a name looks like a recording artifact this extension produced. */
+export function isRecordingFilename(name: string): boolean {
+  return RECORDING_FILENAME_RE.test(name);
+}
+
 /**
  * Converts a recording filename into "google-meet-{slug}-{datetime}",
  * grouping all artifacts from the same session under one Drive folder.
