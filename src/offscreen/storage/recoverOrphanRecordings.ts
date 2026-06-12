@@ -25,11 +25,29 @@ import type { PendingUploadStore } from '../drive/PendingUploadStore';
 
 export type OrphanCandidate = { name: string; lastModifiedMs: number };
 
+/** Recover at most this many orphans per launch; the rest drain on later launches. */
+const MAX_ORPHANS_PER_RUN = 25;
+/** Above this size, deliver raw bytes rather than buffering the duration fix in RAM. */
+const MAX_SEAL_IN_MEMORY_BYTES = 256 * 1024 * 1024;
+
 export type OrphanRecoveryDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
   /** Only recover files older than this (the offscreen session start time). */
   cutoffMs: number;
+  /**
+   * Cap on orphans handled per launch (a seatbelt against a pathological backlog).
+   * Unbounded when omitted. Successful recovery deletes the file, so any remainder
+   * drains over later launches — nothing is lost, just spread out.
+   */
+  maxPerRun?: number;
+  /**
+   * Above this size, skip the in-memory duration fix and deliver the raw bytes
+   * instead (avoids OOM-ing the offscreen on a multi-GB file). Always seals when
+   * omitted. The raw file is a complete, playable WebM whose duration metadata may
+   * be unset until the first seek.
+   */
+  maxSealBytes?: number;
   /** OPFS recording files with their last-modified time. */
   listOrphanCandidates: () => Promise<OrphanCandidate[]>;
   /** Names to skip because another path owns them (e.g. pending Drive uploads). */
@@ -49,20 +67,30 @@ export async function recoverOrphanRecordings(deps: OrphanRecoveryDeps): Promise
     deps.listOrphanCandidates(),
     deps.excludedNames(),
   ]);
-  const orphans = candidates.filter(
-    (candidate) => candidate.lastModifiedMs < deps.cutoffMs && !excluded.has(candidate.name)
-  );
+  const orphans = candidates
+    .filter((candidate) => candidate.lastModifiedMs < deps.cutoffMs && !excluded.has(candidate.name))
+    .sort((a, b) => a.lastModifiedMs - b.lastModifiedMs); // oldest (most likely abandoned) first
   if (!orphans.length) return;
-  deps.log(`Recovering ${orphans.length} orphaned recording file(s)`);
 
-  for (const { name } of orphans) {
+  const batch = deps.maxPerRun != null ? orphans.slice(0, deps.maxPerRun) : orphans;
+  const deferred = orphans.length - batch.length;
+  deps.log(
+    `Recovering ${batch.length} orphaned recording file(s)` +
+      (deferred > 0 ? ` (${deferred} deferred to next launch)` : '')
+  );
+
+  for (const { name } of batch) {
     try {
       const raw = await deps.openOpfsFile(name);
       if (!raw || raw.size === 0) {
         await deps.removeOpfsFile(name);
         continue;
       }
-      const sealed = await deps.sealFile(raw);
+      // Skip the in-memory duration fix for oversized files — buffering a multi-GB
+      // blob can OOM the offscreen. The raw, disk-backed bytes are still a complete,
+      // playable WebM (the same best-effort fallback sealFile itself uses on error).
+      const sealed =
+        deps.maxSealBytes != null && raw.size > deps.maxSealBytes ? raw : await deps.sealFile(raw);
       // Save flow downloads then (on success only) cleans up OPFS; a failed
       // download leaves the orphan in place for the next launch to retry.
       deps.saveRecovered(name, sealed, name);
@@ -87,6 +115,8 @@ export function recoverOrphanRecordingsWithChrome(opts: {
 }): Promise<void> {
   return recoverOrphanRecordings({
     cutoffMs: opts.cutoffMs,
+    maxPerRun: MAX_ORPHANS_PER_RUN,
+    maxSealBytes: MAX_SEAL_IN_MEMORY_BYTES,
     log: opts.log,
     warn: opts.warn,
     listOrphanCandidates: async () => {

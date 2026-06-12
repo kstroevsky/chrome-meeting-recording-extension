@@ -85,4 +85,34 @@ describe('recoverOrphanRecordings', () => {
     await recoverOrphanRecordings(deps);
     expect(deps.saveRecovered).toHaveBeenCalledTimes(2);
   });
+
+  it('caps the number recovered per run, deferring the rest to a later launch', async () => {
+    const deps = makeDeps({
+      maxPerRun: 2,
+      listOrphanCandidates: jest.fn(async () => [
+        { name: 'a-recording.webm', lastModifiedMs: CUTOFF - 3 },
+        { name: 'b-recording.webm', lastModifiedMs: CUTOFF - 2 },
+        { name: 'c-recording.webm', lastModifiedMs: CUTOFF - 1 },
+      ]),
+    });
+    await recoverOrphanRecordings(deps);
+    expect(deps.saveRecovered).toHaveBeenCalledTimes(2);
+    // Oldest-first: the two oldest are taken, the newest is deferred.
+    expect(deps.saveRecovered).toHaveBeenCalledWith('a-recording.webm', expect.anything(), 'a-recording.webm');
+    expect(deps.saveRecovered).toHaveBeenCalledWith('b-recording.webm', expect.anything(), 'b-recording.webm');
+  });
+
+  it('delivers raw bytes (skips the in-memory seal) for files above maxSealBytes', async () => {
+    const raw = blob(500);
+    const deps = makeDeps({ maxSealBytes: 100, openOpfsFile: jest.fn(async () => raw) });
+    await recoverOrphanRecordings(deps);
+    expect(deps.sealFile).not.toHaveBeenCalled();
+    expect(deps.saveRecovered).toHaveBeenCalledWith(NAME, raw, NAME);
+  });
+
+  it('still seals files at or below maxSealBytes', async () => {
+    const deps = makeDeps({ maxSealBytes: 1000, openOpfsFile: jest.fn(async () => blob(500)) });
+    await recoverOrphanRecordings(deps);
+    expect(deps.sealFile).toHaveBeenCalledTimes(1);
+  });
 });
