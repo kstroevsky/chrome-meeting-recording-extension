@@ -5,24 +5,33 @@
  * (or during a local save) — the case the Drive upload-resume (#1) does not
  * cover, because those files were never sealed and never got an upload marker.
  *
- * On launch we scan OPFS for leftover recording files that have no pending-upload
- * marker (those are #1's job), seal each one best-effort (the duration fix on a
- * truncated file still yields a valid partial duration; on failure we deliver
- * the raw bytes), and hand it to the existing local-save flow. That flow
- * downloads the file and — only on download success — removes it from OPFS, so a
- * failed recovery is retried on the next launch and orphans never accumulate
- * silently.
+ * On launch we scan OPFS for leftover recording files that (a) have no
+ * pending-upload marker (those are #1's job) and (b) predate this offscreen
+ * session — the cutoff. The cutoff is essential: the offscreen is created *for*
+ * a new recording, so without it the scan would race with — and clobber — the
+ * file that recording is actively writing. Files written by the current session
+ * are newer than the startup cutoff and are skipped.
+ *
+ * Each surviving orphan is sealed best-effort (the duration fix on a truncated
+ * file still yields a valid partial duration; on failure we deliver the raw
+ * bytes) and handed to the existing local-save flow, which downloads it and —
+ * only on download success — removes it from OPFS, so a failed recovery is
+ * retried next launch and orphans never accumulate silently.
  */
 
 import { describeRuntimeError } from '../errors';
 import { isRecordingFilename } from '../drive/folderNaming';
 import type { PendingUploadStore } from '../drive/PendingUploadStore';
 
+export type OrphanCandidate = { name: string; lastModifiedMs: number };
+
 export type OrphanRecoveryDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
-  /** OPFS file names that look like recording artifacts. */
-  listOrphanCandidates: () => Promise<string[]>;
+  /** Only recover files older than this (the offscreen session start time). */
+  cutoffMs: number;
+  /** OPFS recording files with their last-modified time. */
+  listOrphanCandidates: () => Promise<OrphanCandidate[]>;
   /** Names to skip because another path owns them (e.g. pending Drive uploads). */
   excludedNames: () => Promise<Set<string>>;
   /** Reads an OPFS file, or null when missing/unreadable. */
@@ -40,11 +49,13 @@ export async function recoverOrphanRecordings(deps: OrphanRecoveryDeps): Promise
     deps.listOrphanCandidates(),
     deps.excludedNames(),
   ]);
-  const orphans = candidates.filter((name) => !excluded.has(name));
+  const orphans = candidates.filter(
+    (candidate) => candidate.lastModifiedMs < deps.cutoffMs && !excluded.has(candidate.name)
+  );
   if (!orphans.length) return;
   deps.log(`Recovering ${orphans.length} orphaned recording file(s)`);
 
-  for (const name of orphans) {
+  for (const { name } of orphans) {
     try {
       const raw = await deps.openOpfsFile(name);
       if (!raw || raw.size === 0) {
@@ -68,25 +79,34 @@ export async function recoverOrphanRecordings(deps: OrphanRecoveryDeps): Promise
  * #1's files), and the offscreen's existing `requestSave` download path.
  */
 export function recoverOrphanRecordingsWithChrome(opts: {
+  cutoffMs: number;
   pendingUploads: PendingUploadStore;
   requestSave: (filename: string, blobUrl: string, opfsFilename?: string) => void;
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
 }): Promise<void> {
   return recoverOrphanRecordings({
+    cutoffMs: opts.cutoffMs,
     log: opts.log,
     warn: opts.warn,
     listOrphanCandidates: async () => {
-      const names: string[] = [];
+      const candidates: OrphanCandidate[] = [];
       try {
         const root = await navigator.storage.getDirectory();
         for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) {
-          if (isRecordingFilename(name)) names.push(name);
+          if (!isRecordingFilename(name)) continue;
+          try {
+            const handle = await root.getFileHandle(name);
+            const file = await handle.getFile();
+            candidates.push({ name, lastModifiedMs: file.lastModified });
+          } catch {
+            // Unreadable (e.g. locked by an active sync-access handle) -> skip.
+          }
         }
       } catch {
         /* OPFS unavailable */
       }
-      return names;
+      return candidates;
     },
     excludedNames: async () =>
       new Set((await opts.pendingUploads.list()).map((entry) => entry.opfsFilename)),

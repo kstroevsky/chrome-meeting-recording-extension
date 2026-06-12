@@ -14,6 +14,7 @@
  */
 
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
+import { hasLocalStorageArea } from './platform/chrome/storage';
 import { getBuildId } from './shared/build';
 import { makeLogger } from './shared/logger';
 import { sendToBackground } from './shared/messages';
@@ -188,12 +189,20 @@ const engine = new RecorderEngine({
 
 controller.attachServices(engine, finalizer);
 
+// Captured during synchronous module load — before any OFFSCREEN_START RPC can
+// create this session's recording files — so orphan recovery can tell a stale
+// file (older) from the recording about to start (newer).
+const offscreenStartedAtMs = Date.now();
+
 // Recover anything a previous crash/power-off left behind, before any new
 // recording starts. Sequential so the orphan scan sees the upload-resume domain
 // already resolved; gated on idle so we never touch an active recording's files.
 // Fire and forget — both are no-ops when nothing is pending.
 void (async () => {
   if (controller.currentPhase() !== 'idle') return;
+  // Recovery persists/reads markers via chrome.storage; skip in any host that
+  // lacks it (e.g. the e2e tab-capture runtime) rather than throwing.
+  if (!hasLocalStorageArea()) return;
   // #1: re-upload a Drive upload interrupted mid-flight (sealed, marked files).
   try {
     await resumePendingDriveUploadsWithChrome({
@@ -206,9 +215,13 @@ void (async () => {
     L.warn('Pending Drive upload recovery failed', describeRuntimeError(e));
   }
   // #2: recover orphaned recordings — unmarked OPFS files left by a crash during
-  // capture or local save — by sealing (best-effort) and downloading them.
+  // capture or local save — by sealing (best-effort) and downloading them. The
+  // cutoff is THIS offscreen's start time: since the offscreen is created for a
+  // new recording, the cutoff excludes that recording's own file (newer) so the
+  // scan can never clobber an actively-writing capture.
   try {
     await recoverOrphanRecordingsWithChrome({
+      cutoffMs: offscreenStartedAtMs,
       pendingUploads: pendingUploadStore,
       requestSave,
       log: L.log,
