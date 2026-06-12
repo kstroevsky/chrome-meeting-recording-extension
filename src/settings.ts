@@ -204,3 +204,12 @@ async function init(): Promise<void> {
 }
 
 void init();
+
+// E2E-only: expose crash-recovery entry points on `window` so a Playwright test
+// can drive them from this page (which has chrome.storage + OPFS, unlike the
+// e2e recorder tab). Gated on the compile-time build flag (not the runtime
+// helper) so webpack dead-code-eliminates the import — and its chunk — from
+// production builds entirely.
+if (typeof __E2E_MOCK_DRIVE_BUILD__ !== 'undefined' && __E2E_MOCK_DRIVE_BUILD__) {
+  void import('../tests/e2e/helpers/e2eRecoveryBridge').then((m) => m.installRecoveryTestBridge());
+}
