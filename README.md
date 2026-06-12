@@ -332,6 +332,7 @@ recordings, reports, and troubleshooting are in the
 | `identity` | Authenticate the user silently to write to Google Drive (Drive mode only) |
 | `host: meet.google.com/*` | Scope the content script to Google Meet pages |
 | `host: googleapis.com/*` | Allow Drive API requests during post-stop upload (Drive mode only) |
+| `system.cpu` | **Dev builds only** — system CPU% for the diagnostics dashboard; injected into the manifest only in development builds, never requested in production |
 
 ---
 
@@ -477,6 +478,7 @@ Files: `static/offscreen.html`, `src/offscreen.ts`, `src/offscreen/rpcHandlers.t
 - Runs `RecorderEngine`.
 - Streams chunks to a storage target during capture — by default an OPFS sync-access-handle Worker, so disk writes stay off the offscreen main thread.
 - Runs `RecordingFinalizer` after stop.
+- On startup (while idle), runs crash recovery — resumes interrupted Drive uploads and recovers orphaned recordings left by a previous crash (see [6.1 Resilience and crash recovery](#61-resilience-and-crash-recovery)).
 - Emits explicit runtime phase updates back to background: `starting`, `recording`, `stopping`, `uploading`, `failed`, `idle`.
 
 **Entrypoint decomposition:**
@@ -713,7 +715,7 @@ Result combinations:
 
 ### 5. Storage Targets (worker, OPFS, RAM)
 
-Files: `src/offscreen/storage/opfsWorker.ts`, `src/offscreen/storage/WorkerStorageTarget.ts`, `src/offscreen/storage/WriteBackpressure.ts`, `src/offscreen/LocalFileTarget.ts`, `src/offscreen/engine/RecorderEngineTypes.ts`
+Files: `src/offscreen/storage/opfsWorker.ts`, `src/offscreen/storage/WorkerStorageTarget.ts`, `src/offscreen/storage/WriteBackpressure.ts`, `src/offscreen/storage/FlushPolicy.ts`, `src/offscreen/LocalFileTarget.ts`, `src/offscreen/engine/RecorderEngineTypes.ts`
 
 This is the long-meeting safety mechanism. All three implement the same `StorageTarget` interface (`write(chunk)` / `close()`), tried in a fallback ladder: **`WorkerStorageTarget` ▸ `LocalFileTarget` ▸ `InMemoryStorageTarget`**.
 
@@ -735,6 +737,8 @@ This is the long-meeting safety mechanism. All three implement the same `Storage
 
 **Backpressure (F9):** `makeChunkHandler` wraps every write with `WriteBackpressure`, which tracks in-flight bytes/chunks. If the disk falls behind (>64 MB or >16 chunks queued) it raises a throttled `reportWarning` and a `write_backpressure` diagnostic, so a slow disk degrades to a visible warning instead of an unbounded RAM backlog.
 
+**Periodic flush (power-cut durability):** by default the worker only forces the OS page cache to disk on `close()`, so a hard power cut could lose everything still buffered. `FlushPolicy` (a time-based gate with an injectable clock) makes the worker `flush()` at most once per ~10 s of writes, bounding power-cut loss to roughly the last 10 seconds rather than the whole unflushed window. The flush runs in the worker thread, so it never blocks the offscreen main thread. (A browser/extension crash with the OS still alive was already safe — the page cache survives; this specifically hardens the hard-power-cut case.)
+
 ### 6. Recording Finalizer and Drive Upload
 
 Files:
@@ -747,6 +751,8 @@ Files:
 - `src/offscreen/drive/errors.ts`
 - `src/offscreen/drive/folderNaming.ts`
 - `src/offscreen/drive/constants.ts`
+- `src/offscreen/drive/PendingUploadStore.ts`
+- `src/offscreen/drive/resumePendingUploads.ts`
 
 `RecordingFinalizer` owns post-stop persistence.
 
@@ -754,7 +760,7 @@ Files:
 
 - create blob URLs for sealed artifacts
 - ask background to save them locally
-- background revokes blob URLs and optionally removes OPFS files later
+- background revokes the blob URL and removes the OPFS source **when the download actually completes** — gated on `chrome.downloads.onChanged` (via `awaitDownloadSettled`), not a blind timer, so a service worker that suspends right after a recording can't drop the cleanup and leak a correctly-saved file. An interrupted (or never-settling) download keeps its OPFS file so orphan recovery can reclaim it.
 
 **Drive mode:**
 
@@ -785,6 +791,31 @@ Files:
 - `drive/errors.ts` — parses Drive API error responses into typed error objects with human-readable detail.
 - `drive/folderNaming.ts` — derives the per-recording folder name from artifact filenames.
 - `drive/constants.ts` — upload endpoint URLs and chunk size constants.
+
+### 6.1 Resilience and crash recovery
+
+Files: `src/offscreen/drive/PendingUploadStore.ts`, `src/offscreen/drive/resumePendingUploads.ts`, `src/offscreen/storage/recoverOrphanRecordings.ts`, `src/offscreen/storage/FlushPolicy.ts`
+
+The recorder is designed so a recording is never silently lost. Each failure mode has a dedicated failsafe:
+
+| Failure | Failsafe |
+|---|---|
+| Slow disk — writes fall behind | **Backpressure (F9)** — throttled warning + diagnostic before RAM backs up (Component 5) |
+| OPFS target creation fails | **Storage fallback ladder** — `WorkerStorageTarget ▸ LocalFileTarget ▸ InMemoryStorageTarget` (Component 5) |
+| Hard power cut mid-recording | **Periodic OPFS flush** — `FlushPolicy` bounds loss to ~10 s (Component 5) |
+| Network drops during a Drive upload | **In-session retry/resume** — backoff + resume from the committed offset, else local download |
+| Crash / power-off **during** a Drive upload | **Resume-on-restart (#1)** — re-upload the interrupted file on next launch |
+| Crash / power-off **during** capture | **Orphan recovery (#2)** — seal and download the leftover OPFS file on next launch |
+
+**Continuous durable persistence (the foundation).** Chunks stream to OPFS every timeslice (~4 s), so a crash never loses more than the last few seconds of *bytes* — the recording is always on disk up to the most recent chunk. The mechanisms below turn those on-disk bytes back into a usable file.
+
+**In-session upload resilience (`DriveChunkUploader`).** Each resumable-upload chunk retries up to 5 times with exponential backoff. On a network error it asks Drive for the committed byte offset (`recoverFromCommittedState`, the resumable `Content-Range: bytes */total` protocol) and resumes from exactly there, never re-sending committed bytes. If retries are exhausted, the finalizer falls back to a **local download** of the sealed file. Net: no data loss — worst case the file lands in Downloads instead of Drive.
+
+**Resume-on-restart for interrupted uploads (#1).** When power is lost *during* an upload, the resumable session is gone but the sealed file is still in OPFS. `RecordingFinalizer` writes a per-file marker to `chrome.storage.local` (`PendingUploadStore`) before each upload and clears it once the upload settles, so a marker survives only a crash. On the next launch, `resumePendingDriveUploads` re-opens the raw OPFS file, re-runs the duration fix, and **uploads it fresh** through a new session — it deliberately does *not* splice onto the abandoned session, because the on-disk bytes are the raw, pre-duration-fix recording and a byte-offset resume would corrupt the file. It re-sends the file only in this rare crash case, in exchange for guaranteed correctness, and also covers a crash that happened before the upload even got a session.
+
+**Orphan recovery for interrupted recordings (#2).** A crash *during* capture leaves an unsealed OPFS file with no upload marker — which #1 ignores. On the next launch, `recoverOrphanRecordings` scans OPFS for leftover recording files (skipping any a pending-upload marker owns), seals each best-effort (the duration fix on a truncated file still yields a valid partial duration; on failure it delivers the raw bytes), and hands it to the existing local-save flow — which removes the OPFS file only on download success, so a failed recovery is retried next launch and orphans never accumulate. Recovery is **bounded** so even a pathological backlog (e.g. a run of crashes, or leftover test files) can't overwhelm startup: it handles at most 25 files per launch (oldest first — the remainder drains on later launches, and since each success deletes its file nothing is lost), and for very large files it skips the in-memory duration fix and delivers the raw, disk-backed bytes (a complete, playable WebM whose duration metadata may be unset until the first seek) rather than risk OOM-ing the offscreen. A **start-time cutoff** (only files older than this offscreen's start are eligible) guarantees the scan can never touch the file an in-progress recording is actively writing.
+
+**Where recovery runs.** Both passes fire-and-forget at offscreen startup — gated on the idle phase and the presence of `chrome.storage`, sequentially (#1 then #2) — and are no-ops when nothing is pending.
 
 ### 7. Popup Control Layer
 
@@ -961,6 +992,7 @@ Files:
 - `src/background/PerfDebugStore.ts`
 - `src/background/perf/PerfDebugReducers.ts`
 - `src/background/perf/PerfDebugState.ts`
+- `src/background/perf/CpuSampler.ts`
 - `src/debug/DebugDashboard.ts`
 - `src/debug/debugDashboardText.ts`
 - `src/debug/renderers/EventTableRenderer.ts`
@@ -986,6 +1018,9 @@ Files:
 - caption observer count
 - Drive chunk/file upload timings and retries
 - runtime memory, event loop lag, and long tasks
+- system CPU utilization (dev builds only)
+
+**System CPU (dev only):** `CpuSampler` derives a system-wide CPU% from `chrome.system.cpu` tick deltas, sampled by the background service worker on each runtime sample (no extra timer). The `"system.cpu"` permission is injected into the manifest **only for development builds** (see the webpack manifest transform), so production never requests it — `chrome.system.cpu` is undefined there and the sampler silently no-ops. The reading is system-wide (every process on the machine), so it is a coarse, directional load signal, not per-extension attribution.
 
 **Availability:** the dashboard is linked from the popup only in dev builds; it is meant for development and runtime diagnosis, not user-facing product state.
 
@@ -1934,7 +1969,8 @@ File: `static/manifest.json`
 - `oauth2.client_id` in source control is a placeholder.
 - Webpack injects the real value from `.env` / shell env key `GOOGLE_OAUTH_CLIENT_ID` into `dist/manifest.json` at build time.
 - If the env var is missing, build keeps the placeholder and logs a warning; Drive auth will fail until configured.
-- Source HTML shells and the source manifest live under `static/`, shared static assets (e.g. `gear.png`) live under `public/`, and both are copied to `dist/` at build time. The emitted extension layout in `dist/` is flat because Chrome requires entrypoints at the extension root.
+- The extension icon is declared by the top-level `icons` block and `action.default_icon` (sizes 16/32/48/128). The `icon16/32/48/128.png` set lives in `public/`; without it Chrome falls back to a generic grey placeholder for the toolbar button and the extensions menu.
+- Source HTML shells and the source manifest live under `static/`, shared static assets (the `icon*.png` set and the settings-page `gear.png`) live under `public/`, and both are copied to `dist/` at build time. The emitted extension layout in `dist/` is flat because Chrome requires entrypoints at the extension root.
 
 Extension entrypoints:
 
