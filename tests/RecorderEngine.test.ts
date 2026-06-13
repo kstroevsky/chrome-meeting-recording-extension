@@ -750,7 +750,7 @@ describe('openStorageTarget (RecorderTaskUtils)', () => {
     const artifact = await target.close();
 
     expect(deps.warn).toHaveBeenCalledWith(
-      'Failed to open storage target, falling back to RAM buffer',
+      'Failed to open storage target for recording, falling back to RAM buffer',
       expect.stringContaining('OPFS unavailable')
     );
     expect(artifact?.filename).toBe('test.webm');

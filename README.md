@@ -734,7 +734,7 @@ This is the long-meeting safety mechanism. All three implement the same `Storage
 **`InMemoryStorageTarget` (last resort, non-tab only)** — defined in `RecorderEngineTypes.ts`:
 
 - RAM-backed; used only when OPFS target creation fails entirely; accumulates `Blob` chunks and assembles a `File` on `close()`; `cleanup()` is a no-op
-- **The tab stream never degrades to RAM.** `openStorageTarget` fails it loudly instead — RAM-buffering the long, primary capture for a 2h+ meeting is the exact accumulate-then-OOM the storage layer exists to prevent, so an immediate, explainable start error is preferred over a predictable mid-meeting crash. Shorter/optional streams (mic, self-video) may still degrade to RAM, but the downgrade is now surfaced via `reportWarning` (not just a console `warn`) so the user can distinguish a degraded run from a healthy one.
+- **The required tab stream never degrades to RAM.** `openStorageTarget` fails it loudly instead — tab is the load-bearing artifact (`RecorderEngine.stop()` requires a tab track, and its start failure is the one not swallowed in `buildRecorderStartTasks`, so it aborts the whole session), so RAM-buffering it would spend the entire recording on a path that predictably OOMs partway through, with nothing to salvage. An immediate, explainable start error is preferred over a predictable mid-meeting crash. The **optional** streams (separate mic, self-video) still leave a useful recording if they drop, so they degrade to RAM rather than block an otherwise-fine session — and that downgrade is now surfaced via `reportWarning` (not just a console `warn`) so the user can distinguish a degraded run from a healthy one. (Mixed-mic mode has no separate target — the mic is folded into the tab stream via the audio graph — so only `separate` mic mode reaches this fallback.) **Caveat:** a RAM-buffered optional stream that grows unbounded can still OOM the shared offscreen document; the write-queue ceiling only catches a slow disk (pending, not-yet-written bytes), so a true RAM-size backstop is still owed (tracked separately).
 
 **Backpressure (F9):** `makeChunkHandler` wraps every write with `WriteBackpressure`, which tracks in-flight bytes/chunks in two stages. A **soft** breach (>64 MB or >16 chunks queued) raises a throttled `reportWarning` and a `write_backpressure` diagnostic, so a slow disk surfaces a visible warning. A **hard ceiling** (>256 MB unwritten) means the backlog is unrecoverable: it escalates once (`write_backpressure_ceiling`) to a **protective stop**, sealing the already-persisted prefix instead of growing the RAM queue toward an OOM crash. After the ceiling fires the tracker goes silent (a stop is already in flight).
 
@@ -1510,8 +1510,11 @@ flowchart LR
 The long-meeting safety mechanism. Chunks stream straight to OPFS so memory stays
 bounded (a real 22-min / 507 MB recording peaks at ~23 MB JS heap). By default writes
 go to an off-main-thread sync-access-handle worker; `makeChunkHandler` guards the queue
-with `WriteBackpressure`; and the target degrades worker ▸ main-thread OPFS ▸ . Two
-escalations bound the worst case: a >256 MB backlog or repeated write failures trigger a **protective stop** that seals the captured prefix instead of running a phantom REC.
+with `WriteBackpressure`; and the target degrades worker ▸ main-thread OPFS ▸ RAM (RAM only
+for the shorter mic/self-video streams — the tab stream fails loudly rather than RAM-buffer
+a multi-hour capture). Two escalations bound the worst case: a >256 MB backlog or repeated
+write failures trigger a **protective stop** that seals the captured prefix instead of
+running a phantom REC.
 
 ```mermaid
 flowchart TD
@@ -1524,7 +1527,7 @@ flowchart TD
     C --> D{"target type"}
     D -->|WorkerStorageTarget| WK["transfer ArrayBuffer to opfsWorker<br/>→ createSyncAccessHandle().write (off-thread)"]
     D -->|LocalFileTarget| E["serialize via writeChain promise<br/>→ OPFS FileSystemWritableFileStream"]
-D -->|InMemoryStorageTarget| F["push Blob into RAM array"]
+    D -->|"InMemoryStorageTarget<br/>(mic / self-video only)"| F["push Blob into RAM array"]
     WK --> G["bounded memory: chunk streamed to disk"]
     E --> G
     F --> G
@@ -1538,7 +1541,8 @@ D -->|InMemoryStorageTarget| F["push Blob into RAM array"]
     M --> N["SealedStorageFile<br/>{ filename, file, opfsFilename, durationFixed, cleanup() }"]
 
     WK -. create fails .-> E
-    O["OPFS create fails"] -.->|fallback| F
+    O{"OPFS create fails<br/>(openStorageTarget)"} -->|"tab (required)"| FAIL["fail loudly: reportWarning + throw<br/>→ abort recording (no RAM-buffer)"]
+    O -->|"separate mic / self-video<br/>(optional)"| F
 ```
 
 ---

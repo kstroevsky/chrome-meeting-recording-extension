@@ -33,20 +33,73 @@ export function buildRecordingFilename(slug: string, type: 'recording' | 'mic' |
   return `google-meet-${slugPart}${utcDatetimeStamp()}-${type}.webm`;
 }
 
-/** Opens the preferred storage target and falls back to RAM buffering on failure. */
+/**
+ * Whether a stream may degrade to a RAM buffer when disk storage can't open.
+ *
+ * Only the *required* tab stream fails loudly. It is the load-bearing artifact —
+ * `RecorderEngine.stop()` requires a tab track, and its start failure is the one
+ * not swallowed in `buildRecorderStartTasks`, so it aborts the whole session — so
+ * RAM-buffering it would spend the entire recording on a path that predictably
+ * OOMs partway through, with nothing to salvage. The *optional* streams (separate
+ * mic, self-video) still leave a useful recording if they drop, so they degrade
+ * to a surfaced RAM fallback rather than block an otherwise-fine session.
+ *
+ * NOTE: this only decides *whether to start*. A RAM-buffered stream that then
+ * grows unbounded can still OOM the shared offscreen document; the write-queue
+ * ceiling does NOT catch that (it tracks pending, not-yet-written bytes — RAM
+ * writes complete instantly), so a true RAM-size backstop is still owed.
+ */
+function streamAllowsRamFallback(stream?: RecordingStream): boolean {
+  return stream !== 'tab';
+}
+
+/** Surfaces a downgrade or, for the required tab stream, fails loudly instead of RAM-buffering. */
+function onStorageUnavailable(
+  filename: string,
+  mimeType: string,
+  deps: Pick<RecorderEngineDeps, 'warn' | 'reportWarning'>,
+  stream: RecordingStream | undefined,
+  error: unknown
+): StorageTarget {
+  const label = stream ?? 'recording';
+  if (!streamAllowsRamFallback(stream)) {
+    // Only the required tab stream reaches here; throwing aborts the recording.
+    const message =
+      `Couldn't open disk storage for the recording, so it was not started — recording in memory `
+      + `would risk running out of memory on a long meeting. Please retry.`;
+    deps.warn(`Storage target unavailable for ${label}; failing the recording`, describeMediaError(error));
+    deps.reportWarning?.(message);
+    throw new Error(message);
+  }
+  // Optional stream: degrade to RAM, but surface it (not just console) so the user
+  // can distinguish a degraded run from a healthy one and stop/restart if needed.
+  deps.warn(`Failed to open storage target for ${label}, falling back to RAM buffer`, describeMediaError(error));
+  deps.reportWarning?.(
+    `Couldn't open disk storage for the ${label} stream, so it is being buffered in memory. `
+    + `This is risky for long recordings — consider stopping and restarting.`
+  );
+  return new InMemoryStorageTarget(filename, mimeType);
+}
+
+/**
+ * Opens the preferred storage target. On failure the required tab stream fails
+ * loudly — an immediate, explainable failure beats RAM-buffering the whole session
+ * into a predictable mid-meeting OOM — while the optional streams (separate mic,
+ * self-video) fall back to a RAM buffer with a surfaced warning. The downgrade is
+ * never silent.
+ */
 export async function openStorageTarget(
   filename: string,
   mimeType: string,
-  deps: Pick<RecorderEngineDeps, 'warn' | 'openTarget'>,
+  deps: Pick<RecorderEngineDeps, 'warn' | 'reportWarning' | 'openTarget'>,
   stream?: RecordingStream
 ): Promise<StorageTarget> {
-  if (!deps.openTarget) return new InMemoryStorageTarget(filename, mimeType);
+  if (!deps.openTarget) return onStorageUnavailable(filename, mimeType, deps, stream, undefined);
 
   try {
     return await deps.openTarget(filename, stream);
   } catch (e) {
-    deps.warn('Failed to open storage target, falling back to RAM buffer', describeMediaError(e));
-    return new InMemoryStorageTarget(filename, mimeType);
+    return onStorageUnavailable(filename, mimeType, deps, stream, e);
   }
 }
 
