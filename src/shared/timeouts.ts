@@ -71,4 +71,20 @@ export const TIMEOUTS = {
    * immediately when ready — this is just the outer safety net.
    */
   READY_TIMEOUT_MS: 5_000,
+
+  /**
+   * Base budget for sealing an OPFS recording — closing the sync handle and
+   * running the in-worker WebM duration fix. A dead or silently-wedged worker
+   * never replies `sealed`, so `close()` races this budget and fails fast instead
+   * of hanging the whole stop in `stopping` forever. Generous on purpose: a false
+   * abort only costs a re-run of the duration fix on next launch (the on-disk
+   * bytes are already flushed and untouched by the read-only fix), never data.
+   */
+  SEAL_BASE_MS: 30_000,
+
+  /**
+   * Extra seal budget per MB written, so a legitimately-slow-but-progressing seal
+   * of a multi-GB file on a slow disk is not falsely aborted (~10 MB/s floor).
+   */
+  SEAL_MS_PER_MB: 100,
 } as const;

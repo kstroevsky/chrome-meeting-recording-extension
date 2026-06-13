@@ -708,6 +708,7 @@ This is the long-meeting safety mechanism. All three implement the same `Storage
 - spawns `opfsWorker.js`, which opens the file via `createSyncAccessHandle()` and appends each chunk synchronously, in place, off the offscreen main thread
 - each chunk's `ArrayBuffer` is transferred (zero-copy) to the worker; writes serialize so they can't reorder past `close()`
 - on `close()` the worker also runs the WebM duration fix (`webm-duration-fix`) in-thread, so the parse never touches the offscreen main thread, and returns the sealed `File`
+- `close()` is **hang-proof**: if the worker already failed it fails fast (no `close` posted to a dead worker), and the seal wait is bounded by a size-scaled budget (`TIMEOUTS.SEAL_BASE_MS` + per-MB) so a dead/silently-wedged worker can't leave the stop pipeline stuck in `stopping` forever. On timeout `close()` rejects, the worker is terminated, and — because the duration fix is read-only (the bytes are already flushed and the sync handle closed) — the raw recording is left on disk for orphan recovery rather than lost; a false timeout only costs a re-run of the fix next launch
 - gated by the `opfsWorkerStorage` perf flag (default on); `create()` doubles as the capability probe — if `Worker`/`createSyncAccessHandle` is unavailable it rejects and the factory falls back
 
 **`LocalFileTarget` (fallback)** — main-thread OPFS via `createWritable()`:
@@ -1490,7 +1491,9 @@ flowchart TD
     G -.->|repeat per chunk| B
 
     H["stop() → recorder.onstop"] --> I["target.close()"]
-    I --> J{"bytes written > 0?"}
+    I --> SC{"worker alive &<br/>seal within size-scaled budget?"}
+    SC -->|"no: dead/wedged"| SF["reject + terminate worker<br/>(OPFS bytes kept → orphan recovery)"]
+    SC -->|yes| J{"bytes written > 0?"}
     J -->|no| K["discard temp file → artifact = null"]
     J -->|yes| L["seal File handle"]
     L --> M["webm-duration-fix (in worker for WorkerStorageTarget,<br/>else dynamic-imported on main thread)"]

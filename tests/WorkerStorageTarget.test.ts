@@ -4,7 +4,9 @@
  * exercised end-to-end without a real Worker or OPFS (mirrors LocalFileTarget.test).
  */
 
-type Behavior = 'normal' | 'openError' | 'writeError';
+import { TIMEOUTS } from '../src/shared/timeouts';
+
+type Behavior = 'normal' | 'openError' | 'writeError' | 'sealHang';
 
 /**
  * jsdom's Blob has no arrayBuffer(); real MediaRecorder chunks in the offscreen
@@ -62,6 +64,7 @@ class FakeWorker {
           this.emit({ type: 'written', seq: msg.seq, bytes });
         }
       } else if (msg.type === 'close') {
+        if (FakeWorker.behavior === 'sealHang') return; // wedged: never reply 'sealed'
         const file = this.bytes > 0 ? new File([new Uint8Array(this.bytes)], 'seal', { type: 'video/webm' }) : null;
         // The worker runs the duration fix in-thread before sealing.
         this.emit({ type: 'sealed', file, bytes: this.bytes, durationFixed: this.bytes > 0 });
@@ -161,5 +164,37 @@ describe('WorkerStorageTarget', () => {
     const target = await WorkerStorageTarget.create('rec.webm');
     await target.close();
     await expect(target.write(new Blob(['x']))).rejects.toThrow(/closed/);
+  });
+
+  it('fails close() fast when the worker already failed, without awaiting a seal', async () => {
+    const target = await WorkerStorageTarget.create('rec.webm');
+    FakeWorker.behavior = 'writeError';
+    await expect(target.write(chunk('x'))).rejects.toThrow(/write failed/);
+
+    // The worker is in a failed state; close() must not post a 'close' it can never
+    // be answered, nor hang waiting for a 'sealed' reply — it fails fast + terminates.
+    await expect(target.close()).rejects.toThrow(/write failed/);
+    const worker = FakeWorker.instances[0];
+    expect(worker.terminated).toBe(true);
+    expect(worker.posted.some((m) => m.type === 'close')).toBe(false);
+  });
+
+  it('times out a wedged seal instead of hanging close() forever', async () => {
+    // Set up with real timers (create/write rely on microtask replies), then fake
+    // only the seal wait so the size-scaled budget can be advanced deterministically.
+    const target = await WorkerStorageTarget.create('rec.webm');
+    await target.write(chunk('abc'));
+    FakeWorker.behavior = 'sealHang';
+
+    jest.useFakeTimers();
+    try {
+      const closePromise = target.close();
+      closePromise.catch(() => {}); // avoid an unhandled rejection while advancing
+      await jest.advanceTimersByTimeAsync(TIMEOUTS.SEAL_BASE_MS + 5_000);
+      await expect(closePromise).rejects.toThrow(/timed out/);
+      expect(FakeWorker.instances[0].terminated).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

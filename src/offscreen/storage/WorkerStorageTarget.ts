@@ -12,6 +12,7 @@
 import type { SealedStorageFile, StorageTarget } from '../engine/RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
 import { debugPerf, nowMs, roundMs } from '../../shared/perf';
+import { TIMEOUTS } from '../../shared/timeouts';
 
 type SealResult = { file: File | null; durationFixed: boolean };
 
@@ -131,11 +132,11 @@ export class WorkerStorageTarget implements StorageTarget {
     let file: File | null = null;
     let durationFixed = false;
     try {
-      const result = await new Promise<SealResult>((resolve, reject) => {
-        this.settleSeal = resolve;
-        this.rejectSeal = reject;
-        this.worker.postMessage({ type: 'close' });
-      });
+      // If the worker already failed (e.g. crashed before close), don't post a
+      // 'close' it can never answer — fail fast so the stop pipeline above doesn't
+      // hang in 'stopping' forever waiting for a 'sealed' reply that won't come.
+      if (this.failure) throw this.failure;
+      const result = await this.awaitSeal();
       file = result.file;
       durationFixed = result.durationFixed;
     } catch (error) {
@@ -176,6 +177,30 @@ export class WorkerStorageTarget implements StorageTarget {
       },
     };
     return this.sealed;
+  }
+
+  /**
+   * Posts the seal request and waits for the worker's `sealed` reply, bounded by a
+   * size-scaled budget. A dead or silently-wedged worker never replies, so without
+   * this the await — and the whole stop pipeline above it — would hang in
+   * `stopping` forever. On timeout we reject; `close()` then terminates the worker
+   * and rethrows. That is corruption-safe: the OPFS bytes were already flushed and
+   * the sync handle closed before the (read-only) duration fix runs, so the raw
+   * recording survives and is recovered on next launch rather than lost.
+   */
+  private awaitSeal(): Promise<SealResult> {
+    const budgetMs = TIMEOUTS.SEAL_BASE_MS
+      + (this.writtenBytes / (1024 * 1024)) * TIMEOUTS.SEAL_MS_PER_MB;
+    return new Promise<SealResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.settleSeal = null;
+        this.rejectSeal = null;
+        reject(new Error(`opfsWorker seal timed out after ${Math.round(budgetMs)} ms`));
+      }, budgetMs);
+      this.settleSeal = (result) => { clearTimeout(timer); resolve(result); };
+      this.rejectSeal = (error) => { clearTimeout(timer); reject(error); };
+      this.worker.postMessage({ type: 'close' });
+    });
   }
 
   private discardInternal(): Promise<void> {
