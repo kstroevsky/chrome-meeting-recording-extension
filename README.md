@@ -18,7 +18,7 @@ Everything happens in your browser. Capture is **local-first**: recording data s
 
 **Tab recorder** — captures the Google Meet tab (video + system audio) into a `.webm` via `MediaRecorder`. The selected resolution preset is requested as the tab-capture ceiling; the final file reflects the stream Chrome actually delivers.
 
-**Direct-to-disk streaming** — recording chunks stream continuously to OPFS during capture, keeping memory bounded to a 5 MB working buffer. This prevents memory crashes on 2-hour+ meetings. Drive uploads happen after stop, not during capture.
+**Direct-to-disk streaming** — recording chunks stream continuously to OPFS during capture, keeping memory bounded to a small working buffer under normal disk throughput. If storage falls behind, a soft warning fires first and a hard ceiling triggers a protective stop that seals what was captured, so memory stays bounded even on a slow or failing disk. This prevents memory crashes on 2-hour+ meetings. Drive uploads happen after stop, not during capture.
 
 **Explicit microphone modes** — three options per run:
 
@@ -731,11 +731,14 @@ This is the long-meeting safety mechanism. All three implement the same `Storage
 - create a temp file in OPFS, serialize chunk writes through a promise chain, close and seal, expose `cleanup()`
 - the duration fix runs on the main thread here (dynamic-imported `webm-duration-fix`, so it stays out of the offscreen bundle)
 
-**`InMemoryStorageTarget` (last resort)** — defined in `RecorderEngineTypes.ts`:
+**`InMemoryStorageTarget` (last resort, non-tab only)** — defined in `RecorderEngineTypes.ts`:
 
 - RAM-backed; used only when OPFS target creation fails entirely; accumulates `Blob` chunks and assembles a `File` on `close()`; `cleanup()` is a no-op
+- **The tab stream never degrades to RAM.** `openStorageTarget` fails it loudly instead — RAM-buffering the long, primary capture for a 2h+ meeting is the exact accumulate-then-OOM the storage layer exists to prevent, so an immediate, explainable start error is preferred over a predictable mid-meeting crash. Shorter/optional streams (mic, self-video) may still degrade to RAM, but the downgrade is now surfaced via `reportWarning` (not just a console `warn`) so the user can distinguish a degraded run from a healthy one.
 
-**Backpressure (F9):** `makeChunkHandler` wraps every write with `WriteBackpressure`, which tracks in-flight bytes/chunks. If the disk falls behind (>64 MB or >16 chunks queued) it raises a throttled `reportWarning` and a `write_backpressure` diagnostic, so a slow disk degrades to a visible warning instead of an unbounded RAM backlog.
+**Backpressure (F9):** `makeChunkHandler` wraps every write with `WriteBackpressure`, which tracks in-flight bytes/chunks in two stages. A **soft** breach (>64 MB or >16 chunks queued) raises a throttled `reportWarning` and a `write_backpressure` diagnostic, so a slow disk surfaces a visible warning. A **hard ceiling** (>256 MB unwritten) means the backlog is unrecoverable: it escalates once (`write_backpressure_ceiling`) to a **protective stop**, sealing the already-persisted prefix instead of growing the RAM queue toward an OOM crash. After the ceiling fires the tracker goes silent (a stop is already in flight).
+
+**Storage-failure escalation (silent-REC guard):** a write rejection is not just logged — `makeChunkHandler` counts *consecutive* rejections (a successful write resets the streak). Past `MAX_CONSECUTIVE_WRITE_FAILURES` (3; ~12 s at the tab cadence) it triggers the same protective stop. This closes the case where the OPFS worker dies mid-session, `WorkerStorageTarget` rejects every subsequent write, yet the badge still reads REC with nothing reaching disk. Both escalations call `requestProtectiveStop`, wired in `offscreen.ts` to `OffscreenController.finalize()` — the **same** seal→deliver pipeline a user/background stop uses, so the captured prefix is uploaded/saved (not dropped). The engine de-dupes the stop across streams; the still-persisted prefix is also recoverable via orphan recovery if delivery can't complete in-session.
 
 **Periodic flush (power-cut durability):** by default the worker only forces the OS page cache to disk on `close()`, so a hard power cut could lose everything still buffered. `FlushPolicy` (a time-based gate with an injectable clock) makes the worker `flush()` at most once per ~10 s of writes, bounding power-cut loss to roughly the last 10 seconds rather than the whole unflushed window. The flush runs in the worker thread, so it never blocks the offscreen main thread. (A browser/extension crash with the OS still alive was already safe — the page cache survives; this specifically hardens the hard-power-cut case.)
 
@@ -1507,7 +1510,8 @@ flowchart LR
 The long-meeting safety mechanism. Chunks stream straight to OPFS so memory stays
 bounded (a real 22-min / 507 MB recording peaks at ~23 MB JS heap). By default writes
 go to an off-main-thread sync-access-handle worker; `makeChunkHandler` guards the queue
-with `WriteBackpressure`; and the target degrades worker ▸ main-thread OPFS ▸ RAM.
+with `WriteBackpressure`; and the target degrades worker ▸ main-thread OPFS ▸ . Two
+escalations bound the worst case: a >256 MB backlog or repeated write failures trigger a **protective stop** that seals the captured prefix instead of running a phantom REC.
 
 ```mermaid
 flowchart TD
@@ -1515,10 +1519,12 @@ flowchart TD
     B --> C["makeChunkHandler → WriteBackpressure.enqueue<br/>+ target.write(chunk)"]
     C --> BP{"pending > 64MB / 16 chunks?"}
     BP -->|yes| W["reportWarning + write_backpressure event<br/>(throttled)"]
+    C --> HC{"pending > 256MB<br/>or 3+ consecutive write failures?"}
+    HC -->|yes| PS["requestProtectiveStop →<br/>OffscreenController.finalize()<br/>(seal + deliver prefix)"]
     C --> D{"target type"}
     D -->|WorkerStorageTarget| WK["transfer ArrayBuffer to opfsWorker<br/>→ createSyncAccessHandle().write (off-thread)"]
     D -->|LocalFileTarget| E["serialize via writeChain promise<br/>→ OPFS FileSystemWritableFileStream"]
-    D -->|InMemoryStorageTarget| F["push Blob into RAM array"]
+D -->|InMemoryStorageTarget| F["push Blob into RAM array"]
     WK --> G["bounded memory: chunk streamed to disk"]
     E --> G
     F --> G
