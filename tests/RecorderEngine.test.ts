@@ -400,6 +400,57 @@ describe('RecorderEngine', () => {
     expect(selfVideoTrack.stop).toHaveBeenCalledTimes(1);
   });
 
+  it('stops only the offending optional stream when its RAM buffer overflows, and keeps recording the tab', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const selfVideoTrack = makeTrack('video', { width: 1280, height: 720, frameRate: 30 });
+    const selfVideoStream = makeStream({ videoTracks: [selfVideoTrack] });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.video && constraints.audio === false) return selfVideoStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    // OPFS opens for tab but fails for self-video, forcing self-video onto a RAM buffer.
+    deps.openTarget = jest.fn(async (filename: string, stream?: string) => {
+      if (stream === 'self-video') throw new Error('OPFS unavailable');
+      return new BufferedTarget(filename, 'video/webm');
+    });
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ recordSelfVideo: true }));
+    await flushAsyncWork();
+
+    const tabRecorder = FakeMediaRecorder.instances.find((i) => i.kind === 'tab');
+    const selfVideoRecorder = FakeMediaRecorder.instances.find((i) => i.kind === 'self-video');
+    expect(tabRecorder).toBeDefined();
+    expect(selfVideoRecorder).toBeDefined();
+
+    // Fill the self-video RAM buffer past its 512 MB cap with 60 MB chunks — each
+    // stays under the 64 MB soft-warn and 256 MB hard-ceiling pending thresholds,
+    // and draining between writes keeps only one in flight, so the RAM-size cap is
+    // the only backstop that trips (not the slow-disk backpressure escalation).
+    for (let i = 0; i < 9; i++) {
+      selfVideoRecorder!.ondataavailable?.(
+        { data: { size: 60 * 1024 * 1024, type: 'video/webm' } } as unknown as BlobEvent
+      );
+      await flushAsyncWork();
+    }
+
+    // Only the self-video recorder was stopped; the required tab stream keeps running.
+    expect(selfVideoRecorder!.stop).toHaveBeenCalledTimes(1);
+    expect(tabRecorder!.stop).not.toHaveBeenCalled();
+    expect(selfVideoTrack.stop).toHaveBeenCalledTimes(1); // camera source released
+    expect(engine.isRecording()).toBe(true);
+    expect(deps.reportWarning).toHaveBeenCalledWith(expect.stringMatching(/stopping just this stream/));
+
+    // The partial self-video artifact is still delivered at the eventual session stop.
+    const artifacts = await engine.stop();
+    expect(artifacts.map((a: { stream: string }) => a.stream).sort()).toEqual(['self-video', 'tab']);
+  });
+
   it('mixes microphone audio into the tab recording when micMode=mixed', async () => {
     const createMediaStreamSource = jest.fn().mockReturnValue({ connect: jest.fn() });
     const mixedAudioTrack = makeTrack('audio');

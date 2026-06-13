@@ -45,9 +45,11 @@ export function buildRecordingFilename(slug: string, type: 'recording' | 'mic' |
  * to a surfaced RAM fallback rather than block an otherwise-fine session.
  *
  * NOTE: this only decides *whether to start*. A RAM-buffered stream that then
- * grows unbounded can still OOM the shared offscreen document; the write-queue
- * ceiling does NOT catch that (it tracks pending, not-yet-written bytes — RAM
- * writes complete instantly), so a true RAM-size backstop is still owed.
+ * grows unbounded is bounded separately by {@link InMemoryStorageTarget}'s
+ * byte cap, which escalates via `requestStopStream` (see `onStorageUnavailable`).
+ * The write-queue ceiling does NOT catch RAM growth — it tracks pending,
+ * not-yet-written bytes, and RAM writes complete instantly — so the two are
+ * distinct backstops for distinct leaks (slow disk vs. runaway RAM buffer).
  */
 function streamAllowsRamFallback(stream?: RecordingStream): boolean {
   return stream !== 'tab';
@@ -57,7 +59,7 @@ function streamAllowsRamFallback(stream?: RecordingStream): boolean {
 function onStorageUnavailable(
   filename: string,
   mimeType: string,
-  deps: Pick<RecorderEngineDeps, 'warn' | 'reportWarning'>,
+  deps: Pick<RecorderEngineDeps, 'warn' | 'reportWarning' | 'requestStopStream'>,
   stream: RecordingStream | undefined,
   error: unknown
 ): StorageTarget {
@@ -72,13 +74,25 @@ function onStorageUnavailable(
     throw new Error(message);
   }
   // Optional stream: degrade to RAM, but surface it (not just console) so the user
-  // can distinguish a degraded run from a healthy one and stop/restart if needed.
+  // can distinguish a degraded run from a healthy one — and cap it. A RAM buffer
+  // has no on-disk file for orphan recovery and grows toward an OOM of the shared
+  // offscreen document, so past the cap we stop just this stream (sealing its
+  // partial artifact) rather than let it take the tab recording down with it.
   deps.warn(`Failed to open storage target for ${label}, falling back to RAM buffer`, describeMediaError(error));
   deps.reportWarning?.(
     `Couldn't open disk storage for the ${label} stream, so it is being buffered in memory. `
     + `This is risky for long recordings — consider stopping and restarting.`
   );
-  return new InMemoryStorageTarget(filename, mimeType);
+  return new InMemoryStorageTarget(filename, mimeType, {
+    onOverflow: (bufferedBytes) => {
+      deps.reportWarning?.(
+        `The ${label} stream has buffered ${Math.round(bufferedBytes / 1024 / 1024)} MB in memory `
+        + `(disk storage was unavailable); stopping just this stream to protect the recording. `
+        + `The meeting itself keeps recording.`
+      );
+      if (stream) deps.requestStopStream?.(stream);
+    },
+  });
 }
 
 /**
@@ -86,12 +100,12 @@ function onStorageUnavailable(
  * loudly — an immediate, explainable failure beats RAM-buffering the whole session
  * into a predictable mid-meeting OOM — while the optional streams (separate mic,
  * self-video) fall back to a RAM buffer with a surfaced warning. The downgrade is
- * never silent.
+ * never silent, and the RAM buffer is byte-capped (see `onStorageUnavailable`).
  */
 export async function openStorageTarget(
   filename: string,
   mimeType: string,
-  deps: Pick<RecorderEngineDeps, 'warn' | 'reportWarning' | 'openTarget'>,
+  deps: Pick<RecorderEngineDeps, 'warn' | 'reportWarning' | 'openTarget' | 'requestStopStream'>,
   stream?: RecordingStream
 ): Promise<StorageTarget> {
   if (!deps.openTarget) return onStorageUnavailable(filename, mimeType, deps, stream, undefined);

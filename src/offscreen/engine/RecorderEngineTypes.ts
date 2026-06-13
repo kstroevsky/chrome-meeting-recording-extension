@@ -55,22 +55,63 @@ export type RecorderEngineDeps = {
    * emitted via {@link reportWarning} at the call site).
    */
   requestProtectiveStop?: (reason: string) => void;
+  /**
+   * Stops a single *optional* stream (separate mic / self-video) without ending
+   * the session. The engine binds this to itself; it is the RAM-buffer backstop's
+   * escalation path — when an optional stream that fell back to RAM grows past its
+   * cap, stopping just that stream seals its partial artifact and frees the buffer
+   * while the required tab recording keeps running. Never used for `tab`.
+   */
+  requestStopStream?: (stream: RecordingStream) => void;
+};
+
+/**
+ * Cap on bytes an {@link InMemoryStorageTarget} may accumulate before it escalates.
+ * A RAM buffer is uncapped by nature, leaves nothing on disk for orphan recovery,
+ * and lives in the shared offscreen document — so an unbounded one is both
+ * genuinely-lost data and an OOM that can take the healthy tab recorder down with
+ * it. 512 MB is well under a typical offscreen heap; at the 3 Mbps self-video
+ * default that is ~22 min of camera before the stream is stopped and sealed.
+ */
+export const DEFAULT_MAX_RAM_BUFFER_BYTES = 512 * 1024 * 1024;
+
+export type InMemoryStorageTargetOptions = {
+  /** Byte ceiling after which {@link InMemoryStorageTargetOptions.onOverflow} fires once. */
+  maxBufferedBytes?: number;
+  /** Called once, with the buffered byte total, when the cap is crossed. */
+  onOverflow?: (bufferedBytes: number) => void;
 };
 
 /** RAM-backed fallback target used when OPFS is unavailable for a stream. */
 export class InMemoryStorageTarget implements StorageTarget {
   private readonly chunks: Blob[] = [];
   private closed = false;
+  private bufferedBytes = 0;
+  private overflowed = false;
+  private readonly maxBufferedBytes: number;
+  private readonly onOverflow?: (bufferedBytes: number) => void;
 
   /** Stores filename and MIME so a final File can be assembled on close. */
   constructor(
     private readonly filename: string,
     private readonly mimeType: string,
-  ) {}
+    options: InMemoryStorageTargetOptions = {},
+  ) {
+    this.maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_RAM_BUFFER_BYTES;
+    this.onOverflow = options.onOverflow;
+  }
 
   async write(chunk: Blob): Promise<void> {
     if (this.closed) throw new Error('In-memory target is closed');
     this.chunks.push(chunk);
+    this.bufferedBytes += chunk.size;
+    // Unlike OPFS, a RAM buffer has no on-disk file for orphan recovery and grows
+    // unbounded toward an OOM of the shared offscreen document. Escalate exactly
+    // once when it crosses the cap so the caller can stop+seal this stream.
+    if (!this.overflowed && this.bufferedBytes > this.maxBufferedBytes) {
+      this.overflowed = true;
+      this.onOverflow?.(this.bufferedBytes);
+    }
   }
 
   /** Seals buffered chunks into a File artifact for downstream finalization. */

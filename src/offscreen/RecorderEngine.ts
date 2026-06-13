@@ -65,6 +65,11 @@ export class RecorderEngine {
 
   constructor(deps: RecorderEngineDeps) {
     this.deps = deps;
+    // Bind the per-stream stop onto our (live) deps so sub-components — e.g. a
+    // RAM-buffer target that overflowed — can stop just their own optional stream
+    // without a reference to the engine. Set the property in place rather than
+    // copying, so deps the caller assigns later (e.g. openTarget) stay visible.
+    this.deps.requestStopStream = (stream) => this.stopStream(stream);
   }
 
   isRecording(): boolean {
@@ -237,6 +242,27 @@ export class RecorderEngine {
       track.stopStream?.();
       try { track.recorder.stop(); } catch (e) { this.deps.error(`${track.stream} stop error`, describeMediaError(e)); }
     }
+  }
+
+  /**
+   * Stops a single *optional* stream without ending the session. The stopped
+   * recorder's `onstop` seals its partial artifact and `onTrackStopped` removes
+   * the track and decrements `activeRecorders` — which stays above zero while the
+   * required tab stream runs, so the session keeps recording and the partial
+   * artifact is delivered at the eventual session stop. Used by the RAM-buffer
+   * backstop. The tab stream is never stopped this way (its storage failure is
+   * handled by failing the start, and the RAM cap never applies to it).
+   */
+  private stopStream(stream: RecordingStream) {
+    if (stream === 'tab') return;
+    const track = this.tracks.find((t) => t.stream === stream);
+    if (!track) return;
+    this.deps.warn(`Stopping ${stream} stream early to bound its in-memory buffer`);
+    track.stopStream?.();
+    // Separate mic owns no `stopStream`; release its source here so the mic device
+    // is freed when the recorder stops mid-session (mixed mic has no own target).
+    if (stream === 'mic') this.safeStopStream(this.micStream);
+    try { track.recorder.stop(); } catch (e) { this.deps.error(`${stream} stop error`, describeMediaError(e)); }
   }
 
   /** Adds a started recorder to the active track set. */

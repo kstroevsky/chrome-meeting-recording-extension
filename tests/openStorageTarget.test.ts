@@ -1,6 +1,9 @@
 import { openStorageTarget } from '../src/offscreen/engine/RecorderTaskUtils';
 import { InMemoryStorageTarget } from '../src/offscreen/engine/RecorderEngineTypes';
 
+/** A fake oversized chunk: write() only reads `.size`, so no real allocation. */
+const sizedChunk = (bytes: number) => ({ size: bytes }) as unknown as Blob;
+
 describe('openStorageTarget (storage fallback ladder)', () => {
   it('buffers in RAM when no storage-target factory is provided', async () => {
     const target = await openStorageTarget('rec.webm', 'video/webm', { warn: jest.fn() });
@@ -67,5 +70,53 @@ describe('openStorageTarget (storage fallback ladder)', () => {
     expect(target).toBeInstanceOf(InMemoryStorageTarget);
     expect(reportWarning).toHaveBeenCalledTimes(1);
     expect(reportWarning.mock.calls[0][0]).toMatch(/buffered in memory/);
+  });
+
+  it('caps the optional-stream RAM buffer and stops just that stream on overflow', async () => {
+    const warn = jest.fn();
+    const reportWarning = jest.fn();
+    const requestStopStream = jest.fn();
+    const openTarget = jest.fn().mockRejectedValue(new Error('OPFS unavailable'));
+
+    const target = await openStorageTarget(
+      'cam.webm', 'video/webm', { warn, reportWarning, openTarget, requestStopStream }, 'self-video'
+    );
+    expect(target).toBeInstanceOf(InMemoryStorageTarget);
+
+    // Under the 512 MB default cap: no escalation.
+    await target.write(sizedChunk(10 * 1024 * 1024));
+    expect(requestStopStream).not.toHaveBeenCalled();
+
+    // Crossing the cap stops just this stream (not the whole session).
+    await target.write(sizedChunk(600 * 1024 * 1024));
+    expect(requestStopStream).toHaveBeenCalledWith('self-video');
+    expect(reportWarning).toHaveBeenCalledWith(expect.stringMatching(/stopping just this stream/));
+
+    // Idempotent: a further oversized write does not re-escalate.
+    await target.write(sizedChunk(600 * 1024 * 1024));
+    expect(requestStopStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('InMemoryStorageTarget RAM cap', () => {
+  it('fires onOverflow exactly once when buffered bytes cross the cap', async () => {
+    const onOverflow = jest.fn();
+    const target = new InMemoryStorageTarget('x.webm', 'video/webm', { maxBufferedBytes: 1000, onOverflow });
+
+    await target.write(sizedChunk(600));
+    expect(onOverflow).not.toHaveBeenCalled(); // 600 <= 1000
+    await target.write(sizedChunk(600));        // 1200 > 1000
+    expect(onOverflow).toHaveBeenCalledTimes(1);
+    expect(onOverflow).toHaveBeenCalledWith(1200);
+    await target.write(sizedChunk(600));        // still over, fires only once
+    expect(onOverflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('never fires onOverflow while under the cap', async () => {
+    const onOverflow = jest.fn();
+    const target = new InMemoryStorageTarget('x.webm', 'video/webm', { maxBufferedBytes: 10_000, onOverflow });
+    await target.write(sizedChunk(1000));
+    await target.write(sizedChunk(1000));
+    expect(onOverflow).not.toHaveBeenCalled();
   });
 });
