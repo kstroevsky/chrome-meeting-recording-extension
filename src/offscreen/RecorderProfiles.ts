@@ -141,12 +141,16 @@ export function getAudioMime(): string {
 }
 
 /**
- * Returns the recorder timeslice for one stream.
+ * Returns the recorder timeslice — the `MediaRecorder.start(timeslice)` cadence
+ * at which `ondataavailable` fires a chunk — for one stream.
  *
- * Reliability rule: keep the main tab recorder on the shorter cadence so more
- * data is persisted sooner. The secondary self-video recorder can safely use
- * the longer cadence to reduce OPFS write churn. The mic recorder stays on the
- * shorter cadence unless the perf flag explicitly opts into larger chunks.
+ * The tab and self-video recorders use the **extended** (longer) cadence: fewer,
+ * larger OPFS writes cut write churn and per-chunk overhead. The durability cost
+ * is bounded and paid elsewhere — a browser/extension crash loses at most one
+ * timeslice of still-unflushed MediaRecorder buffer, and a hard power-cut is
+ * dominated by the ~10 s `FlushPolicy` window regardless. The mic recorder stays
+ * on the **shorter** default cadence unless the `extendedTimeslice` perf flag
+ * explicitly opts it into larger chunks too.
  */
 export function getChunkTimesliceMs(
   stream: RecorderChunkStream,

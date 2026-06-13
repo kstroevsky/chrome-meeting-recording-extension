@@ -82,8 +82,7 @@ State persistence:  chrome.storage.session → RecordingSessionSnapshot + perf s
 - **Node.js 18+** and **npm** to build the extension.
 - **FFmpeg and FFprobe** for performance E2E artifact analysis.
 
-The extension requests the following Chrome permissions:
-`activeTab`, `downloads`, `tabCapture`, `offscreen`, `storage`, `tabs`, `desktopCapture`
+The extension requests the following Chrome permissions: `activeTab`, `downloads`, `tabCapture`, `offscreen`, `storage`, `tabs`, `desktopCapture`
 
 Drive mode additionally requires: `identity` and host access to `https://www.googleapis.com/*`.
 
@@ -259,35 +258,21 @@ Drive mode requires a **Chrome Extension** OAuth 2.0 client. A Desktop or Web cl
 
 Two end-to-end testing scenarios exist:
 
-- **Scenario A** — the deterministic mocked-Meet Playwright suite and CI gate:
-  functional tests, the performance matrix, mocked Drive, media analysis, and the
-  physical camera/microphone tier. See the
-  [Scenario A guide](docs/testing-scenario-a.md).
-- **Scenario B** — manual real Google Meet calibration in stable Chrome with a
-  signed-in account, real `chrome.tabCapture`, and real devices. See the
-  [Scenario B guide](docs/testing-scenario-b.md).
+- **Scenario A** — the deterministic mocked-Meet Playwright suite and CI gate: functional tests, the performance matrix, mocked Drive, media analysis, and the physical camera/microphone tier. See the [Scenario A guide](docs/testing-scenario-a.md).
+- **Scenario B** — manual real Google Meet calibration in stable Chrome with a signed-in account, real `chrome.tabCapture`, and real devices. See the [Scenario B guide](docs/testing-scenario-b.md).
 
 ### Real Google Meet (Scenario B)
 
-Scenario B drives the **real** production Meet in stable Chrome with a signed-in
-account, real `chrome.tabCapture`, and the real camera/microphone used
-concurrently by Meet and the extension. It is a manual, headed tier — a host
-admits the test account — and is **not** a CI gate.
+Scenario B drives the **real** production Meet in stable Chrome with a signed-in account, real `chrome.tabCapture`, and the real camera/microphone used concurrently by Meet and the extension. It is a manual, headed tier — a host admits the test account — and is **not** a CI gate.
 
 ```bash
 npm run test:e2e:real:profile                                  # one-time: sign in + install the extension
 npm run test:e2e:real -- https://meet.google.com/abc-defg-hij  # run the live matrix
 ```
 
-It requires OS camera/microphone access for Google Chrome and **Accessibility**
-permission for the launching terminal/app, because the suite starts recording
-with a real `Control+Shift+9` keystroke so Chrome grants `activeTab` to
-`tabCapture`. Validated recordings are saved as named `.webm` files under
-`output/real-meet/recordings/`.
+It requires OS camera/microphone access for Google Chrome and **Accessibility** permission for the launching terminal/app, because the suite starts recording with a real `Control+Shift+9` keystroke so Chrome grants `activeTab` to `tabCapture`. Validated recordings are saved as named `.webm` files under `output/real-meet/recordings/`.
 
-Full setup, OS permissions, Google login, run options, scenarios, named
-recordings, reports, and troubleshooting are in the
-[Scenario B guide](docs/testing-scenario-b.md).
+Full setup, OS permissions, Google login, run options, scenarios, named recordings, reports, and troubleshooting are in the [Scenario B guide](docs/testing-scenario-b.md).
 
 ---
 
@@ -502,8 +487,7 @@ Files: `static/popup.html`, `src/popup.ts`, `src/popup/*`
 - Reflects session state sent from background.
 - Downloads transcript text returned by the content script.
 
-**Important property:**
-The popup is disposable. Closing it does not stop recording or upload.
+**Important property:** The popup is disposable. Closing it does not stop recording or upload.
 
 ### Content Script
 
@@ -1069,12 +1053,7 @@ Files:
 
 ## Architecture diagrams
 
-These diagrams are the canonical visual reference for the runtime. They are grouped
-so you can read them in dependency order: **topology** (what runs where), then the
-**control plane** (who decides start/stop), then the **media engine** (how capture
-works), then **persistence** (where bytes go after stop), then **transcript /
-auto-stop**, and finally **permissions and diagnostics**. Every box and edge maps to
-a named symbol or file in `src/` so the picture stays honest against the code.
+These diagrams are the canonical visual reference for the runtime. They are grouped so you can read them in dependency order: **topology** (what runs where), then the **control plane** (who decides start/stop), then the **media engine** (how capture works), then **persistence** (where bytes go after stop), then **transcript / auto-stop**, and finally **permissions and diagnostics**. Every box and edge maps to a named symbol or file in `src/` so the picture stays honest against the code.
 
 ---
 
@@ -1082,9 +1061,7 @@ a named symbol or file in `src/` so the picture stays honest against the code.
 
 ### 1. Runtime Context Map
 
-Four isolated MV3 contexts plus the optional debug page, the media sources they pull
-from, and the persistence/sinks they write to. Solid edges are commands/data; dashed
-edges are best-effort or diagnostic.
+Four isolated MV3 contexts plus the optional debug page, the media sources they pull from, and the persistence/sinks they write to. Solid edges are commands/data; dashed edges are best-effort or diagnostic.
 
 ```mermaid
 graph TB
@@ -1146,9 +1123,7 @@ graph TB
 
 ### 2. Module Layering and Dependency Direction
 
-Dependencies point **downward only**. Feature modules depend on shared contracts and
-the platform wrappers; nothing in a feature module calls `chrome.*` directly. The
-offscreen layer is the only one that touches raw Web media APIs.
+Dependencies point **downward only**. Feature modules depend on shared contracts and the platform wrappers; nothing in a feature module calls `chrome.*` directly. The offscreen layer is the only one that touches raw Web media APIs.
 
 ```mermaid
 graph TD
@@ -1208,9 +1183,7 @@ graph TD
 
 ### 3. Service Worker Lifecycle, Keep-Alive & Rehydration
 
-The MV3 worker is disposable: Chrome can suspend it mid-recording. State survives in
-`chrome.storage.session`, and the worker re-attaches the offscreen document and restarts
-the keep-alive loop when it wakes into a busy phase.
+The MV3 worker is disposable: Chrome can suspend it mid-recording. State survives in `chrome.storage.session`, and the worker re-attaches the offscreen document and restarts the keep-alive loop when it wakes into a busy phase.
 
 ```mermaid
 flowchart TD
@@ -1235,9 +1208,7 @@ flowchart TD
 
 ### 4. Recording Start / Stop Control Plane
 
-Every start and stop — popup buttons, tab auto-stop, and the content-script
-meeting-ended signal — funnels through `RecordingController`, which owns the
-session transitions and the offscreen RPC handshake.
+Every start and stop — popup buttons, tab auto-stop, and the content-script meeting-ended signal — funnels through `RecordingController`, which owns the session transitions and the offscreen RPC handshake.
 
 ```mermaid
 sequenceDiagram
@@ -1293,8 +1264,7 @@ sequenceDiagram
 
 ### 5. Recording Session State Machine (Background)
 
-The canonical, persisted session phase owned by `RecordingSession`. This is the
-**control-plane** state — distinct from the offscreen engine's own machine (#8).
+The canonical, persisted session phase owned by `RecordingSession`. This is the **control-plane** state — distinct from the offscreen engine's own machine (#8).
 
 ```mermaid
 stateDiagram-v2
@@ -1331,10 +1301,7 @@ stateDiagram-v2
 
 ### 6. Offscreen Ready / Reconnect Handshake
 
-`OffscreenManager.ensureReady()` either creates the offscreen document or asks an
-existing one to reconnect, then waits (Promise, not poll) for the `OFFSCREEN_READY`
-handshake. The offscreen side reconnects its port with exponential backoff after the
-worker sleeps or the page is torn down.
+`OffscreenManager.ensureReady()` either creates the offscreen document or asks an existing one to reconnect, then waits (Promise, not poll) for the `OFFSCREEN_READY` handshake. The offscreen side reconnects its port with exponential backoff after the worker sleeps or the page is torn down.
 
 ```mermaid
 sequenceDiagram
@@ -1368,9 +1335,7 @@ sequenceDiagram
 
 ### 7. Recorder Engine Internal Architecture
 
-`RecorderEngine` is a facade: setup acquires streams and the optional audio graph,
-then up to three per-stream tasks run in parallel. Tab is required; mic and
-self-video are best-effort. Each task streams chunks to its own `StorageTarget`.
+`RecorderEngine` is a facade: setup acquires streams and the optional audio graph, then up to three per-stream tasks run in parallel. Tab is required; mic and self-video are best-effort. Each task streams chunks to its own `StorageTarget`.
 
 ```mermaid
 flowchart TB
@@ -1432,8 +1397,7 @@ flowchart TB
 
 ### 8. Recorder Engine State Machine (Offscreen)
 
-The engine's own lifecycle. Note it has **no** `uploading` or `failed` phase — upload
-lives entirely in the finalizer, and startup errors reset back to `idle` and rethrow.
+The engine's own lifecycle. Note it has **no** `uploading` or `failed` phase — upload lives entirely in the finalizer, and startup errors reset back to `idle` and rethrow.
 
 ```mermaid
 stateDiagram-v2
@@ -1469,10 +1433,7 @@ stateDiagram-v2
 
 ### 9. Mixed-Mic Audio Graph
 
-`micMode=mixed` builds a real Web Audio graph: tab and mic audio are summed into one
-`MediaStreamDestination` track, recombined with the tab video, and recorded as a
-single `.webm`. A separate `AudioPlaybackBridge` restores tab audio to the speakers
-when Chrome suppresses local playback during capture.
+`micMode=mixed` builds a real Web Audio graph: tab and mic audio are summed into one `MediaStreamDestination` track, recombined with the tab video, and recorded as a single `.webm`. A separate `AudioPlaybackBridge` restores tab audio to the speakers when Chrome suppresses local playback during capture.
 
 ```mermaid
 flowchart LR
@@ -1507,14 +1468,7 @@ flowchart LR
 
 ### 10. OPFS Streaming & Storage-Target Fallback
 
-The long-meeting safety mechanism. Chunks stream straight to OPFS so memory stays
-bounded (a real 22-min / 507 MB recording peaks at ~23 MB JS heap). By default writes
-go to an off-main-thread sync-access-handle worker; `makeChunkHandler` guards the queue
-with `WriteBackpressure`; and the target degrades worker ▸ main-thread OPFS ▸ RAM (RAM only
-for the shorter mic/self-video streams — the tab stream fails loudly rather than RAM-buffer
-a multi-hour capture). Two escalations bound the worst case: a >256 MB backlog or repeated
-write failures trigger a **protective stop** that seals the captured prefix instead of
-running a phantom REC.
+The long-meeting safety mechanism. Chunks stream straight to OPFS so memory stays bounded (a real 22-min / 507 MB recording peaks at ~23 MB JS heap). By default writes go to an off-main-thread sync-access-handle worker; `makeChunkHandler` guards the queue with `WriteBackpressure`; and the target degrades worker ▸ main-thread OPFS ▸ RAM (RAM only for the optional streams — separate mic and self-video; the required tab stream fails loudly rather than RAM-buffer the whole session). Two escalations bound the worst case: a >256 MB backlog or repeated write failures trigger a **protective stop** that seals the captured prefix instead of running a phantom REC.
 
 ```mermaid
 flowchart TD
@@ -1527,7 +1481,7 @@ flowchart TD
     C --> D{"target type"}
     D -->|WorkerStorageTarget| WK["transfer ArrayBuffer to opfsWorker<br/>→ createSyncAccessHandle().write (off-thread)"]
     D -->|LocalFileTarget| E["serialize via writeChain promise<br/>→ OPFS FileSystemWritableFileStream"]
-    D -->|"InMemoryStorageTarget<br/>(mic / self-video only)"| F["push Blob into RAM array"]
+    D -->|"InMemoryStorageTarget<br/>(separate mic / self-video)"| F["push Blob into RAM array"]
     WK --> G["bounded memory: chunk streamed to disk"]
     E --> G
     F --> G
@@ -1551,9 +1505,7 @@ flowchart TD
 
 ### 11. Post-Stop Persistence Pipeline
 
-Runs only after `RecorderEngine.stop()` returns sealed artifacts. Local mode hands
-blob URLs to the background downloader; Drive mode uploads with bounded concurrency and
-falls back to a local download per file on any failure.
+Runs only after `RecorderEngine.stop()` returns sealed artifacts. Local mode hands blob URLs to the background downloader; Drive mode uploads with bounded concurrency and falls back to a local download per file on any failure.
 
 ```mermaid
 flowchart TD
@@ -1583,9 +1535,7 @@ flowchart TD
 
 ### 12. Drive Folder Resolution & Resumable Upload Session
 
-The shared parent folder is resolved once per finalize run (and cached statically
-across files), then each file opens its own resumable session and streams chunks whose
-size adapts to observed throughput.
+The shared parent folder is resolved once per finalize run (and cached statically across files), then each file opens its own resumable session and streams chunks whose size adapts to observed throughput.
 
 ```mermaid
 flowchart TD
@@ -1614,9 +1564,7 @@ flowchart TD
 
 ### 13. Drive OAuth Token Fallback
 
-`fetchDriveTokenWithFallback` tries a silent token first, escalates to interactive,
-and short-circuits to actionable guidance the moment Google reports a bad client ID.
-The offscreen side requests tokens via `GET_DRIVE_TOKEN` through a cached provider.
+`fetchDriveTokenWithFallback` tries a silent token first, escalates to interactive, and short-circuits to actionable guidance the moment Google reports a bad client ID. The offscreen side requests tokens via `GET_DRIVE_TOKEN` through a cached provider.
 
 ```mermaid
 flowchart TD
@@ -1642,10 +1590,7 @@ flowchart TD
 
 ### 14. Transcript Collection Pipeline
 
-A tiered observer tree feeds a grace-timer buffer. The region observer waits for the
-captions panel; the caption observer tracks speaker blocks; per-block text observers
-catch Meet's incremental refinements; the buffer commits an utterance after a short
-silence and de-duplicates via text normalization.
+A tiered observer tree feeds a grace-timer buffer. The region observer waits for the captions panel; the caption observer tracks speaker blocks; per-block text observers catch Meet's incremental refinements; the buffer commits an utterance after a short silence and de-duplicates via text normalization.
 
 ```mermaid
 flowchart TD
@@ -1674,9 +1619,7 @@ flowchart TD
 
 ### 15. Meeting-End Auto-Stop
 
-A deliberately conservative content-script detector: it only arms after a live call is
-seen, then requires a 30-second grace window of "ended" state before signalling. Two
-hard background triggers (tab closed, tab navigated away) bypass the grace entirely.
+A deliberately conservative content-script detector: it only arms after a live call is seen, then requires a 30-second grace window of "ended" state before signalling. Two hard background triggers (tab closed, tab navigated away) bypass the grace entirely.
 
 ```mermaid
 stateDiagram-v2
@@ -1710,9 +1653,7 @@ stateDiagram-v2
 
 ### 16. Microphone & Camera Permission Readiness
 
-Both permission services share one ladder: check state, try an inline `getUserMedia`
-prime, and fall back to a dedicated setup tab if Chrome blocks the inline prompt. The
-only difference is the mic's `off` short-circuit.
+Both permission services share one ladder: check state, try an inline `getUserMedia` prime, and fall back to a dedicated setup tab if Chrome blocks the inline prompt. The only difference is the mic's `off` short-circuit.
 
 ```mermaid
 flowchart TD
@@ -1737,9 +1678,7 @@ flowchart TD
 
 ### 17. Diagnostics / Perf Event Flow
 
-All runtime contexts emit structured `PERF_EVENT`s through `configurePerfRuntime`. The
-background store reduces them into a session-scoped snapshot that the dev dashboard
-renders; the snapshot is cleared when idle and no dashboard is open.
+All runtime contexts emit structured `PERF_EVENT`s through `configurePerfRuntime`. The background store reduces them into a session-scoped snapshot that the dev dashboard renders; the snapshot is cleared when idle and no dashboard is open.
 
 ```mermaid
 flowchart LR

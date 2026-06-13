@@ -1,21 +1,12 @@
 # Scenario A: Mock Google Meet E2E Testing
 
-This guide is the human- and agent-readable operating manual for the
-deterministic Playwright suite. It covers functional tests, the full performance
-matrix, mocked Drive uploads, media artifact analysis, and the optional physical
-microphone/camera tier.
+This guide is the human- and agent-readable operating manual for the deterministic Playwright suite. It covers functional tests, the full performance matrix, mocked Drive uploads, media artifact analysis, and the optional physical microphone/camera tier.
 
-For testing against the **real** production Google Meet — real Chrome, real
-`chrome.tabCapture`, and concurrent real camera/microphone use — see
-[Scenario B: Real Google Meet Live Calibration](testing-scenario-b.md). Scenario
-A is the deterministic CI gate; Scenario B is a manual real-world calibration
-tier.
+For testing against the **real** production Google Meet — real Chrome, real `chrome.tabCapture`, and concurrent real camera/microphone use — see [Scenario B: Real Google Meet Live Calibration](testing-scenario-b.md). Scenario A is the deterministic CI gate; Scenario B is a manual real-world calibration tier.
 
 ## What Scenario A Runs
 
-Playwright launches a persistent Chromium context with the real unpacked MV3
-extension. Requests for `https://meet.google.com/abc-defg-hij` are fulfilled with
-`tests/fixtures/mock-meet.html`.
+Playwright launches a persistent Chromium context with the real unpacked MV3 extension. Requests for `https://meet.google.com/abc-defg-hij` are fulfilled with `tests/fixtures/mock-meet.html`.
 
 The test still crosses the extension's production runtime boundaries:
 
@@ -28,10 +19,7 @@ The test still crosses the extension's production runtime boundaries:
 - Chromium and extension performance diagnostics;
 - FFprobe/FFmpeg validation of finalized media.
 
-Playwright cannot reliably grant the toolbar-triggered `activeTab` permission
-needed by `chrome.tabCapture`. The E2E build therefore uses a deterministic
-synthetic tab stream with synchronized visual and audio markers. (Real
-`tabCapture` against a live meeting is exercised by [Scenario B](testing-scenario-b.md).)
+Playwright cannot reliably grant the toolbar-triggered `activeTab` permission needed by `chrome.tabCapture`. The E2E build therefore uses a deterministic synthetic tab stream with synchronized visual and audio markers. (Real `tabCapture` against a live meeting is exercised by [Scenario B](testing-scenario-b.md).)
 
 `dist-e2e/` contains two separately guarded capabilities:
 
@@ -96,8 +84,7 @@ PERF_SMOKE_MEDIA_SECONDS=3 \
 npm run test:e2e:perf:full
 ```
 
-Do not use reduced durations as benchmark results. The committed defaults define
-the measured tiers.
+Do not use reduced durations as benchmark results. The committed defaults define the measured tiers.
 
 ## Coverage Matrix
 
@@ -110,17 +97,12 @@ The performance spec is tagged and data driven:
 - **Streams:** mic off, mixed, separate, mixed plus camera, separate plus camera.
 - **Camera:** all four presets with requested-versus-delivered diagnostics.
 - **Workloads:** minimal, normal, caption-heavy, participant-heavy, combined.
-- **Flags:** audio bridge, timeslice, adaptive camera bitrate, Drive chunk sizing,
-  and upload concurrency.
-- **Drive:** fast, throttled, transient retry, partial commit, token refresh,
-  permanent failure with local fallback, sequential, and parallel uploads.
-- **Reliability:** cold/warm behavior, failure recovery, one discarded warm-up
-  plus five measured runs, and 20 start/stop cycles.
+- **Flags:** audio bridge, timeslice, adaptive camera bitrate, Drive chunk sizing, and upload concurrency.
+- **Drive:** fast, throttled, transient retry, partial commit, token refresh, permanent failure with local fallback, sequential, and parallel uploads.
+- **Reliability:** cold/warm behavior, failure recovery, one discarded warm-up plus five measured runs, and 20 start/stop cycles.
 - **Endurance:** ten-minute three-stream local and two-minute throttled Drive.
 
-The suite uses generated pairwise coverage for cross-factor interactions instead
-of a full Cartesian product. Structural cells run once. The repeatability case
-reports the median and p95 of five measured runs after discarding one warm-up.
+The suite uses generated pairwise coverage for cross-factor interactions instead of a full Cartesian product. Structural cells run once. The repeatability case reports the median and p95 of five measured runs after discarding one warm-up.
 
 ## Important Files
 
@@ -172,14 +154,11 @@ try {
 }
 ```
 
-Prefer fixture functions exposed on `window.mockMeet` for deterministic Meet
-changes. Wait for observable extension state rather than arbitrary delays.
+Prefer fixture functions exposed on `window.mockMeet` for deterministic Meet changes. Wait for observable extension state rather than arbitrary delays.
 
 ## Adding Performance Scenarios
 
-For a normal matrix cell, call `runPerformanceCase`. It handles browser launch,
-settings, debug retention, recording, Drive routing, finalization, diagnostics,
-CDP metrics, artifact analysis, attachments, assertions, and cleanup.
+For a normal matrix cell, call `runPerformanceCase`. It handles browser launch, settings, debug retention, recording, Drive routing, finalization, diagnostics, CDP metrics, artifact analysis, attachments, assertions, and cleanup.
 
 ```ts
 test('@perf-full workload custom', async ({}, testInfo) => {
@@ -217,9 +196,7 @@ Choose the tag based on execution cost:
 - `@perf-hardware`: manually dispatched self-hosted hardware only;
 - `@perf-contention`: manually dispatched A/B (`npm run test:e2e:perf:contention`) that records the same workload with the OPFS worker on vs off (`opfsWorkerStorage`) and compares main-thread metrics (event-loop lag, long tasks) across the recording and finalize phases. Excluded from the default mock run.
 
-Do not introduce E2E branches without a compile-time guard. Add a forbidden
-production marker to `scripts/check-production-build.mjs` when a new E2E-only
-capability is required.
+Do not introduce E2E branches without a compile-time guard. Add a forbidden production marker to `scripts/check-production-build.mjs` when a new E2E-only capability is required.
 
 ## Mock Workloads
 
@@ -236,9 +213,7 @@ await meetPage.evaluate(() => {
 });
 ```
 
-This drives participant count, caption mutation rate, caption-container
-replacement, canvas animation pressure, and combined load in a repeatable way.
-Use `window.mockMeet.getStats()` to verify the requested workload was applied.
+This drives participant count, caption mutation rate, caption-container replacement, canvas animation pressure, and combined load in a repeatable way. Use `window.mockMeet.getStats()` to verify the requested workload was applied.
 
 ## Mock Drive
 
@@ -252,13 +227,9 @@ const result = await runPerformanceCase(testInfo, {
 });
 ```
 
-Supported profiles are `fast`, `throttled`, `retry`, `partial-commit`,
-`token-refresh`, and `permanent-failure`. The simulator records folder calls,
-resumable sessions, PUTs, status probes, auth failures, committed bytes, and
-maximum concurrent uploads in `result.drive`.
+Supported profiles are `fast`, `throttled`, `retry`, `partial-commit`, `token-refresh`, and `permanent-failure`. The simulator records folder calls, resumable sessions, PUTs, status probes, auth failures, committed bytes, and maximum concurrent uploads in `result.drive`.
 
-`permanent-failure` is expected to exercise per-file local fallback. Other Drive
-profiles fail if an unexpected local download occurs.
+`permanent-failure` is expected to exercise per-file local fallback. Other Drive profiles fail if an unexpected local download occurs.
 
 ## Metrics And Assertions
 
@@ -279,21 +250,11 @@ Every measured case also collects:
 - browser process CPU time by process type;
 - GPU device metadata and video-encoding capabilities;
 - FFprobe codec, streams, duration, dimensions, FPS, frames, bitrate, and size;
-- FFmpeg silence, clipping inputs, black/frozen frames, A/V duration drift, and
-  synchronized marker drift where detectable.
+- FFmpeg silence, clipping inputs, black/frozen frames, A/V duration drift, and synchronized marker drift where detectable.
 
-Experimental or platform-dependent metrics are nullable. Structural failures are
-hard gates: negative metrics, missing events/streams, leaked tracks or pending
-writes, broken artifacts, wrong dimensions/codecs/duration, excessive silence,
-black/frozen output, Drive protocol errors, and deterministic flag regressions.
-Tab dimensions are exact because the synthetic source is deterministic. Camera
-artifacts must match the delivered aspect ratio; Chromium and physical devices
-may encode a native size even when `MediaTrackSettings` reports the requested
-size, so both delivered and encoded dimensions remain in the JSON report.
+Experimental or platform-dependent metrics are nullable. Structural failures are hard gates: negative metrics, missing events/streams, leaked tracks or pending writes, broken artifacts, wrong dimensions/codecs/duration, excessive silence, black/frozen output, Drive protocol errors, and deterministic flag regressions. Tab dimensions are exact because the synthetic source is deterministic. Camera artifacts must match the delivered aspect ratio; Chromium and physical devices may encode a native size even when `MediaTrackSettings` reports the requested size, so both delivered and encoded dimensions remain in the JSON report.
 
-CPU, heap, lag, throughput, bitrate, file size, and absolute latency are reports
-until at least ten stable runs exist on the same runner class. Then introduce
-runner-specific median/p95 budgets; do not use one universal machine threshold.
+CPU, heap, lag, throughput, bitrate, file size, and absolute latency are reports until at least ten stable runs exist on the same runner class. Then introduce runner-specific median/p95 budgets; do not use one universal machine threshold.
 
 ## Reports And Failure Artifacts
 
@@ -321,9 +282,7 @@ CI uploads the complete `output/playwright` directory.
 
 ## Physical Hardware Tier
 
-The hardware tier retains mocked Meet and synthetic tab capture but removes
-Chromium's fake-device flags. It uses the operating-system default microphone
-and camera:
+The hardware tier retains mocked Meet and synthetic tab capture but removes Chromium's fake-device flags. It uses the operating-system default microphone and camera:
 
 ```bash
 npm run test:e2e:perf:hardware
@@ -336,9 +295,7 @@ Requirements:
 - allow access for the extension when prompted;
 - use a self-hosted runner labelled `self-hosted` and `hardware-media` in CI.
 
-The command sets `PW_REAL_MEDIA=1`, runs headed, probes both devices first, and
-skips with a clear reason if permission or tracks are unavailable. Device labels
-are written only to the local `hardware-probe.json` test artifact.
+The command sets `PW_REAL_MEDIA=1`, runs headed, probes both devices first, and skips with a clear reason if permission or tracks are unavailable. Device labels are written only to the local `hardware-probe.json` test artifact.
 
 An optional controlled physical synchronization cue is available:
 
@@ -346,9 +303,7 @@ An optional controlled physical synchronization cue is available:
 PERF_HARDWARE_MARKER=1 npm run test:e2e:perf:hardware
 ```
 
-This flashes and sounds a marker five seconds into the mocked meeting. Position
-the camera and microphone to observe it. The artifact analyzer reports marker
-drift when both detections are available.
+This flashes and sounds a marker five seconds into the mocked meeting. Position the camera and microphone to observe it. The artifact analyzer reports marker drift when both detections are available.
 
 > This tier still uses the mocked Meet route and synthetic tab capture — only the
 > camera and microphone are real. For the real production Meet DOM and real
@@ -356,23 +311,15 @@ drift when both detections are available.
 
 ## CI Schedule
 
-- Pull requests and `main` pushes: unit tests, source and E2E type checks,
-  production build/guards, functional E2E, and performance smoke.
+- Pull requests and `main` pushes: unit tests, source and E2E type checks, production build/guards, functional E2E, and performance smoke.
 - Daily at `02:00 UTC`: full pairwise matrix and repeated benchmarks.
 - Weekly Sunday at `03:00 UTC`: endurance tier.
 - Manual dispatch: full, endurance, or labelled self-hosted hardware tier.
 
-JSON reports, snapshots, traces, FFmpeg analyses, and failed media are uploaded
-as workflow artifacts. Scenario B is manual and is not part of the CI schedule.
+JSON reports, snapshots, traces, FFmpeg analyses, and failed media are uploaded as workflow artifacts. Scenario B is manual and is not part of the CI schedule.
 
 ## Limitations
 
-Scenario A does not measure production Meet rendering, network behavior, account
-login, invitations, host admission, or Chrome's real tab compositor. Synthetic
-tab capture validates the extension pipeline, not toolbar permission behavior.
-Hardware results vary by device, driver, room, and operating system.
+Scenario A does not measure production Meet rendering, network behavior, account login, invitations, host admission, or Chrome's real tab compositor. Synthetic tab capture validates the extension pipeline, not toolbar permission behavior. Hardware results vary by device, driver, room, and operating system.
 
-[Scenario B](testing-scenario-b.md) is the manual production-DOM,
-real-tab-capture, and simultaneous-device calibration tier. It complements
-Scenario A; it is not a deterministic CI gate and does not replace mock-only
-Drive failure injection, deterministic workloads, or synthetic marker tests.
+[Scenario B](testing-scenario-b.md) is the manual production-DOM, real-tab-capture, and simultaneous-device calibration tier. It complements Scenario A; it is not a deterministic CI gate and does not replace mock-only Drive failure injection, deterministic workloads, or synthetic marker tests.
