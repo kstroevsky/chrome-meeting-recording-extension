@@ -34,6 +34,15 @@ export type EnforcedSelfVideoStream = {
   stop: () => void;
   /** True when a resize transform was inserted. */
   resized: boolean;
+  /**
+   * Hides/shows the encoded camera (black frames) without tearing the track down.
+   * Blacks out at the layer that is actually defined for the active path: `enabled
+   * = false` on the camera track when recording it directly, or a black-frame fill
+   * inside the resize pump when rerouted through insertable streams (where the
+   * effect of `enabled` is unspecified — mediacapture-transform defines no
+   * disabled-track behavior for MediaStreamTrackProcessor).
+   */
+  setMuted: (muted: boolean) => void;
 };
 
 type Size = { width: number; height: number };
@@ -86,7 +95,7 @@ function buildResizedTrack(
   track: MediaStreamTrack,
   width: number,
   height: number
-): { track: MediaStreamTrack; stop: () => void } {
+): { track: MediaStreamTrack; stop: () => void; setMuted: (muted: boolean) => void } {
   const g = globalThis as any;
   const processor = new g.MediaStreamTrackProcessor({ track });
   const generator = new g.MediaStreamTrackGenerator({ kind: 'video' });
@@ -97,6 +106,7 @@ function buildResizedTrack(
   const writer = generator.writable.getWriter();
 
   let stopped = false;
+  let muted = false;
 
   const pump = async () => {
     try {
@@ -105,9 +115,18 @@ function buildResizedTrack(
         if (done) break;
         if (stopped) { frame.close(); break; }
         try {
-          // drawImage uses the VideoFrame's display rect, preserving the
-          // camera's intended crop-and-scale while forcing the encoded size.
-          context.drawImage(frame, 0, 0, width, height);
+          if (muted) {
+            // Hidden: write a black frame at the source cadence instead of the
+            // camera image. Blacking out here — where we own the encoded frame —
+            // is deterministic, unlike relying on `enabled` propagating through
+            // MediaStreamTrackProcessor (undefined per mediacapture-transform).
+            context.fillStyle = '#000';
+            context.fillRect(0, 0, width, height);
+          } else {
+            // drawImage uses the VideoFrame's display rect, preserving the
+            // camera's intended crop-and-scale while forcing the encoded size.
+            context.drawImage(frame, 0, 0, width, height);
+          }
           const resized = new g.VideoFrame(canvas, {
             timestamp: frame.timestamp,
             ...(frame.duration == null ? {} : { duration: frame.duration }),
@@ -135,7 +154,7 @@ function buildResizedTrack(
     try { (generator as any).stop?.(); } catch {}
   };
 
-  return { track: generator, stop };
+  return { track: generator, stop, setMuted: (next: boolean) => { muted = next; } };
 }
 
 /**
@@ -149,7 +168,17 @@ export async function enforceSelfVideoResolution(
   target: Size,
   log: (...a: any[]) => void
 ): Promise<EnforcedSelfVideoStream> {
-  const noop: EnforcedSelfVideoStream = { stream: source, stop: () => {}, resized: false };
+  const noop: EnforcedSelfVideoStream = {
+    stream: source,
+    stop: () => {},
+    resized: false,
+    // No resize transform: MediaRecorder records the camera track directly, so
+    // `enabled = false` → black frames is the well-defined MediaStreamTrack
+    // contract here (unlike the resized insertable-streams path).
+    setMuted: (muted: boolean) => {
+      for (const t of source.getVideoTracks()) { try { t.enabled = !muted; } catch {} }
+    },
+  };
   const track = source.getVideoTracks()[0];
   if (!track || target.width <= 0 || target.height <= 0 || !hasInsertableStreams()) {
     return noop;
@@ -170,7 +199,7 @@ export async function enforceSelfVideoResolution(
     return noop;
   }
 
-  const { track: resizedTrack, stop } = buildResizedTrack(track, target.width, target.height);
+  const { track: resizedTrack, stop, setMuted } = buildResizedTrack(track, target.width, target.height);
   logPerf(log, 'recorder', 'self_video_resolution_enforced', {
     stream: 'self-video',
     targetWidth: target.width,
@@ -179,5 +208,5 @@ export async function enforceSelfVideoResolution(
     codedHeight: coded.height,
     resized: true,
   });
-  return { stream: new MediaStream([resizedTrack]), stop, resized: true };
+  return { stream: new MediaStream([resizedTrack]), stop, resized: true, setMuted };
 }

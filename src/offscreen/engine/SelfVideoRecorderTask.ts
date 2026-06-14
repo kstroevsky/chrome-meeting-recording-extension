@@ -170,17 +170,11 @@ async function startWiredSelfVideoRecorder(
     }
     try { selfVideo.getTracks().forEach((t) => t.stop()); } catch {}
   };
-  // Blanks the encoded camera to black without tearing the track down: disable the
-  // recorder-facing track (the resize generator, or the raw camera when not resized)
-  // and, when resized, the source camera too so the canvas never draws a real frame.
-  const setSelfVideoMuted = (muted: boolean) => {
-    const apply = (s: MediaStream) => {
-      for (const t of s.getVideoTracks()) { try { t.enabled = !muted; } catch {} }
-    };
-    apply(recordingStream);
-    if (enforced.resized) apply(selfVideo);
-  };
-  callbacks.onStreamAcquired?.({ stop: stopSelfVideoStream, setMuted: setSelfVideoMuted });
+  // Hides/shows the encoded camera. enforced.setMuted blacks out at the layer that
+  // is actually defined for the active path: `enabled = false` on the camera track
+  // when recording it directly, or a black-frame fill inside the resize pump when
+  // rerouted through insertable streams (where `enabled` propagation is unspecified).
+  callbacks.onStreamAcquired?.({ stop: stopSelfVideoStream, setMuted: enforced.setMuted });
 
   let started = false;
   let actualStartTimeMs = 0;
