@@ -246,6 +246,8 @@ Drive mode requires a **Chrome Extension** OAuth 2.0 client. A Desktop or Web cl
 | `npm run typecheck:e2e` | TypeScript check for Playwright specs and helpers |
 | `npm run lint` | Alias for `typecheck` |
 | `npm test` / `npm run test:unit` | Unit test suite (skips E2E) |
+| `npm version patch\|minor\|major` | Bump the release version (single source of truth) and tag the commit |
+| `npm run release:build` | Production build to `dist/` then the production guards (version + no E2E markers) |
 | `npm run test:e2e` / `npm run test:e2e:mock` | Functional mocked-Meet E2E plus performance smoke |
 | `npm run test:e2e:perf:smoke` | Three critical browser/extension performance cases |
 | `npm run test:e2e:perf:full` / `npm run test:e2e:perf` | Complete pairwise matrix and repeated benchmarks |
@@ -255,6 +257,26 @@ Drive mode requires a **Chrome Extension** OAuth 2.0 client. A Desktop or Web cl
 | `npm run test:e2e:real:profile` | Prepare or verify the persistent signed-in Chrome profile |
 | `npm run test:e2e:real -- <meet-url>` | One-admission real Google Meet scenario matrix |
 | `npm run test:e2e:live -- <meet-url>` / `npm run test:real-meet -- <meet-url>` | Compatibility aliases for the real-Meet suite |
+
+### Versioning and releasing
+
+There are two independent version identifiers; do not conflate them:
+
+- **Build ID** (`globalThis.__BUILD_ID__`) is a content hash stamped into every bundle by webpack. It changes on every code change and drives the service-worker ↔ offscreen skew handshake and the on-update reload. It is fully automatic — never set it by hand.
+- **Release version** (semver) lives in **`package.json` only — the single source of truth.** `dist/manifest.json`'s `version` is *derived* from it at build time (`transformManifest` in `webpack.config.js`), so the two cannot drift. The `version` in `static/manifest.json` is an ignored `0.0.0` placeholder.
+
+To cut a release:
+
+```bash
+npm version patch   # or minor / major — bumps package.json and creates the git tag
+npm run release:build   # production build + guards (asserts the derived version)
+git push --follow-tags  # publish the tag when you are ready
+# then zip ./dist and upload to the Chrome Web Store
+```
+
+`npm version` requires a clean working tree (commit or stash first) and runs the `preversion` gate — `typecheck` plus the unit suite — before it bumps and tags, so a release can't be cut over failing checks. It also keeps `package-lock.json` in sync automatically.
+
+Chrome requires the manifest `version` to be 1–4 dot-separated integers and to strictly increase on each store upload. `npm version` guarantees the increment; the build coerces any semver pre-release tag (e.g. `1.4.0-beta.2`) down to the numeric `1.4.0` for `version` while preserving the full string in `version_name`. The `1.4.0-beta.2` form would collide with `1.4.0` at upload — use a numeric build segment for pre-release channels.
 
 Two end-to-end testing scenarios exist:
 

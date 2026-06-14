@@ -3,6 +3,8 @@ const path = require('path')
 const webpack = require('webpack')
 const CopyWebpackPlugin = require('copy-webpack-plugin')
 const { CleanWebpackPlugin } = require('clean-webpack-plugin')
+const pkg = require('./package.json')
+const { toChromeManifestVersion } = require('./scripts/lib/manifestVersion.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
@@ -49,6 +51,12 @@ function transformManifest(content, oauthClientId, isDevBuild) {
     throw new Error('manifest.json is missing oauth2 configuration')
   }
   manifest.oauth2.client_id = oauthClientId
+  // package.json is the single source of truth for the release version; the
+  // numeric Chrome `version` is derived here so the two can never drift, and the
+  // full semver (incl. any pre-release tag) is preserved for display in
+  // `version_name`. The value in static/manifest.json is an ignored placeholder.
+  manifest.version = toChromeManifestVersion(pkg.version)
+  manifest.version_name = isDevBuild ? `${pkg.version} (dev)` : pkg.version
   // Dev-only diagnostics: system-wide CPU sampling via chrome.system.cpu. Never
   // shipped to production so the store listing keeps a minimal permission set
   // and avoids a permission re-review prompt for users.

@@ -1,9 +1,16 @@
 {
     "name": "google-meet-caption-extension",
-    "version": "1.0.0",
+    "version": "0.8.9",
+    "engines": {
+        "node": ">=20",
+        "npm": ">=10"
+    },
     "scripts": {
         "dev": "webpack --mode=development",
         "build": "webpack --mode=production",
+        "preversion": "npm run typecheck && npm run test:unit",
+        "check:version": "node scripts/check-version-monotonic.mjs",
+        "release:build": "npm run check:version && npm run build && npm run test:production-guards",
         "build:e2e:mock": "webpack --mode=development --env e2eMockCapture=1 --env e2eMockDrive=1 --env outputPath=dist-e2e",
         "watch": "webpack --mode=development --watch",
         "test": "npm run test:unit",
