@@ -169,6 +169,37 @@ export class RecordingController {
     }
   }
 
+  /**
+   * Toggles mic mute on the live recording. Guards that capture is active and
+   * that the run actually has a microphone, forwards the actuation to the
+   * offscreen engine, and on success mirrors the flag onto the session so the
+   * popup reflects it. Mute is silence-in-place: the mic stream keeps flowing,
+   * so a failed toggle leaves the recording untouched (no session failure).
+   */
+  async setMicMuted(muted: boolean): Promise<CommandResult> {
+    const snapshot = this.session.getSnapshot();
+    if (!isStoppablePhase(snapshot.phase)) {
+      return this.fail('Mic mute requested but no recording is active');
+    }
+    const micMode = snapshot.runConfig?.micMode;
+    if (micMode !== 'mixed' && micMode !== 'separate') {
+      return this.fail('Mic mute requested but this recording has no microphone');
+    }
+
+    try {
+      await this.offscreen.ensureReady();
+      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
+        type: 'OFFSCREEN_SET_MIC_MUTED',
+        muted,
+      });
+      if (!r?.ok) return this.fail(r?.error || 'Mic mute failed in offscreen');
+      this.session.setMicMuted(muted);
+      return this.ok();
+    } catch (e: any) {
+      return this.fail(`SET_MIC_MUTED failed: ${e?.message || e}`);
+    }
+  }
+
   /** Builds a success CommandResult carrying the current popup-facing status view. */
   private ok(): CommandResult {
     return { ok: true, session: toStatusView(this.session.getSnapshot()) };

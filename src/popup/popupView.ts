@@ -10,6 +10,7 @@ export type PopupElements = {
   saveBtn: HTMLButtonElement | null;
   micBtn: HTMLButtonElement | null;
   micModeSelect: HTMLSelectElement | null;
+  muteMicBtn: HTMLButtonElement | null;
   startBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
   storageModeSelect: HTMLSelectElement | null;

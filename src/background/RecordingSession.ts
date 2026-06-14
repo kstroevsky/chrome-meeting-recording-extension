@@ -116,6 +116,22 @@ export class RecordingSession {
       meetingSlug: this.snapshot.meetingSlug,
       error,
       warnings: this.snapshot.warnings,
+      micMuted: this.snapshot.micMuted,
+      updatedAt: Date.now(),
+    };
+    return this.commit();
+  }
+
+  /**
+   * Mirrors the live mic-mute flag actuated in the offscreen recorder onto the
+   * session so a reopened popup renders the right toggle. Stored as `true` or
+   * omitted (never `false`) to match the snapshot's optional-field convention.
+   * Phase/micMode guarding is the caller's job (see RecordingController).
+   */
+  setMicMuted(muted: boolean): RecordingSessionSnapshot {
+    this.snapshot = {
+      ...this.snapshot,
+      micMuted: muted || undefined,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -145,6 +161,7 @@ export class RecordingSession {
       meetingSlug: this.snapshot.meetingSlug,
       error,
       warnings,
+      micMuted: this.snapshot.micMuted,
       uploadSummary: undefined,
       updatedAt: Date.now(),
     };
@@ -159,6 +176,7 @@ export class RecordingSession {
       targetTabId: this.snapshot.targetTabId,
       meetingSlug: this.snapshot.meetingSlug,
       warnings: this.snapshot.warnings,
+      micMuted: this.snapshot.micMuted,
       updatedAt: Date.now(),
     };
     return this.commit();

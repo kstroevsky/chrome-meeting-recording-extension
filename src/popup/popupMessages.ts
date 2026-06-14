@@ -18,6 +18,8 @@ export const POPUP_TOAST_TEXT = {
   noTranscriptOnPage: 'No transcript on this page',
   transcriptEmpty: 'Transcript is empty',
   stopping: 'Stopping... finalizing local files. You can close this popup.',
+  micMuted: 'Microphone muted',
+  micUnmuted: 'Microphone unmuted',
 } as const;
 
 /** Formats the toast shown after background confirms a local file save. */

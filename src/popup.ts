@@ -22,6 +22,7 @@ const controller = new PopupController({
   saveBtn: document.getElementById('save') as HTMLButtonElement | null,
   micBtn: document.getElementById('enable-mic') as HTMLButtonElement | null,
   micModeSelect: document.getElementById('mic-mode') as HTMLSelectElement | null,
+  muteMicBtn: document.getElementById('mute-mic') as HTMLButtonElement | null,
   startBtn: document.getElementById('start-rec') as HTMLButtonElement | null,
   stopBtn: document.getElementById('stop-rec') as HTMLButtonElement | null,
   storageModeSelect: document.getElementById('storage-mode') as HTMLSelectElement | null,

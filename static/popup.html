@@ -207,6 +207,12 @@
         width: 100%;
         margin-top: 8px;
       }
+
+      /* ── Mic mute toggle (visible only while recording) ── */
+      .mic-mute-btn {
+        width: 100%;
+        margin-top: 9px;
+      }
     </style>
   </head>
   <body>
@@ -246,6 +252,13 @@
         <option value="mixed">Mix into tab recording</option>
         <option value="separate" selected>Save as separate audio file</option>
       </select>
+      <button id="mute-mic" class="btn btn-secondary mic-mute-btn" type="button" hidden aria-pressed="false" title="Mute the microphone (records silence) without stopping the recording">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 10a2 2 0 002-2V4a2 2 0 00-4 0v4a2 2 0 002 2z"/>
+          <path d="M4.5 8a.5.5 0 00-1 0 4.5 4.5 0 009 0 .5.5 0 00-1 0 3.5 3.5 0 01-7 0zM7.5 13.5v1.5h1v-1.5a.5.5 0 00-1 0z"/>
+        </svg>
+        <span data-mute-label>Mute Mic</span>
+      </button>
     </div>
 
     <!-- Storage & video section -->

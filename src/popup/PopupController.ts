@@ -31,7 +31,7 @@ import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
-import { type RecordingPhase } from '../shared/recording';
+import { isStoppablePhase, type RecordingPhase, type RecordingStatusView } from '../shared/recording';
 
 export class PopupController {
   private readonly el: PopupElements;
@@ -41,11 +41,12 @@ export class PopupController {
   private inFlight = false;
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
+  private micMuted = false;
 
   constructor(el: PopupElements) {
     this.el = el;
     this.state = new PopupStateController(el, {
-      onPhaseChange: (phase, _session) => this.onPhaseChange(phase),
+      onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
       onToast: (msg) => this.toast(msg),
       onAlert: (msg) => alert(msg),
     });
@@ -57,6 +58,7 @@ export class PopupController {
     this.wireTranscriptDownload();
     this.wireStartStop();
     this.wireMic();
+    this.wireMuteMic();
     this.wireSettingsLink();
     this.wireDiagnosticsLink();
     void this.state.refreshInitialState();
@@ -70,8 +72,9 @@ export class PopupController {
     }
   }
 
-  private onPhaseChange(phase: RecordingPhase) {
+  private onPhaseChange(phase: RecordingPhase, session?: RecordingStatusView) {
     setControlsForPhase(this.el, phase);
+    this.updateMuteControl(phase, session);
     this.persistentStatus = this.state.buildPersistentStatus(phase);
     if (!this.statusTimer) {
       setStatusText(this.el, this.persistentStatus);
@@ -109,6 +112,58 @@ export class PopupController {
   private wireMic() {
     if (!this.el.micBtn) return;
     this.mic.bindButton(this.el.micBtn);
+  }
+
+  private wireMuteMic() {
+    const btn = this.el.muteMicBtn;
+    if (!btn) return;
+    btn.addEventListener('click', () => void this.toggleMute());
+  }
+
+  /**
+   * Toggles mic mute on the live recording. Optimistically disables the button,
+   * sends the command, and syncs the UI from the authoritative session in the
+   * response (so a rejected toggle reverts). Recording is never interrupted.
+   */
+  private async toggleMute(): Promise<void> {
+    const btn = this.el.muteMicBtn;
+    if (!btn || btn.disabled) return;
+    const next = !this.micMuted;
+    btn.disabled = true;
+    try {
+      const resp = await sendToBackground({ type: 'SET_MIC_MUTED', muted: next });
+      if (resp.ok === false) throw new Error(resp.error || 'Failed to toggle microphone');
+      this.state.applySession(resp.session);
+      this.toast(next ? POPUP_TOAST_TEXT.micMuted : POPUP_TOAST_TEXT.micUnmuted);
+    } catch (e: unknown) {
+      console.error('[popup] SET_MIC_MUTED error', e);
+      btn.disabled = false;
+    }
+  }
+
+  /**
+   * Shows the mute toggle only while a recording with a microphone is active,
+   * and reflects the current mute state (label, pressed state, danger styling).
+   */
+  private updateMuteControl(phase: RecordingPhase, session?: RecordingStatusView) {
+    const btn = this.el.muteMicBtn;
+    if (!btn) return;
+
+    const micMode = session?.runConfig?.micMode;
+    const active = isStoppablePhase(phase) && (micMode === 'mixed' || micMode === 'separate');
+    btn.hidden = !active;
+    if (!active) {
+      this.micMuted = false;
+      return;
+    }
+
+    this.micMuted = session?.micMuted === true;
+    btn.disabled = false;
+    btn.setAttribute('aria-pressed', String(this.micMuted));
+    btn.classList.toggle('btn-danger', this.micMuted);
+    btn.classList.toggle('btn-secondary', !this.micMuted);
+    const label = btn.querySelector<HTMLElement>('[data-mute-label]') ?? btn;
+    label.textContent = this.micMuted ? 'Unmute Mic' : 'Mute Mic';
   }
 
   private wireSettingsLink() {
