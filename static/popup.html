@@ -208,8 +208,9 @@
         margin-top: 8px;
       }
 
-      /* ── Mic mute toggle (visible only while recording) ── */
-      .mic-mute-btn {
+      /* ── Runtime toggles (visible only while recording) ── */
+      .mic-mute-btn,
+      .camera-mute-btn {
         width: 100%;
         margin-top: 9px;
       }
@@ -272,6 +273,12 @@
         <input type="checkbox" id="record-self-video" checked />
         Record my camera separately
       </label>
+      <button id="hide-camera" class="btn btn-secondary camera-mute-btn" type="button" hidden aria-pressed="false" title="Hide the camera (records black frames) without stopping the recording">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M2 4.5A1.5 1.5 0 013.5 3h6A1.5 1.5 0 0111 4.5v1.2l3.2-1.8a.5.5 0 01.8.4v7.4a.5.5 0 01-.8.4L11 10.3v1.2A1.5 1.5 0 019.5 13h-6A1.5 1.5 0 012 11.5v-7z"/>
+        </svg>
+        <span data-camera-label>Hide Camera</span>
+      </button>
     </div>
 
     <!-- Status & controls -->

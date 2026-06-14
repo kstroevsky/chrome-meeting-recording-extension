@@ -15,6 +15,7 @@ export type PopupElements = {
   stopBtn: HTMLButtonElement | null;
   storageModeSelect: HTMLSelectElement | null;
   recordSelfVideoCheckbox: HTMLInputElement | null;
+  hideCameraBtn: HTMLButtonElement | null;
   openSettingsBtn: HTMLButtonElement | null;
   openDiagnosticsBtn: HTMLButtonElement | null;
   recordingStatusEl: HTMLElement | null;

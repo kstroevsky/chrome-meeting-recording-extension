@@ -200,6 +200,35 @@ export class RecordingController {
     }
   }
 
+  /**
+   * Hides/shows the camera on the live self-video recording. Same shape as
+   * {@link setMicMuted}: guards that capture is active and the run records a
+   * camera, relays to the offscreen engine, and mirrors the flag onto the
+   * session. Black-frames-in-place — a failed toggle leaves recording untouched.
+   */
+  async setCameraMuted(muted: boolean): Promise<CommandResult> {
+    const snapshot = this.session.getSnapshot();
+    if (!isStoppablePhase(snapshot.phase)) {
+      return this.fail('Camera hide requested but no recording is active');
+    }
+    if (snapshot.runConfig?.recordSelfVideo !== true) {
+      return this.fail('Camera hide requested but this recording has no camera');
+    }
+
+    try {
+      await this.offscreen.ensureReady();
+      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
+        type: 'OFFSCREEN_SET_CAMERA_MUTED',
+        muted,
+      });
+      if (!r?.ok) return this.fail(r?.error || 'Camera hide failed in offscreen');
+      this.session.setCameraMuted(muted);
+      return this.ok();
+    } catch (e: any) {
+      return this.fail(`SET_CAMERA_MUTED failed: ${e?.message || e}`);
+    }
+  }
+
   /** Builds a success CommandResult carrying the current popup-facing status view. */
   private ok(): CommandResult {
     return { ok: true, session: toStatusView(this.session.getSnapshot()) };

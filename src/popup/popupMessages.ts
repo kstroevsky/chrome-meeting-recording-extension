@@ -20,6 +20,8 @@ export const POPUP_TOAST_TEXT = {
   stopping: 'Stopping... finalizing local files. You can close this popup.',
   micMuted: 'Microphone muted',
   micUnmuted: 'Microphone unmuted',
+  cameraHidden: 'Camera hidden',
+  cameraShown: 'Camera shown',
 } as const;
 
 /** Formats the toast shown after background confirms a local file save. */

@@ -117,6 +117,7 @@ export class RecordingSession {
       error,
       warnings: this.snapshot.warnings,
       micMuted: this.snapshot.micMuted,
+      cameraMuted: this.snapshot.cameraMuted,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -132,6 +133,16 @@ export class RecordingSession {
     this.snapshot = {
       ...this.snapshot,
       micMuted: muted || undefined,
+      updatedAt: Date.now(),
+    };
+    return this.commit();
+  }
+
+  /** Mirrors the live camera-hidden flag actuated in the offscreen recorder. See {@link setMicMuted}. */
+  setCameraMuted(muted: boolean): RecordingSessionSnapshot {
+    this.snapshot = {
+      ...this.snapshot,
+      cameraMuted: muted || undefined,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -162,6 +173,7 @@ export class RecordingSession {
       error,
       warnings,
       micMuted: this.snapshot.micMuted,
+      cameraMuted: this.snapshot.cameraMuted,
       uploadSummary: undefined,
       updatedAt: Date.now(),
     };
@@ -177,6 +189,7 @@ export class RecordingSession {
       meetingSlug: this.snapshot.meetingSlug,
       warnings: this.snapshot.warnings,
       micMuted: this.snapshot.micMuted,
+      cameraMuted: this.snapshot.cameraMuted,
       updatedAt: Date.now(),
     };
     return this.commit();

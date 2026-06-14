@@ -42,6 +42,7 @@ export class PopupController {
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
   private micMuted = false;
+  private cameraMuted = false;
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -59,6 +60,7 @@ export class PopupController {
     this.wireStartStop();
     this.wireMic();
     this.wireMuteMic();
+    this.wireHideCamera();
     this.wireSettingsLink();
     this.wireDiagnosticsLink();
     void this.state.refreshInitialState();
@@ -75,6 +77,7 @@ export class PopupController {
   private onPhaseChange(phase: RecordingPhase, session?: RecordingStatusView) {
     setControlsForPhase(this.el, phase);
     this.updateMuteControl(phase, session);
+    this.updateCameraControl(phase, session);
     this.persistentStatus = this.state.buildPersistentStatus(phase);
     if (!this.statusTimer) {
       setStatusText(this.el, this.persistentStatus);
@@ -164,6 +167,53 @@ export class PopupController {
     btn.classList.toggle('btn-secondary', !this.micMuted);
     const label = btn.querySelector<HTMLElement>('[data-mute-label]') ?? btn;
     label.textContent = this.micMuted ? 'Unmute Mic' : 'Mute Mic';
+  }
+
+  private wireHideCamera() {
+    const btn = this.el.hideCameraBtn;
+    if (!btn) return;
+    btn.addEventListener('click', () => void this.toggleCamera());
+  }
+
+  /** Toggles the camera (black frames) on the live recording; see {@link toggleMute}. */
+  private async toggleCamera(): Promise<void> {
+    const btn = this.el.hideCameraBtn;
+    if (!btn || btn.disabled) return;
+    const next = !this.cameraMuted;
+    btn.disabled = true;
+    try {
+      const resp = await sendToBackground({ type: 'SET_CAMERA_MUTED', muted: next });
+      if (resp.ok === false) throw new Error(resp.error || 'Failed to toggle camera');
+      this.state.applySession(resp.session);
+      this.toast(next ? POPUP_TOAST_TEXT.cameraHidden : POPUP_TOAST_TEXT.cameraShown);
+    } catch (e: unknown) {
+      console.error('[popup] SET_CAMERA_MUTED error', e);
+      btn.disabled = false;
+    }
+  }
+
+  /**
+   * Shows the hide-camera toggle only while a self-video recording is active,
+   * and reflects the current hidden state (label, pressed state, danger styling).
+   */
+  private updateCameraControl(phase: RecordingPhase, session?: RecordingStatusView) {
+    const btn = this.el.hideCameraBtn;
+    if (!btn) return;
+
+    const active = isStoppablePhase(phase) && session?.runConfig?.recordSelfVideo === true;
+    btn.hidden = !active;
+    if (!active) {
+      this.cameraMuted = false;
+      return;
+    }
+
+    this.cameraMuted = session?.cameraMuted === true;
+    btn.disabled = false;
+    btn.setAttribute('aria-pressed', String(this.cameraMuted));
+    btn.classList.toggle('btn-danger', this.cameraMuted);
+    btn.classList.toggle('btn-secondary', !this.cameraMuted);
+    const label = btn.querySelector<HTMLElement>('[data-camera-label]') ?? btn;
+    label.textContent = this.cameraMuted ? 'Show Camera' : 'Hide Camera';
   }
 
   private wireSettingsLink() {
