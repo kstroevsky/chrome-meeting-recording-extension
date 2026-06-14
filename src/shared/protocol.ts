@@ -46,18 +46,22 @@ export type PopupStartRecording = {
 export type PopupStopRecording = { type: 'STOP_RECORDING' };
 export type PopupGetRecordingStatus = { type: 'GET_RECORDING_STATUS' };
 export type PopupGetDriveToken = { type: 'GET_DRIVE_TOKEN'; refresh?: boolean };
+/** Toggles microphone mute on the live recording; the mic emits silence while muted. */
+export type PopupSetMicMuted = { type: 'SET_MIC_MUTED'; muted: boolean };
 
 export type PopupToBg =
   | PopupStartRecording
   | PopupStopRecording
   | PopupGetRecordingStatus
-  | PopupGetDriveToken;
+  | PopupGetDriveToken
+  | PopupSetMicMuted;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
   T extends PopupStopRecording ? CommandResult :
   T extends PopupGetRecordingStatus ? { session: RecordingStatusView } :
   T extends PopupGetDriveToken ? DriveTokenResponse :
+  T extends PopupSetMicMuted ? CommandResult :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -104,7 +108,8 @@ export type BgToOffscreenRpc =
       recorderSettings: RecorderRuntimeSettingsSnapshot;
       perfSettings: PerfSettings;
     }>
-  | RpcRequest<{ type: 'OFFSCREEN_STOP' }>;
+  | RpcRequest<{ type: 'OFFSCREEN_STOP' }>
+  | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>;
 
 export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string };

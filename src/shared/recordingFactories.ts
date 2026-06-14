@@ -34,6 +34,7 @@ export function toStatusView(snapshot: RecordingSessionSnapshot): RecordingStatu
     uploadSummary: snapshot.uploadSummary,
     error: snapshot.error,
     warnings: snapshot.warnings,
+    micMuted: snapshot.micMuted,
     updatedAt: snapshot.updatedAt,
   };
 }

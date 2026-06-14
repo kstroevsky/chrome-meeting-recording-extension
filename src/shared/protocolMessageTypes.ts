@@ -9,6 +9,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'STOP_RECORDING',
   'GET_RECORDING_STATUS',
   'GET_DRIVE_TOKEN',
+  'SET_MIC_MUTED',
 ] as const;
 
 export const POPUP_TO_CONTENT_MESSAGE_TYPES = [

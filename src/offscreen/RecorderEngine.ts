@@ -55,6 +55,7 @@ export class RecorderEngine {
   private suffix = '';
   private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
   private recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
+  private micMuted = false;
 
   private playback: AudioPlaybackBridge | null = null;
   private mixedAudio: MixedAudioMixer | null = null;
@@ -78,6 +79,26 @@ export class RecorderEngine {
 
   getActiveRecorderCount(): number { return this.activeRecorders; }
   getDebugState(): EngineState { return this.state; }
+
+  /**
+   * Mutes or unmutes the live microphone. Silence-in-place: `track.enabled =
+   * false` keeps the track live — so the MediaRecorder timeline stays
+   * continuous, with no gap or re-acquisition glitch — while it emits zeroed
+   * samples. Covers both mic modes: the disabled track feeds silence into the
+   * mixed-audio graph (mixed) or the mic-only recorder (separate). The desired
+   * state is remembered so it also applies to a mic stream still being acquired
+   * when this is called (a mute toggled during the `starting` phase).
+   */
+  setMicMuted(muted: boolean): void {
+    this.micMuted = muted;
+    this.applyMicMuteState();
+  }
+
+  private applyMicMuteState(): void {
+    for (const track of this.micStream?.getAudioTracks() ?? []) {
+      try { track.enabled = !this.micMuted; } catch {}
+    }
+  }
 
   async startFromStreamId(
     streamId: string,
@@ -145,6 +166,7 @@ export class RecorderEngine {
 
     if (options.micMode === 'mixed' || options.micMode === 'separate') {
       this.micStream = await acquireMicStream(runId, () => this.runId, () => this.state, options.micMode, recorderSettings, this.deps);
+      this.applyMicMuteState();
     }
 
     if (options.micMode === 'mixed') {
@@ -321,6 +343,7 @@ export class RecorderEngine {
     this.suffix = '';
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
+    this.micMuted = false;
     this.finalizedArtifacts = [];
     this.stopPromise = null; this.resolveStop = null;
     this.pendingStartPromises = [];

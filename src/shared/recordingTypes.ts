@@ -40,6 +40,12 @@ export type RecordingSessionSnapshot = {
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];
+  /**
+   * Live mic-mute state during an active recording. The mic keeps flowing but
+   * its track emits silence (see RecorderEngine.setMicMuted). Omitted/false
+   * means the mic is live; only meaningful while `runConfig.micMode !== 'off'`.
+   */
+  micMuted?: boolean;
   updatedAt: number;
 };
 
@@ -54,5 +60,7 @@ export type RecordingStatusView = {
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];
+  /** Live mic-mute state; see {@link RecordingSessionSnapshot.micMuted}. */
+  micMuted?: boolean;
   updatedAt: number;
 };
