@@ -266,4 +266,39 @@ describe('offscreen rpc handlers', () => {
       expect(responseFor(port, 'mute-3')).toEqual({ ok: true });
     });
   });
+
+  describe('OFFSCREEN_SET_CAMERA_MUTED', () => {
+    it('rejects a camera-hide request when the recorder is not active', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(false), setCameraMuted: jest.fn() };
+      const { port, listener } = wire({ engine });
+
+      await listener({ __id: 'cam-1', type: 'OFFSCREEN_SET_CAMERA_MUTED', muted: true });
+
+      expect(responseFor(port, 'cam-1')).toEqual({
+        ok: false,
+        error: 'Camera hide requested but recorder is not active',
+      });
+      expect(engine.setCameraMuted).not.toHaveBeenCalled();
+    });
+
+    it('hides the camera when the recorder is active', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(true), setCameraMuted: jest.fn() };
+      const { port, listener } = wire({ engine });
+
+      await listener({ __id: 'cam-2', type: 'OFFSCREEN_SET_CAMERA_MUTED', muted: true });
+
+      expect(engine.setCameraMuted).toHaveBeenCalledWith(true);
+      expect(responseFor(port, 'cam-2')).toEqual({ ok: true });
+    });
+
+    it('coerces a non-boolean muted flag to false', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(true), setCameraMuted: jest.fn() };
+      const { port, listener } = wire({ engine });
+
+      await listener({ __id: 'cam-3', type: 'OFFSCREEN_SET_CAMERA_MUTED', muted: 1 });
+
+      expect(engine.setCameraMuted).toHaveBeenCalledWith(false);
+      expect(responseFor(port, 'cam-3')).toEqual({ ok: true });
+    });
+  });
 });

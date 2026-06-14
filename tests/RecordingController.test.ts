@@ -245,4 +245,53 @@ describe('RecordingController', () => {
       expect(session.getSnapshot().micMuted).toBeUndefined();
     });
   });
+
+  describe('setCameraMuted', () => {
+    const startRun = (recordSelfVideo: boolean) =>
+      session.start({ storageMode: 'local', micMode: 'off', recordSelfVideo }, { targetTabId: 42 });
+
+    it('rejects when no recording is active', async () => {
+      const result = await controller.setCameraMuted(true);
+      expect(result).toEqual(
+        expect.objectContaining({ ok: false, error: 'Camera hide requested but no recording is active' })
+      );
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the active recording has no camera', async () => {
+      startRun(false);
+      const result = await controller.setCameraMuted(true);
+      expect(result).toEqual(
+        expect.objectContaining({ ok: false, error: 'Camera hide requested but this recording has no camera' })
+      );
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+    });
+
+    it('forwards OFFSCREEN_SET_CAMERA_MUTED and mirrors the flag onto the session', async () => {
+      startRun(true);
+      session.markRecording();
+
+      const hidden = await controller.setCameraMuted(true);
+
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_SET_CAMERA_MUTED', muted: true });
+      expect(hidden.ok).toBe(true);
+      expect(session.getSnapshot().cameraMuted).toBe(true);
+
+      offscreen.rpc.mockClear();
+      await controller.setCameraMuted(false);
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_SET_CAMERA_MUTED', muted: false });
+      expect(session.getSnapshot().cameraMuted).toBeUndefined();
+    });
+
+    it('leaves the recording intact when the offscreen camera toggle fails', async () => {
+      startRun(true);
+      session.markRecording();
+      offscreen.rpc.mockResolvedValue({ ok: false, error: 'cam boom' });
+
+      const result = await controller.setCameraMuted(true);
+      expect(result).toEqual(expect.objectContaining({ ok: false, error: 'cam boom' }));
+      expect(session.getSnapshot().phase).toBe('recording');
+      expect(session.getSnapshot().cameraMuted).toBeUndefined();
+    });
+  });
 });

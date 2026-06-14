@@ -77,3 +77,23 @@ describe('session snapshot micMuted', () => {
     expect(toStatusView(active() as any).micMuted).toBeUndefined();
   });
 });
+
+describe('session snapshot cameraMuted', () => {
+  const active = (extra: Record<string, unknown> = {}) => ({
+    phase: 'recording',
+    runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: true },
+    updatedAt: 1,
+    ...extra,
+  });
+
+  it('keeps cameraMuted only while a recording is active', () => {
+    expect(normalizeSessionSnapshot(active({ cameraMuted: true })).cameraMuted).toBe(true);
+    expect(normalizeSessionSnapshot(active()).cameraMuted).toBeUndefined();
+    expect(normalizeSessionSnapshot({ phase: 'idle', cameraMuted: true, updatedAt: 1 }).cameraMuted).toBeUndefined();
+  });
+
+  it('projects cameraMuted onto the popup status view', () => {
+    expect(toStatusView(active({ cameraMuted: true }) as any).cameraMuted).toBe(true);
+    expect(toStatusView(active() as any).cameraMuted).toBeUndefined();
+  });
+});

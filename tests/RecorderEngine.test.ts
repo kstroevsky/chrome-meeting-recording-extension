@@ -866,6 +866,52 @@ describe('RecorderEngine', () => {
 
     await engine.stop();
   });
+
+  it('hides and shows the live camera by toggling the self-video track to black frames', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const selfVideoTrack = makeTrack('video', { width: 1280, height: 720, frameRate: 30 });
+    const selfVideoStream = makeStream({ videoTracks: [selfVideoTrack] });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.video && constraints.audio === false) return selfVideoStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ recordSelfVideo: true }));
+    await flushAsyncWork();
+
+    // Black-frames-in-place: the camera track stays live (never stopped) but is disabled.
+    expect(selfVideoTrack.enabled).toBe(true);
+    engine.setCameraMuted(true);
+    expect(selfVideoTrack.enabled).toBe(false);
+    expect(selfVideoTrack.stop).not.toHaveBeenCalled();
+    engine.setCameraMuted(false);
+    expect(selfVideoTrack.enabled).toBe(true);
+
+    await engine.stop();
+  });
+
+  it('treats camera hide as a safe no-op when no camera is recording', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig());
+    expect(() => engine.setCameraMuted(true)).not.toThrow();
+
+    await engine.stop();
+  });
 });
 
 // openStorageTarget is a RecorderTaskUtils helper, not part of the engine facade;

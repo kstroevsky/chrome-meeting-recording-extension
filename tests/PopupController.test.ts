@@ -510,4 +510,67 @@ describe('PopupController', () => {
       expect(btn.hidden).toBe(true);
     });
   });
+
+  describe('hide-camera toggle', () => {
+    const addCameraButton = () => {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-secondary';
+      const label = document.createElement('span');
+      label.setAttribute('data-camera-label', '');
+      label.textContent = 'Hide Camera';
+      btn.appendChild(label);
+      elements.hideCameraBtn = btn;
+      return { btn, label };
+    };
+
+    it('shows the toggle and hides the camera during a self-video recording', async () => {
+      const { btn, label } = addCameraButton();
+      mockSendMessage.mockResolvedValueOnce({
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: true },
+          updatedAt: Date.now(),
+        },
+      });
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(btn.hidden).toBe(false);
+      expect(label.textContent).toBe('Hide Camera');
+
+      mockSendMessage.mockClear();
+      mockSendMessage.mockResolvedValueOnce({
+        ok: true,
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: true },
+          cameraMuted: true,
+          updatedAt: Date.now(),
+        },
+      });
+
+      btn.click();
+      await new Promise(process.nextTick);
+
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'SET_CAMERA_MUTED', muted: true });
+      expect(label.textContent).toBe('Show Camera');
+      expect(btn.getAttribute('aria-pressed')).toBe('true');
+      expect(btn.classList.contains('btn-danger')).toBe(true);
+    });
+
+    it('hides the toggle when the recording has no camera', async () => {
+      const { btn } = addCameraButton();
+      mockSendMessage.mockResolvedValueOnce({
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          updatedAt: Date.now(),
+        },
+      });
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(btn.hidden).toBe(true);
+    });
+  });
 });

@@ -198,4 +198,31 @@ describe('RecordingSession state machine', () => {
       expect(session.markIdle().micMuted).toBeUndefined();
     });
   });
+
+  describe('camera hide', () => {
+    it('sets cameraMuted true and clears it (never false), independent of micMuted', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.setMicMuted(true);
+
+      expect(session.setCameraMuted(true).cameraMuted).toBe(true);
+      expect(session.getSnapshot().micMuted).toBe(true); // mic flag untouched
+      expect(session.setCameraMuted(false).cameraMuted).toBeUndefined();
+    });
+
+    it('preserves cameraMuted across transitions and offscreen re-broadcasts', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.markRecording();
+      session.setCameraMuted(true);
+
+      expect(session.markStopping().cameraMuted).toBe(true);
+      expect(session.applyOffscreenPhase({ phase: 'recording', warnings: ['w'] }).cameraMuted).toBe(true);
+    });
+
+    it('clears cameraMuted when the session returns to idle', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.setCameraMuted(true);
+
+      expect(session.markIdle().cameraMuted).toBeUndefined();
+    });
+  });
 });
