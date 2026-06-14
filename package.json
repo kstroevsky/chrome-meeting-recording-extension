@@ -8,6 +8,9 @@
     "scripts": {
         "dev": "webpack --mode=development",
         "build": "webpack --mode=production",
+        "build:edge": "webpack --mode=production --env target=edge",
+        "build:brave": "webpack --mode=production --env target=brave",
+        "build:opera": "webpack --mode=production --env target=opera",
         "preversion": "npm run typecheck && npm run test:unit",
         "check:version": "node scripts/check-version-monotonic.mjs",
         "release:build": "npm run check:version && npm run build && npm run test:production-guards",

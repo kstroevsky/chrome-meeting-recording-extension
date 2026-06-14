@@ -18,10 +18,13 @@ import { getRedirectURL, launchWebAuthFlow } from '../../chrome/identity';
 
 const DRIVE_OAUTH_SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
+function getBrowserTarget(): string {
+  if (typeof __BROWSER_TARGET__ !== 'undefined' && __BROWSER_TARGET__) return __BROWSER_TARGET__;
+  return (globalThis as { __BROWSER_TARGET__?: string }).__BROWSER_TARGET__ ?? 'chrome';
+}
+
 function getWebOAuthClientId(): string {
-  // Wired by the per-browser build target (ADR-0002, Phase 0 step 2); empty until
-  // then, which makes WebAuthFlowAuthProvider.getToken fail fast with a clear
-  // "not configured" error rather than starting a broken OAuth flow.
+  if (typeof __WEB_OAUTH_CLIENT_ID__ !== 'undefined' && __WEB_OAUTH_CLIENT_ID__) return __WEB_OAUTH_CLIENT_ID__;
   return (globalThis as { __WEB_OAUTH_CLIENT_ID__?: string }).__WEB_OAUTH_CLIENT_ID__ ?? '';
 }
 
@@ -30,7 +33,11 @@ function chromeIdentityTokenSupported(): boolean {
 }
 
 export function createAuthProvider(): AuthProvider {
-  if (chromeIdentityTokenSupported()) {
+  // chrome.identity.getAuthToken only works on Chrome itself; every other
+  // Chromium target uses launchWebAuthFlow. The build target decides, with a
+  // runtime capability guard so a Chrome build lacking getAuthToken still falls
+  // back rather than crashing.
+  if (getBrowserTarget() === 'chrome' && chromeIdentityTokenSupported()) {
     return new ChromeIdentityAuthProvider();
   }
   return new WebAuthFlowAuthProvider(

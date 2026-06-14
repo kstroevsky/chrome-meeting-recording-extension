@@ -7,9 +7,14 @@ const pkg = require('./package.json')
 const { toChromeManifestVersion } = require('./scripts/lib/manifestVersion.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
+const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
 const STATIC_DIR = 'static'
 const PUBLIC_DIR = 'public'
+// Cross-browser build targets (ADR-0002). Chrome uses chrome.identity.getAuthToken;
+// every other Chromium target authenticates via launchWebAuthFlow.
+const KNOWN_BROWSER_TARGETS = ['chrome', 'edge', 'brave', 'opera', 'vivaldi', 'arc']
+const DEFAULT_BROWSER_TARGET = 'chrome'
 
 function parseDotEnv(rawContent) {
   const parsed = {}
@@ -45,12 +50,35 @@ function resolveGoogleOauthClientId(projectRoot) {
   return value.trim()
 }
 
-function transformManifest(content, oauthClientId, isDevBuild) {
-  const manifest = JSON.parse(content.toString('utf8'))
-  if (!manifest.oauth2 || typeof manifest.oauth2 !== 'object') {
-    throw new Error('manifest.json is missing oauth2 configuration')
+function resolveWebOauthClientId(projectRoot) {
+  const fileEnv = loadProjectDotEnv(projectRoot)
+  const value = process.env[GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY] || fileEnv[GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY] || ''
+  return value.trim()
+}
+
+function resolveBrowserTarget(rawTarget) {
+  if (rawTarget == null || rawTarget === '') return DEFAULT_BROWSER_TARGET
+  const target = String(rawTarget).trim().toLowerCase()
+  if (!KNOWN_BROWSER_TARGETS.includes(target)) {
+    throw new Error(`Unknown build target "${target}". Known targets: ${KNOWN_BROWSER_TARGETS.join(', ')}`)
   }
-  manifest.oauth2.client_id = oauthClientId
+  return target
+}
+
+function transformManifest(content, oauthClientId, isDevBuild, browserTarget) {
+  const manifest = JSON.parse(content.toString('utf8'))
+  if (browserTarget === 'chrome') {
+    if (!manifest.oauth2 || typeof manifest.oauth2 !== 'object') {
+      throw new Error('manifest.json is missing oauth2 configuration')
+    }
+    manifest.oauth2.client_id = oauthClientId
+  } else {
+    // Non-Chrome targets authenticate via launchWebAuthFlow (ADR-0002). The
+    // Chrome-only getAuthToken `oauth2` block and the dev stable-id `key` are
+    // unused there; drop them so each store package stays minimal.
+    delete manifest.oauth2
+    delete manifest.key
+  }
   // package.json is the single source of truth for the release version; the
   // numeric Chrome `version` is derived here so the two can never drift, and the
   // full semver (incl. any pre-release tag) is preserved for display in
@@ -78,15 +106,22 @@ module.exports = (_env, argv) => {
   const e2eMockDrive = isTruthyEnvFlag(env.e2eMockDrive) || process.env.E2E_MOCK_DRIVE === '1'
   const e2eRealCaptureTab = isTruthyEnvFlag(env.e2eRealCaptureTab)
     || process.env.E2E_REAL_CAPTURE_TAB === '1'
+  const browserTarget = resolveBrowserTarget(env.target)
   const outputDir = typeof env.outputPath === 'string' && env.outputPath.trim()
     ? env.outputPath.trim()
-    : 'dist'
+    : (browserTarget === DEFAULT_BROWSER_TARGET ? 'dist' : `dist-${browserTarget}`)
   const configuredGoogleOauthClientId = resolveGoogleOauthClientId(__dirname)
   const googleOauthClientId = configuredGoogleOauthClientId || OAUTH_CLIENT_ID_PLACEHOLDER
+  const webOauthClientId = resolveWebOauthClientId(__dirname)
 
-  if (!configuredGoogleOauthClientId) {
+  if (browserTarget === 'chrome' && !configuredGoogleOauthClientId) {
     console.warn(
       `[build] ${GOOGLE_OAUTH_CLIENT_ID_ENV_KEY} is not set; keeping placeholder in dist/manifest.json. Drive OAuth will fail until you configure it.`
+    )
+  }
+  if (browserTarget !== 'chrome' && !webOauthClientId) {
+    console.warn(
+      `[build] ${GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY} is not set for target "${browserTarget}"; Drive OAuth via launchWebAuthFlow will fail until you configure it.`
     )
   }
 
@@ -128,6 +163,8 @@ module.exports = (_env, argv) => {
         'globalThis.__E2E_MOCK_CAPTURE__': JSON.stringify(e2eMockCapture),
         'globalThis.__E2E_MOCK_DRIVE__': JSON.stringify(e2eMockDrive),
         'globalThis.__E2E_REAL_CAPTURE_TAB__': JSON.stringify(e2eRealCaptureTab),
+        '__BROWSER_TARGET__': JSON.stringify(browserTarget),
+        '__WEB_OAUTH_CLIENT_ID__': JSON.stringify(webOauthClientId),
         'process.env.NODE_ENV': JSON.stringify(mode),
       }),
       // Stamp the per-compilation content hash into every entry bundle as
@@ -144,7 +181,7 @@ module.exports = (_env, argv) => {
           {
             from: path.join(STATIC_DIR, 'manifest.json'),
             to: 'manifest.json',
-            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild),
+            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild, browserTarget),
           },
           { from: path.join(STATIC_DIR, 'popup.html'),     to: 'popup.html' },
           { from: path.join(STATIC_DIR, 'debug.html'),     to: 'debug.html' },

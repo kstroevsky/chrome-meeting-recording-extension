@@ -239,7 +239,8 @@ Drive mode requires a **Chrome Extension** OAuth 2.0 client. A Desktop or Web cl
 
 | Command | Description |
 | :--- | :--- |
-| `npm run build` | Production build to `dist/` (minified) |
+| `npm run build` | Production build to `dist/` (minified, Chrome target) |
+| `npm run build:edge` / `build:brave` / `build:opera` | Per-browser production build to `dist-<target>/` (drops Chrome-only `oauth2`/`key`; auth via `launchWebAuthFlow`) |
 | `npm run dev` | Development build to `dist/` (unminified, source maps) |
 | `npm run watch` | Rebuild on every file save (development) |
 | `npm run typecheck` | Strict TypeScript check across `src/` without emitting |

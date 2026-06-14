@@ -101,4 +101,13 @@ describe('createAuthProvider', () => {
       (chrome.identity as any).getAuthToken = original;
     }
   });
+
+  it('selects WebAuthFlow for a non-Chrome build target even when getAuthToken exists', () => {
+    (globalThis as any).__BROWSER_TARGET__ = 'edge';
+    try {
+      expect(createAuthProvider()).toBeInstanceOf(WebAuthFlowAuthProvider);
+    } finally {
+      delete (globalThis as any).__BROWSER_TARGET__;
+    }
+  });
 });
