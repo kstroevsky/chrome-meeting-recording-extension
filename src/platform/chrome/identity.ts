@@ -35,3 +35,24 @@ export function removeCachedAuthToken(token: string): Promise<void> {
     }
   });
 }
+
+/**
+ * Runs an OAuth2 flow in a browser window and resolves with the final redirect
+ * URL. The cross-browser path (Edge/Brave/Opera/Firefox) where getAuthToken is
+ * Chrome-only; the caller parses the access token out of the redirect.
+ */
+export function launchWebAuthFlow(url: string, interactive: boolean): Promise<string> {
+  return new Promise((resolve, reject) => {
+    chrome.identity.launchWebAuthFlow({ url, interactive }, (redirectUrl) => {
+      const error = chrome.runtime.lastError?.message;
+      if (error) return reject(new Error(error));
+      if (!redirectUrl) return reject(new Error('launchWebAuthFlow returned no redirect URL'));
+      resolve(redirectUrl);
+    });
+  });
+}
+
+/** The extension's OAuth redirect target, e.g. `https://<id>.chromiumapp.org/`. */
+export function getRedirectURL(): string {
+  return chrome.identity.getRedirectURL();
+}

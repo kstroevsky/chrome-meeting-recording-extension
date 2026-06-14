@@ -5,7 +5,8 @@
  * silent-first fallback and explicit diagnostics for bad client IDs.
  */
 
-import { getAuthToken, removeCachedAuthToken } from '../platform/chrome/identity';
+import type { AuthProvider } from '../platform/capabilities/AuthProvider';
+import { createAuthProvider } from '../platform/capabilities/auth/createAuthProvider';
 import { getRuntimeId, getRuntimeManifest } from '../platform/chrome/runtime';
 import { isE2EMockDriveBuild } from '../shared/build';
 
@@ -17,8 +18,24 @@ export type DriveTokenOptions = { refresh?: boolean };
 const BAD_CLIENT_ID_RE = /bad client id/i;
 let lastIssuedToken: string | null = null;
 
+// Token acquisition is delegated to a browser-specific AuthProvider (ADR-0002);
+// the silent-then-interactive, refresh, and bad-client-id policy below stays
+// browser-agnostic. Lazily created so the chrome capability check runs after the
+// environment is ready (and is overridable in tests via setAuthProvider).
+let authProvider: AuthProvider | null = null;
+
+function provider(): AuthProvider {
+  if (!authProvider) authProvider = createAuthProvider();
+  return authProvider;
+}
+
+/** Test seam: inject a fake AuthProvider, or pass null to reset to the default. */
+export function setAuthProvider(next: AuthProvider | null): void {
+  authProvider = next;
+}
+
 async function issueAuthToken(interactive: boolean): Promise<string> {
-  const token = await getAuthToken(interactive);
+  const token = await provider().getToken({ interactive });
   lastIssuedToken = token;
   return token;
 }
@@ -27,7 +44,7 @@ async function invalidateLastIssuedToken(): Promise<void> {
   if (!lastIssuedToken) return;
   const token = lastIssuedToken;
   lastIssuedToken = null;
-  await removeCachedAuthToken(token);
+  await provider().invalidateToken(token);
 }
 
 function isBadClientIdError(message: string): boolean {

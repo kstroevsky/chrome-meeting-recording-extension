@@ -1,4 +1,5 @@
-import { fetchDriveTokenWithFallback } from '../src/background/driveAuth';
+import { fetchDriveTokenWithFallback, setAuthProvider } from '../src/background/driveAuth';
+import type { AuthProvider } from '../src/platform/capabilities/AuthProvider';
 
 type AuthReply = { token?: string; error?: string };
 
@@ -94,5 +95,55 @@ describe('driveAuth', () => {
       { token: 'cached-token' },
       expect.any(Function)
     );
+  });
+});
+
+describe('driveAuth provider delegation (browser-agnostic policy)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (globalThis as any).__E2E_MOCK_DRIVE__ = false;
+  });
+  afterEach(() => setAuthProvider(null));
+
+  function fakeProvider(over: Partial<AuthProvider> = {}): AuthProvider {
+    return { getToken: jest.fn(), invalidateToken: jest.fn().mockResolvedValue(undefined), ...over };
+  }
+
+  it('acquires the token through the injected provider, not chrome.identity', async () => {
+    const provider = fakeProvider({ getToken: jest.fn().mockResolvedValue('provider-token') });
+    setAuthProvider(provider);
+
+    const result = await fetchDriveTokenWithFallback();
+
+    expect(result).toEqual({ ok: true, token: 'provider-token' });
+    expect(provider.getToken).toHaveBeenCalledWith({ interactive: false });
+    expect(chrome.identity.getAuthToken).not.toHaveBeenCalled();
+  });
+
+  it('escalates to an interactive request when the provider silent-fails', async () => {
+    const getToken = jest.fn()
+      .mockRejectedValueOnce(new Error('not granted yet'))
+      .mockResolvedValueOnce('interactive-token');
+    setAuthProvider(fakeProvider({ getToken }));
+
+    const result = await fetchDriveTokenWithFallback();
+
+    expect(result).toEqual({ ok: true, token: 'interactive-token' });
+    expect(getToken).toHaveBeenNthCalledWith(1, { interactive: false });
+    expect(getToken).toHaveBeenNthCalledWith(2, { interactive: true });
+  });
+
+  it('invalidates the prior token via the provider on forced refresh', async () => {
+    const invalidateToken = jest.fn().mockResolvedValue(undefined);
+    const getToken = jest.fn()
+      .mockResolvedValueOnce('first-token')
+      .mockResolvedValueOnce('second-token');
+    setAuthProvider(fakeProvider({ getToken, invalidateToken }));
+
+    await fetchDriveTokenWithFallback();
+    await fetchDriveTokenWithFallback({ refresh: true });
+
+    expect(invalidateToken).toHaveBeenCalledWith('first-token');
+    expect(getToken).toHaveBeenCalledTimes(2);
   });
 });

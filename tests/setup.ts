@@ -103,6 +103,8 @@ Object.assign(global, {
     identity: {
       getAuthToken: jest.fn(),
       removeCachedAuthToken: jest.fn((_details: any, cb?: () => void) => cb?.()),
+      launchWebAuthFlow: jest.fn(),
+      getRedirectURL: jest.fn(() => 'https://mock-id.chromiumapp.org/'),
     }
   }
 });
