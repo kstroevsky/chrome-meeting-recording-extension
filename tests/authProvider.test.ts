@@ -2,7 +2,10 @@ import { ChromeIdentityAuthProvider } from '../src/platform/capabilities/auth/Ch
 import {
   WebAuthFlowAuthProvider,
   buildAuthUrl,
-  parseAccessToken,
+  parseAuthRedirect,
+  deriveCodeChallenge,
+  createPkcePair,
+  exchangeAuthCodeForToken,
 } from '../src/platform/capabilities/auth/WebAuthFlowAuthProvider';
 import { createAuthProvider } from '../src/platform/capabilities/auth/createAuthProvider';
 
@@ -30,60 +33,124 @@ describe('ChromeIdentityAuthProvider', () => {
   });
 });
 
-describe('WebAuthFlowAuthProvider helpers', () => {
-  const config = {
-    clientId: 'web-client-id',
-    scopes: ['https://www.googleapis.com/auth/drive.file', 'email'],
-    redirectUri: 'https://abc.chromiumapp.org/',
-  };
+const config = {
+  clientId: 'web-client-id',
+  clientSecret: 'web-secret',
+  scopes: ['https://www.googleapis.com/auth/drive.file', 'email'],
+  redirectUri: 'https://abc.chromiumapp.org/',
+};
 
-  it('builds a Google implicit-flow auth URL with silent prompt', () => {
-    const url = new URL(buildAuthUrl(config, false));
+describe('WebAuthFlow PKCE + URL helpers', () => {
+  it('derives the RFC 7636 S256 challenge from a verifier', async () => {
+    // RFC 7636 Appendix B test vector.
+    await expect(
+      deriveCodeChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk')
+    ).resolves.toBe('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+  });
+
+  it('creates a url-safe verifier whose challenge derives from it', async () => {
+    const { verifier, challenge } = await createPkcePair();
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(challenge).toBe(await deriveCodeChallenge(verifier));
+  });
+
+  it('builds an authorization-code + PKCE auth URL', () => {
+    const url = new URL(buildAuthUrl(config, { codeChallenge: 'CH', state: 'ST', interactive: false }));
     expect(`${url.origin}${url.pathname}`).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('response_type')).toBe('code');
     expect(url.searchParams.get('client_id')).toBe('web-client-id');
-    expect(url.searchParams.get('response_type')).toBe('token');
-    expect(url.searchParams.get('redirect_uri')).toBe('https://abc.chromiumapp.org/');
+    expect(url.searchParams.get('code_challenge')).toBe('CH');
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(url.searchParams.get('state')).toBe('ST');
     expect(url.searchParams.get('scope')).toBe('https://www.googleapis.com/auth/drive.file email');
     expect(url.searchParams.get('prompt')).toBe('none');
   });
 
   it('uses an interactive consent prompt when interactive', () => {
-    expect(new URL(buildAuthUrl(config, true)).searchParams.get('prompt')).toBe('consent');
+    const url = new URL(buildAuthUrl(config, { codeChallenge: 'CH', state: 'ST', interactive: true }));
+    expect(url.searchParams.get('prompt')).toBe('consent');
   });
 
-  it('parses the access token from the redirect fragment', () => {
-    expect(
-      parseAccessToken('https://abc.chromiumapp.org/#access_token=tok-123&token_type=Bearer&expires_in=3599')
-    ).toBe('tok-123');
-    expect(parseAccessToken('https://abc.chromiumapp.org/#error=access_denied')).toBeNull();
-    expect(parseAccessToken('https://abc.chromiumapp.org/')).toBeNull();
+  it('parses code and state from the redirect query', () => {
+    expect(parseAuthRedirect('https://abc.chromiumapp.org/?code=abc&state=xyz')).toEqual({ code: 'abc', state: 'xyz' });
+    expect(parseAuthRedirect('https://abc.chromiumapp.org/?error=denied')).toEqual({ code: null, state: null });
+    expect(parseAuthRedirect('https://abc.chromiumapp.org/')).toEqual({ code: null, state: null });
+  });
+});
+
+describe('exchangeAuthCodeForToken', () => {
+  afterEach(() => { (global as any).fetch = undefined; });
+
+  it('POSTs code + verifier + secret and returns the access token', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ access_token: 'at-123' }) });
+
+    await expect(exchangeAuthCodeForToken({ code: 'c', codeVerifier: 'v', config })).resolves.toBe('at-123');
+
+    const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(url).toBe('https://oauth2.googleapis.com/token');
+    expect(init.body).toContain('grant_type=authorization_code');
+    expect(init.body).toContain('code_verifier=v');
+    expect(init.body).toContain('client_secret=web-secret');
+  });
+
+  it('throws with detail on a non-OK response', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue({ ok: false, status: 400, text: async () => 'invalid_grant' });
+    await expect(exchangeAuthCodeForToken({ code: 'c', codeVerifier: 'v', config })).rejects.toThrow(/400.*invalid_grant/);
+  });
+
+  it('throws when no access_token is returned', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    await expect(exchangeAuthCodeForToken({ code: 'c', codeVerifier: 'v', config })).rejects.toThrow(/no access_token/);
   });
 });
 
 describe('WebAuthFlowAuthProvider', () => {
-  const config = { clientId: 'web-client-id', scopes: ['s'], redirectUri: 'https://abc.chromiumapp.org/' };
+  function deps(over: Record<string, unknown> = {}) {
+    return {
+      launch: jest.fn().mockImplementation((url: string) => {
+        const state = new URL(url).searchParams.get('state');
+        return Promise.resolve(`https://abc.chromiumapp.org/?code=auth-code&state=${state}`);
+      }),
+      createPkce: jest.fn().mockResolvedValue({ verifier: 'ver', challenge: 'chal' }),
+      exchange: jest.fn().mockResolvedValue('final-token'),
+      ...over,
+    };
+  }
 
-  it('launches the flow and resolves with the access token', async () => {
-    const launch = jest.fn().mockResolvedValue('https://abc.chromiumapp.org/#access_token=flow-token&token_type=Bearer');
-    const provider = new WebAuthFlowAuthProvider(config, launch);
+  it('runs code+PKCE and resolves with the exchanged token', async () => {
+    const d = deps();
+    const provider = new WebAuthFlowAuthProvider(config, d);
 
-    await expect(provider.getToken({ interactive: false })).resolves.toBe('flow-token');
-    expect(launch).toHaveBeenCalledWith(expect.stringContaining('client_id=web-client-id'), false);
+    await expect(provider.getToken({ interactive: false })).resolves.toBe('final-token');
+    expect(d.launch).toHaveBeenCalledWith(expect.stringContaining('response_type=code'), false);
+    expect(d.launch).toHaveBeenCalledWith(expect.stringContaining('code_challenge=chal'), false);
+    expect(d.exchange).toHaveBeenCalledWith({ code: 'auth-code', codeVerifier: 'ver', config });
   });
 
   it('fails fast when the client ID is not configured', async () => {
-    const provider = new WebAuthFlowAuthProvider({ ...config, clientId: '' }, jest.fn());
+    const provider = new WebAuthFlowAuthProvider({ ...config, clientId: '' }, deps());
     await expect(provider.getToken({ interactive: true })).rejects.toThrow(/client ID is not configured/);
   });
 
-  it('rejects when the redirect carries no access token', async () => {
-    const launch = jest.fn().mockResolvedValue('https://abc.chromiumapp.org/#error=access_denied');
-    const provider = new WebAuthFlowAuthProvider(config, launch);
-    await expect(provider.getToken({ interactive: false })).rejects.toThrow(/no access token/);
+  it('rejects on a state mismatch (CSRF guard)', async () => {
+    const provider = new WebAuthFlowAuthProvider(config, deps({
+      launch: jest.fn().mockResolvedValue('https://abc.chromiumapp.org/?code=c&state=WRONG'),
+    }));
+    await expect(provider.getToken({ interactive: false })).rejects.toThrow(/state mismatch/);
+  });
+
+  it('rejects when the redirect carries no authorization code', async () => {
+    const provider = new WebAuthFlowAuthProvider(config, deps({
+      launch: jest.fn().mockImplementation((url: string) => {
+        const state = new URL(url).searchParams.get('state');
+        return Promise.resolve(`https://abc.chromiumapp.org/?error=denied&state=${state}`);
+      }),
+    }));
+    await expect(provider.getToken({ interactive: false })).rejects.toThrow(/no authorization code/);
   });
 
   it('treats invalidateToken as a no-op', async () => {
-    await expect(new WebAuthFlowAuthProvider(config, jest.fn()).invalidateToken('t')).resolves.toBeUndefined();
+    await expect(new WebAuthFlowAuthProvider(config, deps()).invalidateToken('t')).resolves.toBeUndefined();
   });
 });
 

@@ -28,6 +28,11 @@ function getWebOAuthClientId(): string {
   return (globalThis as { __WEB_OAUTH_CLIENT_ID__?: string }).__WEB_OAUTH_CLIENT_ID__ ?? '';
 }
 
+function getWebOAuthClientSecret(): string {
+  if (typeof __WEB_OAUTH_CLIENT_SECRET__ !== 'undefined' && __WEB_OAUTH_CLIENT_SECRET__) return __WEB_OAUTH_CLIENT_SECRET__;
+  return (globalThis as { __WEB_OAUTH_CLIENT_SECRET__?: string }).__WEB_OAUTH_CLIENT_SECRET__ ?? '';
+}
+
 function chromeIdentityTokenSupported(): boolean {
   return typeof chrome !== 'undefined' && typeof chrome.identity?.getAuthToken === 'function';
 }
@@ -43,9 +48,10 @@ export function createAuthProvider(): AuthProvider {
   return new WebAuthFlowAuthProvider(
     {
       clientId: getWebOAuthClientId(),
+      clientSecret: getWebOAuthClientSecret(),
       scopes: DRIVE_OAUTH_SCOPES,
       redirectUri: getRedirectURL(),
     },
-    launchWebAuthFlow
+    { launch: launchWebAuthFlow }
   );
 }

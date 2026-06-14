@@ -7,6 +7,21 @@ if (typeof (globalThis as any).structuredClone !== 'function') {
   (globalThis as any).structuredClone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 }
 
+// jsdom does not expose Web Crypto's subtle API; the PKCE helpers need it.
+if (!(globalThis as any).crypto?.subtle) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { webcrypto } = require('node:crypto');
+  Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
+}
+
+// jsdom does not expose TextEncoder/TextDecoder globally; the PKCE helpers need them.
+if (typeof (globalThis as any).TextEncoder === 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { TextEncoder, TextDecoder } = require('node:util');
+  (globalThis as any).TextEncoder = TextEncoder;
+  (globalThis as any).TextDecoder = TextDecoder;
+}
+
 // Mock global Chrome API for tests
 Object.assign(global, {
   chrome: {

@@ -8,6 +8,7 @@ const { toChromeManifestVersion } = require('./scripts/lib/manifestVersion.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
+const GOOGLE_WEB_OAUTH_CLIENT_SECRET_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_SECRET'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
 const STATIC_DIR = 'static'
 const PUBLIC_DIR = 'public'
@@ -53,6 +54,12 @@ function resolveGoogleOauthClientId(projectRoot) {
 function resolveWebOauthClientId(projectRoot) {
   const fileEnv = loadProjectDotEnv(projectRoot)
   const value = process.env[GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY] || fileEnv[GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY] || ''
+  return value.trim()
+}
+
+function resolveWebOauthClientSecret(projectRoot) {
+  const fileEnv = loadProjectDotEnv(projectRoot)
+  const value = process.env[GOOGLE_WEB_OAUTH_CLIENT_SECRET_ENV_KEY] || fileEnv[GOOGLE_WEB_OAUTH_CLIENT_SECRET_ENV_KEY] || ''
   return value.trim()
 }
 
@@ -113,6 +120,9 @@ module.exports = (_env, argv) => {
   const configuredGoogleOauthClientId = resolveGoogleOauthClientId(__dirname)
   const googleOauthClientId = configuredGoogleOauthClientId || OAUTH_CLIENT_ID_PLACEHOLDER
   const webOauthClientId = resolveWebOauthClientId(__dirname)
+  // The Desktop-client secret is only used by the non-Chrome launchWebAuthFlow
+  // path; never embed it in the Chrome bundle (Chrome uses getAuthToken).
+  const webOauthClientSecret = browserTarget === 'chrome' ? '' : resolveWebOauthClientSecret(__dirname)
 
   if (browserTarget === 'chrome' && !configuredGoogleOauthClientId) {
     console.warn(
@@ -165,6 +175,7 @@ module.exports = (_env, argv) => {
         'globalThis.__E2E_REAL_CAPTURE_TAB__': JSON.stringify(e2eRealCaptureTab),
         '__BROWSER_TARGET__': JSON.stringify(browserTarget),
         '__WEB_OAUTH_CLIENT_ID__': JSON.stringify(webOauthClientId),
+        '__WEB_OAUTH_CLIENT_SECRET__': JSON.stringify(webOauthClientSecret),
         'process.env.NODE_ENV': JSON.stringify(mode),
       }),
       // Stamp the per-compilation content hash into every entry bundle as
