@@ -190,4 +190,59 @@ describe('RecordingController', () => {
       expect(session.getSnapshot().phase).toBe('failed');
     });
   });
+
+  describe('setMicMuted', () => {
+    const startMic = (micMode: 'mixed' | 'separate' | 'off') =>
+      session.start({ storageMode: 'local', micMode, recordSelfVideo: false }, { targetTabId: 42 });
+
+    it('rejects when no recording is active', async () => {
+      const result = await controller.setMicMuted(true);
+
+      expect(result).toEqual(
+        expect.objectContaining({ ok: false, error: 'Mic mute requested but no recording is active' })
+      );
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the active recording has no microphone', async () => {
+      startMic('off');
+
+      const result = await controller.setMicMuted(true);
+
+      expect(result).toEqual(
+        expect.objectContaining({ ok: false, error: 'Mic mute requested but this recording has no microphone' })
+      );
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+    });
+
+    it('forwards OFFSCREEN_SET_MIC_MUTED and mirrors the flag onto the session', async () => {
+      startMic('separate');
+      session.markRecording();
+
+      const muted = await controller.setMicMuted(true);
+
+      expect(offscreen.ensureReady).toHaveBeenCalled();
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_SET_MIC_MUTED', muted: true });
+      expect(muted.ok).toBe(true);
+      expect(session.getSnapshot().micMuted).toBe(true);
+
+      offscreen.rpc.mockClear();
+      await controller.setMicMuted(false);
+
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_SET_MIC_MUTED', muted: false });
+      expect(session.getSnapshot().micMuted).toBeUndefined();
+    });
+
+    it('leaves the recording intact (not failed) when the offscreen mute fails', async () => {
+      startMic('mixed');
+      session.markRecording();
+      offscreen.rpc.mockResolvedValue({ ok: false, error: 'mute boom' });
+
+      const result = await controller.setMicMuted(true);
+
+      expect(result).toEqual(expect.objectContaining({ ok: false, error: 'mute boom' }));
+      expect(session.getSnapshot().phase).toBe('recording');
+      expect(session.getSnapshot().micMuted).toBeUndefined();
+    });
+  });
 });

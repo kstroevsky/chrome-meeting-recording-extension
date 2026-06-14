@@ -785,6 +785,87 @@ describe('RecorderEngine', () => {
       expect.stringContaining('Camera recording requested 1920x1080@30fps, but browser delivered 640x360@15fps.')
     );
   });
+
+  it('mutes and unmutes the live microphone by toggling the mic track (separate mode)', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const micTrack = makeTrack('audio');
+    const micStream = makeStream({ audioTracks: [micTrack] });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return micStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
+    await flushAsyncWork();
+
+    // Silence-in-place: the track stays live (never stopped) but emits silence.
+    expect(micTrack.enabled).toBe(true);
+    engine.setMicMuted(true);
+    expect(micTrack.enabled).toBe(false);
+    expect(micTrack.stop).not.toHaveBeenCalled();
+    engine.setMicMuted(false);
+    expect(micTrack.enabled).toBe(true);
+
+    await engine.stop();
+  });
+
+  it('mutes the microphone feeding the mixed tab recording', async () => {
+    const createMediaStreamSource = jest.fn().mockReturnValue({ connect: jest.fn() });
+    const createMediaStreamDestination = jest.fn().mockReturnValue({
+      stream: makeStream({ audioTracks: [makeTrack('audio')] }),
+    });
+    (global as any).AudioContext = jest.fn().mockImplementation(() => ({
+      resume: jest.fn().mockResolvedValue(undefined),
+      createMediaStreamSource,
+      createMediaStreamDestination,
+      destination: {},
+      close: jest.fn(),
+    }));
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const micTrack = makeTrack('audio');
+    const micStream = makeStream({ audioTracks: [micTrack] });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return micStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'mixed' }));
+
+    engine.setMicMuted(true);
+    expect(micTrack.enabled).toBe(false);
+
+    await engine.stop();
+  });
+
+  it('treats mic mute as a safe no-op for a tab-only recording', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig());
+    expect(() => engine.setMicMuted(true)).not.toThrow();
+
+    await engine.stop();
+  });
 });
 
 // openStorageTarget is a RecorderTaskUtils helper, not part of the engine facade;

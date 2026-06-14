@@ -171,4 +171,31 @@ describe('RecordingSession state machine', () => {
       expect(session.getSnapshot().phase).toBe('recording');
     });
   });
+
+  describe('mic mute', () => {
+    it('sets micMuted to true and clears it (never stores false)', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+
+      expect(session.setMicMuted(true).micMuted).toBe(true);
+      expect(persist).toHaveBeenCalled();
+      expect(session.setMicMuted(false).micMuted).toBeUndefined();
+    });
+
+    it('preserves micMuted across transitions and offscreen re-broadcasts', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.markRecording();
+      session.setMicMuted(true);
+
+      expect(session.markStopping().micMuted).toBe(true);
+      // A late offscreen phase push (e.g. a warning) must not wipe the flag.
+      expect(session.applyOffscreenPhase({ phase: 'recording', warnings: ['w'] }).micMuted).toBe(true);
+    });
+
+    it('clears micMuted when the session returns to idle', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.setMicMuted(true);
+
+      expect(session.markIdle().micMuted).toBeUndefined();
+    });
+  });
 });

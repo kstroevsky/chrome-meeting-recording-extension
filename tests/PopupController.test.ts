@@ -446,4 +446,68 @@ describe('PopupController', () => {
     expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Failed to start recording'));
     expect(elements.startBtn.disabled).toBe(false);
   });
+
+  describe('mic mute toggle', () => {
+    const addMuteButton = () => {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-secondary';
+      const label = document.createElement('span');
+      label.setAttribute('data-mute-label', '');
+      label.textContent = 'Mute Mic';
+      btn.appendChild(label);
+      elements.muteMicBtn = btn;
+      return { btn, label };
+    };
+
+    it('shows the toggle and mutes the mic during a mic recording', async () => {
+      const { btn, label } = addMuteButton();
+      mockSendMessage.mockResolvedValueOnce({
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: false },
+          updatedAt: Date.now(),
+        },
+      });
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(btn.hidden).toBe(false);
+      expect(label.textContent).toBe('Mute Mic');
+      expect(btn.getAttribute('aria-pressed')).toBe('false');
+
+      mockSendMessage.mockClear();
+      mockSendMessage.mockResolvedValueOnce({
+        ok: true,
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: false },
+          micMuted: true,
+          updatedAt: Date.now(),
+        },
+      });
+
+      btn.click();
+      await new Promise(process.nextTick);
+
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'SET_MIC_MUTED', muted: true });
+      expect(label.textContent).toBe('Unmute Mic');
+      expect(btn.getAttribute('aria-pressed')).toBe('true');
+      expect(btn.classList.contains('btn-danger')).toBe(true);
+    });
+
+    it('hides the toggle when the recording has no microphone', async () => {
+      const { btn } = addMuteButton();
+      mockSendMessage.mockResolvedValueOnce({
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          updatedAt: Date.now(),
+        },
+      });
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(btn.hidden).toBe(true);
+    });
+  });
 });

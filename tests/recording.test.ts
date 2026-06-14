@@ -5,8 +5,10 @@ import {
   isBusyPhase,
   isStoppablePhase,
   normalizeMicMode,
+  normalizeSessionSnapshot,
   normalizeUploadSummary,
   normalizeWarnings,
+  toStatusView,
 } from '../src/shared/recording';
 
 describe('shared/recording helpers', () => {
@@ -53,5 +55,25 @@ describe('shared/recording helpers', () => {
       uploaded: [{ stream: 'tab', filename: 'meeting.webm' }],
       localFallbacks: [{ stream: 'tab', filename: 'fallback.webm', error: 'failed' }],
     });
+  });
+});
+
+describe('session snapshot micMuted', () => {
+  const active = (extra: Record<string, unknown> = {}) => ({
+    phase: 'recording',
+    runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: false },
+    updatedAt: 1,
+    ...extra,
+  });
+
+  it('keeps micMuted only while a recording is active', () => {
+    expect(normalizeSessionSnapshot(active({ micMuted: true })).micMuted).toBe(true);
+    expect(normalizeSessionSnapshot(active()).micMuted).toBeUndefined();
+    expect(normalizeSessionSnapshot({ phase: 'idle', micMuted: true, updatedAt: 1 }).micMuted).toBeUndefined();
+  });
+
+  it('projects micMuted onto the popup status view', () => {
+    expect(toStatusView(active({ micMuted: true }) as any).micMuted).toBe(true);
+    expect(toStatusView(active() as any).micMuted).toBeUndefined();
   });
 });
