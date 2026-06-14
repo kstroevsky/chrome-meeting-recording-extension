@@ -162,6 +162,7 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     error: typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error : undefined,
     warnings: normalizeWarnings(candidate.warnings),
     micMuted: phase === 'idle' ? undefined : candidate.micMuted === true ? true : undefined,
+    cameraMuted: phase === 'idle' ? undefined : candidate.cameraMuted === true ? true : undefined,
     updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
   };
 }

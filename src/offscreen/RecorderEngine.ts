@@ -56,6 +56,8 @@ export class RecorderEngine {
   private micMode: MicMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
   private recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
   private micMuted = false;
+  private cameraMuted = false;
+  private selfVideoSetMuted: ((muted: boolean) => void) | null = null;
 
   private playback: AudioPlaybackBridge | null = null;
   private mixedAudio: MixedAudioMixer | null = null;
@@ -98,6 +100,18 @@ export class RecorderEngine {
     for (const track of this.micStream?.getAudioTracks() ?? []) {
       try { track.enabled = !this.micMuted; } catch {}
     }
+  }
+
+  /**
+   * Hides or shows the live camera on a self-video recording. Black-frames-in-place:
+   * the camera track stays live (continuous timeline) but emits black frames. The
+   * actuation lives in SelfVideoRecorderTask (it owns the camera + resize streams);
+   * the engine just relays it. Remembered so it also applies to a camera still being
+   * acquired when toggled during the `starting` phase.
+   */
+  setCameraMuted(muted: boolean): void {
+    this.cameraMuted = muted;
+    this.selfVideoSetMuted?.(muted);
   }
 
   async startFromStreamId(
@@ -211,9 +225,13 @@ export class RecorderEngine {
       tasks.push(
         startSelfVideoRecorder(runId, () => this.runId, isStale, this.suffix, runStartedAt, this.recordSelfVideo, recorderSettings, this.deps, {
           onStarted: () => this.onRecorderStarted(),
-          onStopped: (artifact) => this.onTrackStopped('self-video', artifact),
+          onStopped: (artifact) => { this.selfVideoSetMuted = null; this.onTrackStopped('self-video', artifact); },
           onWarning: (msg) => this.deps.reportWarning?.(msg),
-          onStreamAcquired: (stopFn) => { stopStream = stopFn; },
+          onStreamAcquired: (controls) => {
+            stopStream = controls.stop;
+            this.selfVideoSetMuted = controls.setMuted;
+            controls.setMuted(this.cameraMuted);
+          },
         }).then((recorder) => { if (recorder) this.registerTrack({ stream: 'self-video', recorder, stopStream }); })
           .catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
       );
@@ -344,6 +362,8 @@ export class RecorderEngine {
     this.micMode = DEFAULT_RECORDING_RUN_CONFIG.micMode;
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
     this.micMuted = false;
+    this.cameraMuted = false;
+    this.selfVideoSetMuted = null;
     this.finalizedArtifacts = [];
     this.stopPromise = null; this.resolveStop = null;
     this.pendingStartPromises = [];

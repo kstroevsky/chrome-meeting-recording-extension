@@ -95,6 +95,17 @@ async function handleOffscreenSetMicMuted(
   return { ok: true };
 }
 
+async function handleOffscreenSetCameraMuted(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_SET_CAMERA_MUTED' }>,
+  deps: RpcHandlerDeps
+): Promise<{ ok: boolean; error?: string }> {
+  if (!deps.engine.isRecording()) {
+    return { ok: false, error: 'Camera hide requested but recorder is not active' };
+  }
+  deps.engine.setCameraMuted(msg.muted === true);
+  return { ok: true };
+}
+
 async function handleRevokeBlobUrl(
   msg: Extract<BgToOffscreenOneWay, { type: 'REVOKE_BLOB_URL' }>,
   deps: RpcHandlerDeps
@@ -121,6 +132,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_START:   (msg) => handleOffscreenStart(msg, deps),
       OFFSCREEN_STOP:    ()    => handleOffscreenStop(deps),
       OFFSCREEN_SET_MIC_MUTED: (msg) => handleOffscreenSetMicMuted(msg, deps),
+      OFFSCREEN_SET_CAMERA_MUTED: (msg) => handleOffscreenSetCameraMuted(msg, deps),
       REVOKE_BLOB_URL:   (msg) => handleRevokeBlobUrl(msg, deps),
     },
     (reqId, payload) => respond(deps.getPort, reqId, payload),

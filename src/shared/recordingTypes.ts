@@ -46,6 +46,12 @@ export type RecordingSessionSnapshot = {
    * means the mic is live; only meaningful while `runConfig.micMode !== 'off'`.
    */
   micMuted?: boolean;
+  /**
+   * Live camera-hidden state during an active self-video recording. The camera
+   * keeps flowing but its track emits black frames (see RecorderEngine.setCameraMuted).
+   * Omitted/false means the camera is live; only meaningful while `runConfig.recordSelfVideo`.
+   */
+  cameraMuted?: boolean;
   updatedAt: number;
 };
 
@@ -62,5 +68,7 @@ export type RecordingStatusView = {
   warnings?: string[];
   /** Live mic-mute state; see {@link RecordingSessionSnapshot.micMuted}. */
   micMuted?: boolean;
+  /** Live camera-hidden state; see {@link RecordingSessionSnapshot.cameraMuted}. */
+  cameraMuted?: boolean;
   updatedAt: number;
 };

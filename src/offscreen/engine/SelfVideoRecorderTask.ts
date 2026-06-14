@@ -33,8 +33,11 @@ export type SelfVideoRecorderCallbacks = {
   onStarted: () => void;
   onStopped: (artifact: CompletedRecordingArtifact | null) => void;
   onWarning?: (message: string) => void;
-  /** Called once the camera stream is acquired; receives an idempotent stop-stream function. */
-  onStreamAcquired?: (stopStream: () => void) => void;
+  /**
+   * Called once the camera stream is acquired; receives an idempotent stop-stream
+   * function plus a setMuted toggle that blanks the encoded video to black frames.
+   */
+  onStreamAcquired?: (controls: { stop: () => void; setMuted: (muted: boolean) => void }) => void;
 };
 
 function formatVideoMetrics(width?: number, height?: number, frameRate?: number): string {
@@ -167,7 +170,17 @@ async function startWiredSelfVideoRecorder(
     }
     try { selfVideo.getTracks().forEach((t) => t.stop()); } catch {}
   };
-  callbacks.onStreamAcquired?.(stopSelfVideoStream);
+  // Blanks the encoded camera to black without tearing the track down: disable the
+  // recorder-facing track (the resize generator, or the raw camera when not resized)
+  // and, when resized, the source camera too so the canvas never draws a real frame.
+  const setSelfVideoMuted = (muted: boolean) => {
+    const apply = (s: MediaStream) => {
+      for (const t of s.getVideoTracks()) { try { t.enabled = !muted; } catch {} }
+    };
+    apply(recordingStream);
+    if (enforced.resized) apply(selfVideo);
+  };
+  callbacks.onStreamAcquired?.({ stop: stopSelfVideoStream, setMuted: setSelfVideoMuted });
 
   let started = false;
   let actualStartTimeMs = 0;
