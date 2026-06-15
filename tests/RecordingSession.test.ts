@@ -253,4 +253,61 @@ describe('RecordingSession state machine', () => {
       expect(session.markIdle().paused).toBeUndefined();
     });
   });
+
+  describe('recording timer', () => {
+    let nowSpy: jest.SpyInstance;
+    let t: number;
+
+    beforeEach(() => {
+      t = 1_000_000;
+      nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => t);
+    });
+
+    afterEach(() => {
+      nowSpy.mockRestore();
+    });
+
+    it('counts pause-aware recorded time across start, pause, resume, and stop', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+
+      const rec = session.applyOffscreenPhase({ phase: 'recording' });
+      expect(rec.recordedMs).toBe(0);
+      expect(rec.runningSince).toBe(t);
+
+      t += 5000; // record 5s, then pause → bank 5s and stop the clock
+      const paused = session.setPaused(true);
+      expect(paused.recordedMs).toBe(5000);
+      expect(paused.runningSince).toBeUndefined();
+
+      t += 10000; // 10s paused — must NOT accrue
+      const resumed = session.setPaused(false);
+      expect(resumed.recordedMs).toBe(5000);
+      expect(resumed.runningSince).toBe(t);
+
+      t += 3000; // 3s more, then stop → frozen at 8s for the uploading view
+      const stopping = session.markStopping();
+      expect(stopping.recordedMs).toBe(8000);
+      expect(stopping.runningSince).toBeUndefined();
+    });
+
+    it('keeps the timer running across a recording re-broadcast', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.applyOffscreenPhase({ phase: 'recording' });
+      const since = t;
+
+      t += 2000;
+      const rebroadcast = session.applyOffscreenPhase({ phase: 'recording', warnings: ['w'] });
+      expect(rebroadcast.runningSince).toBe(since);
+      expect(rebroadcast.recordedMs).toBe(0);
+    });
+
+    it('clears the timer when the session returns to idle', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.applyOffscreenPhase({ phase: 'recording' });
+
+      const idle = session.markIdle();
+      expect(idle.recordedMs).toBeUndefined();
+      expect(idle.runningSince).toBeUndefined();
+    });
+  });
 });

@@ -117,3 +117,33 @@ describe('session snapshot paused', () => {
     expect(toStatusView(active() as any).paused).toBeUndefined();
   });
 });
+
+describe('session snapshot recording timer', () => {
+  const active = (extra: Record<string, unknown> = {}) => ({
+    phase: 'recording',
+    runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: false },
+    updatedAt: 1,
+    ...extra,
+  });
+
+  it('normalizes recordedMs/runningSince while recording and resets at idle', () => {
+    const s = normalizeSessionSnapshot(active({ recordedMs: 4200, runningSince: 1000 }));
+    expect(s.recordedMs).toBe(4200);
+    expect(s.runningSince).toBe(1000);
+
+    // Missing/invalid recordedMs defaults to 0; non-positive runningSince drops to undefined.
+    const d = normalizeSessionSnapshot(active({ recordedMs: -5, runningSince: 0 }));
+    expect(d.recordedMs).toBe(0);
+    expect(d.runningSince).toBeUndefined();
+
+    const idle = normalizeSessionSnapshot({ phase: 'idle', recordedMs: 9, runningSince: 9, updatedAt: 1 });
+    expect(idle.recordedMs).toBeUndefined();
+    expect(idle.runningSince).toBeUndefined();
+  });
+
+  it('projects the timer fields onto the popup status view', () => {
+    const view = toStatusView(active({ recordedMs: 7000, runningSince: 1234 }) as any);
+    expect(view.recordedMs).toBe(7000);
+    expect(view.runningSince).toBe(1234);
+  });
+});

@@ -26,7 +26,15 @@ Everything happens in your browser. Capture is **local-first**: recording data s
 - `Mix into tab recording` — mic audio is blended into the main tab file via a real audio graph
 - `Save separately` — mic is recorded as a second `.webm` artifact
 
-**Optional self-video capture** — record your camera feed as a separate `.webm` file. The extension tries the same fallback ladder on every run: exact preset size/FPS → exact size with bounded FPS → best-effort constraints.
+**Optional self-video capture** — record your camera feed as a separate `.webm` file. The extension tries the same fallback ladder on every run: exact preset size/FPS → exact size with bounded FPS → best-effort constraints. The encoded camera resolution is enforced to the selected preset even when Google Meet holds the same camera open at a higher resolution (Chrome otherwise records the shared native buffer); a settings toggle lets you opt out and keep Meet's auto-selected resolution.
+
+**Live recording controls** — adjust a recording in place, without stopping it:
+
+- **Mute / unmute the microphone** — records true digital silence for the muted span (the mic track stays live, so the timeline never breaks). Works in both `mixed` and `separate` mic modes.
+- **Hide / show the camera** — records black frames while hidden, on the separate self-video file.
+- **Pause / resume the whole recording** — pauses every stream (tab, mic, camera) at once. The paused span is **not** written, so the files resume as a **seamless join** — before and after are stitched directly together, with no black/blank/frozen filler. Tracks stay live so resume is instant, and the audio mixer and camera-resize work idle while paused so nothing churns during the wait.
+
+**State-driven popup** — the popup shows a different layout per phase: a clean **configuration** screen before recording, a **recording** screen with a red banner, a pause-aware elapsed **timer** (counts recorded time only — it freezes on pause and equals the saved file's duration), live **status chips** (a Transcript indicator that tracks whether Meet captions are actually on, plus the storage target), and on/off **toggle rows** for the mic and camera; and a **finalizing** screen with a spinner and the run summary while files seal/upload.
 
 **Google Drive storage** — after stop, finalized files are uploaded to `Google Meet Records/<meeting-id>-<timestamp>/` in your Drive. Drive upload falls back per-file to a local download if an individual upload fails.
 
@@ -171,6 +179,24 @@ All three commands compile TypeScript via `ts-loader`, copy HTML shells and the 
 
 **Stop Recording** — releases the extension-owned camera immediately, seals all active recorders, and runs the finalization pipeline. The extension also stops the active run if the recorded tab closes, navigates away from the meeting, or the Meet page stays in an ended-call state for 30 seconds. In local mode a file download begins. In Drive mode the popup passes through an `uploading` phase before returning to idle.
 
+### The popup is state-driven
+
+The popup renders one of three layouts depending on the current recording phase, so each screen only shows the controls that make sense for that state:
+
+- **Configuration** (idle) — the setup screen above: microphone mode, storage, "record my camera separately", Download Transcript, Enable Mic, and **Start Recording**. None of the in-recording controls appear here.
+- **Recording** (recording / paused) — a red **Recording** banner (amber **Paused** when paused) with a live elapsed **timer**, two status chips (**Transcript on/off** and the storage target), a **Microphone** row and a **Camera** row each with an on/off toggle, and **Pause** + **Stop**.
+- **Finalizing** (stopping / uploading) — a spinner with the run summary: storage target, recorded duration, microphone mode, and whether the camera was separate, plus "you can close this popup".
+
+**The live timer is pause-aware.** It counts only *recorded* time: it freezes while paused and stops at stop, so the number you see equals the duration of the saved file. It is computed from authoritative timing on the session, so reopening the popup mid-recording shows the correct elapsed time.
+
+**The Transcript chip reflects live captions.** While recording, the popup polls the active Meet tab and shows *Transcript on* only while Google Meet's captions region is actually present (dimmed *Transcript off* otherwise).
+
+**Live controls (recording view)** — these act on the running recording in place and never interrupt it:
+
+- **Microphone toggle** — shown when the run uses a microphone (`mixed` or `separate`). Switching it off records true silence for as long as it stays off; switching back on resumes live audio. A rejected toggle leaves the recording untouched.
+- **Camera toggle** — shown when the run records the camera separately. Off records black frames; on resumes the live camera.
+- **Pause / Resume** — pauses the entire recording (tab + mic + camera). While paused nothing is recorded — the banner reads **Paused**, the timer freezes, and **Stop** still works — and on Resume the files continue as a seamless join, with the paused time absent rather than filled with a blank or frozen gap. Reopening the popup while paused still shows **Resume**.
+
 > The extension badge shows `REC` while recording and `UP` while uploading to Drive.
 
 ---
@@ -184,6 +210,7 @@ Open the settings page by clicking the gear icon in the popup. Settings persist 
 | Tab capture preset | Output resolution for the tab recording: `640×360`, `854×480`, `1280×720`, or `1920×1080` |
 | Tab video bitrate | Encoder bitrate at the `1920×1080`@30 reference; the recorder scales it down automatically for smaller tab presets / frame rates |
 | Camera capture preset | Output resolution for the self-video recording, same preset options |
+| Prefer the automatically selected resolution | When on, the camera is recorded at whatever resolution Chrome/Meet already selected instead of re-encoding it to the camera preset above — skips the per-frame resize work. Off by default |
 
 The tab and camera capture presets control what size the final file targets, not what resolution Chrome delivers from the source. Actual resolution depends on Chrome, camera hardware, and sharing limits. The popup and debug dashboard warn when the delivered profile differs from the requested one.
 
@@ -555,6 +582,17 @@ type RecordingSessionSnapshot = {
   runConfig: RecordingRunConfig | null;
   uploadSummary?: UploadSummary;
   error?: string;
+  // Live overlay flags on an active recording — orthogonal to `phase`, mirrored
+  // from the offscreen actuation so a reopened popup renders the right controls.
+  micMuted?: boolean;
+  cameraMuted?: boolean;
+  paused?: boolean;
+  // Pause-aware recording timer. `recordedMs` is the banked recorded duration
+  // (excludes paused spans); `runningSince` is the epoch ms the clock last
+  // (re)started, or omitted while paused/stopped. Live elapsed =
+  // recordedMs + (runningSince ? now - runningSince : 0). Drives the popup timer.
+  recordedMs?: number;
+  runningSince?: number;
   updatedAt: number;
 };
 ```
@@ -695,6 +733,8 @@ Files: `src/offscreen/RecorderEngine.ts`, `src/offscreen/engine/*`
 - the recorder always uses the same fallback ladder: exact preset size/FPS, exact size with bounded FPS, then best-effort preset constraints
 - actual delivered settings still depend on Chrome camera sharing and hardware limits
 - recorder diagnostics and popup session warnings include both the requested profile and the delivered track settings when they differ
+- **encoded-resolution enforcement** (`src/offscreen/SelfVideoResize.ts`) — when another consumer (typically the live Meet call) already holds the camera open, Chrome shares one native capture buffer and `getSettings()` under-reports the encoded size, so `MediaRecorder` would record the native frame regardless of the preset. The recorder probes the true coded size and, when it differs, routes the camera through `MediaStreamTrackProcessor → OffscreenCanvas → MediaStreamTrackGenerator` to force the encoded buffer to the preset; the probed size also sizes the bitrate so the auto path isn't under-bitrated. Feature-detected, with zero overhead when no resize is needed.
+- **prefer auto resolution** (`selfVideoUseAutoResolution` setting) — opts out of the resize re-rasterization entirely and records whatever Chrome/Meet selected; the coded size is still probed once so the bitrate matches what is actually encoded
 
 **Tab capture profiles:**
 
@@ -719,6 +759,14 @@ Result combinations:
 - tab + mic
 - tab + selfVideo
 - tab + mic + selfVideo
+
+#### Live recording controls (mute / hide / pause)
+
+Three in-place controls act on a running session without tearing anything down. Each is a boolean overlay on the live `recording` phase — **not** a new phase — mirrored onto the session snapshot (`micMuted` / `cameraMuted` / `paused`) so a reopened popup renders the right state, and persisted across service-worker restarts. The popup actuates them via `SET_MIC_MUTED` / `SET_CAMERA_MUTED` / `SET_PAUSED`, relayed to the engine as `OFFSCREEN_SET_*`.
+
+- **Mic mute** — `track.enabled = false` on the mic track: the track stays live (continuous timeline) but emits silence. Covers `mixed` (silence into the audio graph) and `separate` (silence into the mic recorder).
+- **Camera hide** — black frames. On the direct-record path that's `track.enabled = false` (well-defined); on the resize path it's a black-frame fill *inside the resize pump*, because `mediacapture-transform` leaves disabled-track behavior through `MediaStreamTrackProcessor` unspecified.
+- **Pause / resume** — `MediaRecorder.pause()/resume()` on every recorder. The paused span is never gathered into the blob, so the output is a seamless join (not silence/black filler — that is what mute/hide produce, the wrong tool for a pause). Guarded by `recorder.state` so a stray toggle can't throw; a pause toggled mid-`starting` is remembered and applied per recorder as each registers. Tracks stay live (no re-acquisition glitch); to honor "nothing churns while waiting" the mixed-audio `AudioContext` is suspended and the self-video resize pump idles while paused. Stop still works while paused.
 
 ### 5. Storage Targets (worker, OPFS, RAM)
 
@@ -843,26 +891,21 @@ Files:
 - `src/popup/MicPermissionService.ts`
 - `src/popup/CameraPermissionService.ts`
 
-**Current popup controls:**
+**State-driven views.** The popup renders one of three top-level views, chosen by phase in `setActiveView` (`popupView.ts`) and populated by `PopupController.onPhaseChange`:
 
-- transcript download
-- microphone permission primer
-- microphone mode select
-- storage mode select
-- self-video enable
-- settings gear button
-- start recording
-- stop recording
-- diagnostics page link in dev builds
+- **config** (`idle` / `failed`) — transcript download, microphone permission primer, microphone mode select, storage mode select, self-video enable, **Start Recording**, settings gear, diagnostics link (dev builds).
+- **recording** (`starting` / `recording`) — a `Recording` / `Paused` / `Starting…` banner, a pause-aware elapsed timer, Transcript + storage chips, mic and camera on/off toggle rows, **Pause/Resume** + **Stop**.
+- **finalizing** (`stopping` / `uploading`) — a spinner, a `Finalizing files…` / `Uploading to Google Drive…` label, and a metadata list (storage, recorded duration, mic mode, camera).
+
+The in-recording controls (mic/camera/pause) are the same `SET_MIC_MUTED` / `SET_CAMERA_MUTED` / `SET_PAUSED` actuations as before — only their DOM moved into the recording view as rows/pills.
 
 **`PopupController` behavior:**
 
-- reads session state only from background
-- never guesses lifecycle state locally
+- reads session state only from background; never guesses lifecycle state locally
+- switches view by phase rather than per-control enable/disable — a view's controls are simply absent in the other phases
 - maps form controls to `RecordingRunConfig` through `popupRunConfig.ts`
-- disables controls for all busy phases
-- shows upload summaries and local fallback errors
-- includes run configuration in status text so popup reopen shows the real session configuration
+- runs two intervals only while the recording view is active: a 1 s **timer tick** (renders `recordedMs + (runningSince ? now - runningSince : 0)`, frozen when `runningSince` is unset) and a 3 s **caption poll** (`GET_CAPTION_STATE` to the active tab) that drives the Transcript chip; both are cleared on view change and in `destroy()`
+- shows upload summaries and local fallback errors; includes run configuration in status text so popup reopen shows the real session configuration
 
 **`PopupStateController`** (`src/popup/controllers/PopupStateController.ts`):
 
@@ -885,6 +928,7 @@ Purpose:
 Current settings behavior:
 
 - camera and tab capture sizes are chosen through preset selectors instead of raw width/height inputs
+- a "Prefer the automatically selected resolution" toggle records the camera at Chrome/Meet's chosen resolution and skips the preset resize enforcement (see Recorder Engine § self-video profiles)
 - every settings field exposes a click-to-open tooltip with a short operational explanation
 - legacy stored width/height settings are normalized into the nearest supported preset on load
 - the popup gear icon opens this page in a regular extension tab
@@ -938,11 +982,15 @@ These files define the extension's inter-context contracts.
 - `STOP_RECORDING`
 - `GET_RECORDING_STATUS`
 - `GET_DRIVE_TOKEN`
+- `SET_MIC_MUTED`
+- `SET_CAMERA_MUTED`
+- `SET_PAUSED`
 
 #### Popup → Content Script
 
 - `GET_TRANSCRIPT`
 - `RESET_TRANSCRIPT`
+- `GET_CAPTION_STATE` — returns `{ captionsActive }` (whether the Meet captions region is currently present); drives the recording view's Transcript chip
 
 #### Background → Popup
 
@@ -954,6 +1002,9 @@ These files define the extension's inter-context contracts.
 
 - `OFFSCREEN_START`
 - `OFFSCREEN_STOP`
+- `OFFSCREEN_SET_MIC_MUTED`
+- `OFFSCREEN_SET_CAMERA_MUTED`
+- `OFFSCREEN_SET_PAUSED`
 - `REVOKE_BLOB_URL`
 - `OFFSCREEN_CONNECT`
 
@@ -1746,6 +1797,7 @@ flowchart LR
 | :--- | :--- |
 | `GET_TRANSCRIPT` | transcript text + provider info |
 | `RESET_TRANSCRIPT` | `{ ok: true }` |
+| `GET_CAPTION_STATE` | `{ captionsActive: boolean }` |
 
 ### Offscreen → Background
 

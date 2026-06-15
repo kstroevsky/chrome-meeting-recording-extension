@@ -23,16 +23,54 @@ describe('PopupController', () => {
     });
     (global as any).__TEST_RUN_CONFIG__ = makeRunConfig;
 
+    const pill = (labelAttr: string) => {
+      const btn = document.createElement('button');
+      const span = document.createElement('span');
+      span.setAttribute(labelAttr, '');
+      btn.appendChild(span);
+      return btn;
+    };
+
     elements = {
+      // Header + config view
       saveBtn: document.createElement('button'),
       micBtn: document.createElement('button'),
       micModeSelect: document.createElement('select'),
       startBtn: document.createElement('button'),
-      stopBtn: document.createElement('button'),
       storageModeSelect: document.createElement('select'),
       recordSelfVideoCheckbox: document.createElement('input'),
       openSettingsBtn: document.createElement('button'),
       openDiagnosticsBtn: document.createElement('button'),
+
+      // View containers
+      viewConfig: document.createElement('section'),
+      viewRecording: document.createElement('section'),
+      viewFinalizing: document.createElement('section'),
+
+      // Recording view
+      recBanner: document.createElement('div'),
+      recLabel: document.createElement('span'),
+      recTimer: document.createElement('span'),
+      chipTranscript: document.createElement('span'),
+      chipTranscriptLabel: document.createElement('span'),
+      chipStorage: document.createElement('span'),
+      chipStorageLabel: document.createElement('span'),
+      micRow: document.createElement('div'),
+      micModeLabel: document.createElement('span'),
+      muteMicBtn: pill('data-mute-label'),
+      cameraRow: document.createElement('div'),
+      hideCameraBtn: pill('data-camera-label'),
+      pauseBtn: pill('data-pause-label'),
+      stopBtn: document.createElement('button'),
+
+      // Finalizing view
+      finalizingLabel: document.createElement('div'),
+      metaStorage: document.createElement('span'),
+      metaDuration: document.createElement('span'),
+      metaMic: document.createElement('span'),
+      metaCamera: document.createElement('span'),
+
+      // Shared
       recordingStatusEl: document.createElement('div'),
     };
     elements.recordSelfVideoCheckbox.type = 'checkbox';
@@ -98,12 +136,18 @@ describe('PopupController', () => {
     await new Promise(process.nextTick);
 
     expect(mockSendMessage).toHaveBeenCalledWith({ type: 'GET_RECORDING_STATUS' });
-    expect(elements.startBtn.disabled).toBe(true);
-    expect(elements.stopBtn.disabled).toBe(true);
-    expect(elements.storageModeSelect.disabled).toBe(true);
+    // Uploading → the finalizing view is shown and config/recording are hidden,
+    // so start/stop are simply not reachable (no per-control disabling needed).
+    expect(elements.viewConfig.hidden).toBe(true);
+    expect(elements.viewRecording.hidden).toBe(true);
+    expect(elements.viewFinalizing.hidden).toBe(false);
     expect(elements.storageModeSelect.value).toBe('drive');
     expect(elements.micModeSelect.value).toBe('mixed');
     expect(elements.recordSelfVideoCheckbox.checked).toBe(true);
+    expect(elements.finalizingLabel.textContent).toContain('Uploading to Google Drive');
+    expect(elements.metaStorage.textContent).toBe('Google Drive');
+    expect(elements.metaMic.textContent).toBe('Mixed');
+    expect(elements.metaCamera.textContent).toBe('Separate');
     expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
     expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
   });
@@ -234,8 +278,8 @@ describe('PopupController', () => {
       updatedAt: Date.now(),
     });
 
-    expect(elements.startBtn.disabled).toBe(true);
-    expect(elements.stopBtn.disabled).toBe(true);
+    expect(elements.viewConfig.hidden).toBe(true);
+    expect(elements.viewFinalizing.hidden).toBe(false);
     expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
     expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
   });
@@ -447,216 +491,196 @@ describe('PopupController', () => {
     expect(elements.startBtn.disabled).toBe(false);
   });
 
-  describe('mic mute toggle', () => {
-    const addMuteButton = () => {
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-secondary';
-      const label = document.createElement('span');
-      label.setAttribute('data-mute-label', '');
-      label.textContent = 'Mute Mic';
-      btn.appendChild(label);
-      elements.muteMicBtn = btn;
-      return { btn, label };
-    };
+  const recordingSession = (extra: Record<string, unknown> = {}) => ({
+    session: {
+      phase: 'recording',
+      runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: true },
+      updatedAt: Date.now(),
+      ...extra,
+    },
+  });
 
-    it('shows the toggle and mutes the mic during a mic recording', async () => {
-      const { btn, label } = addMuteButton();
-      mockSendMessage.mockResolvedValueOnce({
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: false },
-          updatedAt: Date.now(),
-        },
-      });
+  describe('mic mute toggle (recording-view row)', () => {
+    it('shows the mic row and mutes the mic on its pill', async () => {
+      mockSendMessage.mockResolvedValueOnce(recordingSession());
       controller.init();
       await new Promise(process.nextTick);
 
-      expect(btn.hidden).toBe(false);
-      expect(label.textContent).toBe('Mute Mic');
-      expect(btn.getAttribute('aria-pressed')).toBe('false');
+      const pill = elements.muteMicBtn as HTMLButtonElement;
+      const label = pill.querySelector('[data-mute-label]') as HTMLElement;
+      expect(elements.micRow.hidden).toBe(false);
+      expect(elements.micModeLabel.textContent).toBe('· separate');
+      expect(label.textContent).toBe('on');
+      expect(pill.classList.contains('on')).toBe(true);
+      expect(pill.getAttribute('aria-pressed')).toBe('false');
 
       mockSendMessage.mockClear();
-      mockSendMessage.mockResolvedValueOnce({
-        ok: true,
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: false },
-          micMuted: true,
-          updatedAt: Date.now(),
-        },
-      });
-
-      btn.click();
+      mockSendMessage.mockResolvedValueOnce({ ok: true, ...recordingSession({ micMuted: true }) });
+      pill.click();
       await new Promise(process.nextTick);
 
       expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'SET_MIC_MUTED', muted: true });
-      expect(label.textContent).toBe('Unmute Mic');
-      expect(btn.getAttribute('aria-pressed')).toBe('true');
-      expect(btn.classList.contains('btn-danger')).toBe(true);
+      expect(label.textContent).toBe('off');
+      expect(pill.classList.contains('off')).toBe(true);
+      expect(pill.getAttribute('aria-pressed')).toBe('true');
     });
 
-    it('hides the toggle when the recording has no microphone', async () => {
-      const { btn } = addMuteButton();
-      mockSendMessage.mockResolvedValueOnce({
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
-          updatedAt: Date.now(),
-        },
-      });
+    it('hides the mic row when the recording has no microphone', async () => {
+      mockSendMessage.mockResolvedValueOnce(recordingSession({
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: true },
+      }));
       controller.init();
       await new Promise(process.nextTick);
-
-      expect(btn.hidden).toBe(true);
+      expect(elements.micRow.hidden).toBe(true);
     });
   });
 
-  describe('hide-camera toggle', () => {
-    const addCameraButton = () => {
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-secondary';
-      const label = document.createElement('span');
-      label.setAttribute('data-camera-label', '');
-      label.textContent = 'Hide Camera';
-      btn.appendChild(label);
-      elements.hideCameraBtn = btn;
-      return { btn, label };
-    };
-
-    it('shows the toggle and hides the camera during a self-video recording', async () => {
-      const { btn, label } = addCameraButton();
-      mockSendMessage.mockResolvedValueOnce({
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: true },
-          updatedAt: Date.now(),
-        },
-      });
+  describe('hide-camera toggle (recording-view row)', () => {
+    it('shows the camera row and hides the camera on its pill', async () => {
+      mockSendMessage.mockResolvedValueOnce(recordingSession());
       controller.init();
       await new Promise(process.nextTick);
 
-      expect(btn.hidden).toBe(false);
-      expect(label.textContent).toBe('Hide Camera');
+      const pill = elements.hideCameraBtn as HTMLButtonElement;
+      const label = pill.querySelector('[data-camera-label]') as HTMLElement;
+      expect(elements.cameraRow.hidden).toBe(false);
+      expect(label.textContent).toBe('on');
 
       mockSendMessage.mockClear();
-      mockSendMessage.mockResolvedValueOnce({
-        ok: true,
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: true },
-          cameraMuted: true,
-          updatedAt: Date.now(),
-        },
-      });
-
-      btn.click();
+      mockSendMessage.mockResolvedValueOnce({ ok: true, ...recordingSession({ cameraMuted: true }) });
+      pill.click();
       await new Promise(process.nextTick);
 
       expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'SET_CAMERA_MUTED', muted: true });
-      expect(label.textContent).toBe('Show Camera');
-      expect(btn.getAttribute('aria-pressed')).toBe('true');
-      expect(btn.classList.contains('btn-danger')).toBe(true);
+      expect(label.textContent).toBe('off');
+      expect(pill.classList.contains('off')).toBe(true);
+      expect(pill.getAttribute('aria-pressed')).toBe('true');
     });
 
-    it('hides the toggle when the recording has no camera', async () => {
-      const { btn } = addCameraButton();
-      mockSendMessage.mockResolvedValueOnce({
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
-          updatedAt: Date.now(),
-        },
-      });
+    it('hides the camera row when the recording has no camera', async () => {
+      mockSendMessage.mockResolvedValueOnce(recordingSession({
+        runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: false },
+      }));
       controller.init();
       await new Promise(process.nextTick);
-
-      expect(btn.hidden).toBe(true);
+      expect(elements.cameraRow.hidden).toBe(true);
     });
   });
 
-  describe('pause toggle', () => {
-    const addPauseButton = () => {
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-secondary';
-      const label = document.createElement('span');
-      label.setAttribute('data-pause-label', '');
-      label.textContent = 'Pause';
-      btn.appendChild(label);
-      elements.pauseBtn = btn;
-      return { btn, label };
-    };
-
-    it('shows the toggle and pauses the whole recording while recording', async () => {
-      const { btn, label } = addPauseButton();
-      mockSendMessage.mockResolvedValueOnce({
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
-          updatedAt: Date.now(),
-        },
-      });
+  describe('pause toggle (recording-view)', () => {
+    it('enables Pause while recording and pauses the whole recording', async () => {
+      mockSendMessage.mockResolvedValueOnce(recordingSession());
       controller.init();
       await new Promise(process.nextTick);
 
-      expect(btn.hidden).toBe(false);
+      const pill = elements.pauseBtn as HTMLButtonElement;
+      const label = pill.querySelector('[data-pause-label]') as HTMLElement;
+      expect(elements.viewRecording.hidden).toBe(false);
+      expect(pill.disabled).toBe(false);
       expect(label.textContent).toBe('Pause');
-      expect(btn.getAttribute('aria-pressed')).toBe('false');
 
       mockSendMessage.mockClear();
-      mockSendMessage.mockResolvedValueOnce({
-        ok: true,
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
-          paused: true,
-          updatedAt: Date.now(),
-        },
-      });
-
-      btn.click();
+      mockSendMessage.mockResolvedValueOnce({ ok: true, ...recordingSession({ paused: true }) });
+      pill.click();
       await new Promise(process.nextTick);
 
       expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'SET_PAUSED', paused: true });
       expect(label.textContent).toBe('Resume');
-      expect(btn.getAttribute('aria-pressed')).toBe('true');
-      expect(btn.classList.contains('btn-danger')).toBe(true);
+      expect(pill.getAttribute('aria-pressed')).toBe('true');
+      expect(pill.classList.contains('btn-danger')).toBe(true);
     });
 
     it('reverts the toggle when the background rejects the pause', async () => {
-      const { btn, label } = addPauseButton();
-      mockSendMessage.mockResolvedValueOnce({
-        session: {
-          phase: 'recording',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
-          updatedAt: Date.now(),
-        },
-      });
+      mockSendMessage.mockResolvedValueOnce(recordingSession());
       controller.init();
       await new Promise(process.nextTick);
 
       mockSendMessage.mockClear();
       mockSendMessage.mockResolvedValueOnce({ ok: false, error: 'pause boom' });
-
-      btn.click();
+      elements.pauseBtn.click();
       await new Promise(process.nextTick);
 
-      expect(btn.disabled).toBe(false);
-      expect(label.textContent).toBe('Pause');
+      expect(elements.pauseBtn.disabled).toBe(false);
+      expect(elements.pauseBtn.querySelector('[data-pause-label]').textContent).toBe('Pause');
     });
 
-    it('hides the toggle when not actively recording', async () => {
-      const { btn } = addPauseButton();
+    it('does not show the recording view (or Pause) while finalizing', async () => {
+      mockSendMessage.mockResolvedValueOnce(recordingSession({ phase: 'uploading' }));
+      controller.init();
+      await new Promise(process.nextTick);
+      expect(elements.viewRecording.hidden).toBe(true);
+      expect(elements.viewFinalizing.hidden).toBe(false);
+    });
+  });
+
+  describe('recording banner + timer', () => {
+    it('renders a pause-aware timer that ticks while recording and freezes when paused', async () => {
+      const now = 1_000_000;
+      jest.spyOn(Date, 'now').mockReturnValue(now);
+
+      mockSendMessage.mockResolvedValueOnce(recordingSession({ recordedMs: 0, runningSince: now - 5000 }));
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(elements.recLabel.textContent).toBe('Recording');
+      expect(elements.recBanner.classList.contains('paused')).toBe(false);
+      expect(elements.recTimer.textContent).toBe('0:05');
+
+      // Paused: timer frozen at the banked recordedMs (no running span).
+      (controller as any).state.applySession(
+        recordingSession({ paused: true, recordedMs: 65000, runningSince: undefined }).session
+      );
+      expect(elements.recLabel.textContent).toBe('Paused');
+      expect(elements.recBanner.classList.contains('paused')).toBe(true);
+      expect(elements.recTimer.textContent).toBe('1:05');
+    });
+
+    it('shows a Starting… banner during the starting phase', async () => {
+      mockSendMessage.mockResolvedValueOnce(recordingSession({ phase: 'starting' }));
+      controller.init();
+      await new Promise(process.nextTick);
+      expect(elements.recLabel.textContent).toBe('Starting…');
+      expect(elements.pauseBtn.disabled).toBe(true);
+    });
+  });
+
+  describe('live transcript chip', () => {
+    it('reflects caption presence polled from the content script', async () => {
+      mockTabSendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+        if (message.type === 'GET_CAPTION_STATE') return { captionsActive: true };
+        return { ok: true };
+      });
+      mockSendMessage.mockResolvedValueOnce(recordingSession());
+      controller.init();
+      await new Promise(process.nextTick);
+      await new Promise(process.nextTick);
+
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(101, { type: 'GET_CAPTION_STATE' });
+      expect(elements.chipTranscriptLabel.textContent).toBe('Transcript on');
+      expect(elements.chipTranscript.classList.contains('off')).toBe(false);
+    });
+  });
+
+  describe('finalizing view metadata', () => {
+    it('renders storage, duration, mic, and camera from the session', async () => {
       mockSendMessage.mockResolvedValueOnce({
         session: {
-          phase: 'uploading',
-          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          phase: 'stopping',
+          runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: true },
+          recordedMs: 125000,
           updatedAt: Date.now(),
         },
       });
       controller.init();
       await new Promise(process.nextTick);
 
-      expect(btn.hidden).toBe(true);
+      expect(elements.viewFinalizing.hidden).toBe(false);
+      expect(elements.finalizingLabel.textContent).toBe('Finalizing files…');
+      expect(elements.metaStorage.textContent).toBe('Local Disk (OPFS)');
+      expect(elements.metaDuration.textContent).toBe('2:05');
+      expect(elements.metaMic.textContent).toBe('Separate');
+      expect(elements.metaCamera.textContent).toBe('Separate');
     });
   });
+
 });

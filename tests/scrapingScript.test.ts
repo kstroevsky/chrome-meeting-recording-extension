@@ -101,6 +101,18 @@ describe('scrapingScript', () => {
     expect(transcript).toContain('Jane Doe : Second line');
   });
 
+  it('reports caption-region presence via areCaptionsActive (drives the transcript chip)', async () => {
+    expect(getCollector().areCaptionsActive()).toBe(false);
+
+    const region = mountCaptionsRegion(createCaptionBlock('user1', 'John Doe', 'Hello'));
+    await flushMutations();
+    expect(getCollector().areCaptionsActive()).toBe(true);
+
+    region.remove();
+    await flushMutations();
+    expect(getCollector().areCaptionsActive()).toBe(false);
+  });
+
   it('deduplicates per-block observers when the same block is scanned repeatedly', async () => {
     const region = mountCaptionsRegion(createCaptionBlock('user1', 'John Doe', 'Hello world'));
 
