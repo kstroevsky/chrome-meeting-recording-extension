@@ -93,7 +93,7 @@ export class RecordingController {
       targetTabId: msg.tabId,
       meetingSlug: meetingSlug || undefined,
     };
-    this.session.start(runConfig, target);
+    const started = this.session.start(runConfig, target);
     this.L.log('Popup requested START_RECORDING for tabId', msg.tabId);
 
     const useLiveRecorderTab = isE2ERealCaptureTabBuild();
@@ -123,6 +123,8 @@ export class RecordingController {
         runConfig,
         recorderSettings,
         perfSettings: getPerfSettingsSnapshot(),
+        // Fencing token (ADR-0003): the offscreen echoes this in OFFSCREEN_STATE.
+        epoch: started.epoch ?? 0,
       } as const;
       const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>(startRequest);
       await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);

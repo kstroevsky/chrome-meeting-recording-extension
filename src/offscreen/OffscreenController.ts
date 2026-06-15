@@ -50,6 +50,8 @@ export class OffscreenController {
   private phase: RecordingPhase = 'idle';
   private warnings: string[] = [];
   private storageMode: StorageMode = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
+  /** Run epoch from the latest OFFSCREEN_START; echoed in every OFFSCREEN_STATE (ADR-0003). */
+  private epoch = 0;
   private finalizeRunPromise: Promise<void> | null = null;
   private engine: FinalizableEngine | null = null;
   private finalizer: ArtifactFinalizer | null = null;
@@ -66,12 +68,14 @@ export class OffscreenController {
   }
 
   currentPhase = (): RecordingPhase => this.phase;
+  currentEpoch = (): number => this.epoch;
   currentWarnings = (): string[] => this.warnings;
   isFinalizing = (): boolean => this.finalizeRunPromise !== null;
   clearWarnings = (): void => { this.warnings = []; };
 
-  onStartRequested = (_runConfig: RecordingRunConfig, storageMode: StorageMode): void => {
+  onStartRequested = (_runConfig: RecordingRunConfig, storageMode: StorageMode, epoch: number): void => {
     this.storageMode = storageMode;
+    this.epoch = epoch;
   };
 
   onStopRequested = (): void => { void this.finalize(); };
@@ -85,6 +89,7 @@ export class OffscreenController {
     this.deps.postMessage({
       type: 'OFFSCREEN_STATE',
       phase,
+      epoch: this.epoch,
       ...(this.warnings.length ? { warnings: this.warnings } : {}),
       ...(extra ?? {}),
     });

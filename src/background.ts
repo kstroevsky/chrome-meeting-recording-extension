@@ -78,8 +78,13 @@ const session = new RecordingSession(
 
 // Wire offscreen -> background save requests and session phase updates.
 offscreen.onStateChanged = (msg) => {
-  if (session.getSnapshot().phase === 'starting' && msg.phase === 'idle') {
-    L.log('Ignoring pre-start offscreen idle state while START_RECORDING is in flight');
+  // Fencing token (ADR-0003): drop status from a previous run — a stale
+  // OFFSCREEN_STATE that survived a port reconnect, SW restart, or offscreen
+  // recreation. The current run's epoch is persisted in the session, so this stays
+  // correct across restarts. Inert until the first start() (epoch undefined → idle).
+  const currentEpoch = session.getSnapshot().epoch;
+  if (currentEpoch != null && msg.epoch !== currentEpoch) {
+    L.log(`Ignoring stale OFFSCREEN_STATE (epoch ${msg.epoch ?? 'none'} != current ${currentEpoch})`);
     return;
   }
   session.applyOffscreenPhase(msg);

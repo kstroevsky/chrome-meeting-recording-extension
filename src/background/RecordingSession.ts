@@ -75,6 +75,8 @@ export class RecordingSession {
       targetTabId: target?.targetTabId,
       meetingSlug: target?.meetingSlug,
       warnings: undefined,
+      // Fencing token (ADR-0003): a fresh, strictly-increasing epoch per run.
+      epoch: (this.snapshot.epoch ?? 0) + 1,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -102,6 +104,8 @@ export class RecordingSession {
       runConfig: null,
       uploadSummary,
       warnings,
+      // Preserved across idle so the next run's epoch stays strictly increasing.
+      epoch: this.snapshot.epoch,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -115,6 +119,7 @@ export class RecordingSession {
       runConfig: this.snapshot.runConfig,
       targetTabId: this.snapshot.targetTabId,
       meetingSlug: this.snapshot.meetingSlug,
+      epoch: this.snapshot.epoch,
       error,
       warnings: this.snapshot.warnings,
       micMuted: this.snapshot.micMuted,
@@ -219,6 +224,7 @@ export class RecordingSession {
       paused: this.snapshot.paused,
       ...this.nextTimer(phase, now),
       uploadSummary: undefined,
+      epoch: this.snapshot.epoch,
       updatedAt: now,
     };
     return this.commit();
@@ -237,6 +243,7 @@ export class RecordingSession {
       cameraMuted: this.snapshot.cameraMuted,
       paused: this.snapshot.paused,
       ...this.nextTimer(phase, now),
+      epoch: this.snapshot.epoch,
       updatedAt: now,
     };
     return this.commit();

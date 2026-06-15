@@ -27,7 +27,7 @@ export type RpcHandlerDeps = {
   connectPort: () => chrome.runtime.Port;
   currentPhase: () => RecordingPhase;
   isFinalizing: () => boolean;
-  onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive') => void;
+  onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number) => void;
   onStopRequested: () => void;
   pushState: (phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>) => void;
   clearWarnings: () => void;
@@ -60,7 +60,7 @@ async function handleOffscreenStart(
 
   deps.clearWarnings();
   applyPerfSettings(msg.perfSettings);
-  deps.onStartRequested(runConfig, runConfig.storageMode);
+  deps.onStartRequested(runConfig, runConfig.storageMode, msg.epoch);
   deps.pushState('starting');
 
   try {

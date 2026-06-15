@@ -135,6 +135,14 @@ function normalizeMeetingSlug(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * Normalizes the persisted run epoch (fencing token, see ADR-0003). Preserved
+ * regardless of phase so it survives across `idle` and stays monotonic.
+ */
+function normalizeEpoch(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 /** Creates the canonical idle session snapshot used as the safe fallback state. */
 export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
   return {
@@ -158,6 +166,8 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     runConfig,
     targetTabId,
     meetingSlug,
+    // Phase-independent: the epoch is preserved across idle so it stays monotonic.
+    epoch: normalizeEpoch(candidate.epoch),
     uploadSummary: normalizeUploadSummary(candidate.uploadSummary),
     error: typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error : undefined,
     warnings: normalizeWarnings(candidate.warnings),

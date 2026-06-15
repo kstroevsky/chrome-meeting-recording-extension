@@ -106,6 +106,13 @@ export type BgToPopup =
  */
 export type OffscreenPhaseUpdate = {
   phase: RecordingPhase;
+  /**
+   * Run epoch echoed back from the offscreen's OFFSCREEN_START. The background
+   * fences stale status by dropping any update whose epoch ≠ the current run's;
+   * see ADR-0003. Optional so a pre-epoch offscreen reads as "no epoch" (dropped
+   * during an active run) rather than a type error.
+   */
+  epoch?: number;
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];
@@ -119,6 +126,8 @@ export type BgToOffscreenRpc =
       runConfig: RecordingRunConfig;
       recorderSettings: RecorderRuntimeSettingsSnapshot;
       perfSettings: PerfSettings;
+      /** Monotonic run epoch the offscreen must echo in OFFSCREEN_STATE; see ADR-0003. */
+      epoch: number;
     }>
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>

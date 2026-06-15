@@ -37,6 +37,14 @@ export type RecordingSessionSnapshot = {
   runConfig: RecordingRunConfig | null;
   targetTabId?: number;
   meetingSlug?: string;
+  /**
+   * Monotonic run epoch (fencing token). Incremented on each `start()`, persisted
+   * across service-worker restarts, and echoed by the offscreen in OFFSCREEN_STATE
+   * so the background can drop status from a previous run. Preserved across `idle`
+   * to stay strictly increasing. Background-only bookkeeping — never sent to the
+   * popup. See ADR-0003.
+   */
+  epoch?: number;
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];

@@ -125,6 +125,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   port.postMessage({
     type: 'OFFSCREEN_STATE',
     phase: controller.currentPhase(),
+    epoch: controller.currentEpoch(),
     ...(warnings.length ? { warnings } : {}),
   });
   L.log('READY signaled via Port');
