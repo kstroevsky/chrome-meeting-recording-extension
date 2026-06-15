@@ -51,7 +51,9 @@ export function validateSelfVideoProfile(candidate: Record<string, unknown>): Se
     return null;
   }
 
-  return { width, height, frameRate, aspectRatio, defaultBitsPerSecond, minAdaptiveBitsPerSecond };
+  // Lenient (default false) so a snapshot from an older build still validates.
+  const autoResolution = typeof candidate.autoResolution === 'boolean' ? candidate.autoResolution : false;
+  return { width, height, frameRate, aspectRatio, defaultBitsPerSecond, minAdaptiveBitsPerSecond, autoResolution };
 }
 
 /** Validates the microphone capture settings section from a snapshot. */

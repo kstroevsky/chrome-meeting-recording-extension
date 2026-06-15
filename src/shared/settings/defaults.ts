@@ -64,6 +64,7 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     microphoneRecordingMode: defaultMicMode,
     separateCameraCapture: EXTENSION_DEFAULTS.configurable.separateCameraCapture,
     selfVideoResolutionPreset: DEFAULT_RESOLUTION_PRESET,
+    selfVideoUseAutoResolution: false,
   }),
   professional: Object.freeze({
     selfVideoBitrate: EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond,

@@ -174,6 +174,7 @@ describe('settings', () => {
           aspectRatio: 1280 / 720,
           defaultBitsPerSecond: 2_000_000,
           minAdaptiveBitsPerSecond: 1_000_000,
+          autoResolution: false,
         },
       },
       microphone: {
@@ -186,6 +187,22 @@ describe('settings', () => {
         extendedTimesliceMs: 4500,
       },
     });
+  });
+
+  it('defaults selfVideoUseAutoResolution off and carries it into the snapshot profile', () => {
+    expect(normalizeExtensionSettings({}).basic.selfVideoUseAutoResolution).toBe(false);
+
+    const on = normalizeExtensionSettings({ basic: { selfVideoUseAutoResolution: true } });
+    expect(on.basic.selfVideoUseAutoResolution).toBe(true);
+    expect(buildRecorderRuntimeSettingsSnapshot(on).selfVideo.profile.autoResolution).toBe(true);
+  });
+
+  it('defaults a snapshot profile missing autoResolution to false on validation', () => {
+    const snapshot = buildRecorderRuntimeSettingsSnapshot(normalizeExtensionSettings({}));
+    const legacy = { ...snapshot, selfVideo: { profile: { ...snapshot.selfVideo.profile } } };
+    delete (legacy.selfVideo.profile as any).autoResolution;
+
+    expect(normalizeRecorderRuntimeSettingsSnapshot(legacy)?.selfVideo.profile.autoResolution).toBe(false);
   });
 
   it('accepts only valid recorder runtime snapshots without applying silent defaults', () => {

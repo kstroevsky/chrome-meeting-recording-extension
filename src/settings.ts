@@ -16,6 +16,7 @@ type SettingsElements = {
   micMode: HTMLSelectElement | null;
   separateCamera: HTMLInputElement | null;
   selfVideoResolutionPreset: HTMLSelectElement | null;
+  selfVideoAutoResolution: HTMLInputElement | null;
   selfVideoBitrate: HTMLInputElement | null;
   selfVideoFrameRate: HTMLInputElement | null;
   selfVideoMinAdaptiveBitrate: HTMLInputElement | null;
@@ -43,6 +44,7 @@ const el: SettingsElements = {
   micMode: document.getElementById('mic-mode') as HTMLSelectElement | null,
   separateCamera: document.getElementById('separate-camera') as HTMLInputElement | null,
   selfVideoResolutionPreset: document.getElementById('self-video-resolution-preset') as HTMLSelectElement | null,
+  selfVideoAutoResolution: document.getElementById('self-video-auto-resolution') as HTMLInputElement | null,
   selfVideoBitrate: document.getElementById('self-video-bitrate') as HTMLInputElement | null,
   selfVideoFrameRate: document.getElementById('self-video-frame-rate') as HTMLInputElement | null,
   selfVideoMinAdaptiveBitrate: document.getElementById('self-video-min-adaptive-bitrate') as HTMLInputElement | null,
@@ -74,6 +76,9 @@ function applySettings(settings: Readonly<ExtensionSettings>): void {
   if (el.selfVideoResolutionPreset) {
     el.selfVideoResolutionPreset.value = settings.basic.selfVideoResolutionPreset;
   }
+  if (el.selfVideoAutoResolution) {
+    el.selfVideoAutoResolution.checked = settings.basic.selfVideoUseAutoResolution;
+  }
   if (el.selfVideoBitrate) el.selfVideoBitrate.value = String(settings.professional.selfVideoBitrate);
   if (el.selfVideoFrameRate) el.selfVideoFrameRate.value = String(settings.professional.selfVideoFrameRate);
   if (el.selfVideoMinAdaptiveBitrate) {
@@ -99,6 +104,7 @@ function readSettingsFromForm(): unknown {
       microphoneRecordingMode: el.micMode?.value,
       separateCameraCapture: el.separateCamera?.checked,
       selfVideoResolutionPreset: el.selfVideoResolutionPreset?.value,
+      selfVideoUseAutoResolution: !!el.selfVideoAutoResolution?.checked,
     },
     professional: {
       selfVideoBitrate: Number(el.selfVideoBitrate?.value),

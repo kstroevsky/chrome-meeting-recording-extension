@@ -158,6 +158,9 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
       ? basicCandidate.separateCameraCapture
       : DEFAULT_EXTENSION_SETTINGS.basic.separateCameraCapture,
     selfVideoResolutionPreset: normalizeSelfVideoResolutionPreset(basicCandidate),
+    selfVideoUseAutoResolution: typeof basicCandidate.selfVideoUseAutoResolution === 'boolean'
+      ? basicCandidate.selfVideoUseAutoResolution
+      : DEFAULT_EXTENSION_SETTINGS.basic.selfVideoUseAutoResolution,
   };
 
   const professional: ExtensionSettings['professional'] = {

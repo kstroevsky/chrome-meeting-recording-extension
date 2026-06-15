@@ -23,6 +23,8 @@ export type ExtensionSettings = {
     microphoneRecordingMode: MicMode;
     separateCameraCapture: boolean;
     selfVideoResolutionPreset: ResolutionPreset;
+    /** Record the camera at the browser/Meet-selected resolution instead of forcing the preset (skips the resize re-rasterization). */
+    selfVideoUseAutoResolution: boolean;
   };
   professional: {
     selfVideoBitrate: number;
@@ -46,6 +48,8 @@ export type SelfVideoProfileSettings = {
   aspectRatio: number;
   defaultBitsPerSecond: number;
   minAdaptiveBitsPerSecond: number;
+  /** When true, skip resolution enforcement and record whatever the browser delivered. */
+  autoResolution: boolean;
 };
 
 export type TabCaptureSettings = {

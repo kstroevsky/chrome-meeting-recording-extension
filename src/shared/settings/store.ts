@@ -66,6 +66,7 @@ export function getSelfVideoProfileSettings(
     aspectRatio: width / height,
     defaultBitsPerSecond: settings.professional.selfVideoBitrate,
     minAdaptiveBitsPerSecond: settings.professional.selfVideoMinAdaptiveBitrate,
+    autoResolution: settings.basic.selfVideoUseAutoResolution,
   };
 }
 

@@ -151,6 +151,7 @@ describe('enforceSelfVideoResolution', () => {
 
       const enforced = await enforceSelfVideoResolution(source, { width: 640, height: 360 }, () => {});
       expect(enforced.resized).toBe(true);
+      expect(enforced.encodedSize).toEqual({ width: 640, height: 360 });
       const generator = generators[0];
 
       // Live: the real camera frame is drawn and encoded.
@@ -178,6 +179,29 @@ describe('enforceSelfVideoResolution', () => {
 
       savedReader.end();
       await flush();
+    });
+
+    it('records native resolution (no resize) when auto resolution is preferred', async () => {
+      const sourceTrack: any = {
+        enabled: true,
+        stop: jest.fn(),
+        getSettings: () => ({ width: 1280, height: 720 }),
+        clone: () => ({ __probe: true, stop: jest.fn() }),
+        __manual: new ManualReader(),
+      };
+      const source = { getVideoTracks: () => [sourceTrack], getTracks: () => [sourceTrack] } as any;
+
+      // Insertable streams ARE available and the coded size mismatches the target,
+      // so a resize WOULD normally be inserted — `auto` must still bypass it.
+      const enforced = await enforceSelfVideoResolution(source, { width: 640, height: 360 }, () => {}, { auto: true });
+
+      expect(enforced.resized).toBe(false);
+      expect(enforced.stream).toBe(source);
+      // Bitrate must size to the native coded buffer, not getSettings()'s under-report.
+      expect(enforced.encodedSize).toEqual({ width: 1280, height: 720 });
+      // Direct-path mute still works (well-defined enabled=false).
+      enforced.setMuted(true);
+      expect(sourceTrack.enabled).toBe(false);
     });
   });
 });

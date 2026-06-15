@@ -43,6 +43,14 @@ export type EnforcedSelfVideoStream = {
    * disabled-track behavior for MediaStreamTrackProcessor).
    */
   setMuted: (muted: boolean) => void;
+  /**
+   * The dimensions MediaRecorder will actually encode, when known: the target
+   * when a resize was inserted, or the probed native coded size when recording
+   * the camera directly. Used to size the bitrate, because `getSettings()`
+   * under-reports the encoded size under camera contention. Undefined when the
+   * coded size couldn't be probed (e.g. no insertable streams).
+   */
+  encodedSize?: { width: number; height: number };
 };
 
 type Size = { width: number; height: number };
@@ -166,7 +174,8 @@ function buildResizedTrack(
 export async function enforceSelfVideoResolution(
   source: MediaStream,
   target: Size,
-  log: (...a: any[]) => void
+  log: (...a: any[]) => void,
+  options: { auto?: boolean } = {}
 ): Promise<EnforcedSelfVideoStream> {
   const noop: EnforcedSelfVideoStream = {
     stream: source,
@@ -180,7 +189,19 @@ export async function enforceSelfVideoResolution(
     },
   };
   const track = source.getVideoTracks()[0];
-  if (!track || target.width <= 0 || target.height <= 0 || !hasInsertableStreams()) {
+  if (!track) return noop;
+
+  // "Prefer auto resolution": record whatever Chrome/Meet already selected — skip
+  // the resize re-rasterization (and its per-frame cost) entirely. We still probe
+  // the true coded size once (one frame, cheap) so the bitrate can match what is
+  // actually encoded; getSettings() under-reports it under camera contention.
+  if (options.auto) {
+    log('self-video: preferring auto resolution; skipping resize enforcement');
+    const codedAuto = hasInsertableStreams() ? await detectCodedSize(track) : null;
+    return { ...noop, encodedSize: codedAuto ?? undefined };
+  }
+
+  if (target.width <= 0 || target.height <= 0 || !hasInsertableStreams()) {
     return noop;
   }
 
@@ -196,7 +217,8 @@ export async function enforceSelfVideoResolution(
       codedHeight: coded.height,
       resized: false,
     });
-    return noop;
+    // Recording the source directly at the coded size — that IS the encoded size.
+    return { ...noop, encodedSize: coded };
   }
 
   const { track: resizedTrack, stop, setMuted } = buildResizedTrack(track, target.width, target.height);
@@ -208,5 +230,6 @@ export async function enforceSelfVideoResolution(
     codedHeight: coded.height,
     resized: true,
   });
-  return { stream: new MediaStream([resizedTrack]), stop, resized: true, setMuted };
+  // The resize forces the encoded buffer to the target size.
+  return { stream: new MediaStream([resizedTrack]), stop, resized: true, setMuted, encodedSize: { width: target.width, height: target.height } };
 }

@@ -133,11 +133,6 @@ async function startWiredSelfVideoRecorder(
   const settings = track?.getSettings?.();
   const mime = getVideoOnlyMime();
   const timesliceMs = getChunkTimesliceMs('self-video', recorderSettings.chunking);
-  const videoBitsPerSecond = resolveSelfVideoBitrate(
-    getDefaultSelfVideoBitrate(recorderSettings.selfVideo.profile),
-    settings,
-    recorderSettings.selfVideo.profile.minAdaptiveBitsPerSecond
-  );
 
   // Force the encoded resolution to match the selected preset even when another
   // consumer (e.g. the live Meet call) holds the camera open at a higher native
@@ -146,9 +141,23 @@ async function startWiredSelfVideoRecorder(
   const enforced = await enforceSelfVideoResolution(
     selfVideo,
     { width: profile.width, height: profile.height },
-    deps.log
+    deps.log,
+    { auto: recorderSettings.selfVideo.profile.autoResolution }
   );
   const recordingStream = enforced.stream;
+
+  // Size the bitrate to what is actually encoded. getSettings() can under-report the
+  // frame size under camera contention (Chrome reports the requested size, not the
+  // native coded buffer), which would under-bitrate the auto-resolution path; prefer
+  // the probed encoded size when SelfVideoResize could determine it.
+  const bitrateSettings: MediaTrackSettings | undefined = enforced.encodedSize
+    ? { ...(settings ?? {}), width: enforced.encodedSize.width, height: enforced.encodedSize.height }
+    : settings;
+  const videoBitsPerSecond = resolveSelfVideoBitrate(
+    getDefaultSelfVideoBitrate(recorderSettings.selfVideo.profile),
+    bitrateSettings,
+    recorderSettings.selfVideo.profile.minAdaptiveBitsPerSecond
+  );
 
   const recorder = new MediaRecorder(recordingStream, { mimeType: mime, videoBitsPerSecond });
   const target = await openStorageTarget(

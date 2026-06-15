@@ -15,6 +15,7 @@ describe('settings page', () => {
       microphoneRecordingMode: 'separate',
       separateCameraCapture: true,
       selfVideoResolutionPreset: '1280x720',
+      selfVideoUseAutoResolution: true,
     },
     professional: {
       selfVideoBitrate: 3_000_000,
@@ -72,6 +73,7 @@ describe('settings page', () => {
         microphoneRecordingMode: 'mixed',
         separateCameraCapture: false,
         selfVideoResolutionPreset: '640x360',
+        selfVideoUseAutoResolution: true,
       },
       professional: {
         selfVideoBitrate: 3000000,
