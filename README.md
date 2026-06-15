@@ -1283,7 +1283,7 @@ flowchart TD
 
 ### 4. Recording Start / Stop Control Plane
 
-Every start and stop — popup buttons, tab auto-stop, and the content-script meeting-ended signal — funnels through `RecordingController`, which owns the session transitions and the offscreen RPC handshake.
+Every start and stop — popup buttons, tab auto-stop, and the content-script meeting-ended signal — funnels through `RecordingController`, which owns the session transitions and the offscreen RPC handshake. Each run carries a monotonic **epoch** (a fencing token): the background stamps it on `start()`, sends it in `OFFSCREEN_START`, and drops any `OFFSCREEN_STATE` whose epoch ≠ the current run — so stale status from a previous run (after a port reconnect or service-worker restart) can't clobber the session. See [ADR-0003](docs/adr/0003-recording-phase-ownership-and-stale-offscreen-status.md).
 
 ```mermaid
 sequenceDiagram
@@ -1305,16 +1305,17 @@ sequenceDiagram
     B->>B: parseRunConfig + tabCapture conflict check
     B->>B: loadRecorderRuntimeSettingsSnapshot()
     B->>B: resolveMeetingSlug(tabId)
-    B->>S: start(runConfig) → starting
+    B->>S: start(runConfig) → starting (epoch++)
     S-->>B: persist + broadcast RECORDING_STATE
     B->>OM: ensureReady()
     OM-->>B: offscreen ready (Port)
     B->>OM: getMediaStreamIdForTab(tabId)
-    B->>O: OFFSCREEN_START(streamId, slug, runConfig, recorderSettings)
+    B->>O: OFFSCREEN_START(streamId, slug, runConfig, recorderSettings, epoch)
     O->>E: startFromStreamId(...)
     E->>E: acquire tab stream + mic/mixer + start tasks
     E-->>O: first recorder onstart → notifyPhase(recording)
-    O-->>B: OFFSCREEN_STATE(recording)
+    O-->>B: OFFSCREEN_STATE(recording, epoch)
+    B->>B: fence — drop if epoch ≠ current run (ADR-0003)
     B->>S: applyOffscreenPhase(recording)
     S-->>P: RECORDING_STATE + badge REC
     end
@@ -1327,11 +1328,11 @@ sequenceDiagram
     B->>O: OFFSCREEN_STOP
     O->>E: stop()
     E->>E: release camera eagerly, seal tab / mic / self-video
-    O-->>B: OFFSCREEN_STATE(stopping)
+    O-->>B: OFFSCREEN_STATE(stopping, epoch)
     opt storageMode = drive and artifacts > 0
-        O-->>B: OFFSCREEN_STATE(uploading) + badge UP
+        O-->>B: OFFSCREEN_STATE(uploading, epoch) + badge UP
     end
-    O-->>B: OFFSCREEN_STATE(idle, uploadSummary?) or (failed, error)
+    O-->>B: OFFSCREEN_STATE(idle, epoch, uploadSummary?) or (failed, error)
     B->>S: applyOffscreenPhase(...)
     S-->>P: RECORDING_STATE + badge cleared / ERR
     end
@@ -1339,7 +1340,7 @@ sequenceDiagram
 
 ### 5. Recording Session State Machine (Background)
 
-The canonical, persisted session phase owned by `RecordingSession`. This is the **control-plane** state — distinct from the offscreen engine's own machine (#8).
+The canonical, persisted session phase owned by `RecordingSession`. This is the **control-plane** state — distinct from the offscreen engine's own machine (#8). Offscreen-sourced transitions (`OFFSCREEN_STATE`) are admitted only when their run epoch matches the current run; stale-epoch updates are dropped before they reach this machine (the fencing token, [ADR-0003](docs/adr/0003-recording-phase-ownership-and-stale-offscreen-status.md)). The persisted `epoch` is carried across `idle` so it stays strictly increasing across service-worker restarts.
 
 ```mermaid
 stateDiagram-v2
@@ -1394,8 +1395,9 @@ sequenceDiagram
 
     O->>B: runtime.connect(name=offscreen)
     O->>B: OFFSCREEN_READY
-    O->>B: OFFSCREEN_STATE(currentPhase, warnings?)
+    O->>B: OFFSCREEN_STATE(currentPhase, epoch, warnings?)
     B->>B: ready=true, resolve readyPromise, set badge
+    Note over B: re-broadcast is epoch-fenced — a stale phase from a prior run is dropped (ADR-0003)
     Note over B: withTimeout(READY_TIMEOUT_MS = 5s) outer safety net
 
     opt Port drops (SW idle / crash)
@@ -1804,7 +1806,7 @@ flowchart LR
 | Message | Meaning |
 | :--- | :--- |
 | `OFFSCREEN_READY` | offscreen port is attached and ready |
-| `OFFSCREEN_STATE` | phase transition or finalize result |
+| `OFFSCREEN_STATE` | phase transition or finalize result; carries the run `epoch` the background fences on (ADR-0003) |
 | `OFFSCREEN_SAVE` | request a local save through background |
 
 ### Content Script → Background
@@ -1817,7 +1819,7 @@ flowchart LR
 
 | Message | Meaning |
 | :--- | :--- |
-| `OFFSCREEN_START` | begin a run for a specific `streamId` and `runConfig` |
+| `OFFSCREEN_START` | begin a run for a specific `streamId` and `runConfig`; carries the run `epoch` the offscreen echoes back (ADR-0003) |
 | `OFFSCREEN_STOP` | stop active recording and begin finalize flow |
 | `REVOKE_BLOB_URL` | release local save blob URLs and optionally cleanup OPFS temp files |
 | `OFFSCREEN_CONNECT` | ask an existing offscreen page to reconnect its runtime port |

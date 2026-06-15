@@ -75,6 +75,7 @@ describe('RecordingController', () => {
         runConfig: RUN_CONFIG,
         recorderSettings: { recorder: 'snapshot' },
         perfSettings: getPerfSettingsSnapshot(),
+        epoch: 1,
       });
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('starting');

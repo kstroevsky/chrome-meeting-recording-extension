@@ -19,7 +19,7 @@ describe('OffscreenController', () => {
     it('broadcasts the phase without warnings by default', () => {
       const { controller, postMessage } = makeController();
       controller.pushState('recording');
-      expect(postMessage).toHaveBeenCalledWith({ type: 'OFFSCREEN_STATE', phase: 'recording' });
+      expect(postMessage).toHaveBeenCalledWith({ type: 'OFFSCREEN_STATE', phase: 'recording', epoch: 0 });
       expect(controller.currentPhase()).toBe('recording');
     });
 
@@ -31,6 +31,7 @@ describe('OffscreenController', () => {
       expect(lastState(postMessage)).toEqual({
         type: 'OFFSCREEN_STATE',
         phase: 'uploading',
+        epoch: 0,
         warnings: ['low disk'],
         uploadSummary: { uploaded: [], localFallbacks: [] },
       });
@@ -91,7 +92,7 @@ describe('OffscreenController', () => {
     it('saves locally without an uploading phase and returns to idle', async () => {
       const { controller, postMessage } = makeController();
       const { stop, finalize } = attach(controller, { artifacts: [artifact('tab')] });
-      controller.onStartRequested({ storageMode: 'local', micMode: 'off', recordSelfVideo: false }, 'local');
+      controller.onStartRequested({ storageMode: 'local', micMode: 'off', recordSelfVideo: false }, 'local', 7);
 
       await controller.finalize();
 
@@ -106,19 +107,19 @@ describe('OffscreenController', () => {
       const { controller, postMessage } = makeController();
       const summary = { uploaded: [{ stream: 'tab', filename: 'tab.webm' }], localFallbacks: [] };
       attach(controller, { artifacts: [artifact('tab')], summary });
-      controller.onStartRequested({ storageMode: 'drive', micMode: 'off', recordSelfVideo: false }, 'drive');
+      controller.onStartRequested({ storageMode: 'drive', micMode: 'off', recordSelfVideo: false }, 'drive', 7);
 
       await controller.finalize();
 
       const phases = postMessage.mock.calls.map((c) => c[0].phase);
       expect(phases).toEqual(['uploading', 'idle']);
-      expect(lastState(postMessage)).toEqual({ type: 'OFFSCREEN_STATE', phase: 'idle', uploadSummary: summary });
+      expect(lastState(postMessage)).toEqual({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 7, uploadSummary: summary });
     });
 
     it('does not signal uploading for a Drive run that produced no artifacts', async () => {
       const { controller, postMessage } = makeController();
       attach(controller, { artifacts: [] });
-      controller.onStartRequested({ storageMode: 'drive', micMode: 'off', recordSelfVideo: false }, 'drive');
+      controller.onStartRequested({ storageMode: 'drive', micMode: 'off', recordSelfVideo: false }, 'drive', 7);
 
       await controller.finalize();
 
@@ -153,7 +154,7 @@ describe('OffscreenController', () => {
       await controller.finalize();
 
       expect(error).toHaveBeenCalledWith('Stop/finalize pipeline failed', 'Error: capture lost');
-      expect(lastState(postMessage)).toEqual({ type: 'OFFSCREEN_STATE', phase: 'failed', error: 'Error: capture lost' });
+      expect(lastState(postMessage)).toEqual({ type: 'OFFSCREEN_STATE', phase: 'failed', epoch: 0, error: 'Error: capture lost' });
       expect(controller.isFinalizing()).toBe(false);
     });
 

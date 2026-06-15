@@ -107,6 +107,29 @@ describe('RecordingSession state machine', () => {
     expect(onChanged).toHaveBeenCalledTimes(3);
   });
 
+  describe('run epoch (fencing token, ADR-0003)', () => {
+    it('assigns a fresh, strictly increasing epoch per run and preserves it across transitions and idle', () => {
+      expect(session.start(RUN_CONFIG).epoch).toBe(1);
+      // Preserved through the run so every status the offscreen echoes matches.
+      expect(session.markRecording().epoch).toBe(1);
+      expect(session.markStopping().epoch).toBe(1);
+      // Preserved across idle so the next run is strictly greater (not reset to 1).
+      expect(session.markIdle().epoch).toBe(1);
+
+      expect(session.start(RUN_CONFIG).epoch).toBe(2);
+      // failed preserves the active run's epoch; a retry start increments again.
+      expect(session.fail('boom').epoch).toBe(2);
+      expect(session.start(RUN_CONFIG).epoch).toBe(3);
+    });
+
+    it('rehydrates the persisted epoch so the fence survives a service-worker restart', () => {
+      const restored = session.hydrate({ phase: 'recording', runConfig: RUN_CONFIG, epoch: 5, updatedAt: 1 });
+      expect(restored.epoch).toBe(5);
+      // The next run continues strictly above the restored epoch.
+      expect(session.start(RUN_CONFIG).epoch).toBe(6);
+    });
+  });
+
   describe('applyOffscreenPhase', () => {
     it('routes an idle update through markIdle with its summary and warnings', () => {
       session.start(RUN_CONFIG, { targetTabId: 42 });

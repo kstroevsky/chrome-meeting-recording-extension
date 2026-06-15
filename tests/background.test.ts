@@ -128,6 +128,7 @@ describe('background runtime messages', () => {
       perfSettings: expect.objectContaining({
         parallelUploadConcurrency: 2,
       }),
+      epoch: 1,
     });
     expect(response).toEqual(expect.objectContaining({ ok: true }));
   });
