@@ -74,14 +74,18 @@ export type PopupToBgResponse<T extends PopupToBg> =
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
 export type PopupResetTranscript = { type: 'RESET_TRANSCRIPT' };
+/** Asks the content script whether the Meet captions region is currently present. */
+export type PopupGetCaptionState = { type: 'GET_CAPTION_STATE' };
 
 export type PopupToContent =
   | PopupGetTranscript
-  | PopupResetTranscript;
+  | PopupResetTranscript
+  | PopupGetCaptionState;
 
 export type PopupToContentResponse<T extends PopupToContent> =
   T extends PopupGetTranscript ? { transcript: string; provider: MeetingProviderInfo } :
   T extends PopupResetTranscript ? { ok: true } :
+  T extends PopupGetCaptionState ? { captionsActive: boolean } :
   never;
 
 export type ContentMeetingEnded = {

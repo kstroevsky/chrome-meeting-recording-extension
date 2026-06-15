@@ -17,6 +17,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
 export const POPUP_TO_CONTENT_MESSAGE_TYPES = [
   'GET_TRANSCRIPT',
   'RESET_TRANSCRIPT',
+  'GET_CAPTION_STATE',
 ] as const;
 
 export const CONTENT_TO_BG_MESSAGE_TYPES = [

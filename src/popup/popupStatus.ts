@@ -29,6 +29,17 @@ export function describeRunConfig(config: RecordingRunConfig | null): string {
   return `${mode} ${mic} ${camera}`.trim();
 }
 
+/** Formats a recorded-duration in ms as `M:SS` (or `H:MM:SS` past an hour). */
+export function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor((ms || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const ss = String(seconds).padStart(2, '0');
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${ss}`;
+  return `${minutes}:${ss}`;
+}
+
 /** Formats the first active warning for compact popup display. */
 export function describeRecordingWarnings(warnings?: string[]): string {
   const first = warnings?.find((warning) => warning.trim());

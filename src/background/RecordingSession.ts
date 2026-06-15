@@ -109,6 +109,7 @@ export class RecordingSession {
 
   /** Records a terminal failure while preserving the last active run configuration. */
   fail(error: string): RecordingSessionSnapshot {
+    const now = Date.now();
     this.snapshot = {
       phase: 'failed',
       runConfig: this.snapshot.runConfig,
@@ -119,7 +120,9 @@ export class RecordingSession {
       micMuted: this.snapshot.micMuted,
       cameraMuted: this.snapshot.cameraMuted,
       paused: this.snapshot.paused,
-      updatedAt: Date.now(),
+      recordedMs: this.elapsedRecordedMs(now),
+      runningSince: undefined,
+      updatedAt: now,
     };
     return this.commit();
   }
@@ -149,14 +152,41 @@ export class RecordingSession {
     return this.commit();
   }
 
-  /** Mirrors the live whole-recording pause flag actuated in the offscreen recorder. See {@link setMicMuted}. */
+  /**
+   * Mirrors the live whole-recording pause flag, and freezes/resumes the recording
+   * timer with it: pausing banks the running span into `recordedMs` and stops the
+   * clock; resuming restarts it. See {@link setMicMuted}.
+   */
   setPaused(paused: boolean): RecordingSessionSnapshot {
+    const now = Date.now();
     this.snapshot = {
       ...this.snapshot,
       paused: paused || undefined,
-      updatedAt: Date.now(),
+      recordedMs: paused ? this.elapsedRecordedMs(now) : this.snapshot.recordedMs,
+      runningSince: paused ? undefined : (this.snapshot.runningSince ?? now),
+      updatedAt: now,
     };
     return this.commit();
+  }
+
+  /** Live recorded duration in ms: banked time plus the current running span. */
+  private elapsedRecordedMs(now: number): number {
+    const base = this.snapshot.recordedMs ?? 0;
+    return this.snapshot.runningSince ? base + Math.max(0, now - this.snapshot.runningSince) : base;
+  }
+
+  /**
+   * Computes the timer fields for a phase transition: (re)start counting on the
+   * first entry into `recording`, keep them on a `recording` re-broadcast, and
+   * freeze the running span (bank it, stop the clock) for every other phase.
+   */
+  private nextTimer(newPhase: RecordingSessionSnapshot['phase'], now: number): Pick<RecordingSessionSnapshot, 'recordedMs' | 'runningSince'> {
+    if (newPhase === 'recording') {
+      return this.snapshot.phase === 'recording'
+        ? { recordedMs: this.snapshot.recordedMs, runningSince: this.snapshot.runningSince }
+        : { recordedMs: 0, runningSince: now };
+    }
+    return { recordedMs: this.elapsedRecordedMs(now), runningSince: undefined };
   }
 
   /**
@@ -176,6 +206,7 @@ export class RecordingSession {
       return this.fail(error ?? 'Recording runtime failed');
     }
 
+    const now = Date.now();
     this.snapshot = {
       phase,
       runConfig: this.snapshot.runConfig,
@@ -186,14 +217,16 @@ export class RecordingSession {
       micMuted: this.snapshot.micMuted,
       cameraMuted: this.snapshot.cameraMuted,
       paused: this.snapshot.paused,
+      ...this.nextTimer(phase, now),
       uploadSummary: undefined,
-      updatedAt: Date.now(),
+      updatedAt: now,
     };
     return this.commit();
   }
 
   /** Performs simple phase-only transitions while preserving the active run config. */
   private transition(phase: RecordingSessionSnapshot['phase']): RecordingSessionSnapshot {
+    const now = Date.now();
     this.snapshot = {
       phase,
       runConfig: this.snapshot.runConfig,
@@ -203,7 +236,8 @@ export class RecordingSession {
       micMuted: this.snapshot.micMuted,
       cameraMuted: this.snapshot.cameraMuted,
       paused: this.snapshot.paused,
-      updatedAt: Date.now(),
+      ...this.nextTimer(phase, now),
+      updatedAt: now,
     };
     return this.commit();
   }

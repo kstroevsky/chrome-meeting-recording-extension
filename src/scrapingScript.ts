@@ -69,6 +69,9 @@ class TranscriptCollector {
 
   getTranscriptText(): string { return this.buffer.getTranscriptText(); }
 
+  /** True when the Meet captions region is currently attached to the live DOM. */
+  areCaptionsActive(): boolean { return this.activeRegion?.isConnected === true; }
+
   reset() {
     this.buffer.reset();
   }
@@ -225,6 +228,10 @@ class TranscriptCollector {
       if (msg.type === 'RESET_TRANSCRIPT') {
         this.reset();
         sendResponse({ ok: true });
+        return true;
+      }
+      if (msg.type === 'GET_CAPTION_STATE') {
+        sendResponse({ captionsActive: this.areCaptionsActive() });
         return true;
       }
       return false;

@@ -164,6 +164,18 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     micMuted: phase === 'idle' ? undefined : candidate.micMuted === true ? true : undefined,
     cameraMuted: phase === 'idle' ? undefined : candidate.cameraMuted === true ? true : undefined,
     paused: phase === 'idle' ? undefined : candidate.paused === true ? true : undefined,
+    recordedMs:
+      phase === 'idle'
+        ? undefined
+        : typeof candidate.recordedMs === 'number' && candidate.recordedMs >= 0
+          ? candidate.recordedMs
+          : 0,
+    runningSince:
+      phase === 'idle'
+        ? undefined
+        : typeof candidate.runningSince === 'number' && candidate.runningSince > 0
+          ? candidate.runningSince
+          : undefined,
     updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
   };
 }

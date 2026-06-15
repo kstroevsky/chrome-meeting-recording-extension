@@ -59,6 +59,15 @@ export type RecordingSessionSnapshot = {
    * recording; only meaningful while the session is in an active capture phase.
    */
   paused?: boolean;
+  /**
+   * Pause-aware recording timer state. `recordedMs` is the accumulated *recorded*
+   * duration (excludes paused spans), frozen on pause and on stop; `runningSince`
+   * is the epoch ms the timer (re)started counting, or omitted while paused /
+   * stopped / idle. Live elapsed = recordedMs + (runningSince ? now - runningSince : 0).
+   * Authoritative here so the disposable popup can render a correct timer after reopen.
+   */
+  recordedMs?: number;
+  runningSince?: number;
   updatedAt: number;
 };
 
@@ -79,5 +88,8 @@ export type RecordingStatusView = {
   cameraMuted?: boolean;
   /** Live whole-recording pause state; see {@link RecordingSessionSnapshot.paused}. */
   paused?: boolean;
+  /** Pause-aware recording timer state; see {@link RecordingSessionSnapshot.recordedMs}. */
+  recordedMs?: number;
+  runningSince?: number;
   updatedAt: number;
 };
