@@ -52,6 +52,13 @@ export type RecordingSessionSnapshot = {
    * Omitted/false means the camera is live; only meaningful while `runConfig.recordSelfVideo`.
    */
   cameraMuted?: boolean;
+  /**
+   * Live pause state of the whole recording. While paused, every MediaRecorder
+   * is paused so nothing is written (see RecorderEngine.setPaused); the tracks
+   * stay live so resume produces a seamless join. Omitted/false means actively
+   * recording; only meaningful while the session is in an active capture phase.
+   */
+  paused?: boolean;
   updatedAt: number;
 };
 
@@ -70,5 +77,7 @@ export type RecordingStatusView = {
   micMuted?: boolean;
   /** Live camera-hidden state; see {@link RecordingSessionSnapshot.cameraMuted}. */
   cameraMuted?: boolean;
+  /** Live whole-recording pause state; see {@link RecordingSessionSnapshot.paused}. */
+  paused?: boolean;
   updatedAt: number;
 };

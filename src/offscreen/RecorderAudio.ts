@@ -46,6 +46,20 @@ export class MixedAudioMixer {
     return new MediaStream(mixedTracks);
   }
 
+  /**
+   * Suspends the mixing AudioContext while the recording is paused so the mixer
+   * stops doing audio work; the paused tab MediaRecorder discards its output
+   * anyway. Best-effort and idempotent — never throws into the pause path.
+   */
+  suspend() {
+    try { void this.ctx?.suspend?.(); } catch {}
+  }
+
+  /** Resumes the mixing AudioContext when the recording resumes. See {@link suspend}. */
+  resume() {
+    try { void this.ctx?.resume?.(); } catch {}
+  }
+
   /** Disconnects audio graph nodes and closes the underlying AudioContext. */
   stop() {
     for (const source of this.sources) {

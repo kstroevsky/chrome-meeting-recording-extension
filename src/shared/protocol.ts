@@ -50,6 +50,8 @@ export type PopupGetDriveToken = { type: 'GET_DRIVE_TOKEN'; refresh?: boolean };
 export type PopupSetMicMuted = { type: 'SET_MIC_MUTED'; muted: boolean };
 /** Toggles the camera on the live self-video recording; it emits black frames while hidden. */
 export type PopupSetCameraMuted = { type: 'SET_CAMERA_MUTED'; muted: boolean };
+/** Pauses/resumes the whole recording; the paused span is absent from the files (seamless join). */
+export type PopupSetPaused = { type: 'SET_PAUSED'; paused: boolean };
 
 export type PopupToBg =
   | PopupStartRecording
@@ -57,7 +59,8 @@ export type PopupToBg =
   | PopupGetRecordingStatus
   | PopupGetDriveToken
   | PopupSetMicMuted
-  | PopupSetCameraMuted;
+  | PopupSetCameraMuted
+  | PopupSetPaused;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -66,6 +69,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupGetDriveToken ? DriveTokenResponse :
   T extends PopupSetMicMuted ? CommandResult :
   T extends PopupSetCameraMuted ? CommandResult :
+  T extends PopupSetPaused ? CommandResult :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -114,7 +118,8 @@ export type BgToOffscreenRpc =
     }>
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
-  | RpcRequest<{ type: 'OFFSCREEN_SET_CAMERA_MUTED'; muted: boolean }>;
+  | RpcRequest<{ type: 'OFFSCREEN_SET_CAMERA_MUTED'; muted: boolean }>
+  | RpcRequest<{ type: 'OFFSCREEN_SET_PAUSED'; paused: boolean }>;
 
 export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string };

@@ -11,6 +11,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'GET_DRIVE_TOKEN',
   'SET_MIC_MUTED',
   'SET_CAMERA_MUTED',
+  'SET_PAUSED',
 ] as const;
 
 export const POPUP_TO_CONTENT_MESSAGE_TYPES = [

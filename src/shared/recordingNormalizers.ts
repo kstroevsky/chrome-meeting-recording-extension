@@ -163,6 +163,7 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     warnings: normalizeWarnings(candidate.warnings),
     micMuted: phase === 'idle' ? undefined : candidate.micMuted === true ? true : undefined,
     cameraMuted: phase === 'idle' ? undefined : candidate.cameraMuted === true ? true : undefined,
+    paused: phase === 'idle' ? undefined : candidate.paused === true ? true : undefined,
     updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
   };
 }

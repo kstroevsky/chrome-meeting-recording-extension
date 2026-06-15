@@ -44,6 +44,13 @@ export type EnforcedSelfVideoStream = {
    */
   setMuted: (muted: boolean) => void;
   /**
+   * Halts/resumes per-frame work in the resize pump while the recording is paused
+   * (skips the drawImage + VideoFrame allocation + write — the expensive part).
+   * No-op on the direct path, where the paused MediaRecorder already stops the
+   * encoder and there is no pump to idle. See RecorderEngine.setPaused.
+   */
+  setPaused: (paused: boolean) => void;
+  /**
    * The dimensions MediaRecorder will actually encode, when known: the target
    * when a resize was inserted, or the probed native coded size when recording
    * the camera directly. Used to size the bitrate, because `getSettings()`
@@ -103,7 +110,7 @@ function buildResizedTrack(
   track: MediaStreamTrack,
   width: number,
   height: number
-): { track: MediaStreamTrack; stop: () => void; setMuted: (muted: boolean) => void } {
+): { track: MediaStreamTrack; stop: () => void; setMuted: (muted: boolean) => void; setPaused: (paused: boolean) => void } {
   const g = globalThis as any;
   const processor = new g.MediaStreamTrackProcessor({ track });
   const generator = new g.MediaStreamTrackGenerator({ kind: 'video' });
@@ -115,6 +122,7 @@ function buildResizedTrack(
 
   let stopped = false;
   let muted = false;
+  let paused = false;
 
   const pump = async () => {
     try {
@@ -122,6 +130,10 @@ function buildResizedTrack(
         const { value: frame, done } = await reader.read();
         if (done) break;
         if (stopped) { frame.close(); break; }
+        // Paused: drain the source frame (so the processor doesn't back up) but
+        // skip the expensive resize work and write nothing — the MediaRecorder is
+        // paused, so it would discard these frames anyway.
+        if (paused) { frame.close(); continue; }
         try {
           if (muted) {
             // Hidden: write a black frame at the source cadence instead of the
@@ -162,7 +174,12 @@ function buildResizedTrack(
     try { (generator as any).stop?.(); } catch {}
   };
 
-  return { track: generator, stop, setMuted: (next: boolean) => { muted = next; } };
+  return {
+    track: generator,
+    stop,
+    setMuted: (next: boolean) => { muted = next; },
+    setPaused: (next: boolean) => { paused = next; },
+  };
 }
 
 /**
@@ -187,6 +204,9 @@ export async function enforceSelfVideoResolution(
     setMuted: (muted: boolean) => {
       for (const t of source.getVideoTracks()) { try { t.enabled = !muted; } catch {} }
     },
+    // Direct recording: the paused MediaRecorder already stops the encoder, and
+    // there is no resize pump to idle, so pausing needs no extra actuation here.
+    setPaused: () => {},
   };
   const track = source.getVideoTracks()[0];
   if (!track) return noop;
@@ -221,7 +241,7 @@ export async function enforceSelfVideoResolution(
     return { ...noop, encodedSize: coded };
   }
 
-  const { track: resizedTrack, stop, setMuted } = buildResizedTrack(track, target.width, target.height);
+  const { track: resizedTrack, stop, setMuted, setPaused } = buildResizedTrack(track, target.width, target.height);
   logPerf(log, 'recorder', 'self_video_resolution_enforced', {
     stream: 'self-video',
     targetWidth: target.width,
@@ -231,5 +251,5 @@ export async function enforceSelfVideoResolution(
     resized: true,
   });
   // The resize forces the encoded buffer to the target size.
-  return { stream: new MediaStream([resizedTrack]), stop, resized: true, setMuted, encodedSize: { width: target.width, height: target.height } };
+  return { stream: new MediaStream([resizedTrack]), stop, resized: true, setMuted, setPaused, encodedSize: { width: target.width, height: target.height } };
 }

@@ -57,7 +57,9 @@ export class RecorderEngine {
   private recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
   private micMuted = false;
   private cameraMuted = false;
+  private paused = false;
   private selfVideoSetMuted: ((muted: boolean) => void) | null = null;
+  private selfVideoSetPaused: ((paused: boolean) => void) | null = null;
 
   private playback: AudioPlaybackBridge | null = null;
   private mixedAudio: MixedAudioMixer | null = null;
@@ -112,6 +114,50 @@ export class RecorderEngine {
   setCameraMuted(muted: boolean): void {
     this.cameraMuted = muted;
     this.selfVideoSetMuted?.(muted);
+  }
+
+  /**
+   * Pauses or resumes the whole recording. Drives `MediaRecorder.pause()/resume()`
+   * on every active recorder: the paused span is never gathered into the blob, so
+   * resume produces a seamless join (no black/blank filler) — unlike a mute, which
+   * would record silence/black for the full span. Tracks stay live, so resume is
+   * instant and the timeline stays continuous. The desired state is remembered so
+   * a pause toggled during the `starting` phase is applied to recorders as they
+   * come up (see registerTrack).
+   */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    this.applyPauseState();
+  }
+
+  private applyPauseState(): void {
+    const paused = this.paused;
+
+    // On resume, restart upstream producers before the recorders so audio/frames
+    // are already flowing when each recorder resumes gathering.
+    if (!paused) {
+      this.selfVideoSetPaused?.(false);
+      this.mixedAudio?.resume();
+    }
+
+    for (const track of this.tracks) {
+      try {
+        if (paused) {
+          if (track.recorder.state === 'recording') track.recorder.pause();
+        } else if (track.recorder.state === 'paused') {
+          track.recorder.resume();
+        }
+      } catch (e) {
+        this.deps.error(`${track.stream} pause/resume error`, describeMediaError(e));
+      }
+    }
+
+    // On pause, idle upstream producers after the recorders are paused — nothing
+    // is being gathered, so the mixing/resize work is pure waste until resume.
+    if (paused) {
+      this.selfVideoSetPaused?.(true);
+      this.mixedAudio?.suspend();
+    }
   }
 
   async startFromStreamId(
@@ -225,12 +271,14 @@ export class RecorderEngine {
       tasks.push(
         startSelfVideoRecorder(runId, () => this.runId, isStale, this.suffix, runStartedAt, this.recordSelfVideo, recorderSettings, this.deps, {
           onStarted: () => this.onRecorderStarted(),
-          onStopped: (artifact) => { this.selfVideoSetMuted = null; this.onTrackStopped('self-video', artifact); },
+          onStopped: (artifact) => { this.selfVideoSetMuted = null; this.selfVideoSetPaused = null; this.onTrackStopped('self-video', artifact); },
           onWarning: (msg) => this.deps.reportWarning?.(msg),
           onStreamAcquired: (controls) => {
             stopStream = controls.stop;
             this.selfVideoSetMuted = controls.setMuted;
+            this.selfVideoSetPaused = controls.setPaused;
             controls.setMuted(this.cameraMuted);
+            controls.setPaused(this.paused);
           },
         }).then((recorder) => { if (recorder) this.registerTrack({ stream: 'self-video', recorder, stopStream }); })
           .catch((e) => this.deps.warn('Self video recorder start failed', describeMediaError(e)))
@@ -308,6 +356,11 @@ export class RecorderEngine {
   /** Adds a started recorder to the active track set. */
   private registerTrack(track: RecorderTrack): void {
     this.tracks.push(track);
+    // Apply a pause toggled during the `starting` phase to recorders as they come
+    // up, so all streams pause together regardless of acquisition order/timing.
+    if (this.paused && track.recorder.state === 'recording') {
+      try { track.recorder.pause(); } catch (e) { this.deps.error(`${track.stream} pause error`, describeMediaError(e)); }
+    }
   }
 
   /** Collects a stopped track's artifact, drops it from the set, then advances stop accounting. */
@@ -363,7 +416,9 @@ export class RecorderEngine {
     this.recordSelfVideo = DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
     this.micMuted = false;
     this.cameraMuted = false;
+    this.paused = false;
     this.selfVideoSetMuted = null;
+    this.selfVideoSetPaused = null;
     this.finalizedArtifacts = [];
     this.stopPromise = null; this.resolveStop = null;
     this.pendingStartPromises = [];
