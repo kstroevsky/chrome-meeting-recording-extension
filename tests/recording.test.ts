@@ -97,3 +97,23 @@ describe('session snapshot cameraMuted', () => {
     expect(toStatusView(active() as any).cameraMuted).toBeUndefined();
   });
 });
+
+describe('session snapshot paused', () => {
+  const active = (extra: Record<string, unknown> = {}) => ({
+    phase: 'recording',
+    runConfig: { storageMode: 'local', micMode: 'separate', recordSelfVideo: true },
+    updatedAt: 1,
+    ...extra,
+  });
+
+  it('keeps paused only while a recording is active', () => {
+    expect(normalizeSessionSnapshot(active({ paused: true })).paused).toBe(true);
+    expect(normalizeSessionSnapshot(active()).paused).toBeUndefined();
+    expect(normalizeSessionSnapshot({ phase: 'idle', paused: true, updatedAt: 1 }).paused).toBeUndefined();
+  });
+
+  it('projects paused onto the popup status view', () => {
+    expect(toStatusView(active({ paused: true }) as any).paused).toBe(true);
+    expect(toStatusView(active() as any).paused).toBeUndefined();
+  });
+});

@@ -181,6 +181,48 @@ describe('enforceSelfVideoResolution', () => {
       await flush();
     });
 
+    it('idles the pump while paused (drains frames but writes nothing) and resumes cleanly', async () => {
+      const reader = new ManualReader();
+      const sourceTrack: any = {
+        enabled: true,
+        stop: jest.fn(),
+        getSettings: () => ({ width: 1280, height: 720 }),
+        clone: () => ({ __probe: true, stop: jest.fn() }),
+        __manual: reader,
+      };
+      const source = { getVideoTracks: () => [sourceTrack], getTracks: () => [sourceTrack] } as any;
+
+      const enforced = await enforceSelfVideoResolution(source, { width: 640, height: 360 }, () => {});
+      expect(enforced.resized).toBe(true);
+      const generator = generators[0];
+
+      // Live: drawn and written.
+      reader.push(makeFrame({ timestamp: 1000 }));
+      await flush();
+      expect(ctx.drawImage).toHaveBeenCalledTimes(1);
+      expect(generator.written).toHaveLength(1);
+
+      // Paused: the frame is drained (closed) but no draw/fill and nothing written.
+      enforced.setPaused(true);
+      const pausedFrame = makeFrame({ timestamp: 2000 });
+      reader.push(pausedFrame);
+      await flush();
+      expect(pausedFrame.close).toHaveBeenCalledTimes(1);
+      expect(ctx.drawImage).toHaveBeenCalledTimes(1);
+      expect(ctx.fillRect).not.toHaveBeenCalled();
+      expect(generator.written).toHaveLength(1);
+
+      // Resumed: drawing/writing continues, seamless with the pre-pause frames.
+      enforced.setPaused(false);
+      reader.push(makeFrame({ timestamp: 3000 }));
+      await flush();
+      expect(ctx.drawImage).toHaveBeenCalledTimes(2);
+      expect(generator.written).toHaveLength(2);
+
+      reader.end();
+      await flush();
+    });
+
     it('records native resolution (no resize) when auto resolution is preferred', async () => {
       const sourceTrack: any = {
         enabled: true,

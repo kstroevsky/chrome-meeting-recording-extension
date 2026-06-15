@@ -294,4 +294,45 @@ describe('RecordingController', () => {
       expect(session.getSnapshot().cameraMuted).toBeUndefined();
     });
   });
+
+  describe('setPaused', () => {
+    const startRun = () =>
+      session.start({ storageMode: 'local', micMode: 'off', recordSelfVideo: false }, { targetTabId: 42 });
+
+    it('rejects when no recording is active', async () => {
+      const result = await controller.setPaused(true);
+      expect(result).toEqual(
+        expect.objectContaining({ ok: false, error: 'Pause requested but no recording is active' })
+      );
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+    });
+
+    it('forwards OFFSCREEN_SET_PAUSED and mirrors the flag onto the session (no mic/camera sub-guard)', async () => {
+      startRun();
+      session.markRecording();
+
+      const paused = await controller.setPaused(true);
+
+      expect(offscreen.ensureReady).toHaveBeenCalled();
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_SET_PAUSED', paused: true });
+      expect(paused.ok).toBe(true);
+      expect(session.getSnapshot().paused).toBe(true);
+
+      offscreen.rpc.mockClear();
+      await controller.setPaused(false);
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_SET_PAUSED', paused: false });
+      expect(session.getSnapshot().paused).toBeUndefined();
+    });
+
+    it('leaves the recording intact when the offscreen pause fails', async () => {
+      startRun();
+      session.markRecording();
+      offscreen.rpc.mockResolvedValue({ ok: false, error: 'pause boom' });
+
+      const result = await controller.setPaused(true);
+      expect(result).toEqual(expect.objectContaining({ ok: false, error: 'pause boom' }));
+      expect(session.getSnapshot().phase).toBe('recording');
+      expect(session.getSnapshot().paused).toBeUndefined();
+    });
+  });
 });

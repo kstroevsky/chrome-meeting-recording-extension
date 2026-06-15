@@ -148,6 +148,9 @@ class FakeMediaRecorder {
       this.onstop?.();
     });
   });
+
+  pause = jest.fn(() => { this.state = 'paused'; });
+  resume = jest.fn(() => { this.state = 'recording'; });
 }
 
 describe('RecorderEngine', () => {
@@ -909,6 +912,131 @@ describe('RecorderEngine', () => {
 
     await engine.startFromStreamId('stream-id', makeRunConfig());
     expect(() => engine.setCameraMuted(true)).not.toThrow();
+
+    await engine.stop();
+  });
+
+  it('pauses and resumes every active recorder so the paused span is never written', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const micTrack = makeTrack('audio');
+    const micStream = makeStream({ audioTracks: [micTrack] });
+    const selfVideoStream = makeStream({ videoTracks: [makeTrack('video', { width: 1280, height: 720, frameRate: 30 })] });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return micStream;
+      if (constraints.video && constraints.audio === false) return selfVideoStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate', recordSelfVideo: true }));
+    await flushAsyncWork();
+
+    const recorders = FakeMediaRecorder.instances;
+    expect(recorders.length).toBeGreaterThanOrEqual(2);
+    expect(recorders.every((r) => r.state === 'recording')).toBe(true);
+
+    engine.setPaused(true);
+    expect(recorders.every((r) => r.state === 'paused')).toBe(true);
+    expect(recorders.every((r) => (r.pause as jest.Mock).mock.calls.length === 1)).toBe(true);
+    // Tracks stay live across the pause so resume is seamless.
+    expect(micTrack.stop).not.toHaveBeenCalled();
+
+    engine.setPaused(false);
+    expect(recorders.every((r) => r.state === 'recording')).toBe(true);
+    expect(recorders.every((r) => (r.resume as jest.Mock).mock.calls.length === 1)).toBe(true);
+
+    await engine.stop();
+  });
+
+  it('does not pause/resume a recorder that is not in the matching state (no InvalidStateError)', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig());
+    const tab = FakeMediaRecorder.instances[0];
+
+    // Resume while already recording is a no-op.
+    engine.setPaused(false);
+    expect(tab.resume).not.toHaveBeenCalled();
+
+    // Double pause only pauses once.
+    engine.setPaused(true);
+    engine.setPaused(true);
+    expect((tab.pause as jest.Mock).mock.calls.length).toBe(1);
+
+    await engine.stop();
+  });
+
+  it('applies a pause toggled during the starting phase to recorders as they register', async () => {
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    // Toggle pause before any recorder has registered, then let the start finish.
+    const starting = engine.startFromStreamId('stream-id', makeRunConfig());
+    engine.setPaused(true);
+    await starting;
+    await flushAsyncWork();
+
+    const tab = FakeMediaRecorder.instances[0];
+    expect(tab.state).toBe('paused');
+    expect(tab.pause).toHaveBeenCalled();
+
+    await engine.stop();
+  });
+
+  it('suspends and resumes the mixed-audio context across a pause', async () => {
+    const suspend = jest.fn().mockResolvedValue(undefined);
+    const resume = jest.fn().mockResolvedValue(undefined);
+    (global as any).AudioContext = jest.fn().mockImplementation(() => ({
+      resume,
+      suspend,
+      createMediaStreamSource: jest.fn().mockReturnValue({ connect: jest.fn(), disconnect: jest.fn() }),
+      createMediaStreamDestination: jest.fn().mockReturnValue({ stream: makeStream({ audioTracks: [makeTrack('audio')] }) }),
+      destination: {},
+      close: jest.fn(),
+    }));
+
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+    const micStream = makeStream({ audioTracks: [makeTrack('audio')] });
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return micStream;
+      throw new Error('Unexpected getUserMedia call');
+    });
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'mixed' }));
+    await flushAsyncWork();
+    suspend.mockClear();
+    resume.mockClear();
+
+    engine.setPaused(true);
+    expect(suspend).toHaveBeenCalledTimes(1);
+
+    engine.setPaused(false);
+    expect(resume).toHaveBeenCalledTimes(1);
 
     await engine.stop();
   });

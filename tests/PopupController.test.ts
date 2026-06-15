@@ -573,4 +573,90 @@ describe('PopupController', () => {
       expect(btn.hidden).toBe(true);
     });
   });
+
+  describe('pause toggle', () => {
+    const addPauseButton = () => {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-secondary';
+      const label = document.createElement('span');
+      label.setAttribute('data-pause-label', '');
+      label.textContent = 'Pause';
+      btn.appendChild(label);
+      elements.pauseBtn = btn;
+      return { btn, label };
+    };
+
+    it('shows the toggle and pauses the whole recording while recording', async () => {
+      const { btn, label } = addPauseButton();
+      mockSendMessage.mockResolvedValueOnce({
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          updatedAt: Date.now(),
+        },
+      });
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(btn.hidden).toBe(false);
+      expect(label.textContent).toBe('Pause');
+      expect(btn.getAttribute('aria-pressed')).toBe('false');
+
+      mockSendMessage.mockClear();
+      mockSendMessage.mockResolvedValueOnce({
+        ok: true,
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          paused: true,
+          updatedAt: Date.now(),
+        },
+      });
+
+      btn.click();
+      await new Promise(process.nextTick);
+
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'SET_PAUSED', paused: true });
+      expect(label.textContent).toBe('Resume');
+      expect(btn.getAttribute('aria-pressed')).toBe('true');
+      expect(btn.classList.contains('btn-danger')).toBe(true);
+    });
+
+    it('reverts the toggle when the background rejects the pause', async () => {
+      const { btn, label } = addPauseButton();
+      mockSendMessage.mockResolvedValueOnce({
+        session: {
+          phase: 'recording',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          updatedAt: Date.now(),
+        },
+      });
+      controller.init();
+      await new Promise(process.nextTick);
+
+      mockSendMessage.mockClear();
+      mockSendMessage.mockResolvedValueOnce({ ok: false, error: 'pause boom' });
+
+      btn.click();
+      await new Promise(process.nextTick);
+
+      expect(btn.disabled).toBe(false);
+      expect(label.textContent).toBe('Pause');
+    });
+
+    it('hides the toggle when not actively recording', async () => {
+      const { btn } = addPauseButton();
+      mockSendMessage.mockResolvedValueOnce({
+        session: {
+          phase: 'uploading',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          updatedAt: Date.now(),
+        },
+      });
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(btn.hidden).toBe(true);
+    });
+  });
 });

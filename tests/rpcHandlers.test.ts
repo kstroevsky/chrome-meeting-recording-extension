@@ -301,4 +301,39 @@ describe('offscreen rpc handlers', () => {
       expect(responseFor(port, 'cam-3')).toEqual({ ok: true });
     });
   });
+
+  describe('OFFSCREEN_SET_PAUSED', () => {
+    it('rejects a pause request when the recorder is not active', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(false), setPaused: jest.fn() };
+      const { port, listener } = wire({ engine });
+
+      await listener({ __id: 'pause-1', type: 'OFFSCREEN_SET_PAUSED', paused: true });
+
+      expect(responseFor(port, 'pause-1')).toEqual({
+        ok: false,
+        error: 'Pause requested but recorder is not active',
+      });
+      expect(engine.setPaused).not.toHaveBeenCalled();
+    });
+
+    it('pauses the engine when the recorder is active', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(true), setPaused: jest.fn() };
+      const { port, listener } = wire({ engine });
+
+      await listener({ __id: 'pause-2', type: 'OFFSCREEN_SET_PAUSED', paused: true });
+
+      expect(engine.setPaused).toHaveBeenCalledWith(true);
+      expect(responseFor(port, 'pause-2')).toEqual({ ok: true });
+    });
+
+    it('coerces a non-boolean paused flag to false', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(true), setPaused: jest.fn() };
+      const { port, listener } = wire({ engine });
+
+      await listener({ __id: 'pause-3', type: 'OFFSCREEN_SET_PAUSED', paused: 'yes' });
+
+      expect(engine.setPaused).toHaveBeenCalledWith(false);
+      expect(responseFor(port, 'pause-3')).toEqual({ ok: true });
+    });
+  });
 });
