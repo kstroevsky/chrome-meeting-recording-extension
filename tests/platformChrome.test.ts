@@ -5,6 +5,13 @@ import {
   getTab,
 } from '../src/platform/chrome/tabs';
 import { downloadFile } from '../src/platform/chrome/downloads';
+import {
+  getAllLocalStorageValues,
+  getLocalStorageValues,
+  removeLocalStorageValues,
+  setLocalStorageValues,
+  setSessionStorageValues,
+} from '../src/platform/chrome/storage';
 
 function setLastError(message?: string) {
   (chrome.runtime as any).lastError = message ? { message } : undefined;
@@ -114,5 +121,30 @@ describe('platform/chrome/downloads', () => {
       setLastError(undefined);
     });
     await expect(downloadFile({ url: 'blob:1', filename: 'tab.webm' })).rejects.toThrow('Download blocked');
+  });
+});
+
+describe('platform/chrome/storage (host without chrome.storage)', () => {
+  let savedStorage: typeof chrome.storage;
+
+  beforeEach(() => {
+    savedStorage = chrome.storage;
+    // Simulate a runtime that exposes `chrome` but not `chrome.storage` (e.g. the
+    // e2e tab-capture recorder runtime). Reading `chrome.storage.local` directly
+    // here is what produced "Cannot read properties of undefined (reading 'local')"
+    // and aborted the stop/finalize pipeline.
+    (chrome as any).storage = undefined;
+  });
+
+  afterEach(() => {
+    (chrome as any).storage = savedStorage;
+  });
+
+  it('degrades to a safe no-op instead of throwing on local reads/writes', async () => {
+    await expect(getLocalStorageValues('k')).resolves.toEqual({});
+    await expect(getAllLocalStorageValues()).resolves.toEqual({});
+    await expect(setLocalStorageValues({ k: 1 })).resolves.toBeUndefined();
+    await expect(removeLocalStorageValues('k')).resolves.toBeUndefined();
+    await expect(setSessionStorageValues({ k: 1 })).resolves.toBeUndefined();
   });
 });

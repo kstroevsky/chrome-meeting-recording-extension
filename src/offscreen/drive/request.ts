@@ -4,6 +4,7 @@
  * Small helpers for Drive requests that need token reuse and a single auth retry.
  */
 
+import { sendRuntimeMessage } from '../../platform/chrome/runtime';
 import { isE2EMockDriveBuild } from '../../shared/build';
 
 export type TokenProvider = (options?: { refresh?: boolean }) => Promise<string>;
@@ -42,13 +43,13 @@ export async function driveFetch(
     init.headers ?? (isRequest ? input.headers : undefined)
   );
   const body = typeof init.body === 'string' ? init.body : undefined;
-  const response = await chrome.runtime.sendMessage({
+  const response = await sendRuntimeMessage<E2EDriveFetchResponse>({
     type: 'E2E_DRIVE_FETCH',
     url,
     method,
     headers,
     body,
-  }) as E2EDriveFetchResponse;
+  });
   if (!response?.ok || response.status == null) {
     throw new TypeError(response?.error ?? 'E2E Drive fetch bridge failed');
   }
