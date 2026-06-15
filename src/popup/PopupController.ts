@@ -22,16 +22,25 @@ import {
   POPUP_TOAST_TEXT,
 } from './popupMessages';
 import {
-  setControlsForPhase,
+  setActiveView,
   setStatusText,
   type PopupElements,
 } from './popupView';
+import { formatDuration } from './popupStatus';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
-import { isStoppablePhase, type RecordingPhase, type RecordingStatusView } from '../shared/recording';
+import type { MicMode, RecordingPhase, RecordingStatusView } from '../shared/recording';
+
+/** How often the recording view polls the content script for live caption presence. */
+const CAPTION_POLL_MS = 3000;
+
+/** Maps a mic mode to its finalizing-view metadata label. */
+function micModeLabel(mode: MicMode | undefined): string {
+  return mode === 'mixed' ? 'Mixed' : mode === 'separate' ? 'Separate' : 'Off';
+}
 
 export class PopupController {
   private readonly el: PopupElements;
@@ -44,6 +53,10 @@ export class PopupController {
   private micMuted = false;
   private cameraMuted = false;
   private paused = false;
+  private timerInterval: ReturnType<typeof setInterval> | null = null;
+  private captionPollInterval: ReturnType<typeof setInterval> | null = null;
+  private timerRecordedMs = 0;
+  private timerRunningSince: number | null = null;
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -74,13 +87,35 @@ export class PopupController {
       clearTimeout(this.statusTimer);
       this.statusTimer = null;
     }
+    this.stopTimer();
+    this.stopCaptionPoll();
   }
 
+  /**
+   * Switches the popup to the view its phase maps to (config / recording /
+   * finalizing) and populates that view. Live intervals (the recording timer and
+   * the caption-state poll) run only while the recording view is active.
+   */
   private onPhaseChange(phase: RecordingPhase, session?: RecordingStatusView) {
-    setControlsForPhase(this.el, phase);
-    this.updateMuteControl(phase, session);
-    this.updateCameraControl(phase, session);
-    this.updatePauseControl(phase, session);
+    const view = setActiveView(this.el, phase);
+
+    if (view === 'recording') {
+      this.updateRecordingBanner(phase, session);
+      this.updateChips(session);
+      this.updateMuteControl(session);
+      this.updateCameraControl(session);
+      this.updatePauseControl(phase, session);
+      if (this.el.stopBtn) this.el.stopBtn.disabled = false;
+      this.syncTimer(phase, session);
+      this.startCaptionPoll();
+    } else {
+      this.stopTimer();
+      this.stopCaptionPoll();
+      this.micMuted = this.cameraMuted = this.paused = false;
+      if (view === 'finalizing') this.updateFinalizingView(phase, session);
+      if (view === 'config' && this.el.startBtn) this.el.startBtn.disabled = false;
+    }
+
     this.persistentStatus = this.state.buildPersistentStatus(phase, session?.paused === true);
     if (!this.statusTimer) {
       setStatusText(this.el, this.persistentStatus);
@@ -148,28 +183,30 @@ export class PopupController {
   }
 
   /**
-   * Shows the mute toggle only while a recording with a microphone is active,
-   * and reflects the current mute state (label, pressed state, danger styling).
+   * Shows the microphone row only when the run has a mic, and reflects the live
+   * mute state on its on/off pill (a muted mic records silence). Recording view only.
    */
-  private updateMuteControl(phase: RecordingPhase, session?: RecordingStatusView) {
+  private updateMuteControl(session?: RecordingStatusView) {
+    const row = this.el.micRow;
     const btn = this.el.muteMicBtn;
-    if (!btn) return;
+    if (!row || !btn) return;
 
     const micMode = session?.runConfig?.micMode;
-    const active = isStoppablePhase(phase) && (micMode === 'mixed' || micMode === 'separate');
-    btn.hidden = !active;
+    const active = micMode === 'mixed' || micMode === 'separate';
+    row.hidden = !active;
     if (!active) {
       this.micMuted = false;
       return;
     }
 
+    if (this.el.micModeLabel) this.el.micModeLabel.textContent = `· ${micMode}`;
     this.micMuted = session?.micMuted === true;
     btn.disabled = false;
     btn.setAttribute('aria-pressed', String(this.micMuted));
-    btn.classList.toggle('btn-danger', this.micMuted);
-    btn.classList.toggle('btn-secondary', !this.micMuted);
+    btn.classList.toggle('on', !this.micMuted);
+    btn.classList.toggle('off', this.micMuted);
     const label = btn.querySelector<HTMLElement>('[data-mute-label]') ?? btn;
-    label.textContent = this.micMuted ? 'Unmute Mic' : 'Mute Mic';
+    label.textContent = this.micMuted ? 'off' : 'on';
   }
 
   private wireHideCamera() {
@@ -196,15 +233,17 @@ export class PopupController {
   }
 
   /**
-   * Shows the hide-camera toggle only while a self-video recording is active,
-   * and reflects the current hidden state (label, pressed state, danger styling).
+   * Shows the camera row only when the run records the camera separately, and
+   * reflects the live hidden state on its on/off pill (hidden records black
+   * frames). Recording view only.
    */
-  private updateCameraControl(phase: RecordingPhase, session?: RecordingStatusView) {
+  private updateCameraControl(session?: RecordingStatusView) {
+    const row = this.el.cameraRow;
     const btn = this.el.hideCameraBtn;
-    if (!btn) return;
+    if (!row || !btn) return;
 
-    const active = isStoppablePhase(phase) && session?.runConfig?.recordSelfVideo === true;
-    btn.hidden = !active;
+    const active = session?.runConfig?.recordSelfVideo === true;
+    row.hidden = !active;
     if (!active) {
       this.cameraMuted = false;
       return;
@@ -213,10 +252,10 @@ export class PopupController {
     this.cameraMuted = session?.cameraMuted === true;
     btn.disabled = false;
     btn.setAttribute('aria-pressed', String(this.cameraMuted));
-    btn.classList.toggle('btn-danger', this.cameraMuted);
-    btn.classList.toggle('btn-secondary', !this.cameraMuted);
+    btn.classList.toggle('on', !this.cameraMuted);
+    btn.classList.toggle('off', this.cameraMuted);
     const label = btn.querySelector<HTMLElement>('[data-camera-label]') ?? btn;
-    label.textContent = this.cameraMuted ? 'Show Camera' : 'Hide Camera';
+    label.textContent = this.cameraMuted ? 'off' : 'on';
   }
 
   private wirePause() {
@@ -246,27 +285,117 @@ export class PopupController {
   }
 
   /**
-   * Shows the pause/resume toggle only while actively recording, and reflects the
-   * current pause state (label, pressed state, danger styling).
+   * Reflects pause state on the Pause/Resume button. Enabled only once actively
+   * recording (disabled during the brief `starting` phase). Recording view only.
    */
   private updatePauseControl(phase: RecordingPhase, session?: RecordingStatusView) {
     const btn = this.el.pauseBtn;
     if (!btn) return;
 
-    const active = phase === 'recording';
-    btn.hidden = !active;
-    if (!active) {
-      this.paused = false;
-      return;
-    }
-
-    this.paused = session?.paused === true;
-    btn.disabled = false;
+    const recording = phase === 'recording';
+    btn.disabled = !recording;
+    this.paused = recording && session?.paused === true;
     btn.setAttribute('aria-pressed', String(this.paused));
     btn.classList.toggle('btn-danger', this.paused);
     btn.classList.toggle('btn-secondary', !this.paused);
     const label = btn.querySelector<HTMLElement>('[data-pause-label]') ?? btn;
     label.textContent = this.paused ? 'Resume' : 'Pause';
+  }
+
+  /** Sets the recording banner label + paused styling for the current phase. */
+  private updateRecordingBanner(phase: RecordingPhase, session?: RecordingStatusView) {
+    const paused = phase === 'recording' && session?.paused === true;
+    const starting = phase === 'starting';
+    if (this.el.recLabel) {
+      this.el.recLabel.textContent = starting ? 'Starting…' : paused ? 'Paused' : 'Recording';
+    }
+    if (this.el.recBanner) this.el.recBanner.classList.toggle('paused', paused);
+  }
+
+  /** Renders the storage chip from the run config (the transcript chip is poll-driven). */
+  private updateChips(session?: RecordingStatusView) {
+    if (this.el.chipStorageLabel) {
+      this.el.chipStorageLabel.textContent =
+        session?.runConfig?.storageMode === 'drive' ? 'Google Drive' : 'Local Disk';
+    }
+  }
+
+  // ── Recording timer (pause-aware; driven by session recordedMs/runningSince) ──
+
+  /** Syncs the timer fields from the session and starts/stops the 1s tick. */
+  private syncTimer(phase: RecordingPhase, session?: RecordingStatusView) {
+    this.timerRecordedMs = session?.recordedMs ?? 0;
+    this.timerRunningSince =
+      phase === 'recording' && session?.paused !== true ? (session?.runningSince ?? null) : null;
+    this.renderTimer();
+    if (this.timerRunningSince != null) this.startTimer();
+    else this.stopTimer();
+  }
+
+  private renderTimer() {
+    const elapsed =
+      this.timerRecordedMs + (this.timerRunningSince != null ? Date.now() - this.timerRunningSince : 0);
+    if (this.el.recTimer) this.el.recTimer.textContent = formatDuration(elapsed);
+  }
+
+  private startTimer() {
+    if (this.timerInterval != null) return;
+    this.timerInterval = setInterval(() => this.renderTimer(), 1000);
+  }
+
+  private stopTimer() {
+    if (this.timerInterval != null) {
+      clearInterval(this.timerInterval);
+      this.timerInterval = null;
+    }
+  }
+
+  // ── Live transcript chip (polls the content script for caption presence) ──
+
+  private startCaptionPoll() {
+    if (this.captionPollInterval != null) return;
+    void this.pollCaptionState();
+    this.captionPollInterval = setInterval(() => void this.pollCaptionState(), CAPTION_POLL_MS);
+  }
+
+  private stopCaptionPoll() {
+    if (this.captionPollInterval != null) {
+      clearInterval(this.captionPollInterval);
+      this.captionPollInterval = null;
+    }
+  }
+
+  /** Best-effort: asks the active tab whether Meet captions are live; off if unreachable. */
+  private async pollCaptionState() {
+    let active = false;
+    try {
+      const tab = await queryActiveTab();
+      if (tab?.id) {
+        const res = await sendToContent(tab.id, { type: 'GET_CAPTION_STATE' }).catch(() => undefined);
+        active = res?.captionsActive === true;
+      }
+    } catch {
+      active = false;
+    }
+    if (this.el.chipTranscriptLabel) {
+      this.el.chipTranscriptLabel.textContent = active ? 'Transcript on' : 'Transcript off';
+    }
+    if (this.el.chipTranscript) this.el.chipTranscript.classList.toggle('off', !active);
+  }
+
+  /** Populates the finalizing view: spinner label + run metadata (storage/duration/mic/camera). */
+  private updateFinalizingView(phase: RecordingPhase, session?: RecordingStatusView) {
+    if (this.el.finalizingLabel) {
+      this.el.finalizingLabel.textContent =
+        phase === 'uploading' ? 'Uploading to Google Drive…' : 'Finalizing files…';
+    }
+    const cfg = session?.runConfig;
+    if (this.el.metaStorage) {
+      this.el.metaStorage.textContent = cfg?.storageMode === 'drive' ? 'Google Drive' : 'Local Disk (OPFS)';
+    }
+    if (this.el.metaDuration) this.el.metaDuration.textContent = formatDuration(session?.recordedMs ?? 0);
+    if (this.el.metaMic) this.el.metaMic.textContent = micModeLabel(cfg?.micMode);
+    if (this.el.metaCamera) this.el.metaCamera.textContent = cfg?.recordSelfVideo ? 'Separate' : 'Off';
   }
 
   private wireSettingsLink() {

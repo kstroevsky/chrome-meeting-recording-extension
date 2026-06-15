@@ -1,13 +1,23 @@
 <!DOCTYPE html>
 <html>
+
   <head>
     <meta charset="utf-8" />
     <title>Google Meet Helper</title>
     <style>
-      *, *::before, *::after {
+      *,
+      *::before,
+      *::after {
         box-sizing: border-box;
         margin: 0;
         padding: 0;
+      }
+
+      /* The `hidden` attribute must win over component display rules (.btn,
+         .toggle-row, .chip all set `display`, which would otherwise override the
+         UA [hidden] style and leave hidden controls/rows visible). */
+      [hidden] {
+        display: none !important;
       }
 
       body {
@@ -53,6 +63,11 @@
         width: 16px;
         height: 16px;
         opacity: 0.55;
+      }
+
+      /* ── State views ── */
+      .view[hidden] {
+        display: none;
       }
 
       /* ── Section groups ── */
@@ -184,22 +199,255 @@
         margin-bottom: 8px;
       }
 
-      /* ── Action row (start/stop) ── */
+      /* ── Action row (start / pause+stop) ── */
       .action-row {
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: 1fr 1fr;
         gap: 6px;
         margin-top: 6px;
       }
 
-      /* ── Status ── */
+      .start-btn {
+        width: 100%;
+        margin-top: 6px;
+        padding: 9px 12px;
+      }
+
+      .action-row .btn {
+        padding: 9px 12px;
+      }
+
+      /* ── Recording banner ── */
+      .rec-banner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(192, 57, 43, 0.14);
+        border: 1px solid rgba(192, 57, 43, 0.38);
+        border-radius: 8px;
+        padding: 11px 14px;
+        margin-bottom: 10px;
+        color: #e8736a;
+      }
+
+      .rec-banner.paused {
+        background: rgba(232, 160, 69, 0.12);
+        border-color: rgba(232, 160, 69, 0.38);
+        color: #e8a045;
+      }
+
+      .rec-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: currentColor;
+        flex-shrink: 0;
+        animation: rec-pulse 1.4s ease-in-out infinite;
+      }
+
+      .rec-banner.paused .rec-dot {
+        animation: none;
+        opacity: 0.6;
+      }
+
+      @keyframes rec-pulse {
+
+        0%,
+        100% {
+          opacity: 1;
+        }
+
+        50% {
+          opacity: 0.3;
+        }
+      }
+
+      .rec-label {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .rec-timer {
+        margin-left: auto;
+        font-size: 16px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.02em;
+      }
+
+      /* ── Status chips ── */
+      .chips {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 11px;
+        border-radius: 999px;
+        background: rgba(76, 127, 227, 0.15);
+        color: #7da4f5;
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      .chip svg {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+      }
+
+      .chip.off {
+        background: #25262b;
+        color: #5c6070;
+      }
+
+      /* ── Toggle rows (mic / camera while recording) ── */
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: #1e1f24;
+        border: 1px solid #2c2e33;
+        border-radius: 8px;
+        padding: 11px 12px;
+        margin-bottom: 8px;
+      }
+
+      .toggle-row svg {
+        width: 16px;
+        height: 16px;
+        opacity: 0.7;
+        flex-shrink: 0;
+      }
+
+      .row-title {
+        flex: 1;
+        font-size: 13px;
+        font-weight: 500;
+        color: #c9cdd4;
+      }
+
+      .row-mode {
+        color: #5c6070;
+        font-weight: 400;
+      }
+
+      .toggle-pill {
+        border: 0;
+        border-radius: 999px;
+        padding: 4px 13px;
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .toggle-pill.on {
+        background: rgba(46, 160, 67, 0.2);
+        color: #3fb950;
+      }
+
+      .toggle-pill.off {
+        background: rgba(192, 57, 43, 0.18);
+        color: #e8736a;
+      }
+
+      .toggle-pill:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* ── Recording footer caption ── */
+      .rec-footer {
+        text-align: center;
+        font-size: 10px;
+        color: #5c6070;
+        margin-top: 10px;
+      }
+
+      /* ── Finalizing view ── */
+      .finalizing {
+        text-align: center;
+        padding: 6px 0 2px;
+      }
+
+      .spinner {
+        width: 28px;
+        height: 28px;
+        margin: 6px auto 0;
+        border: 3px solid #2c2e33;
+        border-top-color: #4c7fe3;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .finalizing-label {
+        font-size: 13px;
+        font-weight: 600;
+        color: #c9cdd4;
+        margin: 12px 0 10px;
+      }
+
+      .meta-list {
+        list-style: none;
+        background: #1e1f24;
+        border: 1px solid #2c2e33;
+        border-radius: 8px;
+        padding: 4px 12px;
+        text-align: left;
+      }
+
+      .meta-list li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 7px 0;
+        font-size: 12px;
+        border-bottom: 1px solid #2c2e33;
+      }
+
+      .meta-list li:last-child {
+        border-bottom: 0;
+      }
+
+      .meta-list li span:first-child {
+        color: #5c6070;
+      }
+
+      .meta-list li span:last-child {
+        color: #c9cdd4;
+        font-weight: 500;
+      }
+
+      .finalizing-hint {
+        font-size: 11px;
+        color: #5c6070;
+        margin-top: 12px;
+      }
+
+      /* ── Shared status / toast line ── */
       #recording-status {
-        min-height: 18px;
+        min-height: 16px;
         font-size: 11px;
         color: #e8a045;
         font-weight: 500;
         text-align: center;
-        padding: 2px 0;
+        padding: 6px 0 0;
+      }
+
+      #recording-status:empty {
+        display: none;
       }
 
       /* ── Diagnostics ── */
@@ -207,102 +455,164 @@
         width: 100%;
         margin-top: 8px;
       }
-
-      /* ── Runtime toggles (visible only while recording) ── */
-      .mic-mute-btn,
-      .camera-mute-btn,
-      .pause-btn {
-        width: 100%;
-        margin-top: 9px;
-      }
     </style>
   </head>
+
   <body>
     <!-- Header -->
     <div class="popup-header">
       <span class="popup-title">Meet Recorder</span>
-      <button id="open-settings" class="icon-button" type="button" title="Open recorder settings" aria-label="Open recorder settings">
+      <button id="open-settings" class="icon-button" type="button" title="Open recorder settings"
+        aria-label="Open recorder settings">
         <svg viewBox="0 0 20 20" fill="white" xmlns="http://www.w3.org/2000/svg">
-          <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+          <path fill-rule="evenodd"
+            d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z"
+            clip-rule="evenodd" />
         </svg>
       </button>
     </div>
 
-    <!-- Quick actions -->
-    <div class="top-actions">
-      <button id="save" class="btn btn-secondary">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 12l-4.5-4.5 1.06-1.06L7 8.88V2h2v6.88l2.44-2.44 1.06 1.06L8 12z"/>
-          <path d="M2 13h12v1.5H2z"/>
-        </svg>
-        Download
-      </button>
-      <button id="enable-mic" class="btn btn-secondary">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 10a2 2 0 002-2V4a2 2 0 00-4 0v4a2 2 0 002 2z"/>
-          <path d="M4.5 8a.5.5 0 00-1 0 4.5 4.5 0 009 0 .5.5 0 00-1 0 3.5 3.5 0 01-7 0zM7.5 13.5v1.5h1v-1.5a.5.5 0 00-1 0z"/>
-        </svg>
-        Enable Mic
-      </button>
-    </div>
+    <!-- ════════ CONFIG VIEW (idle / failed) ════════ -->
+    <section id="view-config" class="view">
+      <div class="top-actions">
+        <button id="save" class="btn btn-secondary">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 12l-4.5-4.5 1.06-1.06L7 8.88V2h2v6.88l2.44-2.44 1.06 1.06L8 12z" />
+            <path d="M2 13h12v1.5H2z" />
+          </svg>
+          Download
+        </button>
+        <button id="enable-mic" class="btn btn-secondary">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 10a2 2 0 002-2V4a2 2 0 00-4 0v4a2 2 0 002 2z" />
+            <path
+              d="M4.5 8a.5.5 0 00-1 0 4.5 4.5 0 009 0 .5.5 0 00-1 0 3.5 3.5 0 01-7 0zM7.5 13.5v1.5h1v-1.5a.5.5 0 00-1 0z" />
+          </svg>
+          Enable Mic
+        </button>
+      </div>
 
-    <!-- Microphone section -->
-    <div class="section">
-      <div class="section-label">Microphone</div>
-      <select id="mic-mode">
-        <option value="off">Do not record microphone</option>
-        <option value="mixed">Mix into tab recording</option>
-        <option value="separate" selected>Save as separate audio file</option>
-      </select>
-      <button id="mute-mic" class="btn btn-secondary mic-mute-btn" type="button" hidden aria-pressed="false" title="Mute the microphone (records silence) without stopping the recording">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M8 10a2 2 0 002-2V4a2 2 0 00-4 0v4a2 2 0 002 2z"/>
-          <path d="M4.5 8a.5.5 0 00-1 0 4.5 4.5 0 009 0 .5.5 0 00-1 0 3.5 3.5 0 01-7 0zM7.5 13.5v1.5h1v-1.5a.5.5 0 00-1 0z"/>
-        </svg>
-        <span data-mute-label>Mute Mic</span>
-      </button>
-    </div>
+      <div class="section">
+        <div class="section-label">Microphone</div>
+        <select id="mic-mode">
+          <option value="off">Do not record microphone</option>
+          <option value="mixed">Mix into tab recording</option>
+          <option value="separate" selected>Save as separate audio file</option>
+        </select>
+      </div>
 
-    <!-- Storage & video section -->
-    <div class="section">
-      <div class="section-label">Output</div>
-      <select id="storage-mode">
-        <option value="local">Save to Local Disk (OPFS)</option>
-        <option value="drive" selected>Save to Google Drive (after stop)</option>
-      </select>
-      <label class="checkbox-label">
-        <input type="checkbox" id="record-self-video" checked />
-        Record my camera separately
-      </label>
-      <button id="hide-camera" class="btn btn-secondary camera-mute-btn" type="button" hidden aria-pressed="false" title="Hide the camera (records black frames) without stopping the recording">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M2 4.5A1.5 1.5 0 013.5 3h6A1.5 1.5 0 0111 4.5v1.2l3.2-1.8a.5.5 0 01.8.4v7.4a.5.5 0 01-.8.4L11 10.3v1.2A1.5 1.5 0 019.5 13h-6A1.5 1.5 0 012 11.5v-7z"/>
-        </svg>
-        <span data-camera-label>Hide Camera</span>
-      </button>
-    </div>
+      <div class="section">
+        <div class="section-label">Output</div>
+        <select id="storage-mode">
+          <option value="local">Save to Local Disk (OPFS)</option>
+          <option value="drive" selected>Save to Google Drive (after stop)</option>
+        </select>
+        <label class="checkbox-label">
+          <input type="checkbox" id="record-self-video" checked />
+          Record my camera separately
+        </label>
+      </div>
 
-    <!-- Status & controls -->
-    <div id="recording-status"></div>
-    <div class="action-row">
-      <button id="start-rec" class="btn btn-primary">
+      <button id="start-rec" class="btn btn-primary start-btn">
         <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor">
-          <path d="M3 2l7 4-7 4V2z"/>
+          <path d="M3 2l7 4-7 4V2z" />
         </svg>
         Start Recording
       </button>
-      <button id="stop-rec" class="btn btn-danger" disabled>
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-          <rect width="10" height="10" rx="1"/>
-        </svg>
-        Stop
-      </button>
-    </div>
+    </section>
 
-    <button id="pause-recording" class="btn btn-secondary pause-btn" type="button" hidden aria-pressed="false" title="Pause the whole recording (records nothing); resume joins seamlessly with no gap">
+    <!-- ════════ RECORDING VIEW (starting / recording / paused) ════════ -->
+    <section id="view-recording" class="view" hidden>
+      <div id="rec-banner" class="rec-banner">
+        <span class="rec-dot"></span>
+        <span id="rec-label" class="rec-label">Recording</span>
+        <span id="rec-timer" class="rec-timer">0:00</span>
+      </div>
+
+      <div class="chips">
+        <span id="chip-transcript" class="chip off">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path
+              d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm1 3h8V4H4v1zm0 3h8V7H4v1zm0 3h5v-1H4v1z" />
+          </svg>
+          <span id="chip-transcript-label">Transcript off</span>
+        </span>
+        <span id="chip-storage" class="chip">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M4.5 13a3 3 0 01-.3-5.99A4 4 0 0112 6.5a2.75 2.75 0 01-.25 5.5H4.5z" />
+          </svg>
+          <span id="chip-storage-label">Google Drive</span>
+        </span>
+      </div>
+
+      <div id="row-mic" class="toggle-row" hidden>
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 10a2 2 0 002-2V4a2 2 0 00-4 0v4a2 2 0 002 2z" />
+          <path
+            d="M4.5 8a.5.5 0 00-1 0 4.5 4.5 0 009 0 .5.5 0 00-1 0 3.5 3.5 0 01-7 0zM7.5 13.5v1.5h1v-1.5a.5.5 0 00-1 0z" />
+        </svg>
+        <span class="row-title">Microphone <span id="mic-mode-label" class="row-mode"></span></span>
+        <button id="mute-mic" class="toggle-pill on" type="button" aria-pressed="false"
+          title="Mute the microphone (records silence) without stopping the recording">
+          <span data-mute-label>on</span>
+        </button>
+      </div>
+
+      <div id="row-camera" class="toggle-row" hidden>
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path
+            d="M2 4.5A1.5 1.5 0 013.5 3h6A1.5 1.5 0 0111 4.5v1.2l3.2-1.8a.5.5 0 01.8.4v7.4a.5.5 0 01-.8.4L11 10.3v1.2A1.5 1.5 0 019.5 13h-6A1.5 1.5 0 012 11.5v-7z" />
+        </svg>
+        <span class="row-title">Camera <span id="camera-mode-label" class="row-mode">· separate</span></span>
+        <button id="hide-camera" class="toggle-pill on" type="button" aria-pressed="false"
+          title="Hide the camera (records black frames) without stopping the recording">
+          <span data-camera-label>on</span>
+        </button>
+      </div>
+
+      <div class="action-row">
+        <button id="pause-recording" class="btn btn-secondary" type="button" aria-pressed="false"
+          title="Pause the whole recording (records nothing); resume joins seamlessly with no gap">
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="3" height="8" rx="1" />
+            <rect x="7" y="2" width="3" height="8" rx="1" />
+          </svg>
+          <span data-pause-label>Pause</span>
+        </button>
+        <button id="stop-rec" class="btn btn-danger">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+            <rect width="10" height="10" rx="1" />
+          </svg>
+          Stop
+        </button>
+      </div>
+
+      <div class="rec-footer">Pause freezes everything · output stays seamless</div>
+    </section>
+
+    <!-- ════════ FINALIZING VIEW (stopping / uploading) ════════ -->
+    <section id="view-finalizing" class="view" hidden>
+      <div class="finalizing">
+        <div class="spinner"></div>
+        <div id="finalizing-label" class="finalizing-label">Finalizing files…</div>
+        <ul class="meta-list">
+          <li><span>Storage</span><span id="meta-storage">—</span></li>
+          <li><span>Duration</span><span id="meta-duration">0:00</span></li>
+          <li><span>Microphone</span><span id="meta-mic">—</span></li>
+          <li><span>Camera</span><span id="meta-camera">—</span></li>
+        </ul>
+        <div class="finalizing-hint">You can close this popup.</div>
+      </div>
+    </section>
+
+    <!-- Shared status / toast line -->
+    <div id="recording-status"></div>
+
+    <button id="pause-recording" class="btn btn-secondary pause-btn" type="button" hidden aria-pressed="false"
+      title="Pause the whole recording (records nothing); resume joins seamlessly with no gap">
       <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-        <rect x="2" y="2" width="3" height="8" rx="1"/>
-        <rect x="7" y="2" width="3" height="8" rx="1"/>
+        <rect x="2" y="2" width="3" height="8" rx="1" />
+        <rect x="7" y="2" width="3" height="8" rx="1" />
       </svg>
       <span data-pause-label>Pause</span>
     </button>
@@ -311,4 +621,5 @@
 
     <script src="popup.js"></script>
   </body>
+
 </html>

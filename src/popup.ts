@@ -9,7 +9,7 @@
  *
  * Message flow:
  *   popup → background: START_RECORDING, STOP_RECORDING, GET_RECORDING_STATUS
- *   popup → content script: GET_TRANSCRIPT, RESET_TRANSCRIPT
+ *   popup → content script: GET_TRANSCRIPT, RESET_TRANSCRIPT, GET_CAPTION_STATE
  *   background → popup: RECORDING_STATE, RECORDING_SAVED
  *
  * @see src/popup/PopupController.ts   — all interaction logic
@@ -18,20 +18,49 @@
  */
 import { PopupController } from './popup/PopupController';
 
+const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
+
 const controller = new PopupController({
-  saveBtn: document.getElementById('save') as HTMLButtonElement | null,
-  micBtn: document.getElementById('enable-mic') as HTMLButtonElement | null,
-  micModeSelect: document.getElementById('mic-mode') as HTMLSelectElement | null,
-  muteMicBtn: document.getElementById('mute-mic') as HTMLButtonElement | null,
-  startBtn: document.getElementById('start-rec') as HTMLButtonElement | null,
-  stopBtn: document.getElementById('stop-rec') as HTMLButtonElement | null,
-  pauseBtn: document.getElementById('pause-recording') as HTMLButtonElement | null,
-  storageModeSelect: document.getElementById('storage-mode') as HTMLSelectElement | null,
-  recordSelfVideoCheckbox: document.getElementById('record-self-video') as HTMLInputElement | null,
-  hideCameraBtn: document.getElementById('hide-camera') as HTMLButtonElement | null,
-  openSettingsBtn: document.getElementById('open-settings') as HTMLButtonElement | null,
-  openDiagnosticsBtn: document.getElementById('open-diagnostics') as HTMLButtonElement | null,
-  recordingStatusEl: document.getElementById('recording-status') as HTMLElement | null,
+  // Header + config view
+  saveBtn: byId<HTMLButtonElement>('save'),
+  micBtn: byId<HTMLButtonElement>('enable-mic'),
+  micModeSelect: byId<HTMLSelectElement>('mic-mode'),
+  startBtn: byId<HTMLButtonElement>('start-rec'),
+  storageModeSelect: byId<HTMLSelectElement>('storage-mode'),
+  recordSelfVideoCheckbox: byId<HTMLInputElement>('record-self-video'),
+  openSettingsBtn: byId<HTMLButtonElement>('open-settings'),
+  openDiagnosticsBtn: byId<HTMLButtonElement>('open-diagnostics'),
+
+  // View containers
+  viewConfig: byId('view-config'),
+  viewRecording: byId('view-recording'),
+  viewFinalizing: byId('view-finalizing'),
+
+  // Recording view
+  recBanner: byId('rec-banner'),
+  recLabel: byId('rec-label'),
+  recTimer: byId('rec-timer'),
+  chipTranscript: byId('chip-transcript'),
+  chipTranscriptLabel: byId('chip-transcript-label'),
+  chipStorage: byId('chip-storage'),
+  chipStorageLabel: byId('chip-storage-label'),
+  micRow: byId('row-mic'),
+  micModeLabel: byId('mic-mode-label'),
+  muteMicBtn: byId<HTMLButtonElement>('mute-mic'),
+  cameraRow: byId('row-camera'),
+  hideCameraBtn: byId<HTMLButtonElement>('hide-camera'),
+  pauseBtn: byId<HTMLButtonElement>('pause-recording'),
+  stopBtn: byId<HTMLButtonElement>('stop-rec'),
+
+  // Finalizing view
+  finalizingLabel: byId('finalizing-label'),
+  metaStorage: byId('meta-storage'),
+  metaDuration: byId('meta-duration'),
+  metaMic: byId('meta-mic'),
+  metaCamera: byId('meta-camera'),
+
+  // Shared status / toast line
+  recordingStatusEl: byId('recording-status'),
 });
 
 controller.init();
