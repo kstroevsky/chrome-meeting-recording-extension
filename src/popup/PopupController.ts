@@ -43,6 +43,7 @@ export class PopupController {
   private persistentStatus = '';
   private micMuted = false;
   private cameraMuted = false;
+  private paused = false;
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -61,6 +62,7 @@ export class PopupController {
     this.wireMic();
     this.wireMuteMic();
     this.wireHideCamera();
+    this.wirePause();
     this.wireSettingsLink();
     this.wireDiagnosticsLink();
     void this.state.refreshInitialState();
@@ -78,7 +80,8 @@ export class PopupController {
     setControlsForPhase(this.el, phase);
     this.updateMuteControl(phase, session);
     this.updateCameraControl(phase, session);
-    this.persistentStatus = this.state.buildPersistentStatus(phase);
+    this.updatePauseControl(phase, session);
+    this.persistentStatus = this.state.buildPersistentStatus(phase, session?.paused === true);
     if (!this.statusTimer) {
       setStatusText(this.el, this.persistentStatus);
     }
@@ -214,6 +217,56 @@ export class PopupController {
     btn.classList.toggle('btn-secondary', !this.cameraMuted);
     const label = btn.querySelector<HTMLElement>('[data-camera-label]') ?? btn;
     label.textContent = this.cameraMuted ? 'Show Camera' : 'Hide Camera';
+  }
+
+  private wirePause() {
+    const btn = this.el.pauseBtn;
+    if (!btn) return;
+    btn.addEventListener('click', () => void this.togglePause());
+  }
+
+  /**
+   * Pauses/resumes the whole recording; see {@link toggleMute}. The paused span is
+   * never written, so resume yields a seamless join with no black/blank filler.
+   */
+  private async togglePause(): Promise<void> {
+    const btn = this.el.pauseBtn;
+    if (!btn || btn.disabled) return;
+    const next = !this.paused;
+    btn.disabled = true;
+    try {
+      const resp = await sendToBackground({ type: 'SET_PAUSED', paused: next });
+      if (resp.ok === false) throw new Error(resp.error || 'Failed to pause recording');
+      this.state.applySession(resp.session);
+      this.toast(next ? POPUP_TOAST_TEXT.recordingPaused : POPUP_TOAST_TEXT.recordingResumed);
+    } catch (e: unknown) {
+      console.error('[popup] SET_PAUSED error', e);
+      btn.disabled = false;
+    }
+  }
+
+  /**
+   * Shows the pause/resume toggle only while actively recording, and reflects the
+   * current pause state (label, pressed state, danger styling).
+   */
+  private updatePauseControl(phase: RecordingPhase, session?: RecordingStatusView) {
+    const btn = this.el.pauseBtn;
+    if (!btn) return;
+
+    const active = phase === 'recording';
+    btn.hidden = !active;
+    if (!active) {
+      this.paused = false;
+      return;
+    }
+
+    this.paused = session?.paused === true;
+    btn.disabled = false;
+    btn.setAttribute('aria-pressed', String(this.paused));
+    btn.classList.toggle('btn-danger', this.paused);
+    btn.classList.toggle('btn-secondary', !this.paused);
+    const label = btn.querySelector<HTMLElement>('[data-pause-label]') ?? btn;
+    label.textContent = this.paused ? 'Resume' : 'Pause';
   }
 
   private wireSettingsLink() {

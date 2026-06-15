@@ -13,6 +13,7 @@ export type PopupElements = {
   muteMicBtn: HTMLButtonElement | null;
   startBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
+  pauseBtn: HTMLButtonElement | null;
   storageModeSelect: HTMLSelectElement | null;
   recordSelfVideoCheckbox: HTMLInputElement | null;
   hideCameraBtn: HTMLButtonElement | null;

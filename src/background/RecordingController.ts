@@ -229,6 +229,33 @@ export class RecordingController {
     }
   }
 
+  /**
+   * Pauses/resumes the whole live recording. Guards only that capture is active
+   * (pause spans every stream, so there is no mic/camera sub-guard), relays to
+   * the offscreen engine, and on success mirrors the flag onto the session. The
+   * paused span is never written, so resume yields a seamless join; a failed
+   * toggle leaves the recording untouched (this.fail does not mutate the session).
+   */
+  async setPaused(paused: boolean): Promise<CommandResult> {
+    const snapshot = this.session.getSnapshot();
+    if (!isStoppablePhase(snapshot.phase)) {
+      return this.fail('Pause requested but no recording is active');
+    }
+
+    try {
+      await this.offscreen.ensureReady();
+      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
+        type: 'OFFSCREEN_SET_PAUSED',
+        paused,
+      });
+      if (!r?.ok) return this.fail(r?.error || 'Pause failed in offscreen');
+      this.session.setPaused(paused);
+      return this.ok();
+    } catch (e: any) {
+      return this.fail(`SET_PAUSED failed: ${e?.message || e}`);
+    }
+  }
+
   /** Builds a success CommandResult carrying the current popup-facing status view. */
   private ok(): CommandResult {
     return { ok: true, session: toStatusView(this.session.getSnapshot()) };

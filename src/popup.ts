@@ -25,6 +25,7 @@ const controller = new PopupController({
   muteMicBtn: document.getElementById('mute-mic') as HTMLButtonElement | null,
   startBtn: document.getElementById('start-rec') as HTMLButtonElement | null,
   stopBtn: document.getElementById('stop-rec') as HTMLButtonElement | null,
+  pauseBtn: document.getElementById('pause-recording') as HTMLButtonElement | null,
   storageModeSelect: document.getElementById('storage-mode') as HTMLSelectElement | null,
   recordSelfVideoCheckbox: document.getElementById('record-self-video') as HTMLInputElement | null,
   hideCameraBtn: document.getElementById('hide-camera') as HTMLButtonElement | null,

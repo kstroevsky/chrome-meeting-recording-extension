@@ -118,6 +118,7 @@ export class RecordingSession {
       warnings: this.snapshot.warnings,
       micMuted: this.snapshot.micMuted,
       cameraMuted: this.snapshot.cameraMuted,
+      paused: this.snapshot.paused,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -143,6 +144,16 @@ export class RecordingSession {
     this.snapshot = {
       ...this.snapshot,
       cameraMuted: muted || undefined,
+      updatedAt: Date.now(),
+    };
+    return this.commit();
+  }
+
+  /** Mirrors the live whole-recording pause flag actuated in the offscreen recorder. See {@link setMicMuted}. */
+  setPaused(paused: boolean): RecordingSessionSnapshot {
+    this.snapshot = {
+      ...this.snapshot,
+      paused: paused || undefined,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -174,6 +185,7 @@ export class RecordingSession {
       warnings,
       micMuted: this.snapshot.micMuted,
       cameraMuted: this.snapshot.cameraMuted,
+      paused: this.snapshot.paused,
       uploadSummary: undefined,
       updatedAt: Date.now(),
     };
@@ -190,6 +202,7 @@ export class RecordingSession {
       warnings: this.snapshot.warnings,
       micMuted: this.snapshot.micMuted,
       cameraMuted: this.snapshot.cameraMuted,
+      paused: this.snapshot.paused,
       updatedAt: Date.now(),
     };
     return this.commit();

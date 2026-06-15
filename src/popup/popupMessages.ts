@@ -22,6 +22,8 @@ export const POPUP_TOAST_TEXT = {
   micUnmuted: 'Microphone unmuted',
   cameraHidden: 'Camera hidden',
   cameraShown: 'Camera shown',
+  recordingPaused: 'Recording paused',
+  recordingResumed: 'Recording resumed',
 } as const;
 
 /** Formats the toast shown after background confirms a local file save. */

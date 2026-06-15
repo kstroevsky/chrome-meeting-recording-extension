@@ -132,6 +132,7 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
       if (msg.type === 'STOP_RECORDING')     { send(await controller.stop('popup stop button')); return; }
       if (msg.type === 'SET_MIC_MUTED')      { send(await controller.setMicMuted(msg.muted)); return; }
       if (msg.type === 'SET_CAMERA_MUTED')   { send(await controller.setCameraMuted(msg.muted)); return; }
+      if (msg.type === 'SET_PAUSED')         { send(await controller.setPaused(msg.paused)); return; }
       if (msg.type === 'GET_RECORDING_STATUS') { sendResponse({ session: toStatusView(session.getSnapshot()) }); return; }
     })().catch((err) => {
       console.error('[background] top-level error', err);

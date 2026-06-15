@@ -84,8 +84,8 @@ export class PopupStateController {
     this.handleUploadSummary(prevPhase, snapshot.phase, snapshot.uploadSummary);
   }
 
-  /** Builds the persistent status line text based on current phase and warnings. */
-  buildPersistentStatus(phase: RecordingPhase): string {
+  /** Builds the persistent status line text based on current phase, pause state, and warnings. */
+  buildPersistentStatus(phase: RecordingPhase, paused = false): string {
     const warning = describeRecordingWarnings(this.activeWarnings);
     if (phase === 'idle') {
       return warning;
@@ -93,7 +93,8 @@ export class PopupStateController {
     const run = describeRunConfig(this.activeRunConfig);
     const runSuffix = run ? ` ${run}` : '';
     const warningSuffix = warning ? ` ${warning}` : '';
-    return `${STATUS_BY_PHASE[phase]}${runSuffix}${warningSuffix}`;
+    const label = paused && phase === 'recording' ? 'Recording paused.' : STATUS_BY_PHASE[phase];
+    return `${label}${runSuffix}${warningSuffix}`;
   }
 
   /** Reads the run configuration from the popup form. */
