@@ -22,6 +22,7 @@ import { registerMessageHandlers } from './background/messageHandlers';
 import { createChromeCpuSampler } from './background/perf/CpuSampler';
 import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
+import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, maybeClearPerfDiagnostics, registerSaveHandler } from './background/sessionLifecycle';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
 import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
@@ -37,6 +38,7 @@ import {
   RECORDING_SESSION_STORAGE_KEY,
   toStatusView,
 } from './shared/recording';
+import { TIMEOUTS } from './shared/timeouts';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
@@ -56,6 +58,9 @@ const session = new RecordingSession(
     }
   },
   (snapshot) => {
+    // Liveness backstop: (re)arm/clear the start watchdog on every transition,
+    // including the rehydrated one after a service-worker restart (ADR-0003).
+    startWatchdog.observe(snapshot);
     if (isBusyPhase(snapshot.phase)) {
       startKeepAlive();
     } else {
@@ -89,6 +94,22 @@ offscreen.onStateChanged = (msg) => {
   }
   session.applyOffscreenPhase(msg);
 };
+
+// Liveness backstop for an orphaned `starting` (ADR-0003). Complements the epoch
+// fence: the fence drops *stale* status, this rescues *missing* status.
+const startWatchdog = createPhaseWatchdog({
+  budgetMs: TIMEOUTS.STARTING_WATCHDOG_MS,
+  getSnapshot: () => session.getSnapshot(),
+  onStuck: () => {
+    L.warn("Start watchdog: session stuck in 'starting'; failing it and tearing down the offscreen so a retry starts clean");
+    session.fail('Recording start timed out — the recorder never confirmed it began.');
+    // fail() flips lastKnownPhase to 'failed' (non-busy) via the change-listener
+    // above, so closeForUpdate now proceeds and discards the dead/wedged/zombie
+    // offscreen (otherwise a wedged one would reject the retry's OFFSCREEN_START).
+    void offscreen.closeForUpdate().catch((e) => L.warn('Watchdog offscreen teardown failed (non-fatal):', e));
+  },
+});
+
 registerSaveHandler(offscreen, L);
 
 // The recording control plane: every start/stop trigger drives this one seam.

@@ -853,7 +853,7 @@ Files:
 
 ### 6.1 Resilience and crash recovery
 
-Files: `src/offscreen/drive/PendingUploadStore.ts`, `src/offscreen/drive/resumePendingUploads.ts`, `src/offscreen/storage/recoverOrphanRecordings.ts`, `src/offscreen/storage/FlushPolicy.ts`
+Files: `src/offscreen/drive/PendingUploadStore.ts`, `src/offscreen/drive/resumePendingUploads.ts`, `src/offscreen/storage/recoverOrphanRecordings.ts`, `src/offscreen/storage/FlushPolicy.ts`, `src/background/phaseWatchdog.ts`
 
 The recorder is designed so a recording is never silently lost. Each failure mode has a dedicated failsafe:
 
@@ -865,6 +865,7 @@ The recorder is designed so a recording is never silently lost. Each failure mod
 | Network drops during a Drive upload | **In-session retry/resume** — backoff + resume from the committed offset, else local download |
 | Crash / power-off **during** a Drive upload | **Resume-on-restart (#1)** — re-upload the interrupted file on next launch |
 | Crash / power-off **during** capture | **Orphan recovery (#2)** — seal and download the leftover OPFS file on next launch |
+| Service worker dies **mid-start** | **Start watchdog (ADR-0003)** — fail the orphaned `starting` and tear down the offscreen after a budget so the popup unblocks and a retry is clean |
 
 **Continuous durable persistence (the foundation).** Chunks stream to OPFS every timeslice (~4 s), so a crash never loses more than the last few seconds of *bytes* — the recording is always on disk up to the most recent chunk. The mechanisms below turn those on-disk bytes back into a usable file.
 
@@ -875,6 +876,8 @@ The recorder is designed so a recording is never silently lost. Each failure mod
 **Orphan recovery for interrupted recordings (#2).** A crash *during* capture leaves an unsealed OPFS file with no upload marker — which #1 ignores. On the next launch, `recoverOrphanRecordings` scans OPFS for leftover recording files (skipping any a pending-upload marker owns), seals each best-effort (the duration fix on a truncated file still yields a valid partial duration; on failure it delivers the raw bytes), and hands it to the existing local-save flow — which removes the OPFS file only on download success, so a failed recovery is retried next launch and orphans never accumulate. Recovery is **bounded** so even a pathological backlog (e.g. a run of crashes, or leftover test files) can't overwhelm startup: it handles at most 25 files per launch (oldest first — the remainder drains on later launches, and since each success deletes its file nothing is lost), and for very large files it skips the in-memory duration fix and delivers the raw, disk-backed bytes (a complete, playable WebM whose duration metadata may be unset until the first seek) rather than risk OOM-ing the offscreen. A **start-time cutoff** (only files older than this offscreen's start are eligible) guarantees the scan can never touch the file an in-progress recording is actively writing.
 
 **Where recovery runs.** Both passes fire-and-forget at offscreen startup — gated on the idle phase and the presence of `chrome.storage`, sequentially (#1 then #2) — and are no-ops when nothing is pending.
+
+**Start watchdog (liveness backstop).** The two recovery passes above turn on-disk bytes back into files; the watchdog covers a different failure — a *control-plane* hang. If the service worker is killed mid-start, the `OFFSCREEN_START` RPC promise dies with it, so on restart the session rehydrates as `starting` with nothing driving it forward (the offscreen's reconnect re-broadcast is itself dropped by the epoch fence, ADR-0003). `phaseWatchdog` is armed from the session change-listener — including the rehydrated transition, so an already-stale `starting` is caught immediately — and after `TIMEOUTS.STARTING_WATCHDOG_MS` it fails the session and tears the offscreen down so the popup unblocks and a retry gets a fresh document. It is scoped to `starting` (the live-start path is already bounded by `RPC_MS`; `uploading` legitimately runs for minutes) and is the liveness complement to the fence: the fence drops *stale* status, the watchdog rescues *missing* status.
 
 ### 7. Popup Control Layer
 
@@ -1340,14 +1343,14 @@ sequenceDiagram
 
 ### 5. Recording Session State Machine (Background)
 
-The canonical, persisted session phase owned by `RecordingSession`. This is the **control-plane** state — distinct from the offscreen engine's own machine (#8). Offscreen-sourced transitions (`OFFSCREEN_STATE`) are admitted only when their run epoch matches the current run; stale-epoch updates are dropped before they reach this machine (the fencing token, [ADR-0003](docs/adr/0003-recording-phase-ownership-and-stale-offscreen-status.md)). The persisted `epoch` is carried across `idle` so it stays strictly increasing across service-worker restarts.
+The canonical, persisted session phase owned by `RecordingSession`. This is the **control-plane** state — distinct from the offscreen engine's own machine (#8). Offscreen-sourced transitions (`OFFSCREEN_STATE`) are admitted only when their run epoch matches the current run; stale-epoch updates are dropped before they reach this machine (the fencing token, [ADR-0003](docs/adr/0003-recording-phase-ownership-and-stale-offscreen-status.md)). The persisted `epoch` is carried across `idle` so it stays strictly increasing across service-worker restarts. A **start watchdog** is the liveness complement to the fence: if a session sits in `starting` past `TIMEOUTS.STARTING_WATCHDOG_MS` (e.g. orphaned after the worker died mid-start, so no RPC drives it on), it is failed and the offscreen torn down so a retry starts clean — the fence drops *stale* status, the watchdog rescues *missing* status.
 
 ```mermaid
 stateDiagram-v2
     [*] --> idle
     idle --> starting: START_RECORDING (session.start)
     starting --> recording: OFFSCREEN_STATE(recording)
-    starting --> failed: ensureReady / OFFSCREEN_START error
+    starting --> failed: ensureReady / OFFSCREEN_START error / start watchdog timeout
     recording --> stopping: STOP_RECORDING / auto-stop (markStopping)
     recording --> failed: offscreen runtime error
     stopping --> uploading: drive finalize begins

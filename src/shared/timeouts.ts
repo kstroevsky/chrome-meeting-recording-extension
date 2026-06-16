@@ -87,4 +87,16 @@ export const TIMEOUTS = {
    * of a multi-GB file on a slow disk is not falsely aborted (~10 MB/s floor).
    */
   SEAL_MS_PER_MB: 100,
+
+  /**
+   * Liveness backstop for the `starting` phase (the phase watchdog). The epoch
+   * fence (ADR-0003) drops *stale* offscreen status; this rescues a session with
+   * *missing* status — one orphaned in `starting` after the service worker died
+   * mid-start, so its `OFFSCREEN_START` RPC promise is gone and nothing else drives
+   * it to `recording`/`failed`. Deliberately above `RPC_MS` (15s): a slow-but-live
+   * start fails through its own RPC timeout first, so the watchdog only fires when
+   * there is no live RPC — i.e. the orphan case. Scoped to `starting` only;
+   * `uploading` legitimately runs for minutes and is not watched.
+   */
+  STARTING_WATCHDOG_MS: 30_000,
 } as const;

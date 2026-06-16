@@ -1,3 +1,5 @@
+import { TIMEOUTS } from '../src/shared/timeouts';
+
 describe('background runtime messages', () => {
   const activeSession = {
     phase: 'recording',
@@ -186,6 +188,99 @@ describe('background runtime messages', () => {
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
       }),
     }));
+  });
+
+  it('epoch fence applies matching-run status and drops stale-run status', async () => {
+    (chrome.storage.session.get as jest.Mock).mockResolvedValue({
+      recordingSession: {
+        phase: 'recording',
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        epoch: 1,
+        updatedAt: Date.now(),
+      },
+    });
+    const offscreenInstance = {
+      onStateChanged: undefined as ((msg: any) => void) | undefined,
+      onSaveRequested: undefined as ((msg: any) => void) | undefined,
+      hydratePhase: jest.fn(),
+      attachPort: jest.fn(),
+      ensureReady: jest.fn().mockResolvedValue(undefined),
+      stopIfPossibleOnSuspend: jest.fn(),
+      rpc: jest.fn(),
+      revokeBlobUrl: jest.fn(),
+    };
+
+    jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
+    jest.doMock('../src/background/OffscreenManager', () => ({
+      OffscreenManager: jest.fn(() => offscreenInstance),
+    }));
+
+    await import('../src/background');
+    await new Promise(process.nextTick);
+
+    const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
+    const phase = async () =>
+      (await new Promise<any>((resolve) => listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve))).session.phase;
+
+    // Matching the current run's epoch → applied.
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'stopping', epoch: 1 });
+    expect(await phase()).toBe('stopping');
+
+    // A stale update from a previous run (wrong epoch) → dropped; phase unchanged.
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 99 });
+    expect(await phase()).toBe('stopping');
+  });
+
+  it('start watchdog fails and tears down a session left orphaned in starting past the budget', async () => {
+    jest.useFakeTimers();
+    // Keep-alive (armed for the busy `starting` phase) pokes the runtime on its
+    // interval; stub it so advancing fake time doesn't throw on the chrome mock.
+    (chrome.runtime as any).getPlatformInfo = jest.fn();
+    try {
+      // A persisted `starting` rehydrated on service-worker restart with nothing
+      // driving it forward — the orphan the watchdog (ADR-0003) exists to rescue.
+      (chrome.storage.session.get as jest.Mock).mockResolvedValue({
+        recordingSession: {
+          phase: 'starting',
+          runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+          epoch: 1,
+          updatedAt: Date.now(),
+        },
+      });
+      const offscreenInstance = {
+        onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+        onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
+        hydratePhase: jest.fn(),
+        attachPort: jest.fn(),
+        ensureReady: jest.fn().mockResolvedValue(undefined),
+        stopIfPossibleOnSuspend: jest.fn(),
+        rpc: jest.fn(),
+        revokeBlobUrl: jest.fn(),
+        closeForUpdate: jest.fn().mockResolvedValue(true),
+      };
+
+      jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
+      jest.doMock('../src/background/OffscreenManager', () => ({
+        OffscreenManager: jest.fn(() => offscreenInstance),
+      }));
+
+      await import('../src/background');
+      // Flush the hydrate IIFE so the watchdog arms on the rehydrated `starting`.
+      await jest.advanceTimersByTimeAsync(0);
+      expect(offscreenInstance.closeForUpdate).not.toHaveBeenCalled(); // still within budget
+
+      // Cross the budget → watchdog fires → fail + tear down the stale offscreen.
+      await jest.advanceTimersByTimeAsync(TIMEOUTS.STARTING_WATCHDOG_MS + 100);
+      expect(offscreenInstance.closeForUpdate).toHaveBeenCalledTimes(1);
+
+      const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
+      const status = await new Promise<any>((resolve) => {
+        listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve);
+      });
+      expect(status.session.phase).toBe('failed');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('clears diagnostics only after the debug dashboard disconnects while the session is idle', async () => {
