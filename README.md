@@ -578,7 +578,15 @@ type RecordingRunConfig = {
 
 ```ts
 type RecordingSessionSnapshot = {
+  // Displayed phase — DERIVED (ADR-0003 Decision 4), never written directly:
+  // phase = projectPhase(desired, observed, failed). See "Recording Phases" below.
   phase: 'idle' | 'starting' | 'recording' | 'stopping' | 'uploading' | 'failed';
+  // The two owned planes the phase is projected from. The command path writes only
+  // `desired`; the offscreen-status path writes only `observed`; `failed` is the
+  // terminal flag. One writer per field ⇒ a late same-run status can't clobber intent.
+  desired: 'idle' | 'recording';
+  observed: 'none' | 'starting' | 'recording' | 'stopping' | 'uploading' | 'idle';
+  failed?: boolean;
   runConfig: RecordingRunConfig | null;
   uploadSummary?: UploadSummary;
   error?: string;
@@ -599,12 +607,15 @@ type RecordingSessionSnapshot = {
 
 ### Recording Phases
 
-- `idle` — no active run.
-- `starting` — background/offscreen startup is in progress.
-- `recording` — at least one recorder has started.
-- `stopping` — the stop path has begun and recorders are sealing.
-- `uploading` — post-stop Drive upload is in progress.
-- `failed` — the last run failed before returning to `idle`.
+The phase is **derived** (ADR-0003 Decision 4) — a projection of the command-plane
+`desired` and the status-plane `observed` (plus the terminal `failed`):
+
+- `idle` — `desired=idle`, recorder idle/unknown.
+- `starting` — `desired=recording`, recorder not yet observed `recording`.
+- `recording` — `desired=recording`, recorder observed `recording`.
+- `stopping` — `desired=idle`, recorder still observed capturing.
+- `uploading` — `desired=idle`, recorder observed `uploading`.
+- `failed` — terminal `failed` flag set (wins over both planes).
 
 Busy phases (service worker kept alive, popup controls disabled):
 
@@ -625,12 +636,12 @@ This class is the canonical lifecycle owner.
 
 Responsibilities:
 
-- hydrating the last persisted session snapshot
-- starting a new session from a normalized run config
-- transitioning through `stopping`, `uploading`, `idle`, and `failed`
-- applying offscreen phase updates without leaking offscreen-specific state shape into the rest of the background runtime
+- hydrating the last persisted session snapshot (reconstructing the `desired`/`observed` planes from a legacy `phase` for backward compatibility)
+- owning the **command plane** — `start` / `markStopping` / `markIdle` / `fail` write `desired` and `failed`
+- applying offscreen phase updates to the **status plane** (`observed`) only — never to intent — so a late same-run status can't overwrite the command path
+- projecting the displayed `phase` from `(desired, observed, failed)` on every change, so it has a single source of truth and no direct writers
 
-This is the main architectural improvement over the older design, where lifecycle state was distributed across module globals.
+This is the main architectural improvement over the older design, where lifecycle state was distributed across module globals; the `desired`/`observed` split (ADR-0003 Decision 4) further removed the intent/observation conflation that previously let stale status clobber the phase.
 
 ### 1.1 Recording Control Plane Orchestrator
 
@@ -865,7 +876,7 @@ The recorder is designed so a recording is never silently lost. Each failure mod
 | Network drops during a Drive upload | **In-session retry/resume** — backoff + resume from the committed offset, else local download |
 | Crash / power-off **during** a Drive upload | **Resume-on-restart (#1)** — re-upload the interrupted file on next launch |
 | Crash / power-off **during** capture | **Orphan recovery (#2)** — seal and download the leftover OPFS file on next launch |
-| Service worker dies **mid-start** | **Start watchdog (ADR-0003)** — fail the orphaned `starting` and tear down the offscreen after a budget so the popup unblocks and a retry is clean |
+| Service worker dies **mid-start or mid-stop** | **Phase watchdog (ADR-0003)** — fail the orphaned `starting`/`stopping` and tear down the offscreen after a per-phase budget so the popup unblocks and a retry is clean (a stuck `stopping` keeps its captured file — the recovery pass above downloads it) |
 
 **Continuous durable persistence (the foundation).** Chunks stream to OPFS every timeslice (~4 s), so a crash never loses more than the last few seconds of *bytes* — the recording is always on disk up to the most recent chunk. The mechanisms below turn those on-disk bytes back into a usable file.
 
@@ -877,7 +888,7 @@ The recorder is designed so a recording is never silently lost. Each failure mod
 
 **Where recovery runs.** Both passes fire-and-forget at offscreen startup — gated on the idle phase and the presence of `chrome.storage`, sequentially (#1 then #2) — and are no-ops when nothing is pending.
 
-**Start watchdog (liveness backstop).** The two recovery passes above turn on-disk bytes back into files; the watchdog covers a different failure — a *control-plane* hang. If the service worker is killed mid-start, the `OFFSCREEN_START` RPC promise dies with it, so on restart the session rehydrates as `starting` with nothing driving it forward (the offscreen's reconnect re-broadcast is itself dropped by the epoch fence, ADR-0003). `phaseWatchdog` is armed from the session change-listener — including the rehydrated transition, so an already-stale `starting` is caught immediately — and after `TIMEOUTS.STARTING_WATCHDOG_MS` it fails the session and tears the offscreen down so the popup unblocks and a retry gets a fresh document. It is scoped to `starting` (the live-start path is already bounded by `RPC_MS`; `uploading` legitimately runs for minutes) and is the liveness complement to the fence: the fence drops *stale* status, the watchdog rescues *missing* status.
+**Phase watchdog (liveness backstop).** The two recovery passes above turn on-disk bytes back into files; the watchdog covers a different failure — a *control-plane* hang. If the service worker is killed mid-start (or mid-stop), the in-flight `OFFSCREEN_START` / `OFFSCREEN_STOP` RPC promise dies with it, so on restart the session rehydrates in `starting` (or `stopping`) with nothing driving it forward (the offscreen's reconnect re-broadcast is itself dropped by the epoch fence, ADR-0003). `phaseWatchdog` is armed from the session change-listener — including the rehydrated transition, so an already-stale phase is caught immediately — and after that phase's budget (`TIMEOUTS.STARTING_WATCHDOG_MS` / `STOPPING_WATCHDOG_MS`) it fails the session and tears the offscreen down so the popup unblocks and a retry gets a fresh document. A stuck `stopping` means capture already completed, so its file is left for the recovery pass to download and the failure message says so. It watches exactly the orphan-prone "intent ≠ observed" phases — `starting` and `stopping` (the live paths are bounded by `RPC_MS`; `uploading` legitimately runs for minutes and has its own recovery) — and is the liveness complement to the fence: the fence drops *stale* status, the watchdog rescues *missing* status. This is the reconciler escalation rule of ADR-0003 Decision 4.
 
 ### 7. Popup Control Layer
 
@@ -1343,7 +1354,7 @@ sequenceDiagram
 
 ### 5. Recording Session State Machine (Background)
 
-The canonical, persisted session phase owned by `RecordingSession`. This is the **control-plane** state — distinct from the offscreen engine's own machine (#8). Offscreen-sourced transitions (`OFFSCREEN_STATE`) are admitted only when their run epoch matches the current run; stale-epoch updates are dropped before they reach this machine (the fencing token, [ADR-0003](docs/adr/0003-recording-phase-ownership-and-stale-offscreen-status.md)). The persisted `epoch` is carried across `idle` so it stays strictly increasing across service-worker restarts. A **start watchdog** is the liveness complement to the fence: if a session sits in `starting` past `TIMEOUTS.STARTING_WATCHDOG_MS` (e.g. orphaned after the worker died mid-start, so no RPC drives it on), it is failed and the offscreen torn down so a retry starts clean — the fence drops *stale* status, the watchdog rescues *missing* status.
+The canonical, persisted session phase owned by `RecordingSession`. This is the **control-plane** state — distinct from the offscreen engine's own machine (#8). The displayed `phase` is **derived** (ADR-0003 Decision 4): the command path writes only `desired` (`idle`/`recording`) and the offscreen-status path writes only `observed`, with `phase = projectPhase(desired, observed, failed)`. Because each plane has a single writer, a late *same-run* status can no longer overwrite intent — e.g. after a stop, a late `recording` re-broadcast derives to `stopping`, not back to `recording`. Cross-run staleness is handled separately: offscreen-sourced transitions (`OFFSCREEN_STATE`) are admitted only when their run epoch matches the current run; stale-epoch updates are dropped before they reach this machine (the fencing token, [ADR-0003](docs/adr/0003-recording-phase-ownership-and-stale-offscreen-status.md)). The persisted `epoch` is carried across `idle` so it stays strictly increasing across service-worker restarts. A **phase watchdog** is the liveness complement to the fence: if a session sits in `starting` or `stopping` past that phase's budget (`TIMEOUTS.STARTING_WATCHDOG_MS` / `STOPPING_WATCHDOG_MS`) — e.g. orphaned after the worker died mid-start or mid-stop, so no RPC drives it on — it is failed and the offscreen torn down so a retry starts clean. The fence drops *stale* status, the watchdog rescues *missing* status (the reconciler "intent unmet for too long" rule, Decision 4).
 
 ```mermaid
 stateDiagram-v2
@@ -1355,7 +1366,7 @@ stateDiagram-v2
     recording --> failed: offscreen runtime error
     stopping --> uploading: drive finalize begins
     stopping --> idle: local finalize completes
-    stopping --> failed: finalize error
+    stopping --> failed: finalize error / stop watchdog timeout
     uploading --> idle: uploads complete (uploadSummary)
     uploading --> failed: upload pipeline error
     failed --> starting: START_RECORDING (retry)
