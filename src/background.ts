@@ -58,9 +58,9 @@ const session = new RecordingSession(
     }
   },
   (snapshot) => {
-    // Liveness backstop: (re)arm/clear the start watchdog on every transition,
+    // Liveness backstop: (re)arm/clear the phase watchdog on every transition,
     // including the rehydrated one after a service-worker restart (ADR-0003).
-    startWatchdog.observe(snapshot);
+    phaseWatchdog.observe(snapshot);
     if (isBusyPhase(snapshot.phase)) {
       startKeepAlive();
     } else {
@@ -95,14 +95,26 @@ offscreen.onStateChanged = (msg) => {
   session.applyOffscreenPhase(msg);
 };
 
-// Liveness backstop for an orphaned `starting` (ADR-0003). Complements the epoch
-// fence: the fence drops *stale* status, this rescues *missing* status.
-const startWatchdog = createPhaseWatchdog({
-  budgetMs: TIMEOUTS.STARTING_WATCHDOG_MS,
+// Liveness backstop for an orphaned `starting`/`stopping` (ADR-0003). Complements
+// the epoch fence: the fence drops *stale* status, this rescues *missing* status —
+// a session left mid-start or mid-stop when the worker died and the offscreen is
+// dead/wedged, so no RPC drives it on.
+const phaseWatchdog = createPhaseWatchdog({
+  budgets: {
+    starting: TIMEOUTS.STARTING_WATCHDOG_MS,
+    stopping: TIMEOUTS.STOPPING_WATCHDOG_MS,
+  },
   getSnapshot: () => session.getSnapshot(),
-  onStuck: () => {
-    L.warn("Start watchdog: session stuck in 'starting'; failing it and tearing down the offscreen so a retry starts clean");
-    session.fail('Recording start timed out — the recorder never confirmed it began.');
+  onStuck: (snapshot) => {
+    // A stuck `stopping` means capture already happened — the bytes are on disk and
+    // orphan-recovery downloads them on the next launch — so the message says so
+    // rather than implying the recording was lost.
+    const error =
+      snapshot.phase === 'stopping'
+        ? 'Recording stop timed out — the recorder never confirmed finalize. Any captured file is recovered on the next launch.'
+        : 'Recording start timed out — the recorder never confirmed it began.';
+    L.warn(`Phase watchdog: session stuck in '${snapshot.phase}'; failing it and tearing down the offscreen so a retry starts clean`);
+    session.fail(error);
     // fail() flips lastKnownPhase to 'failed' (non-busy) via the change-listener
     // above, so closeForUpdate now proceeds and discards the dead/wedged/zombie
     // offscreen (otherwise a wedged one would reject the retry's OFFSCREEN_START).

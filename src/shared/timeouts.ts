@@ -95,8 +95,18 @@ export const TIMEOUTS = {
    * mid-start, so its `OFFSCREEN_START` RPC promise is gone and nothing else drives
    * it to `recording`/`failed`. Deliberately above `RPC_MS` (15s): a slow-but-live
    * start fails through its own RPC timeout first, so the watchdog only fires when
-   * there is no live RPC — i.e. the orphan case. Scoped to `starting` only;
-   * `uploading` legitimately runs for minutes and is not watched.
+   * there is no live RPC — i.e. the orphan case.
    */
   STARTING_WATCHDOG_MS: 30_000,
+
+  /**
+   * Liveness backstop for the `stopping` phase — the symmetric twin of
+   * STARTING_WATCHDOG_MS. The stop path persists `stopping` then awaits
+   * `OFFSCREEN_STOP` over RPC; if the service worker dies mid-stop *and* the
+   * offscreen is dead/wedged, the session rehydrates `stopping` with nothing
+   * driving it on. Same rationale as the start budget (above `RPC_MS`, fires only
+   * for the orphan). `uploading` is still NOT watched: it legitimately runs for
+   * minutes and has its own pending-upload/orphan-file recovery.
+   */
+  STOPPING_WATCHDOG_MS: 30_000,
 } as const;
