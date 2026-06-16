@@ -45,7 +45,7 @@ describe('RecordingSession state machine', () => {
   it('preserves run config and target across simple phase transitions', () => {
     session.start(RUN_CONFIG, { targetTabId: 42, meetingSlug: 'abc-defg-hij' });
 
-    const recording = session.markRecording();
+    const recording = session.applyOffscreenPhase({ phase: 'recording' });
     expect(recording.phase).toBe('recording');
     expect(recording.runConfig).toEqual(RUN_CONFIG);
     expect(recording.targetTabId).toBe(42);
@@ -55,7 +55,7 @@ describe('RecordingSession state machine', () => {
     expect(stopping.phase).toBe('stopping');
     expect(stopping.runConfig).toEqual(RUN_CONFIG);
 
-    const uploading = session.markUploading();
+    const uploading = session.applyOffscreenPhase({ phase: 'uploading' });
     expect(uploading.phase).toBe('uploading');
     expect(uploading.runConfig).toEqual(RUN_CONFIG);
   });
@@ -75,7 +75,7 @@ describe('RecordingSession state machine', () => {
 
   it('fail() preserves the last run config, target, and warnings', () => {
     session.start(RUN_CONFIG, { targetTabId: 42, meetingSlug: 'abc-defg-hij' });
-    session.markRecording();
+    session.applyOffscreenPhase({ phase: 'recording' });
 
     const failed = session.fail('boom');
 
@@ -100,7 +100,7 @@ describe('RecordingSession state machine', () => {
 
   it('commits (persists + notifies) on every transition', () => {
     session.start(RUN_CONFIG, { targetTabId: 42 });
-    session.markRecording();
+    session.applyOffscreenPhase({ phase: 'recording' });
     session.markStopping();
 
     expect(persist).toHaveBeenCalledTimes(3);
@@ -111,7 +111,7 @@ describe('RecordingSession state machine', () => {
     it('assigns a fresh, strictly increasing epoch per run and preserves it across transitions and idle', () => {
       expect(session.start(RUN_CONFIG).epoch).toBe(1);
       // Preserved through the run so every status the offscreen echoes matches.
-      expect(session.markRecording().epoch).toBe(1);
+      expect(session.applyOffscreenPhase({ phase: 'recording' }).epoch).toBe(1);
       expect(session.markStopping().epoch).toBe(1);
       // Preserved across idle so the next run is strictly greater (not reset to 1).
       expect(session.markIdle().epoch).toBe(1);
@@ -130,11 +130,49 @@ describe('RecordingSession state machine', () => {
     });
   });
 
-  describe('applyOffscreenPhase', () => {
-    it('routes an idle update through markIdle with its summary and warnings', () => {
+  describe('desired/observed planes (ADR-0003 Decision 4)', () => {
+    it('derives phase from the two planes and lets only the command path change intent', () => {
+      const starting = session.start(RUN_CONFIG, { targetTabId: 42 });
+      expect(starting.desired).toBe('recording');
+      expect(starting.observed).toBe('starting');
+      expect(starting.phase).toBe('starting');
+
+      // Observation writes `observed` only — it must never touch `desired`.
+      const recording = session.applyOffscreenPhase({ phase: 'recording' });
+      expect(recording.desired).toBe('recording');
+      expect(recording.observed).toBe('recording');
+      expect(recording.phase).toBe('recording');
+
+      // The command path is the only writer of intent.
+      const stopping = session.markStopping();
+      expect(stopping.desired).toBe('idle');
+      expect(stopping.observed).toBe('recording');
+      expect(stopping.phase).toBe('stopping');
+    });
+
+    it('does NOT let a late same-run recording re-broadcast clobber a stop in progress', () => {
       session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.applyOffscreenPhase({ phase: 'recording' });
+      expect(session.markStopping().phase).toBe('stopping');
+
+      // A late same-run `recording` report (e.g. an offscreen reconnect re-broadcast)
+      // lands after the stop. Pre-Decision-4 it flipped the phase back to `recording`;
+      // now intent (`desired=idle`) is preserved and the phase stays `stopping`.
+      const afterLate = session.applyOffscreenPhase({ phase: 'recording' });
+      expect(afterLate.phase).toBe('stopping');
+      expect(afterLate.desired).toBe('idle');
+      expect(afterLate.observed).toBe('recording');
+    });
+  });
+
+  describe('applyOffscreenPhase', () => {
+    it('finalizes through markIdle on an offscreen idle report, surfacing the upload summary', () => {
+      session.start(RUN_CONFIG, { targetTabId: 42 });
+      session.applyOffscreenPhase({ phase: 'recording' });
       const summary = { uploaded: [], localFallbacks: [{ stream: 'tab' as const, filename: 'tab.webm', error: 'x' }] };
 
+      // A same-run idle (a commanded stop OR an autonomous offscreen finalize) ends
+      // the run regardless of intent — cross-run stale idle is fenced out before here.
       const snapshot = session.applyOffscreenPhase({ phase: 'idle', uploadSummary: summary, warnings: ['w'] });
 
       expect(snapshot.phase).toBe('idle');
@@ -206,7 +244,7 @@ describe('RecordingSession state machine', () => {
 
     it('preserves micMuted across transitions and offscreen re-broadcasts', () => {
       session.start(RUN_CONFIG, { targetTabId: 42 });
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
       session.setMicMuted(true);
 
       expect(session.markStopping().micMuted).toBe(true);
@@ -234,7 +272,7 @@ describe('RecordingSession state machine', () => {
 
     it('preserves cameraMuted across transitions and offscreen re-broadcasts', () => {
       session.start(RUN_CONFIG, { targetTabId: 42 });
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
       session.setCameraMuted(true);
 
       expect(session.markStopping().cameraMuted).toBe(true);
@@ -261,7 +299,7 @@ describe('RecordingSession state machine', () => {
 
     it('preserves paused across transitions and offscreen re-broadcasts', () => {
       session.start(RUN_CONFIG, { targetTabId: 42 });
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
       session.setPaused(true);
 
       expect(session.markStopping().paused).toBe(true);

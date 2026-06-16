@@ -191,9 +191,11 @@ describe('background runtime messages', () => {
   });
 
   it('epoch fence applies matching-run status and drops stale-run status', async () => {
+    // Rehydrated mid-stop (desired=idle, observed=stopping) so an applied status
+    // moves the derived phase coherently and a dropped one leaves it unchanged.
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({
       recordingSession: {
-        phase: 'recording',
+        phase: 'stopping',
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         epoch: 1,
         updatedAt: Date.now(),
@@ -222,13 +224,13 @@ describe('background runtime messages', () => {
     const phase = async () =>
       (await new Promise<any>((resolve) => listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve))).session.phase;
 
-    // Matching the current run's epoch → applied.
-    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'stopping', epoch: 1 });
-    expect(await phase()).toBe('stopping');
+    // Matching the current run's epoch → applied (observed=uploading ⇒ uploading).
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'uploading', epoch: 1 });
+    expect(await phase()).toBe('uploading');
 
     // A stale update from a previous run (wrong epoch) → dropped; phase unchanged.
     offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 99 });
-    expect(await phase()).toBe('stopping');
+    expect(await phase()).toBe('uploading');
   });
 
   it('start watchdog fails and tears down a session left orphaned in starting past the budget', async () => {

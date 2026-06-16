@@ -10,6 +10,7 @@ import {
   normalizeWarnings,
   toStatusView,
 } from '../src/shared/recording';
+import type { DesiredState, ObservedState, RecordingPhase } from '../src/shared/recording';
 
 describe('shared/recording helpers', () => {
   it('preserves micMode=off during normalization', () => {
@@ -145,5 +146,114 @@ describe('session snapshot recording timer', () => {
     const view = toStatusView(active({ recordedMs: 7000, runningSince: 1234 }) as any);
     expect(view.recordedMs).toBe(7000);
     expect(view.runningSince).toBe(1234);
+  });
+});
+
+describe('session snapshot desired/observed migration (ADR-0003 Decision 4)', () => {
+  it('reconstructs the planes from each legacy phase and round-trips the derived phase', () => {
+    const cases: Array<[RecordingPhase, DesiredState, ObservedState, boolean]> = [
+      ['idle', 'idle', 'idle', false],
+      ['starting', 'recording', 'starting', false],
+      ['recording', 'recording', 'recording', false],
+      ['stopping', 'idle', 'stopping', false],
+      ['uploading', 'idle', 'uploading', false],
+      ['failed', 'idle', 'none', true],
+    ];
+
+    for (const [phase, desired, observed, failed] of cases) {
+      const s = normalizeSessionSnapshot({
+        phase,
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        error: failed ? 'boom' : undefined,
+        updatedAt: 1,
+      });
+      expect(s.desired).toBe(desired);
+      expect(s.observed).toBe(observed);
+      expect(s.failed).toBe(failed);
+      // The legacy `phase` is reconstructed exactly (inverse of projectPhase).
+      expect(s.phase).toBe(phase);
+    }
+  });
+
+  it('prefers authoritative planes when present and re-derives the phase from them', () => {
+    // A snapshot written by current code: the planes are the source of truth, even
+    // if a stale stored `phase` disagrees.
+    const s = normalizeSessionSnapshot({
+      phase: 'idle', // stale / ignored
+      desired: 'recording',
+      observed: 'recording',
+      failed: false,
+      runConfig: { storageMode: 'drive', micMode: 'mixed', recordSelfVideo: true },
+      updatedAt: 1,
+    });
+
+    expect(s.desired).toBe('recording');
+    expect(s.observed).toBe('recording');
+    expect(s.phase).toBe('recording'); // planes win over the stale phase
+    expect(s.runConfig).toEqual({ storageMode: 'drive', micMode: 'mixed', recordSelfVideo: true });
+  });
+
+  it('carries a persisted failed flag and derives the failed phase regardless of the planes', () => {
+    const s = normalizeSessionSnapshot({
+      phase: 'recording',
+      desired: 'recording',
+      observed: 'recording',
+      failed: true,
+      runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+      error: 'kaboom',
+      updatedAt: 1,
+    });
+
+    expect(s.failed).toBe(true);
+    expect(s.phase).toBe('failed');
+    expect(s.error).toBe('kaboom');
+  });
+
+  it('falls back to legacy decomposition when the persisted planes are partial/invalid', () => {
+    // Only `desired` is present (no valid `observed`) → the planes are not trustworthy,
+    // so rebuild both from the legacy `phase` instead.
+    const s = normalizeSessionSnapshot({
+      phase: 'recording',
+      desired: 'recording',
+      runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+      updatedAt: 1,
+    });
+
+    expect(s.desired).toBe('recording');
+    expect(s.observed).toBe('recording'); // reconstructed from legacy phase, not the partial input
+    expect(s.phase).toBe('recording');
+  });
+
+  it('produces a fully-formed idle session for non-record input', () => {
+    const s = normalizeSessionSnapshot(null);
+    expect(s.phase).toBe('idle');
+    expect(s.desired).toBe('idle');
+    expect(s.observed).toBe('idle');
+    expect(s.failed).toBe(false);
+  });
+
+  it('keeps the control-plane planes out of the popup-facing status view', () => {
+    // The popup only ever sees the derived `phase`; the planes it is projected from
+    // (and the other control-plane bookkeeping) must never cross the background→popup
+    // seam. This locks that boundary so a future field addition cannot leak it.
+    const view = toStatusView({
+      phase: 'recording',
+      desired: 'recording',
+      observed: 'recording',
+      failed: false,
+      runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+      epoch: 3,
+      targetTabId: 7,
+      meetingSlug: 'abc-defg-hij',
+      updatedAt: 1,
+    });
+
+    expect(view.phase).toBe('recording');
+    expect(view).not.toHaveProperty('desired');
+    expect(view).not.toHaveProperty('observed');
+    expect(view).not.toHaveProperty('failed');
+    expect(view).not.toHaveProperty('epoch');
+    expect(view).not.toHaveProperty('targetTabId');
+    expect(view).not.toHaveProperty('meetingSlug');
   });
 });

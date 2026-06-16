@@ -218,7 +218,7 @@ describe('RecordingController', () => {
 
     it('forwards OFFSCREEN_SET_MIC_MUTED and mirrors the flag onto the session', async () => {
       startMic('separate');
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
 
       const muted = await controller.setMicMuted(true);
 
@@ -236,7 +236,7 @@ describe('RecordingController', () => {
 
     it('leaves the recording intact (not failed) when the offscreen mute fails', async () => {
       startMic('mixed');
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
       offscreen.rpc.mockResolvedValue({ ok: false, error: 'mute boom' });
 
       const result = await controller.setMicMuted(true);
@@ -270,7 +270,7 @@ describe('RecordingController', () => {
 
     it('forwards OFFSCREEN_SET_CAMERA_MUTED and mirrors the flag onto the session', async () => {
       startRun(true);
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
 
       const hidden = await controller.setCameraMuted(true);
 
@@ -286,7 +286,7 @@ describe('RecordingController', () => {
 
     it('leaves the recording intact when the offscreen camera toggle fails', async () => {
       startRun(true);
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
       offscreen.rpc.mockResolvedValue({ ok: false, error: 'cam boom' });
 
       const result = await controller.setCameraMuted(true);
@@ -310,7 +310,7 @@ describe('RecordingController', () => {
 
     it('forwards OFFSCREEN_SET_PAUSED and mirrors the flag onto the session (no mic/camera sub-guard)', async () => {
       startRun();
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
 
       const paused = await controller.setPaused(true);
 
@@ -327,7 +327,7 @@ describe('RecordingController', () => {
 
     it('leaves the recording intact when the offscreen pause fails', async () => {
       startRun();
-      session.markRecording();
+      session.applyOffscreenPhase({ phase: 'recording' });
       offscreen.rpc.mockResolvedValue({ ok: false, error: 'pause boom' });
 
       const result = await controller.setPaused(true);
