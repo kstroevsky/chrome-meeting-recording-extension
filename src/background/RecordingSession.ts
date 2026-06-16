@@ -8,6 +8,9 @@
 import {
   createIdleSession,
   normalizeSessionSnapshot,
+  projectPhase,
+  type DesiredState,
+  type ObservedState,
   type RecordingRunConfig,
   type RecordingSessionSnapshot,
   type UploadSummary,
@@ -23,29 +26,29 @@ export type SessionChangeListener = (snapshot: RecordingSessionSnapshot) => void
 export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<void> | void;
 
 /**
- * Canonical state machine for a recording session.
+ * Canonical state machine for a recording session (ADR-0003, Decision 4).
  *
- * Valid phase transitions:
+ * The displayed `phase` is **not** stored directly — it is derived from two
+ * separately-owned inputs plus a terminal flag:
  *
- *   idle  ──start()──►  starting  ──markRecording()──►  recording
- *                                                            │
- *                                              markStopping()▼
- *                                                         stopping
- *                                                            │
- *                                              markUploading()▼
- *                                                         uploading
- *                                                            │
- *                                                markIdle()  ▼
- *                                                          idle
+ *   desired   command-plane intent  (`idle` | `recording`)   — written by start/stop
+ *   observed  status-plane report   (offscreen's last state) — written by applyOffscreenPhase
+ *   failed    terminal failure flag                          — written by fail / observed failed
  *
- *   Any non-idle phase ──fail()──► failed
- *   failed             ──start()──► starting   (retry)
+ *   phase = projectPhase(desired, observed, failed)
  *
- *   applyOffscreenPhase() drives the same transitions but from offscreen-sourced
- *   state updates. It delegates to markIdle() or fail() for terminal phases.
+ * Because the command path writes only `desired` and the offscreen-status path
+ * writes only `observed`, a late same-run status can no longer overwrite intent:
+ * it can at most move the *derived* phase (e.g. after a stop is requested, a late
+ * `recording` re-broadcast derives to `stopping`, not back to `recording`). Stale
+ * *cross-run* status is dropped by the epoch fence (ADR-0003) before it ever
+ * reaches this session. See ADR-0003 and `projectPhase` in shared/recordingProjection.
  *
- *   markIdle() carries the optional UploadSummary from the completed upload pass.
- *   fail() preserves the last active runConfig so the popup can display context.
+ *   start()              → desired=recording, observed=starting  ⇒ starting
+ *   applyOffscreenPhase() → observed=<reported>                  ⇒ recording / stopping / uploading / …
+ *   markStopping()       → desired=idle                          ⇒ stopping (while still capturing)
+ *   markIdle()           → desired=idle, observed=idle           ⇒ idle (carries the UploadSummary)
+ *   fail()               → failed=true                           ⇒ failed (preserves run context)
  */
 export class RecordingSession {
   private snapshot: RecordingSessionSnapshot = createIdleSession();
@@ -67,10 +70,15 @@ export class RecordingSession {
     return structuredClone(this.snapshot);
   }
 
-  /** Starts a new session in the `starting` phase with the chosen run configuration and target tab. */
+  /** Starts a new session with the chosen run configuration and target tab (desired=recording). */
   start(runConfig: RecordingRunConfig, target?: RecordingTarget): RecordingSessionSnapshot {
+    const desired: DesiredState = 'recording';
+    const observed: ObservedState = 'starting';
     this.snapshot = {
-      phase: 'starting',
+      phase: projectPhase(desired, observed, false),
+      desired,
+      observed,
+      failed: false,
       runConfig,
       targetTabId: target?.targetTabId,
       meetingSlug: target?.meetingSlug,
@@ -82,25 +90,39 @@ export class RecordingSession {
     return this.commit();
   }
 
-  /** Marks the session as actively stopping recorder instances. */
+  /** Signals intent to stop (desired=idle); the phase derives to `stopping` while capture drains. */
   markStopping(): RecordingSessionSnapshot {
-    return this.transition('stopping');
+    const now = Date.now();
+    const desired: DesiredState = 'idle';
+    const observed = this.snapshot.observed ?? 'starting';
+    const failed = this.snapshot.failed ?? false;
+    const phase = projectPhase(desired, observed, failed);
+    this.snapshot = {
+      phase,
+      desired,
+      observed,
+      failed,
+      runConfig: this.snapshot.runConfig,
+      targetTabId: this.snapshot.targetTabId,
+      meetingSlug: this.snapshot.meetingSlug,
+      warnings: this.snapshot.warnings,
+      micMuted: this.snapshot.micMuted,
+      cameraMuted: this.snapshot.cameraMuted,
+      paused: this.snapshot.paused,
+      ...this.nextTimer(phase, now),
+      epoch: this.snapshot.epoch,
+      updatedAt: now,
+    };
+    return this.commit();
   }
 
-  /** Marks the session as actively recording. */
-  markRecording(): RecordingSessionSnapshot {
-    return this.transition('recording');
-  }
-
-  /** Marks the session as uploading sealed artifacts after capture stops. */
-  markUploading(): RecordingSessionSnapshot {
-    return this.transition('uploading');
-  }
-
-  /** Clears run state and moves the session back to idle. */
+  /** Clears run state and moves the session back to idle (desired=idle, observed=idle). */
   markIdle(uploadSummary?: UploadSummary, warnings?: string[]): RecordingSessionSnapshot {
     this.snapshot = {
-      phase: 'idle',
+      phase: projectPhase('idle', 'idle', false),
+      desired: 'idle',
+      observed: 'idle',
+      failed: false,
       runConfig: null,
       uploadSummary,
       warnings,
@@ -111,11 +133,16 @@ export class RecordingSession {
     return this.commit();
   }
 
-  /** Records a terminal failure while preserving the last active run configuration. */
+  /** Records a terminal failure (failed=true) while preserving the last active run configuration. */
   fail(error: string): RecordingSessionSnapshot {
     const now = Date.now();
+    const desired = this.snapshot.desired ?? 'idle';
+    const observed = this.snapshot.observed ?? 'starting';
     this.snapshot = {
-      phase: 'failed',
+      phase: projectPhase(desired, observed, true),
+      desired,
+      observed,
+      failed: true,
       runConfig: this.snapshot.runConfig,
       targetTabId: this.snapshot.targetTabId,
       meetingSlug: this.snapshot.meetingSlug,
@@ -160,7 +187,8 @@ export class RecordingSession {
   /**
    * Mirrors the live whole-recording pause flag, and freezes/resumes the recording
    * timer with it: pausing banks the running span into `recordedMs` and stops the
-   * clock; resuming restarts it. See {@link setMicMuted}.
+   * clock; resuming restarts it. See {@link setMicMuted}. The phase is unchanged
+   * (still derived from the planes), so the timer it manages here is not disturbed.
    */
   setPaused(paused: boolean): RecordingSessionSnapshot {
     const now = Date.now();
@@ -181,9 +209,10 @@ export class RecordingSession {
   }
 
   /**
-   * Computes the timer fields for a phase transition: (re)start counting on the
+   * Computes the timer fields for a derived-phase change: (re)start counting on the
    * first entry into `recording`, keep them on a `recording` re-broadcast, and
-   * freeze the running span (bank it, stop the clock) for every other phase.
+   * freeze the running span (bank it, stop the clock) for every other phase. Keyed
+   * on the *derived* phase, compared against the current (pre-update) phase.
    */
   private nextTimer(newPhase: RecordingSessionSnapshot['phase'], now: number): Pick<RecordingSessionSnapshot, 'recordedMs' | 'runningSince'> {
     if (newPhase === 'recording') {
@@ -195,25 +224,42 @@ export class RecordingSession {
   }
 
   /**
-   * Applies an offscreen phase update onto the canonical background-owned
-   * snapshot. The update is a typed `OffscreenPhaseUpdate` produced by our own
-   * offscreen code, so it is trusted as-is — no defensive normalization.
+   * Applies an offscreen phase update onto the canonical background-owned snapshot.
+   * This is the **status plane**: a non-terminal report writes only `observed`
+   * (never `desired`), so a late same-run report cannot overwrite intent — e.g.
+   * after `markStopping` (desired=idle), a late `recording` re-broadcast derives to
+   * `stopping`, not back to `recording`. Cross-run stale status is already dropped
+   * by the epoch fence (ADR-0003) before reaching here.
+   *
+   * The update is a typed `OffscreenPhaseUpdate` produced by our own offscreen
+   * code, so it is trusted as-is — no defensive normalization.
    */
   applyOffscreenPhase(update: OffscreenPhaseUpdate): RecordingSessionSnapshot {
-    const { phase, error, uploadSummary, warnings } = update;
+    const { phase: reported, error, uploadSummary, warnings } = update;
 
-    if (phase === 'idle') {
+    // A fenced same-run `idle` is a genuine end-of-run — the offscreen finalized,
+    // whether we commanded the stop or capture ended on its own — so finalize and
+    // surface the upload summary. (Cross-run stale `idle` never reaches here: the
+    // epoch fence drops it first, ADR-0003.)
+    if (reported === 'idle') {
       return this.markIdle(uploadSummary, warnings);
     }
 
-    if (phase === 'failed') {
+    if (reported === 'failed') {
       this.snapshot.warnings = warnings;
       return this.fail(error ?? 'Recording runtime failed');
     }
 
     const now = Date.now();
+    const desired = this.snapshot.desired ?? 'idle';
+    const failed = this.snapshot.failed ?? false;
+    const observed: ObservedState = reported;
+    const phase = projectPhase(desired, observed, failed);
     this.snapshot = {
       phase,
+      desired,
+      observed,
+      failed,
       runConfig: this.snapshot.runConfig,
       targetTabId: this.snapshot.targetTabId,
       meetingSlug: this.snapshot.meetingSlug,
@@ -224,25 +270,6 @@ export class RecordingSession {
       paused: this.snapshot.paused,
       ...this.nextTimer(phase, now),
       uploadSummary: undefined,
-      epoch: this.snapshot.epoch,
-      updatedAt: now,
-    };
-    return this.commit();
-  }
-
-  /** Performs simple phase-only transitions while preserving the active run config. */
-  private transition(phase: RecordingSessionSnapshot['phase']): RecordingSessionSnapshot {
-    const now = Date.now();
-    this.snapshot = {
-      phase,
-      runConfig: this.snapshot.runConfig,
-      targetTabId: this.snapshot.targetTabId,
-      meetingSlug: this.snapshot.meetingSlug,
-      warnings: this.snapshot.warnings,
-      micMuted: this.snapshot.micMuted,
-      cameraMuted: this.snapshot.cameraMuted,
-      paused: this.snapshot.paused,
-      ...this.nextTimer(phase, now),
       epoch: this.snapshot.epoch,
       updatedAt: now,
     };

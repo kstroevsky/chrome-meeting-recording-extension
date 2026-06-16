@@ -18,7 +18,9 @@ import {
   VALID_STORAGE_MODES,
 } from './recordingConstants';
 import type {
+  DesiredState,
   MicMode,
+  ObservedState,
   RecordingPhase,
   RecordingRunConfig,
   RecordingSessionSnapshot,
@@ -27,6 +29,7 @@ import type {
   UploadSummary,
   UploadSummaryEntry,
 } from './recordingTypes';
+import { projectPhase } from './recordingProjection';
 import { isRecord } from './typeGuards';
 
 /** Returns true when a string exactly matches one of the allowed values. */
@@ -143,10 +146,55 @@ function normalizeEpoch(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
+const VALID_OBSERVED_STATES: readonly ObservedState[] = [
+  'none',
+  'starting',
+  'recording',
+  'stopping',
+  'uploading',
+  'idle',
+];
+
+/** Parses a persisted command-plane intent; returns null when absent/invalid. */
+function parseDesired(value: unknown): DesiredState | null {
+  return value === 'idle' || value === 'recording' ? value : null;
+}
+
+/** Parses a persisted status-plane observation; returns null when absent/invalid. */
+function parseObserved(value: unknown): ObservedState | null {
+  return (VALID_OBSERVED_STATES as readonly unknown[]).includes(value) ? (value as ObservedState) : null;
+}
+
+/**
+ * Reconstructs the (desired, observed, failed) planes from a legacy persisted
+ * `phase` written before ADR-0003 Decision 4. This is the inverse of `projectPhase`
+ * and must round-trip: `projectPhase(decomposeLegacyPhase(p)) === p` for every `p`
+ * (asserted in tests/recordingProjection.test.ts).
+ */
+function decomposeLegacyPhase(phase: RecordingPhase): { desired: DesiredState; observed: ObservedState; failed: boolean } {
+  switch (phase) {
+    case 'idle':
+      return { desired: 'idle', observed: 'idle', failed: false };
+    case 'starting':
+      return { desired: 'recording', observed: 'starting', failed: false };
+    case 'recording':
+      return { desired: 'recording', observed: 'recording', failed: false };
+    case 'stopping':
+      return { desired: 'idle', observed: 'stopping', failed: false };
+    case 'uploading':
+      return { desired: 'idle', observed: 'uploading', failed: false };
+    case 'failed':
+      return { desired: 'idle', observed: 'none', failed: true };
+  }
+}
+
 /** Creates the canonical idle session snapshot used as the safe fallback state. */
 export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
   return {
     phase: 'idle',
+    desired: 'idle',
+    observed: 'idle',
+    failed: false,
     runConfig: null,
     updatedAt: now,
   };
@@ -156,13 +204,28 @@ export function createIdleSession(now = Date.now()): RecordingSessionSnapshot {
 export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapshot {
   if (!isRecord(value)) return createIdleSession();
   const candidate = value as Partial<RecordingSessionSnapshot>;
-  const phase = normalizePhase(candidate.phase);
+
+  // Reconstruct the two ADR-0003 planes. Prefer authoritative values when the
+  // snapshot was written by current code; otherwise rebuild them from the legacy
+  // `phase` so a pre-Decision-4 persisted snapshot still rehydrates correctly.
+  const desiredRaw = parseDesired(candidate.desired);
+  const observedRaw = parseObserved(candidate.observed);
+  const planes =
+    desiredRaw != null && observedRaw != null
+      ? { desired: desiredRaw, observed: observedRaw, failed: candidate.failed === true }
+      : decomposeLegacyPhase(normalizePhase(candidate.phase));
+  const { desired, observed, failed } = planes;
+  const phase = projectPhase(desired, observed, failed);
+
   const runConfig = phase === 'idle' ? null : parseRunConfig(candidate.runConfig);
   const targetTabId = phase === 'idle' ? undefined : normalizeTargetTabId(candidate.targetTabId);
   const meetingSlug = phase === 'idle' ? undefined : normalizeMeetingSlug(candidate.meetingSlug);
 
   return {
     phase,
+    desired,
+    observed,
+    failed,
     runConfig,
     targetTabId,
     meetingSlug,

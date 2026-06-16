@@ -12,7 +12,9 @@
  */
 
 export type {
+  DesiredState,
   MicMode,
+  ObservedState,
   RecordingPhase,
   RecordingRunConfig,
   RecordingSessionSnapshot,
@@ -51,3 +53,5 @@ export {
   getRunConfigOrDefault,
   toStatusView,
 } from './recordingFactories';
+
+export { projectPhase } from './recordingProjection';
