@@ -307,6 +307,33 @@ describe('RecorderEngine', () => {
     await engine.stop();
   });
 
+  it('stops the separate mic source track on stop so the device is released (no lingering mic indicator)', async () => {
+    const micTrack = makeTrack('audio');
+    const baseStream = makeStream({
+      audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],
+      videoTracks: [makeTrack('video')],
+    });
+
+    (navigator.mediaDevices.getUserMedia as jest.Mock).mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if ((constraints.video as any)?.mandatory?.chromeMediaSource) return baseStream;
+      if (constraints.audio && !constraints.video) return makeStream({ audioTracks: [micTrack] });
+      throw new Error('Unexpected getUserMedia call');
+    });
+
+    deps.openTarget = jest.fn(async (filename: string, mimeType?: string) => new BufferedTarget(filename, mimeType || 'video/webm'));
+
+    await engine.startFromStreamId('stream-id', makeRunConfig({ micMode: 'separate' }));
+    await flushAsyncWork();
+    expect(micTrack.stop).not.toHaveBeenCalled(); // mic device stays live while recording
+
+    await engine.stop();
+    // Regression guard: the separate-mic getUserMedia source must be stopped on
+    // teardown. Stopping the MediaRecorder does not stop its source track, so if the
+    // engine drops the `micStream` ref before cleanup the device stays open and the
+    // OS/Chrome mic indicator lingers after the recording (and meeting) ends.
+    expect(micTrack.stop).toHaveBeenCalled();
+  });
+
   it('waits for target close() to drain pending writes without dropping chunks', async () => {
     const baseStream = makeStream({
       audioTracks: [makeTrack('audio', { suppressLocalAudioPlayback: false })],

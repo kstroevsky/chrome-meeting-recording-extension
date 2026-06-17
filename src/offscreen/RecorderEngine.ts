@@ -260,7 +260,18 @@ export class RecorderEngine {
       tasks.push(
         startMicRecorder(runId, () => this.runId, isStale, this.suffix, runStartedAt, this.micMode, recorderSettings, this.micStream, this.deps, {
           onStarted: () => this.onRecorderStarted(),
-          onStopped: (artifact) => { this.micStream = null; this.onTrackStopped('mic', artifact); },
+          onStopped: (artifact) => {
+            // Stop the mic *source* track here, before nulling the ref. A separate
+            // mic's getUserMedia stream is owned by the engine (MicRecorderTask only
+            // stops it on a stale/discard), and stopping the MediaRecorder does NOT
+            // stop its source track. Nulling `micStream` before onRecorderStopped's
+            // cleanup runs would leave the device open — the mic indicator stays lit
+            // after the recording ends. safeStopStream is idempotent, so this is safe
+            // even when stopStream() already released it.
+            this.safeStopStream(this.micStream);
+            this.micStream = null;
+            this.onTrackStopped('mic', artifact);
+          },
         }).then((recorder) => { if (recorder) this.registerTrack({ stream: 'mic', recorder }); })
           .catch((e) => this.deps.warn('Mic recorder start failed', describeMediaError(e)))
       );
