@@ -10,6 +10,7 @@ module.exports = {
   // report reflects unit-testable logic.
   collectCoverageFrom: [
     'src/**/*.ts',
+    '!src/**/*.test.ts',
     '!src/**/*.d.ts',
     '!src/shared/types/**',
     '!src/shared/recordingTypes.ts',

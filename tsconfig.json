@@ -15,5 +15,8 @@
     "include": [
         "src",
         "tests/e2e/helpers/e2eRecoveryBridge.ts"
+    ],
+    "exclude": [
+        "**/*.test.ts"
     ]
 }
