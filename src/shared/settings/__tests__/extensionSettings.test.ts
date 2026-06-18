@@ -174,7 +174,7 @@ describe('settings', () => {
           aspectRatio: 1280 / 720,
           defaultBitsPerSecond: 2_000_000,
           minAdaptiveBitsPerSecond: 1_000_000,
-          autoResolution: false,
+          autoResolution: true,
         },
       },
       microphone: {
@@ -189,12 +189,12 @@ describe('settings', () => {
     });
   });
 
-  it('defaults selfVideoUseAutoResolution off and carries it into the snapshot profile', () => {
-    expect(normalizeExtensionSettings({}).basic.selfVideoUseAutoResolution).toBe(false);
+  it('defaults selfVideoUseAutoResolution on and carries it into the snapshot profile', () => {
+    expect(normalizeExtensionSettings({}).basic.selfVideoUseAutoResolution).toBe(true);
 
-    const on = normalizeExtensionSettings({ basic: { selfVideoUseAutoResolution: true } });
-    expect(on.basic.selfVideoUseAutoResolution).toBe(true);
-    expect(buildRecorderRuntimeSettingsSnapshot(on).selfVideo.profile.autoResolution).toBe(true);
+    const off = normalizeExtensionSettings({ basic: { selfVideoUseAutoResolution: false } });
+    expect(off.basic.selfVideoUseAutoResolution).toBe(false);
+    expect(buildRecorderRuntimeSettingsSnapshot(off).selfVideo.profile.autoResolution).toBe(false);
   });
 
   it('defaults a snapshot profile missing autoResolution to false on validation', () => {

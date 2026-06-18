@@ -32,6 +32,9 @@ export const LEGACY_VIDEO_FORMAT_OPTIONS = [
 export const DEFAULT_RESOLUTION_PRESET: ResolutionPreset = '1920x1080';
 export const MAX_SELF_VIDEO_BITRATE = EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond;
 
+/** Chrome tab capture hard ceiling on frame rate — values above this have no effect on the capture FPS. */
+export const TAB_MAX_FRAME_RATE = EXTENSION_DEFAULTS.capture.tab.maxFrameRate;
+
 // Tab video bitrate scaling. `tabVideoBitrate` is the bitrate at the 1080p30
 // reference; the recorder scales it linearly by the selected pixels-per-second
 // (resolution × frame rate) and clamps the result to a sane floor/ceiling.
@@ -64,7 +67,7 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     microphoneRecordingMode: defaultMicMode,
     separateCameraCapture: EXTENSION_DEFAULTS.configurable.separateCameraCapture,
     selfVideoResolutionPreset: DEFAULT_RESOLUTION_PRESET,
-    selfVideoUseAutoResolution: false,
+    selfVideoUseAutoResolution: true,
   }),
   professional: Object.freeze({
     selfVideoBitrate: EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond,

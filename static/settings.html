@@ -337,10 +337,10 @@
           <label for="tab-max-frame-rate">Tab capture max frame rate (FPS)</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab frame rate" aria-controls="tooltip-tab-max-frame-rate" aria-expanded="false">?</button>
-            <span id="tooltip-tab-max-frame-rate" class="tooltip-bubble" role="tooltip" hidden>Caps the preferred tab frame rate. Chrome tab capture tops out at 30 FPS, and lower values can reduce CPU use and file size.</span>
+            <span id="tooltip-tab-max-frame-rate" class="tooltip-bubble" role="tooltip" hidden>Caps the requested tab frame rate. Chrome tab capture is hard-limited to 30 FPS regardless of this value; setting it lower (e.g. 15) reduces CPU use and file size proportionally.</span>
           </span>
         </div>
-        <input id="tab-max-frame-rate" type="number" min="1" max="120" />
+        <input id="tab-max-frame-rate" type="number" min="1" max="30" />
 
         <div class="field-label">
           <label for="mic-echo-cancellation">Microphone echo cancellation</label>
@@ -370,19 +370,19 @@
         <input id="mic-auto-gain" type="checkbox" />
 
         <div class="field-label">
-          <label for="chunk-default-timeslice">Default chunk timeslice (ms)</label>
+          <label for="chunk-default-timeslice">Microphone chunk timeslice (ms)</label>
           <span class="tooltip-shell">
-            <button class="tooltip-toggle" type="button" aria-label="Explain default chunk timeslice" aria-controls="tooltip-chunk-default-timeslice" aria-expanded="false">?</button>
-            <span id="tooltip-chunk-default-timeslice" class="tooltip-bubble" role="tooltip" hidden>Controls how often MediaRecorder flushes normal recording chunks to storage during simple runs.</span>
+            <button class="tooltip-toggle" type="button" aria-label="Explain microphone chunk timeslice" aria-controls="tooltip-chunk-default-timeslice" aria-expanded="false">?</button>
+            <span id="tooltip-chunk-default-timeslice" class="tooltip-bubble" role="tooltip" hidden>Controls how often the microphone MediaRecorder flushes audio to storage. Smaller values reduce potential data loss on a crash but increase write overhead.</span>
           </span>
         </div>
         <input id="chunk-default-timeslice" type="number" min="250" max="60000" />
 
         <div class="field-label">
-          <label for="chunk-extended-timeslice">Extended chunk timeslice (ms)</label>
+          <label for="chunk-extended-timeslice">Tab and camera chunk timeslice (ms)</label>
           <span class="tooltip-shell">
-            <button class="tooltip-toggle" type="button" aria-label="Explain extended chunk timeslice" aria-controls="tooltip-chunk-extended-timeslice" aria-expanded="false">?</button>
-            <span id="tooltip-chunk-extended-timeslice" class="tooltip-bubble" role="tooltip" hidden>Used when extra streams are active and the performance flag enables longer recorder chunk intervals.</span>
+            <button class="tooltip-toggle" type="button" aria-label="Explain tab and camera chunk timeslice" aria-controls="tooltip-chunk-extended-timeslice" aria-expanded="false">?</button>
+            <span id="tooltip-chunk-extended-timeslice" class="tooltip-bubble" role="tooltip" hidden>Controls how often the tab and camera recorders flush video to storage. Larger values reduce write churn; the microphone also uses this interval when the extended-timeslice performance flag is on.</span>
           </span>
         </div>
         <input id="chunk-extended-timeslice" type="number" min="250" max="60000" />

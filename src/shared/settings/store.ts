@@ -11,6 +11,7 @@ import {
   DEFAULT_EXTENSION_SETTINGS,
   EXTENSION_SETTINGS_STORAGE_KEY,
   MAX_TAB_VIDEO_BITRATE,
+  TAB_MAX_FRAME_RATE,
   TAB_MIN_VIDEO_BITRATE,
   TAB_VIDEO_BITRATE_REFERENCE_PIXELS_PER_SECOND,
 } from './defaults';
@@ -92,6 +93,10 @@ export function getTabOutputSettings(
 ): TabCaptureSettings {
   const dimensions = getResolutionPresetDimensions(settings.professional.tabResolutionPreset);
   const maxFrameRate = settings.professional.tabMaxFrameRate;
+  // Chrome tab capture is hard-capped at TAB_MAX_FRAME_RATE (30). Clamp before
+  // scaling the bitrate so a user-entered value above 30 doesn't silently inflate
+  // the encoded bitrate while the actual capture stays at 30 FPS.
+  const frameRateForBitrate = Math.min(maxFrameRate, TAB_MAX_FRAME_RATE);
   return {
     maxWidth: dimensions.width,
     maxHeight: dimensions.height,
@@ -99,7 +104,7 @@ export function getTabOutputSettings(
     videoBitsPerSecond: resolveTabVideoBitrate(
       dimensions.width,
       dimensions.height,
-      maxFrameRate,
+      frameRateForBitrate,
       settings.professional.tabVideoBitrate
     ),
   };
