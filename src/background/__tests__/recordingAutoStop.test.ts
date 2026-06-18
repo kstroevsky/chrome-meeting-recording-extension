@@ -14,7 +14,7 @@ const RECORDING_SNAPSHOT: RecordingSessionSnapshot = {
   phase: 'recording',
   runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
   targetTabId: 42,
-  meetingSlug: 'abc-defg-hij',
+  meetingSlug: 'meet-abc-defg-hij',
   updatedAt: Date.now(),
 };
 

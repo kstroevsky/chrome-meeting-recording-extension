@@ -289,12 +289,33 @@ export class RecordingController {
     }
   }
 
-  /** Extracts the last path segment from the active tab URL as the meeting slug. */
+  /**
+   * Derives a filesystem-safe slug that labels the recording.
+   * Google Meet: `meet-{room-code}` (e.g. `meet-abc-defg-hij`).
+   * Everything else: up to 48 characters sanitized from the tab title,
+   * falling back to `{hostname}{pathname}` when the title is absent.
+   */
   private async resolveMeetingSlug(tabId: number): Promise<string> {
     try {
       const tab = await getTab(tabId);
       if (!tab?.url) return '';
-      return new URL(tab.url).pathname.split('/').pop() || '';
+      const url = new URL(tab.url);
+      if (url.hostname === 'meet.google.com') {
+        const code = url.pathname.split('/').filter(Boolean).pop() ?? '';
+        return code ? `meet-${code}` : '';
+      }
+      const source = tab.title?.trim() || `${url.hostname}${url.pathname}`;
+      return RecordingController.sanitizeAsSlug(source);
     } catch { return ''; }
+  }
+
+  /** Converts arbitrary text into a lowercase, dash-separated filename-safe slug. */
+  private static sanitizeAsSlug(text: string, maxLength = 48): string {
+    return text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, maxLength)
+      .replace(/-+$/, '');
   }
 }

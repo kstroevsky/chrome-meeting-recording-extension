@@ -71,7 +71,7 @@ describe('RecordingController', () => {
       expect(offscreen.rpc).toHaveBeenCalledWith({
         type: 'OFFSCREEN_START',
         streamId: 'stream-xyz',
-        meetingSlug: 'abc-defg-hij',
+        meetingSlug: 'meet-abc-defg-hij',
         runConfig: RUN_CONFIG,
         recorderSettings: { recorder: 'snapshot' },
         perfSettings: getPerfSettingsSnapshot(),
@@ -79,6 +79,30 @@ describe('RecordingController', () => {
       });
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('starting');
+    });
+
+    it('uses a sanitized tab title slug for non-Meet URLs', async () => {
+      (getTab as jest.Mock).mockResolvedValue({
+        url: 'https://github.com/anthropics/claude-code',
+        title: 'anthropics/claude-code: CLI tool · GitHub',
+      });
+
+      await controller.start(startMsg());
+
+      const rpcArg = offscreen.rpc.mock.calls[0][0];
+      expect(rpcArg.meetingSlug).toBe('anthropics-claude-code-cli-tool-github');
+    });
+
+    it('falls back to hostname+path slug when the tab title is missing', async () => {
+      (getTab as jest.Mock).mockResolvedValue({
+        url: 'https://app.example.com/dashboard',
+        title: '',
+      });
+
+      await controller.start(startMsg());
+
+      const rpcArg = offscreen.rpc.mock.calls[0][0];
+      expect(rpcArg.meetingSlug).toBe('app-example-com-dashboard');
     });
 
     it('selects the recorder extension tab before requesting the first stream in live E2E builds', async () => {

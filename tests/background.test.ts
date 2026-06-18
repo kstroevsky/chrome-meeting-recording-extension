@@ -120,7 +120,7 @@ describe('background runtime messages', () => {
     expect(offscreenInstance.rpc).toHaveBeenCalledWith({
       type: 'OFFSCREEN_START',
       streamId: 'stream-1',
-      meetingSlug: 'abc-defg-hij',
+      meetingSlug: 'meet-abc-defg-hij',
       runConfig: {
         storageMode: 'local',
         micMode: 'off',
@@ -450,7 +450,7 @@ describe('background runtime messages', () => {
         phase: 'recording',
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
-        meetingSlug: 'abc-defg-hij',
+        meetingSlug: 'meet-abc-defg-hij',
         updatedAt: Date.now(),
       },
     });
@@ -490,7 +490,7 @@ describe('background runtime messages', () => {
         phase: 'recording',
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
-        meetingSlug: 'abc-defg-hij',
+        meetingSlug: 'meet-abc-defg-hij',
         updatedAt: Date.now(),
       },
     });
@@ -529,7 +529,7 @@ describe('background runtime messages', () => {
         phase: 'recording',
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
-        meetingSlug: 'abc-defg-hij',
+        meetingSlug: 'meet-abc-defg-hij',
         updatedAt: Date.now(),
       },
     });
@@ -569,7 +569,7 @@ describe('background runtime messages', () => {
         phase: 'recording',
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
-        meetingSlug: 'abc-defg-hij',
+        meetingSlug: 'meet-abc-defg-hij',
         updatedAt: Date.now(),
       },
     });

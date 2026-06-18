@@ -20,7 +20,8 @@ function getMeetSlug(url: string): string | null {
   try {
     const parsed = new URL(url);
     if (parsed.hostname !== 'meet.google.com') return null;
-    return parsed.pathname.split('/').filter(Boolean).pop() || null;
+    const code = parsed.pathname.split('/').filter(Boolean).pop() ?? '';
+    return code ? `meet-${code}` : null;
   } catch {
     return null;
   }
@@ -33,7 +34,10 @@ function isSameRecordingTab(snapshot: RecordingSessionSnapshot, tabId: number | 
 }
 
 function isSameMeeting(snapshot: RecordingSessionSnapshot, meetingId: string | null | undefined): boolean {
-  return !!snapshot.meetingSlug && meetingId === snapshot.meetingSlug;
+  if (!snapshot.meetingSlug || !meetingId) return false;
+  const slug = snapshot.meetingSlug;
+  // The session stores Meet slugs as 'meet-{room-code}'; the content script sends the raw room code.
+  return meetingId === slug || `meet-${meetingId}` === slug;
 }
 
 async function stopIfTargetMatches(

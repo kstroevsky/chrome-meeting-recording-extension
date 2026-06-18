@@ -23,14 +23,16 @@ function utcDatetimeStamp(date = new Date()): string {
 }
 
 /**
- * Builds a recording filename using the format:
- * `google-meet-{slug}-{UTC-datetime}-{type}.webm`
+ * Builds a recording filename from an optional context slug and a stream type.
  *
- * Example: `google-meet-abc123de-20260402T083000Z-recording.webm`
+ * Examples:
+ *   `meet-abc-defg-hij-20260618T1430-recording.webm`  (Google Meet)
+ *   `my-page-title-github-20260618T1430-recording.webm` (non-Meet tab)
+ *   `20260618T1430-recording.webm`                     (no slug)
  */
 export function buildRecordingFilename(slug: string, type: 'recording' | 'mic' | 'self-video'): string {
   const slugPart = slug ? `${slug}-` : '';
-  return `google-meet-${slugPart}${utcDatetimeStamp()}-${type}.webm`;
+  return `${slugPart}${utcDatetimeStamp()}-${type}.webm`;
 }
 
 /**
