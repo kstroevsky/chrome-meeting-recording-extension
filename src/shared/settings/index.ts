@@ -26,7 +26,10 @@ export {
   getTabOutputSettings,
   getMicrophoneCaptureSettings,
   getChunkingSettings,
+  resolveTabVideoBitrate,
 } from './store';
+
+export { TAB_MAX_FRAME_RATE } from './defaults';
 
 // Normalization for persisted payloads and snapshots received over RPC.
 export {

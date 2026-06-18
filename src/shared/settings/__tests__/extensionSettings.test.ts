@@ -5,6 +5,7 @@ import {
   getTabOutputSettings,
   normalizeRecorderRuntimeSettingsSnapshot,
   normalizeExtensionSettings,
+  resolveTabVideoBitrate,
 } from '..';
 
 describe('settings', () => {
@@ -95,29 +96,28 @@ describe('settings', () => {
     expect(settings.professional.tabResolutionPreset).toBe('1920x1080');
   });
 
-  it('scales the tab video bitrate with the selected resolution preset', () => {
-    // Default 1080p30 keeps the historical 1.5 Mbps bitrate exactly.
-    expect(getTabOutputSettings(DEFAULT_EXTENSION_SETTINGS).videoBitsPerSecond).toBe(1_500_000);
-
-    // 720p30 scales the reference bitrate down by the pixels-per-second ratio.
-    const at720p = normalizeExtensionSettings({ professional: { tabResolutionPreset: '1280x720' } });
-    expect(getTabOutputSettings(at720p).videoBitsPerSecond).toBe(
-      Math.round(1_500_000 * (1280 * 720 * 30) / (1920 * 1080 * 30))
+  it('passes the reference bitrate through to tab output settings unchanged', () => {
+    // getTabOutputSettings no longer pre-scales; it hands the reference off to
+    // the offscreen, which scales against the delivered track dimensions instead.
+    expect(getTabOutputSettings(DEFAULT_EXTENSION_SETTINGS).referenceBitsPerSecond).toBe(
+      DEFAULT_EXTENSION_SETTINGS.professional.tabVideoBitrate
     );
-
-    // The smallest preset clamps to the bitrate floor instead of going arbitrarily low.
-    const at360p = normalizeExtensionSettings({ professional: { tabResolutionPreset: '640x360' } });
-    expect(getTabOutputSettings(at360p).videoBitsPerSecond).toBe(250_000);
+    const settings = normalizeExtensionSettings({ professional: { tabVideoBitrate: 3_000_000 } });
+    expect(getTabOutputSettings(settings).referenceBitsPerSecond).toBe(3_000_000);
   });
 
-  it('honors a custom tab video bitrate while still scaling with resolution', () => {
-    const settings = normalizeExtensionSettings({
-      professional: { tabResolutionPreset: '1280x720', tabVideoBitrate: 3_000_000 },
-    });
-    expect(settings.professional.tabVideoBitrate).toBe(3_000_000);
-    expect(getTabOutputSettings(settings).videoBitsPerSecond).toBe(
-      Math.round(3_000_000 * (1280 * 720 * 30) / (1920 * 1080 * 30))
+  it('resolveTabVideoBitrate scales with delivered resolution and clamps to floor/ceiling', () => {
+    const ref = 1_500_000;
+    // 1080p30 is the reference — ratio = 1, output equals input.
+    expect(resolveTabVideoBitrate(1920, 1080, 30, ref)).toBe(1_500_000);
+    // 720p30 scales down by the pixels-per-second ratio.
+    expect(resolveTabVideoBitrate(1280, 720, 30, ref)).toBe(
+      Math.round(ref * (1280 * 720 * 30) / (1920 * 1080 * 30))
     );
+    // 360p30 falls below the 250 kbps floor and is clamped.
+    expect(resolveTabVideoBitrate(640, 360, 30, ref)).toBe(250_000);
+    // High reference at 1080p60 would exceed the 8 Mbps ceiling and is clamped.
+    expect(resolveTabVideoBitrate(1920, 1080, 60, 8_000_000)).toBe(8_000_000);
   });
 
   it('honors an in-range tab video bitrate but rejects values past the 8 Mbps ceiling', () => {
@@ -163,8 +163,9 @@ describe('settings', () => {
 
     expect(buildRecorderRuntimeSettingsSnapshot(settings)).toEqual({
       tab: {
-        // 640x360@20 scales the 1080p reference bitrate below the floor → clamped.
-        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20, videoBitsPerSecond: 250_000 },
+        // Reference bitrate is passed through unscaled; the offscreen scales it against
+        // the delivered track dims after getUserMedia.
+        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20, referenceBitsPerSecond: 1_500_000 },
       },
       selfVideo: {
         profile: {

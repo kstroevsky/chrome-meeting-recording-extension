@@ -7,6 +7,7 @@
 import { getChunkTimesliceMs, getVideoMime } from '../RecorderProfiles';
 import { describeMediaError } from '../RecorderSupport';
 import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
+import { resolveTabVideoBitrate, TAB_MAX_FRAME_RATE } from '../../shared/settings';
 import {
   awaitRecorderStart,
   buildRecordingFilename,
@@ -44,9 +45,28 @@ export async function startTabRecorder(
   let started = false;
   let actualStartTimeMs = 0;
 
+  // Scale the reference bitrate against what Chrome actually delivered, not
+  // the ceiling constraints we requested. Chrome may capture at a lower
+  // resolution (windowed tab, HiDPI mismatch, display scaling) so using the
+  // preset dims would overprovision bits for content with fewer pixels.
+  const videoTrack = recordingStream.getVideoTracks()[0];
+  const ts = videoTrack?.getSettings() ?? {};
+  const deliveredWidth = ts.width ?? recorderSettings.tab.output.maxWidth;
+  const deliveredHeight = ts.height ?? recorderSettings.tab.output.maxHeight;
+  const deliveredFps = Math.min(
+    ts.frameRate ?? recorderSettings.tab.output.maxFrameRate,
+    TAB_MAX_FRAME_RATE
+  );
+  const videoBitsPerSecond = resolveTabVideoBitrate(
+    deliveredWidth,
+    deliveredHeight,
+    deliveredFps,
+    recorderSettings.tab.output.referenceBitsPerSecond
+  );
+
   const recorder = new MediaRecorder(recordingStream, {
     mimeType: mime,
-    videoBitsPerSecond: recorderSettings.tab.output.videoBitsPerSecond,
+    videoBitsPerSecond,
     audioBitsPerSecond: 96_000,
   });
 
@@ -90,7 +110,7 @@ export async function startTabRecorder(
     timesliceMs,
     callbacks.onStarted,
     deps.log,
-    { videoBitsPerSecond: recorderSettings.tab.output.videoBitsPerSecond }
+    { videoBitsPerSecond, deliveredWidth, deliveredHeight, deliveredFps }
   );
   started = true;
   actualStartTimeMs = startMs;

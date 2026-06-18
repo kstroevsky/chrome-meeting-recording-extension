@@ -557,8 +557,10 @@ describe('RecorderEngine', () => {
       })
     );
     expect(tabRecorder?.stream).toBe(baseStream);
-    // 640x360@24 scales the tab bitrate below the floor → clamped to 250 kbps.
-    expect(tabRecorder?.options.videoBitsPerSecond).toBe(250_000);
+    // The preset is 640x360@24 but Chrome delivered 1920x1080@30 (the mock stream).
+    // Bitrate is computed from the delivered resolution, not the ceiling constraint,
+    // so it scales to the full 1080p30 reference bitrate rather than the floor.
+    expect(tabRecorder?.options.videoBitsPerSecond).toBe(1_500_000);
     expect(createElementSpy).not.toHaveBeenCalled();
 
     await engine.stop();

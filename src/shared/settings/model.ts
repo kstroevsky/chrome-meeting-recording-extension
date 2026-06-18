@@ -56,8 +56,8 @@ export type TabCaptureSettings = {
   maxWidth: number;
   maxHeight: number;
   maxFrameRate: number;
-  /** Resolved tab MediaRecorder video bitrate, scaled to the selected resolution. */
-  videoBitsPerSecond: number;
+  /** Reference tab video bitrate at 1080p30; the offscreen scales it to the delivered resolution. */
+  referenceBitsPerSecond: number;
 };
 
 export type MicrophoneCaptureSettings = {
