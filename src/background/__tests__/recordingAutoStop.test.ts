@@ -18,6 +18,11 @@ const RECORDING_SNAPSHOT: RecordingSessionSnapshot = {
   updatedAt: Date.now(),
 };
 
+const NON_MEET_SNAPSHOT: RecordingSessionSnapshot = {
+  ...RECORDING_SNAPSHOT,
+  meetingSlug: 'youtube-some-long-video-title',
+};
+
 function makeDeps(snapshot: RecordingSessionSnapshot, stopResult: any = { ok: true }) {
   const stop = jest.fn().mockResolvedValue(stopResult);
   const deps = {
@@ -139,10 +144,41 @@ describe('registerRecordingAutoStop', () => {
     expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting');
   });
 
+  it('stops a Meet recording that navigates to a different meeting room', () => {
+    const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
+    onUpdated(42, { url: 'https://meet.google.com/zzz-yyyy-xxx' }, { id: 42 });
+    expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting');
+  });
+
   it('does not stop when the URL update keeps the same meeting slug', () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'https://meet.google.com/abc-defg-hij' }, { id: 42 });
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('keeps a non-Meet recording running when its tab navigates to another page', () => {
+    const { onUpdated, stop } = register(NON_MEET_SNAPSHOT);
+    onUpdated(42, { url: 'https://www.youtube.com/watch?v=different-video' }, { id: 42 });
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('keeps a non-Meet recording running across an SPA in-tab URL change', () => {
+    const { onUpdated, stop } = register(NON_MEET_SNAPSHOT);
+    // Same-origin route change (History API), the common case that fired tabs.onUpdated.
+    onUpdated(42, { url: 'https://www.youtube.com/feed/subscriptions' }, { id: 42 });
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('does not stop a non-Meet recording even when it navigates onto a Meet URL', () => {
+    const { onUpdated, stop } = register(NON_MEET_SNAPSHOT);
+    onUpdated(42, { url: 'https://meet.google.com/abc-defg-hij' }, { id: 42 });
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('still stops a non-Meet recording when its tab is closed', () => {
+    const { onRemoved, stop } = register(NON_MEET_SNAPSHOT);
+    onRemoved(42, { windowId: 1, isWindowClosing: false });
+    expect(stop).toHaveBeenCalledWith('recorded tab closed');
   });
 
   it('ignores tab updates without a URL change', () => {

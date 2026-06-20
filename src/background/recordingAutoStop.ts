@@ -40,6 +40,17 @@ function isSameMeeting(snapshot: RecordingSessionSnapshot, meetingId: string | n
   return meetingId === slug || `meet-${meetingId}` === slug;
 }
 
+/**
+ * Whether this recording targets a Google Meet call. Meet recordings store a
+ * 'meet-{room-code}' slug; everything else stores a sanitized tab-title slug (or
+ * none). The navigation auto-stop is Meet-only — "left the meeting room" has no
+ * meaning for an arbitrary tab, where in-tab navigation (including SPA URL
+ * changes on sites like YouTube or Docs) is normal browsing, not a stop signal.
+ */
+function isMeetRecording(snapshot: RecordingSessionSnapshot): boolean {
+  return !!snapshot.meetingSlug && snapshot.meetingSlug.startsWith('meet-');
+}
+
 async function stopIfTargetMatches(
   deps: AutoStopDeps,
   tabId: number | undefined,
@@ -87,6 +98,11 @@ export function registerRecordingAutoStop(deps: AutoStopDeps): void {
     if (typeof changeInfo.url !== 'string') return;
     const snapshot = deps.session.getSnapshot();
     if (!isSameRecordingTab(snapshot, tabId)) return;
+    // Only Meet recordings auto-stop on navigation. A non-Meet recording keeps
+    // running across in-tab URL changes and is hard-stopped only when the tab
+    // closes (above) or the user stops it; otherwise an SPA route change would
+    // silently kill the recording mid-session.
+    if (!isMeetRecording(snapshot)) return;
 
     const nextSlug = getMeetSlug(changeInfo.url);
     if (nextSlug === snapshot.meetingSlug) return;
