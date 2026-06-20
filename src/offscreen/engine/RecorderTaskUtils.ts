@@ -18,17 +18,19 @@ import type { RecordingStream } from '../../shared/recording';
  * `YYYYMMDDTHHmmssZ` — no colons or slashes that would break file paths.
  */
 function utcDatetimeStamp(date = new Date()): string {
-  // Format: YYYYMMDDTHHmm  (UTC, no seconds)
-  return date.toISOString().slice(0, 16).replace(/[-:T]/g, (c) => (c === 'T' ? 'T' : ''));
+  // Format: YYYYMMDDTHHmmss (UTC). Seconds are included so two recordings of the
+  // same meeting or same-titled page started within the same minute don't collide
+  // on filename (and silently overwrite each other in storage).
+  return date.toISOString().slice(0, 19).replace(/[-:]/g, '');
 }
 
 /**
  * Builds a recording filename from an optional context slug and a stream type.
  *
  * Examples:
- *   `meet-abc-defg-hij-20260618T1430-recording.webm`  (Google Meet)
- *   `my-page-title-github-20260618T1430-recording.webm` (non-Meet tab)
- *   `20260618T1430-recording.webm`                     (no slug)
+ *   `meet-abc-defg-hij-20260618T143045-recording.webm`  (Google Meet)
+ *   `my-page-title-github-20260618T143045-recording.webm` (non-Meet tab)
+ *   `20260618T143045-recording.webm`                     (no slug)
  */
 export function buildRecordingFilename(slug: string, type: 'recording' | 'mic' | 'self-video'): string {
   const slugPart = slug ? `${slug}-` : '';
