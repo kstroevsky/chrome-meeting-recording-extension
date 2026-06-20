@@ -105,6 +105,32 @@ describe('RecordingController', () => {
       expect(rpcArg.meetingSlug).toBe('app-example-com-dashboard');
     });
 
+    it('falls back to hostname+path slug when the tab title has no Latin alphanumerics', async () => {
+      // A CJK/Cyrillic-only title sanitizes to an empty slug; the host+path keeps
+      // the recording meaningfully named instead of degrading to a bare timestamp.
+      (getTab as jest.Mock).mockResolvedValue({
+        url: 'https://app.example.com/dashboard',
+        title: '会議録画',
+      });
+
+      await controller.start(startMsg());
+
+      const rpcArg = offscreen.rpc.mock.calls[0][0];
+      expect(rpcArg.meetingSlug).toBe('app-example-com-dashboard');
+    });
+
+    it('still derives a partial slug from a mixed-script title', async () => {
+      (getTab as jest.Mock).mockResolvedValue({
+        url: 'https://app.example.com/dashboard',
+        title: 'Проект Roadmap 2026',
+      });
+
+      await controller.start(startMsg());
+
+      const rpcArg = offscreen.rpc.mock.calls[0][0];
+      expect(rpcArg.meetingSlug).toBe('roadmap-2026');
+    });
+
     it('selects the recorder extension tab before requesting the first stream in live E2E builds', async () => {
       (globalThis as any).__E2E_REAL_CAPTURE_TAB__ = true;
       (getMediaStreamIdForTab as jest.Mock).mockResolvedValue('extension-tab-stream');

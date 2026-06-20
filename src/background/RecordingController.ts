@@ -304,8 +304,11 @@ export class RecordingController {
         const code = url.pathname.split('/').filter(Boolean).pop() ?? '';
         return code ? `meet-${code}` : '';
       }
-      const source = tab.title?.trim() || `${url.hostname}${url.pathname}`;
-      return RecordingController.sanitizeAsSlug(source);
+      // Prefer the tab title, but a title with no Latin alphanumerics (e.g. CJK or
+      // Cyrillic) sanitizes to an empty slug — fall back to the ASCII host+path so
+      // the recording still gets a meaningful name instead of just a bare timestamp.
+      const titleSlug = tab.title ? RecordingController.sanitizeAsSlug(tab.title) : '';
+      return titleSlug || RecordingController.sanitizeAsSlug(`${url.hostname}${url.pathname}`);
     } catch { return ''; }
   }
 
