@@ -20,8 +20,8 @@ type SettingsElements = {
   selfVideoBitrate: HTMLInputElement | null;
   selfVideoFrameRate: HTMLInputElement | null;
   selfVideoMinAdaptiveBitrate: HTMLInputElement | null;
+  tabContentType: HTMLSelectElement | null;
   tabResolutionPreset: HTMLSelectElement | null;
-  tabVideoBitrate: HTMLInputElement | null;
   tabMaxFrameRate: HTMLInputElement | null;
   micEchoCancellation: HTMLInputElement | null;
   micNoiseSuppression: HTMLInputElement | null;
@@ -48,8 +48,8 @@ const el: SettingsElements = {
   selfVideoBitrate: document.getElementById('self-video-bitrate') as HTMLInputElement | null,
   selfVideoFrameRate: document.getElementById('self-video-frame-rate') as HTMLInputElement | null,
   selfVideoMinAdaptiveBitrate: document.getElementById('self-video-min-adaptive-bitrate') as HTMLInputElement | null,
+  tabContentType: document.getElementById('tab-content-type') as HTMLSelectElement | null,
   tabResolutionPreset: document.getElementById('tab-resolution-preset') as HTMLSelectElement | null,
-  tabVideoBitrate: document.getElementById('tab-video-bitrate') as HTMLInputElement | null,
   tabMaxFrameRate: document.getElementById('tab-max-frame-rate') as HTMLInputElement | null,
   micEchoCancellation: document.getElementById('mic-echo-cancellation') as HTMLInputElement | null,
   micNoiseSuppression: document.getElementById('mic-noise-suppression') as HTMLInputElement | null,
@@ -84,10 +84,10 @@ function applySettings(settings: Readonly<ExtensionSettings>): void {
   if (el.selfVideoMinAdaptiveBitrate) {
     el.selfVideoMinAdaptiveBitrate.value = String(settings.professional.selfVideoMinAdaptiveBitrate);
   }
+  if (el.tabContentType) el.tabContentType.value = settings.professional.tabContentType;
   if (el.tabResolutionPreset) {
     el.tabResolutionPreset.value = settings.professional.tabResolutionPreset;
   }
-  if (el.tabVideoBitrate) el.tabVideoBitrate.value = String(settings.professional.tabVideoBitrate);
   if (el.tabMaxFrameRate) el.tabMaxFrameRate.value = String(settings.professional.tabMaxFrameRate);
   if (el.micEchoCancellation) el.micEchoCancellation.checked = settings.professional.microphoneEchoCancellation;
   if (el.micNoiseSuppression) el.micNoiseSuppression.checked = settings.professional.microphoneNoiseSuppression;
@@ -110,8 +110,8 @@ function readSettingsFromForm(): unknown {
       selfVideoBitrate: Number(el.selfVideoBitrate?.value),
       selfVideoFrameRate: Number(el.selfVideoFrameRate?.value),
       selfVideoMinAdaptiveBitrate: Number(el.selfVideoMinAdaptiveBitrate?.value),
+      tabContentType: el.tabContentType?.value,
       tabResolutionPreset: el.tabResolutionPreset?.value,
-      tabVideoBitrate: Number(el.tabVideoBitrate?.value),
       tabMaxFrameRate: Number(el.tabMaxFrameRate?.value),
       microphoneEchoCancellation: !!el.micEchoCancellation?.checked,
       microphoneNoiseSuppression: !!el.micNoiseSuppression?.checked,

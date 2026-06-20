@@ -14,6 +14,7 @@ import type {
   RecordingModeDefault,
   ResolutionDimensions,
   ResolutionPreset,
+  TabContentType,
 } from './model';
 
 export const EXTENSION_SETTINGS_STORAGE_KEY = 'extensionSettings';
@@ -35,10 +36,15 @@ export const MAX_SELF_VIDEO_BITRATE = EXTENSION_DEFAULTS.capture.selfVideo.defau
 /** Chrome tab capture hard ceiling on frame rate — values above this have no effect on the capture FPS. */
 export const TAB_MAX_FRAME_RATE = EXTENSION_DEFAULTS.capture.tab.maxFrameRate;
 
-// Tab video bitrate scaling. `tabVideoBitrate` is the bitrate at the 1080p30
-// reference; the recorder scales it linearly by the selected pixels-per-second
-// (resolution × frame rate) and clamps the result to a sane floor/ceiling.
-export const TAB_VIDEO_BITRATE_REFERENCE_PIXELS_PER_SECOND = 1920 * 1080 * 30;
+export const TAB_CONTENT_TYPE_OPTIONS = ['screen', 'video'] as const satisfies readonly TabContentType[];
+
+// Tab video bitrate quality factors (bits / pixel / frame).
+// Screen content (UI, code, slides) is highly compressible — 0.024 gives ~1.5 Mbps
+// at 1080p30, matching typical screen-recorder targets. Video content (playback,
+// animations) needs more bits for motion and colour detail.
+export const TAB_SCREEN_QUALITY_FACTOR = 0.024;
+export const TAB_VIDEO_QUALITY_FACTOR = 0.08;
+
 export const TAB_MIN_VIDEO_BITRATE = 250_000;
 export const MAX_TAB_VIDEO_BITRATE = 8_000_000;
 
@@ -75,7 +81,10 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     selfVideoMinAdaptiveBitrate: EXTENSION_DEFAULTS.capture.selfVideo.minAdaptiveBitsPerSecond,
     tabResolutionPreset: DEFAULT_RESOLUTION_PRESET,
     tabMaxFrameRate: EXTENSION_DEFAULTS.capture.tab.maxFrameRate,
-    tabVideoBitrate: EXTENSION_DEFAULTS.capture.tab.defaultBitsPerSecond,
+    // Tab bitrate is computed from this content type's quality factor × the delivered
+    // resolution, clamped to the internal MAX_TAB_VIDEO_BITRATE ceiling — there is no
+    // user-facing bitrate knob, so the ceiling can never be set stale.
+    tabContentType: 'screen' as TabContentType,
     microphoneEchoCancellation: EXTENSION_DEFAULTS.capture.microphone.echoCancellation,
     microphoneNoiseSuppression: EXTENSION_DEFAULTS.capture.microphone.noiseSuppression,
     microphoneAutoGainControl: EXTENSION_DEFAULTS.capture.microphone.autoGainControl,

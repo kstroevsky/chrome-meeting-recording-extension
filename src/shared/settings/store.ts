@@ -10,9 +10,8 @@ import { getLocalStorageValues, hasLocalStorageArea, setLocalStorageValues } fro
 import {
   DEFAULT_EXTENSION_SETTINGS,
   EXTENSION_SETTINGS_STORAGE_KEY,
-  MAX_TAB_VIDEO_BITRATE,
   TAB_MIN_VIDEO_BITRATE,
-  TAB_VIDEO_BITRATE_REFERENCE_PIXELS_PER_SECOND,
+  MAX_TAB_VIDEO_BITRATE,
 } from './defaults';
 import type { RecordingRunConfig, StorageMode } from '../recordingTypes';
 import {
@@ -71,19 +70,19 @@ export function getSelfVideoProfileSettings(
 }
 
 /**
- * Scales the configured 1080p reference tab bitrate to the selected resolution
- * and frame rate, clamped to a sane floor/ceiling. Lowering the tab resolution
- * preset therefore lowers the encoded bitrate proportionally.
+ * Computes a tab video bitrate from a quality factor (bits/pixel/frame) and a
+ * ceiling, clamped to a sane floor. Use TAB_SCREEN_QUALITY_FACTOR for UI/code
+ * recordings and TAB_VIDEO_QUALITY_FACTOR for video playback or animations.
  */
 export function resolveTabVideoBitrate(
   width: number,
   height: number,
   frameRate: number,
-  referenceBitrate: number
+  factor: number,
+  ceiling: number = MAX_TAB_VIDEO_BITRATE
 ): number {
-  const ratio = (width * height * frameRate) / TAB_VIDEO_BITRATE_REFERENCE_PIXELS_PER_SECOND;
-  const scaled = Math.round(referenceBitrate * ratio);
-  return Math.min(Math.max(scaled, TAB_MIN_VIDEO_BITRATE), MAX_TAB_VIDEO_BITRATE);
+  const estimated = Math.round(width * height * frameRate * factor);
+  return Math.min(Math.max(estimated, TAB_MIN_VIDEO_BITRATE), ceiling);
 }
 
 /** Returns the numeric tab-output target derived from the selected resolution preset. */
@@ -95,10 +94,7 @@ export function getTabOutputSettings(
     maxWidth: dimensions.width,
     maxHeight: dimensions.height,
     maxFrameRate: settings.professional.tabMaxFrameRate,
-    // Passed through unscaled; the offscreen scales it against the delivered
-    // track dimensions after getUserMedia so the bitrate matches what Chrome
-    // actually captures, not what the ceiling constraint requested.
-    referenceBitsPerSecond: settings.professional.tabVideoBitrate,
+    contentType: settings.professional.tabContentType,
   };
 }
 

@@ -13,11 +13,11 @@ import {
   LEGACY_CAMERA_FORMAT_TO_PRESET,
   LEGACY_VIDEO_FORMAT_OPTIONS,
   MAX_SELF_VIDEO_BITRATE,
-  MAX_TAB_VIDEO_BITRATE,
   MICROPHONE_MODE_OPTIONS,
   RECORDING_MODE_OPTIONS,
   RESOLUTION_PRESET_DIMENSIONS,
   RESOLUTION_PRESET_OPTIONS,
+  TAB_CONTENT_TYPE_OPTIONS,
 } from './defaults';
 import {
   validateChunkingSettings,
@@ -169,7 +169,9 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
     selfVideoMinAdaptiveBitrate: normalizePositiveInt(professionalCandidate.selfVideoMinAdaptiveBitrate, DEFAULT_EXTENSION_SETTINGS.professional.selfVideoMinAdaptiveBitrate, 100_000, 50_000_000),
     tabResolutionPreset: normalizeTabResolutionPreset(professionalCandidate),
     tabMaxFrameRate: normalizePositiveInt(professionalCandidate.tabMaxFrameRate, DEFAULT_EXTENSION_SETTINGS.professional.tabMaxFrameRate, 1, 120),
-    tabVideoBitrate: normalizePositiveInt(professionalCandidate.tabVideoBitrate, DEFAULT_EXTENSION_SETTINGS.professional.tabVideoBitrate, 100_000, MAX_TAB_VIDEO_BITRATE),
+    tabContentType: hasAllowedString(professionalCandidate.tabContentType, TAB_CONTENT_TYPE_OPTIONS)
+      ? professionalCandidate.tabContentType
+      : DEFAULT_EXTENSION_SETTINGS.professional.tabContentType,
     microphoneEchoCancellation: typeof professionalCandidate.microphoneEchoCancellation === 'boolean'
       ? professionalCandidate.microphoneEchoCancellation
       : DEFAULT_EXTENSION_SETTINGS.professional.microphoneEchoCancellation,

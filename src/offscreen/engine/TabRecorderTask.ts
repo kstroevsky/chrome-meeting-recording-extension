@@ -7,7 +7,7 @@
 import { getChunkTimesliceMs, getVideoMime } from '../RecorderProfiles';
 import { describeMediaError } from '../RecorderSupport';
 import type { RecorderRuntimeSettingsSnapshot } from '../../shared/settings';
-import { resolveTabVideoBitrate, TAB_MAX_FRAME_RATE } from '../../shared/settings';
+import { resolveTabVideoBitrate, TAB_MAX_FRAME_RATE, TAB_SCREEN_QUALITY_FACTOR, TAB_VIDEO_QUALITY_FACTOR } from '../../shared/settings';
 import {
   awaitRecorderStart,
   buildRecordingFilename,
@@ -57,11 +57,15 @@ export async function startTabRecorder(
     ts.frameRate ?? recorderSettings.tab.output.maxFrameRate,
     TAB_MAX_FRAME_RATE
   );
+  const qualityFactor = recorderSettings.tab.output.contentType === 'video'
+    ? TAB_VIDEO_QUALITY_FACTOR
+    : TAB_SCREEN_QUALITY_FACTOR;
+  // Ceiling defaults to the internal MAX_TAB_VIDEO_BITRATE; there is no user knob.
   const videoBitsPerSecond = resolveTabVideoBitrate(
     deliveredWidth,
     deliveredHeight,
     deliveredFps,
-    recorderSettings.tab.output.referenceBitsPerSecond
+    qualityFactor
   );
 
   const recorder = new MediaRecorder(recordingStream, {

@@ -6,7 +6,7 @@
  * the Settings module.
  */
 
-import type { ChunkingSettings, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings } from './model';
+import type { ChunkingSettings, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings, TabContentType } from './model';
 
 export type BoundedPositiveIntResult = number | null;
 
@@ -24,9 +24,10 @@ export function validateTabOutput(candidate: Record<string, unknown>): TabCaptur
   const maxWidth = readBoundedPositiveInt(candidate.maxWidth, 1, 10_000);
   const maxHeight = readBoundedPositiveInt(candidate.maxHeight, 1, 10_000);
   const maxFrameRate = readBoundedPositiveInt(candidate.maxFrameRate, 1, 120);
-  const referenceBitsPerSecond = readBoundedPositiveInt(candidate.referenceBitsPerSecond, 100_000, 50_000_000);
-  if (!maxWidth || !maxHeight || !maxFrameRate || !referenceBitsPerSecond) return null;
-  return { maxWidth, maxHeight, maxFrameRate, referenceBitsPerSecond };
+  if (!maxWidth || !maxHeight || !maxFrameRate) return null;
+  // Lenient ('screen' default) so a snapshot from an older build still validates.
+  const contentType: TabContentType = candidate.contentType === 'video' ? 'video' : 'screen';
+  return { maxWidth, maxHeight, maxFrameRate, contentType };
 }
 
 /** Validates the self-video profile from a recorder settings snapshot. */

@@ -6,6 +6,8 @@ import {
   normalizeRecorderRuntimeSettingsSnapshot,
   normalizeExtensionSettings,
   resolveTabVideoBitrate,
+  TAB_SCREEN_QUALITY_FACTOR,
+  TAB_VIDEO_QUALITY_FACTOR,
 } from '..';
 
 describe('settings', () => {
@@ -96,38 +98,41 @@ describe('settings', () => {
     expect(settings.professional.tabResolutionPreset).toBe('1920x1080');
   });
 
-  it('passes the reference bitrate through to tab output settings unchanged', () => {
-    // getTabOutputSettings no longer pre-scales; it hands the reference off to
-    // the offscreen, which scales against the delivered track dimensions instead.
-    expect(getTabOutputSettings(DEFAULT_EXTENSION_SETTINGS).referenceBitsPerSecond).toBe(
-      DEFAULT_EXTENSION_SETTINGS.professional.tabVideoBitrate
-    );
-    const settings = normalizeExtensionSettings({ professional: { tabVideoBitrate: 3_000_000 } });
-    expect(getTabOutputSettings(settings).referenceBitsPerSecond).toBe(3_000_000);
+  it('passes the tab content type through to tab output settings', () => {
+    // There is no user-facing bitrate knob; the offscreen derives the bitrate from
+    // this content type's factor and the delivered dimensions, capped at the
+    // internal MAX_TAB_VIDEO_BITRATE ceiling.
+    expect(getTabOutputSettings(DEFAULT_EXTENSION_SETTINGS).contentType).toBe('screen');
+    const settings = normalizeExtensionSettings({ professional: { tabContentType: 'video' } });
+    expect(getTabOutputSettings(settings).contentType).toBe('video');
   });
 
-  it('resolveTabVideoBitrate scales with delivered resolution and clamps to floor/ceiling', () => {
-    const ref = 1_500_000;
-    // 1080p30 is the reference — ratio = 1, output equals input.
-    expect(resolveTabVideoBitrate(1920, 1080, 30, ref)).toBe(1_500_000);
-    // 720p30 scales down by the pixels-per-second ratio.
-    expect(resolveTabVideoBitrate(1280, 720, 30, ref)).toBe(
-      Math.round(ref * (1280 * 720 * 30) / (1920 * 1080 * 30))
+  it('resolveTabVideoBitrate scales with a quality factor and clamps to floor/ceiling', () => {
+    // Screen factor at 1080p30: ~1.49 Mbps — matches historical target.
+    expect(resolveTabVideoBitrate(1920, 1080, 30, TAB_SCREEN_QUALITY_FACTOR)).toBe(
+      Math.round(1920 * 1080 * 30 * TAB_SCREEN_QUALITY_FACTOR)
     );
-    // 360p30 falls below the 250 kbps floor and is clamped.
-    expect(resolveTabVideoBitrate(640, 360, 30, ref)).toBe(250_000);
-    // High reference at 1080p60 would exceed the 8 Mbps ceiling and is clamped.
-    expect(resolveTabVideoBitrate(1920, 1080, 60, 8_000_000)).toBe(8_000_000);
+    // 360p30 with screen factor falls below the 250 kbps floor → clamped.
+    expect(resolveTabVideoBitrate(640, 360, 30, TAB_SCREEN_QUALITY_FACTOR)).toBe(250_000);
+    // Video factor at 1080p30: ~4.97 Mbps.
+    expect(resolveTabVideoBitrate(1920, 1080, 30, TAB_VIDEO_QUALITY_FACTOR)).toBe(
+      Math.round(1920 * 1080 * 30 * TAB_VIDEO_QUALITY_FACTOR)
+    );
+    // Ceiling parameter clamps when the estimate exceeds it.
+    expect(resolveTabVideoBitrate(1920, 1080, 30, TAB_VIDEO_QUALITY_FACTOR, 3_000_000)).toBe(3_000_000);
   });
 
-  it('honors an in-range tab video bitrate but rejects values past the 8 Mbps ceiling', () => {
-    const inRange = normalizeExtensionSettings({ professional: { tabVideoBitrate: 4_000_000 } });
-    expect(inRange.professional.tabVideoBitrate).toBe(4_000_000);
+  it('defaults tabContentType to screen and normalizes video correctly', () => {
+    expect(normalizeExtensionSettings({}).professional.tabContentType).toBe('screen');
+    const video = normalizeExtensionSettings({ professional: { tabContentType: 'video' } });
+    expect(video.professional.tabContentType).toBe('video');
+    const invalid = normalizeExtensionSettings({ professional: { tabContentType: 'animation' } });
+    expect(invalid.professional.tabContentType).toBe('screen');
+  });
 
-    const tooHigh = normalizeExtensionSettings({ professional: { tabVideoBitrate: 50_000_000 } });
-    expect(tooHigh.professional.tabVideoBitrate).toBe(
-      DEFAULT_EXTENSION_SETTINGS.professional.tabVideoBitrate
-    );
+  it('drops a legacy persisted tabVideoBitrate (the ceiling is now internal-only)', () => {
+    const settings = normalizeExtensionSettings({ professional: { tabVideoBitrate: 1_500_000 } });
+    expect((settings.professional as Record<string, unknown>).tabVideoBitrate).toBeUndefined();
   });
 
   it('caps persisted self-video bitrate settings at the new 3 Mbps ceiling', () => {
@@ -163,9 +168,7 @@ describe('settings', () => {
 
     expect(buildRecorderRuntimeSettingsSnapshot(settings)).toEqual({
       tab: {
-        // Reference bitrate is passed through unscaled; the offscreen scales it against
-        // the delivered track dims after getUserMedia.
-        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20, referenceBitsPerSecond: 1_500_000 },
+        output: { maxWidth: 640, maxHeight: 360, maxFrameRate: 20, contentType: 'screen' },
       },
       selfVideo: {
         profile: {

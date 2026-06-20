@@ -37,8 +37,6 @@ export const EXTENSION_DEFAULTS = Object.freeze({
       maxWidth: 1920,
       maxHeight: 1080,
       maxFrameRate: 30,
-      // Tab video bitrate at the 1080p30 reference; scaled down for smaller presets.
-      defaultBitsPerSecond: 1_500_000,
     }),
     selfVideo: Object.freeze({
       width: 1920,

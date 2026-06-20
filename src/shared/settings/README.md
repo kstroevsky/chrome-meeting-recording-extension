@@ -27,7 +27,8 @@ The single source of *configuration*. Two responsibilities: (1) hold the user's 
 | Field | Drives |
 | :--- | :--- |
 | `selfVideoBitrate`, `selfVideoMinAdaptiveBitrate`, `selfVideoFrameRate` | camera encode profile (bitrate ceiling/floor, fps) |
-| `tabResolutionPreset`, `tabMaxFrameRate`, `tabVideoBitrate` | tab capture target + reference bitrate |
+| `tabResolutionPreset`, `tabMaxFrameRate` | tab capture target dimensions + fps ceiling |
+| `tabContentType` | `'screen' \| 'video'` — the **only** tab-bitrate knob. Selects the quality factor (screen ≈ low bits/pixel for UI/code; video ≈ high bits/pixel for motion). The ceiling is the internal `MAX_TAB_VIDEO_BITRATE`, not user-facing. |
 | `microphoneEchoCancellation`, `microphoneNoiseSuppression`, `microphoneAutoGainControl` | mic `getUserMedia` constraints (DSP) |
 | `chunkDefaultTimesliceMs`, `chunkExtendedTimesliceMs` | `MediaRecorder` timeslice selection |
 
@@ -44,7 +45,7 @@ flowchart LR
 
 The derive helpers turn *choices* into *numbers*:
 
-- **`resolveTabVideoBitrate`** scales the configured 1080p reference bitrate by `(width × height × fps) / referencePixelsPerSecond`, clamped to `[TAB_MIN_VIDEO_BITRATE, MAX_TAB_VIDEO_BITRATE]` — so **lowering the tab resolution preset lowers the encoded bitrate proportionally**, automatically.
+- **`resolveTabVideoBitrate`** computes `width × height × fps × qualityFactor`, clamped to `[TAB_MIN_VIDEO_BITRATE, MAX_TAB_VIDEO_BITRATE]`. The factor comes from `tabContentType` (`TAB_SCREEN_QUALITY_FACTOR` ≈ 1.5 Mbps@1080p30 vs. `TAB_VIDEO_QUALITY_FACTOR` ≈ 5 Mbps@1080p30); the ceiling is the internal `MAX_TAB_VIDEO_BITRATE` (there is no user-facing bitrate knob, so it can never be set stale). **Crucially, `getTabOutputSettings` doesn't pre-compute the bitrate** — it ships the dimensions and content type in the snapshot, and the offscreen (`TabRecorderTask`) runs the formula against the *delivered* track dimensions from `getSettings()`, not the requested preset. So the bitrate matches what Chrome actually captured (which may be smaller for a windowed/HiDPI tab), instead of over-provisioning for the requested size.
 - **`getSelfVideoProfileSettings`** maps the preset to dimensions + carries the adaptive bitrate floor/ceiling and the `autoResolution` flag.
 - **`getMicrophoneCaptureSettings`** / **`getChunkingSettings`** pass the DSP toggles and timeslice timings through.
 - **`buildRecorderRuntimeSettingsSnapshot`** assembles all of the above into the one frozen object the background sends down. `buildDefaultRunConfigFromSettings` derives the popup's default `RunConfig`.
@@ -60,7 +61,7 @@ The derive helpers turn *choices* into *numbers*:
 
 - **Import from the module index, not internal files** — that boundary is what lets the internals evolve.
 - **Normalize on every read.** Persisted settings are untrusted (old versions, manual edits); `normalizeExtensionSettings` is the only safe entry.
-- **Tab bitrate is derived, not stored raw.** Don't set a tab bitrate directly expecting it to stick at any resolution — it's scaled from the 1080p reference by `resolveTabVideoBitrate`.
+- **Tab bitrate is derived, not stored.** There is no stored tab bitrate at all — only `tabContentType`. The effective bitrate is `w × h × fps × factor` computed in the offscreen against the resolution Chrome actually delivered, capped at the internal `MAX_TAB_VIDEO_BITRATE`.
 - **A run's settings are frozen at `start()`.** Editing settings mid-recording affects only the *next* run; the active run uses its snapshot.
 - **`selfVideoUseAutoResolution` short-circuits the resize.** It's the lever that trades enforced dimensions for skipping the per-frame re-rasterization.
 
@@ -70,7 +71,7 @@ The derive helpers turn *choices* into *numbers*:
 | :--- | :--- |
 | `index.ts` | the public interface (the only import surface) |
 | `model.ts` | `ExtensionSettings` + the derived `*Settings` / `RecorderRuntimeSettingsSnapshot` types |
-| `defaults.ts` | `DEFAULT_EXTENSION_SETTINGS`, storage key, bitrate reference/clamp constants |
+| `defaults.ts` | `DEFAULT_EXTENSION_SETTINGS`, storage key, bitrate quality-factor/clamp constants |
 | `normalize.ts` | `normalizeExtensionSettings`, preset→dimensions, clone/normalize the recorder snapshot |
 | `store.ts` | in-memory cache, load/save/reset, all the derive helpers |
 | `validate.ts` | bounded validators (`normalizePositiveInt` min/max clamps, `readBoundedPositiveInt`) used by normalize |
@@ -79,7 +80,7 @@ Consumers: the **Settings page** (`../../settings.ts`) edits the schema; the **p
 
 ## Testing notes
 
-- `__tests__/extensionSettings.test.ts` and `settings.test.ts` cover normalization (partial/invalid → defaulted), the derive math (especially `resolveTabVideoBitrate` scaling + clamping), and the run-config derivation.
+- `__tests__/extensionSettings.test.ts` and `settings.test.ts` cover normalization (partial/invalid → defaulted), the derive math (`resolveTabVideoBitrate` factor + clamp, `tabContentType` selection), and the run-config derivation. The delivered-dimension bitrate path itself is exercised in `offscreen/__tests__/RecorderEngine.test.ts`.
 - Normalization and derivation are pure given a settings object — test with values, no storage mock needed (the storage seam is `hasLocalStorageArea`/`get`/`set`, mocked separately).
 
 ## Related

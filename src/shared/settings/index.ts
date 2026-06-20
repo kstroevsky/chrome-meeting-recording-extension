@@ -29,7 +29,12 @@ export {
   resolveTabVideoBitrate,
 } from './store';
 
-export { TAB_MAX_FRAME_RATE } from './defaults';
+export {
+  TAB_MAX_FRAME_RATE,
+  TAB_SCREEN_QUALITY_FACTOR,
+  TAB_VIDEO_QUALITY_FACTOR,
+  TAB_CONTENT_TYPE_OPTIONS,
+} from './defaults';
 
 // Normalization for persisted payloads and snapshots received over RPC.
 export {
@@ -44,6 +49,7 @@ export type {
   RecorderRuntimeSettingsSnapshot,
   SelfVideoProfileSettings,
   TabCaptureSettings,
+  TabContentType,
   MicrophoneCaptureSettings,
   ChunkingSettings,
   ResolutionPreset,

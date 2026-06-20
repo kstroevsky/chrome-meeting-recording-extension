@@ -558,9 +558,8 @@ describe('RecorderEngine', () => {
     );
     expect(tabRecorder?.stream).toBe(baseStream);
     // The preset is 640x360@24 but Chrome delivered 1920x1080@30 (the mock stream).
-    // Bitrate is computed from the delivered resolution, not the ceiling constraint,
-    // so it scales to the full 1080p30 reference bitrate rather than the floor.
-    expect(tabRecorder?.options.videoBitsPerSecond).toBe(1_500_000);
+    // Bitrate is computed from the delivered resolution × screen quality factor.
+    expect(tabRecorder?.options.videoBitsPerSecond).toBe(Math.round(1920 * 1080 * 30 * 0.024));
     expect(createElementSpy).not.toHaveBeenCalled();
 
     await engine.stop();

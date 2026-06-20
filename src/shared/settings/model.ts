@@ -32,7 +32,7 @@ export type ExtensionSettings = {
     selfVideoMinAdaptiveBitrate: number;
     tabResolutionPreset: ResolutionPreset;
     tabMaxFrameRate: number;
-    tabVideoBitrate: number;
+    tabContentType: TabContentType;
     microphoneEchoCancellation: boolean;
     microphoneNoiseSuppression: boolean;
     microphoneAutoGainControl: boolean;
@@ -52,12 +52,14 @@ export type SelfVideoProfileSettings = {
   autoResolution: boolean;
 };
 
+export type TabContentType = 'screen' | 'video';
+
 export type TabCaptureSettings = {
   maxWidth: number;
   maxHeight: number;
   maxFrameRate: number;
-  /** Reference tab video bitrate at 1080p30; the offscreen scales it to the delivered resolution. */
-  referenceBitsPerSecond: number;
+  /** Content type hint that selects the quality factor: 'screen' for UI/code/slides, 'video' for playback or animations. The offscreen multiplies it by the delivered W×H×fps and clamps to the internal MAX_TAB_VIDEO_BITRATE ceiling. */
+  contentType: TabContentType;
 };
 
 export type MicrophoneCaptureSettings = {

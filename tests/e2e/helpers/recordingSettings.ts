@@ -38,7 +38,11 @@ export async function applyFullRecordingSettings(
     String(settings.selfVideoMinAdaptiveBitrate)
   );
   await page.selectOption('#tab-resolution-preset', settings.tabResolutionPreset);
-  await page.fill('#tab-video-bitrate', String(settings.tabVideoBitrate));
+  // NOTE: the tab video-bitrate input was removed — bitrate is now derived from the
+  // content type's quality factor × delivered resolution (capped at the internal
+  // ceiling), with no user knob. `settings.tabVideoBitrate` is retained in the e2e
+  // config but no longer applied; the bitrate assertions in the specs predate the
+  // #1/#2 model change and need realignment under a real Playwright run.
   await page.fill('#tab-max-frame-rate', String(settings.tabMaxFrameRate));
   await page.setChecked('#mic-echo-cancellation', settings.micEchoCancellation);
   await page.setChecked('#mic-noise-suppression', settings.micNoiseSuppression);
