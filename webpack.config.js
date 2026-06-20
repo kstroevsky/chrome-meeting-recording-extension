@@ -5,6 +5,13 @@ const CopyWebpackPlugin = require('copy-webpack-plugin')
 const { CleanWebpackPlugin } = require('clean-webpack-plugin')
 const pkg = require('./package.json')
 const { toChromeManifestVersion } = require('./scripts/lib/manifestVersion.cjs')
+const {
+  TARGET_PROFILES,
+  DEFAULT_TARGET,
+  getTargetProfile,
+  usesWebAuthFlow,
+  applyTargetToManifest,
+} = require('./scripts/lib/manifestTargets.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
@@ -12,10 +19,11 @@ const GOOGLE_WEB_OAUTH_CLIENT_SECRET_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_SECRET'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
 const STATIC_DIR = 'static'
 const PUBLIC_DIR = 'public'
-// Cross-browser build targets (ADR-0002). Chrome uses chrome.identity.getAuthToken;
-// every other Chromium target authenticates via launchWebAuthFlow.
-const KNOWN_BROWSER_TARGETS = ['chrome', 'edge', 'brave', 'opera', 'vivaldi', 'arc']
-const DEFAULT_BROWSER_TARGET = 'chrome'
+// Cross-browser build targets (ADR-0002), modeled as data in manifestTargets.cjs.
+// Chrome uses chrome.identity.getAuthToken; every other Chromium target
+// authenticates via launchWebAuthFlow but keeps a stable `key` for its redirect.
+const KNOWN_BROWSER_TARGETS = Object.keys(TARGET_PROFILES)
+const DEFAULT_BROWSER_TARGET = DEFAULT_TARGET
 
 function parseDotEnv(rawContent) {
   const parsed = {}
@@ -74,18 +82,9 @@ function resolveBrowserTarget(rawTarget) {
 
 function transformManifest(content, oauthClientId, isDevBuild, browserTarget) {
   const manifest = JSON.parse(content.toString('utf8'))
-  if (browserTarget === 'chrome') {
-    if (!manifest.oauth2 || typeof manifest.oauth2 !== 'object') {
-      throw new Error('manifest.json is missing oauth2 configuration')
-    }
-    manifest.oauth2.client_id = oauthClientId
-  } else {
-    // Non-Chrome targets authenticate via launchWebAuthFlow (ADR-0002). The
-    // Chrome-only getAuthToken `oauth2` block and the dev stable-id `key` are
-    // unused there; drop them so each store package stays minimal.
-    delete manifest.oauth2
-    delete manifest.key
-  }
+  // Per-target manifest decisions (oauth2 / key) live in the tested profile model
+  // (scripts/lib/manifestTargets.cjs), keyed off browser family + auth capability.
+  applyTargetToManifest(manifest, browserTarget, { oauthClientId })
   // package.json is the single source of truth for the release version; the
   // numeric Chrome `version` is derived here so the two can never drift, and the
   // full semver (incl. any pre-release tag) is preserved for display in
@@ -117,19 +116,22 @@ module.exports = (_env, argv) => {
   const outputDir = typeof env.outputPath === 'string' && env.outputPath.trim()
     ? env.outputPath.trim()
     : (browserTarget === DEFAULT_BROWSER_TARGET ? 'dist' : `dist-${browserTarget}`)
+  const targetProfile = getTargetProfile(browserTarget)
+  const isWebAuthFlowTarget = usesWebAuthFlow(browserTarget)
   const configuredGoogleOauthClientId = resolveGoogleOauthClientId(__dirname)
   const googleOauthClientId = configuredGoogleOauthClientId || OAUTH_CLIENT_ID_PLACEHOLDER
-  const webOauthClientId = resolveWebOauthClientId(__dirname)
-  // The Desktop-client secret is only used by the non-Chrome launchWebAuthFlow
-  // path; never embed it in the Chrome bundle (Chrome uses getAuthToken).
-  const webOauthClientSecret = browserTarget === 'chrome' ? '' : resolveWebOauthClientSecret(__dirname)
+  // The web OAuth client id/secret are only used by the launchWebAuthFlow path;
+  // they are left empty for chrome-identity targets so the secret never embeds
+  // in a Chrome bundle that uses getAuthToken.
+  const webOauthClientId = isWebAuthFlowTarget ? resolveWebOauthClientId(__dirname) : ''
+  const webOauthClientSecret = isWebAuthFlowTarget ? resolveWebOauthClientSecret(__dirname) : ''
 
-  if (browserTarget === 'chrome' && !configuredGoogleOauthClientId) {
+  if (targetProfile.auth === 'chrome-identity' && !configuredGoogleOauthClientId) {
     console.warn(
       `[build] ${GOOGLE_OAUTH_CLIENT_ID_ENV_KEY} is not set; keeping placeholder in dist/manifest.json. Drive OAuth will fail until you configure it.`
     )
   }
-  if (browserTarget !== 'chrome' && !webOauthClientId) {
+  if (isWebAuthFlowTarget && !webOauthClientId) {
     console.warn(
       `[build] ${GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY} is not set for target "${browserTarget}"; Drive OAuth via launchWebAuthFlow will fail until you configure it.`
     )

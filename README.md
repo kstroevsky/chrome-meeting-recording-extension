@@ -255,6 +255,17 @@ Drive mode requires a **Chrome Extension** OAuth 2.0 client. A Desktop or Web cl
 
 **Keep a stable extension ID** — the `key` field in `static/manifest.json` is checked into this repo and pins the extension ID. If the key changes, the extension ID changes and the OAuth client must be recreated for the new ID. The webpack build emits the runtime manifest to `dist/manifest.json`.
 
+### Other Chromium browsers (Edge, Brave, Opera, …)
+
+`chrome.identity.getAuthToken` is Chrome-only, so the rest of the Chromium family signs in via `chrome.identity.launchWebAuthFlow` against a **Web application** OAuth client (ADR-0002). Build per target — `npm run build:brave`, `build:edge`, `build:opera` — which emit to `dist-<target>/`. All Chromium targets keep the **same `key`**, so they share one extension ID and therefore **one redirect URI**.
+
+1. Create an **OAuth 2.0 client** with **Application type: Web application**, enable the Drive API, and add the `drive.file` scope on the consent screen (add yourself as a test user while the app is unverified).
+2. Get the redirect URI to register: `npm run redirect-uri` prints `https://<id>.chromiumapp.org/`. Add that exact value (trailing `/` included) to the client's **Authorized redirect URIs**.
+3. In `.env`, set `GOOGLE_WEB_OAUTH_CLIENT_ID` and `GOOGLE_WEB_OAUTH_CLIENT_SECRET` (for a Desktop/Web client the secret is shipped in the non-Chrome bundle and never in the Chrome bundle).
+4. Build the target, load `dist-<target>/` unpacked, and sign in.
+
+Each **store-published** build (Chrome Web Store, Edge Add-ons) gets its own store-assigned ID; add that build's `https://<id>.chromiumapp.org/` to the same OAuth client. The `redirect-uri` script covers the stable unpacked/dev ID.
+
 **Drive folder structure** — Drive mode auto-creates:
 
 - Root folder: `Google Meet Records` (created once, reused)
