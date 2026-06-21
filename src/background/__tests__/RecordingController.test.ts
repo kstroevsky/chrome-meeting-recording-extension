@@ -21,7 +21,7 @@ import {
 } from '../../platform/chrome/tabs';
 import { loadRecorderRuntimeSettingsSnapshot } from '../../shared/settings';
 
-const RUN_CONFIG = { storageMode: 'local', micMode: 'off', recordSelfVideo: false } as const;
+const RUN_CONFIG = { storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen' } as const;
 const startMsg = (overrides: Record<string, unknown> = {}) => ({
   type: 'START_RECORDING' as const,
   tabId: 42,
@@ -79,6 +79,17 @@ describe('RecordingController', () => {
       });
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('starting');
+    });
+
+    it('overrides the snapshot tab content type with the per-recording popup choice', async () => {
+      (loadRecorderRuntimeSettingsSnapshot as jest.Mock).mockResolvedValueOnce({
+        tab: { output: { maxWidth: 1920, maxHeight: 1080, maxFrameRate: 30, contentType: 'screen' } },
+      });
+
+      await controller.start(startMsg({ runConfig: { ...RUN_CONFIG, tabContentType: 'video' } }));
+
+      const rpcArg = offscreen.rpc.mock.calls[0][0];
+      expect(rpcArg.recorderSettings.tab.output.contentType).toBe('video');
     });
 
     it('uses a sanitized tab title slug for non-Meet URLs', async () => {

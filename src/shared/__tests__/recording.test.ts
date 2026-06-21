@@ -25,6 +25,12 @@ describe('shared/recording helpers', () => {
     expect(createDefaultRunConfig()).toEqual(DEFAULT_RECORDING_RUN_CONFIG);
   });
 
+  it('parses the per-recording tabContentType and defaults invalid/missing values to screen', () => {
+    expect(getRunConfigOrDefault({ tabContentType: 'video' }).tabContentType).toBe('video');
+    expect(getRunConfigOrDefault({ tabContentType: 'bogus' }).tabContentType).toBe('screen');
+    expect(getRunConfigOrDefault({}).tabContentType).toBe('screen');
+  });
+
   it('treats only active capture phases as stoppable', () => {
     expect((['starting', 'recording', 'stopping'] as const).map(isStoppablePhase)).toEqual([true, true, true]);
     expect((['idle', 'uploading', 'failed'] as const).map(isStoppablePhase)).toEqual([false, false, false]);
@@ -190,7 +196,7 @@ describe('session snapshot desired/observed migration (ADR-0003 Decision 4)', ()
     expect(s.desired).toBe('recording');
     expect(s.observed).toBe('recording');
     expect(s.phase).toBe('recording'); // planes win over the stale phase
-    expect(s.runConfig).toEqual({ storageMode: 'drive', micMode: 'mixed', recordSelfVideo: true });
+    expect(s.runConfig).toEqual({ storageMode: 'drive', micMode: 'mixed', recordSelfVideo: true, tabContentType: 'screen' });
   });
 
   it('carries a persisted failed flag and derives the failed phase regardless of the planes', () => {

@@ -96,7 +96,7 @@ describe('offscreen rpc handlers', () => {
     expect(deps.pushState).toHaveBeenCalledWith('starting');
     expect(engine.startFromStreamId).toHaveBeenCalledWith(
       'stream-1',
-      { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+      { storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen' },
       buildRecorderRuntimeSettingsSnapshot(),
       'abc-defg-hij'
     );

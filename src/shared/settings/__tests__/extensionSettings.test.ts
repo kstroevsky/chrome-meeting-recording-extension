@@ -1,4 +1,5 @@
 import {
+  buildDefaultRunConfigFromSettings,
   buildRecorderRuntimeSettingsSnapshot,
   DEFAULT_EXTENSION_SETTINGS,
   getSelfVideoProfileSettings,
@@ -128,6 +129,13 @@ describe('settings', () => {
     expect(video.professional.tabContentType).toBe('video');
     const invalid = normalizeExtensionSettings({ professional: { tabContentType: 'animation' } });
     expect(invalid.professional.tabContentType).toBe('screen');
+  });
+
+  it('carries the persisted tab content type into the popup default run config', () => {
+    // The popup pre-selects this default, then may override it per-recording.
+    expect(buildDefaultRunConfigFromSettings(DEFAULT_EXTENSION_SETTINGS).tabContentType).toBe('screen');
+    const video = normalizeExtensionSettings({ professional: { tabContentType: 'video' } });
+    expect(buildDefaultRunConfigFromSettings(video).tabContentType).toBe('video');
   });
 
   it('drops a legacy persisted tabVideoBitrate (the ceiling is now internal-only)', () => {

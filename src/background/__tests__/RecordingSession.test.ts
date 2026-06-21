@@ -225,7 +225,7 @@ describe('RecordingSession state machine', () => {
       });
 
       expect(snapshot.phase).toBe('recording');
-      expect(snapshot.runConfig).toEqual({ storageMode: 'drive', micMode: 'mixed', recordSelfVideo: true });
+      expect(snapshot.runConfig).toEqual({ storageMode: 'drive', micMode: 'mixed', recordSelfVideo: true, tabContentType: 'screen' });
       expect(snapshot.targetTabId).toBe(5);
       expect(snapshot.meetingSlug).toBe('abc-defg-hij');
       // Hydration becomes the live state.

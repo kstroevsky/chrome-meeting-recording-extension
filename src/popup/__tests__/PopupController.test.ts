@@ -186,6 +186,7 @@ describe('PopupController', () => {
         storageMode: 'drive',
         micMode: 'mixed',
         recordSelfVideo: true,
+        tabContentType: 'screen',
       },
     });
 
@@ -222,6 +223,7 @@ describe('PopupController', () => {
         storageMode: 'local',
         micMode: 'off',
         recordSelfVideo: false,
+        tabContentType: 'screen',
       },
     });
   });

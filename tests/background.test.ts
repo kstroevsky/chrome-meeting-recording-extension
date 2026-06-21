@@ -125,6 +125,7 @@ describe('background runtime messages', () => {
         storageMode: 'local',
         micMode: 'off',
         recordSelfVideo: false,
+        tabContentType: 'screen',
       },
       recorderSettings,
       perfSettings: expect.objectContaining({
@@ -185,7 +186,7 @@ describe('background runtime messages', () => {
       ok: true,
       session: expect.objectContaining({
         phase: 'starting',
-        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen' },
       }),
     }));
   });
