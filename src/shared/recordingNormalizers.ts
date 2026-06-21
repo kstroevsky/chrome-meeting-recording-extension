@@ -16,6 +16,7 @@ import {
   NON_IDLE_RECORDING_PHASES,
   VALID_MIC_MODES,
   VALID_STORAGE_MODES,
+  VALID_TAB_CONTENT_TYPES,
 } from './recordingConstants';
 import type {
   DesiredState,
@@ -26,6 +27,7 @@ import type {
   RecordingSessionSnapshot,
   RecordingStream,
   StorageMode,
+  TabContentType,
   UploadSummary,
   UploadSummaryEntry,
 } from './recordingTypes';
@@ -52,6 +54,13 @@ export function normalizeMicMode(value: unknown): MicMode {
   return hasAllowedString(value, VALID_MIC_MODES) ? value : DEFAULT_RECORDING_RUN_CONFIG.micMode;
 }
 
+/** Normalizes the per-recording tab content preset to a supported value. */
+export function normalizeTabContentType(value: unknown): TabContentType {
+  return hasAllowedString(value, VALID_TAB_CONTENT_TYPES)
+    ? value
+    : DEFAULT_RECORDING_RUN_CONFIG.tabContentType ?? 'screen';
+}
+
 /**
  * Parses any run-config-like object into the strict runtime shape.
  * Returns null when the input is not a record (use getRunConfigOrDefault for a
@@ -68,6 +77,7 @@ export function parseRunConfig(value: unknown): RecordingRunConfig | null {
       typeof candidate.recordSelfVideo === 'boolean'
         ? candidate.recordSelfVideo
         : DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo,
+    tabContentType: normalizeTabContentType(candidate.tabContentType),
   };
 }
 

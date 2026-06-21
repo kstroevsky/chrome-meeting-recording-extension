@@ -49,6 +49,8 @@ export function buildDefaultRunConfigFromSettings(
     storageMode: toStorageMode(settings.basic.recordingMode),
     micMode: settings.basic.microphoneRecordingMode,
     recordSelfVideo: settings.basic.separateCameraCapture,
+    // The persisted default; the popup pre-selects it and may override per-recording.
+    tabContentType: settings.professional.tabContentType,
   };
 }
 

@@ -27,11 +27,19 @@ export type ObservedState = 'none' | 'starting' | 'recording' | 'stopping' | 'up
 export type RecordingStream = 'tab' | 'mic' | 'self-video';
 export type StorageMode = 'local' | 'drive';
 export type MicMode = 'off' | 'mixed' | 'separate';
+/** Tab recording quality preset: 'screen' (UI/code/slides) vs 'video' (playback/motion). */
+export type TabContentType = 'screen' | 'video';
 
 export type RecordingRunConfig = {
   storageMode: StorageMode;
   micMode: MicMode;
   recordSelfVideo: boolean;
+  /**
+   * Per-recording tab content preset, chosen in the popup before each recording.
+   * Optional on the type to keep the many run-config literals churn-free; the
+   * canonical paths (`parseRunConfig`, `DEFAULT_RECORDING_RUN_CONFIG`) always set it.
+   */
+  tabContentType?: TabContentType;
 };
 
 export type UploadSummaryEntry = {

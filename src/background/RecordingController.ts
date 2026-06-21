@@ -88,6 +88,12 @@ export class RecordingController {
       return this.fail(error);
     }
 
+    // The popup's per-recording tab content preset wins over the persisted default
+    // baked into the snapshot. The snapshot is a fresh clone, so mutating is safe.
+    if (runConfig.tabContentType && recorderSettings.tab?.output) {
+      recorderSettings.tab.output.contentType = runConfig.tabContentType;
+    }
+
     const meetingSlug = await this.resolveMeetingSlug(msg.tabId);
     const target = {
       targetTabId: msg.tabId,

@@ -17,6 +17,8 @@ export type PopupElements = {
   startBtn: HTMLButtonElement | null;
   storageModeSelect: HTMLSelectElement | null;
   recordSelfVideoCheckbox: HTMLInputElement | null;
+  /** Container of the tab-content-type segmented radio group (screen/video). */
+  tabContentTypeGroup: HTMLElement | null;
   openSettingsBtn: HTMLButtonElement | null;
   openDiagnosticsBtn: HTMLButtonElement | null;
 

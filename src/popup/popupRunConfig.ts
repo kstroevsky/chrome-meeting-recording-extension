@@ -28,16 +28,25 @@ export function applyRunConfigToForm(
   if (elements.recordSelfVideoCheckbox) {
     elements.recordSelfVideoCheckbox.checked = config.recordSelfVideo;
   }
+  if (elements.tabContentTypeGroup && config.tabContentType) {
+    const input = elements.tabContentTypeGroup.querySelector<HTMLInputElement>(
+      `input[value="${config.tabContentType}"]`
+    );
+    if (input) input.checked = true;
+  }
 }
 
 /** Reads the current popup controls into a normalized recording run config. */
 export function buildRunConfigFromForm(elements: PopupElements): RecordingRunConfig {
   const recordSelfVideo =
     elements.recordSelfVideoCheckbox?.checked ?? DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo;
+  const tabContentType = elements.tabContentTypeGroup
+    ?.querySelector<HTMLInputElement>('input:checked')?.value;
 
   return getRunConfigOrDefault({
     storageMode: elements.storageModeSelect?.value,
     micMode: elements.micModeSelect?.value,
     recordSelfVideo,
+    tabContentType,
   });
 }

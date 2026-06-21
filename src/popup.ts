@@ -28,6 +28,7 @@ const controller = new PopupController({
   startBtn: byId<HTMLButtonElement>('start-rec'),
   storageModeSelect: byId<HTMLSelectElement>('storage-mode'),
   recordSelfVideoCheckbox: byId<HTMLInputElement>('record-self-video'),
+  tabContentTypeGroup: byId('tab-content-type'),
   openSettingsBtn: byId<HTMLButtonElement>('open-settings'),
   openDiagnosticsBtn: byId<HTMLButtonElement>('open-diagnostics'),
 

@@ -311,10 +311,10 @@
         <input id="self-video-min-adaptive-bitrate" type="number" min="100000" step="1000" />
 
         <div class="field-label">
-          <label for="tab-content-type">Tab content type</label>
+          <label for="tab-content-type">Default tab content type</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain tab content type" aria-controls="tooltip-tab-content-type" aria-expanded="false">?</button>
-            <span id="tooltip-tab-content-type" class="tooltip-bubble" role="tooltip" hidden>Selects the quality factor for the tab encoder. Screen (default) targets ~1.5 Mbps at 1080p30, which is appropriate for UI, code, and slides. Video targets ~5 Mbps at 1080p30, which preserves motion detail when recording video playback or animations.</span>
+            <span id="tooltip-tab-content-type" class="tooltip-bubble" role="tooltip" hidden>The default preset; you can override it per-recording from the popup. Selects the quality factor for the tab encoder. Screen targets ~1.5 Mbps at 1080p30, appropriate for UI, code, and slides. Video targets ~5 Mbps at 1080p30, preserving motion detail for video playback or animations.</span>
           </span>
         </div>
         <select id="tab-content-type">

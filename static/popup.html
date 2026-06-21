@@ -132,6 +132,63 @@
         flex-shrink: 0;
       }
 
+      /* ── Segmented control (quick presets) ── */
+      .segmented {
+        display: flex;
+        gap: 3px;
+        background: #25262b;
+        border: 1px solid #2c2e33;
+        border-radius: 6px;
+        padding: 3px;
+      }
+
+      .seg {
+        position: relative;
+        cursor: pointer;
+      }
+
+      .seg input {
+        position: absolute;
+        inset: 0;
+        margin: 0;
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .seg span {
+        display: block;
+        text-align: center;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+        color: #a0a6b4;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .seg input:checked+span {
+        background: #4c7fe3;
+        color: #fff;
+      }
+
+      .seg input:focus-visible+span {
+        box-shadow: 0 0 0 2px rgba(76, 127, 227, 0.35);
+      }
+
+      /* ── Inline field row (label + compact control) ── */
+      .field-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .field-name {
+        font-size: 12px;
+        color: #a0a6b4;
+      }
+
       /* ── Buttons ── */
       .btn {
         display: inline-flex;
@@ -493,12 +550,16 @@
       </div>
 
       <div class="section">
-        <div class="section-label">Microphone</div>
+        <div class="section-label">Microphone & Camera</div>
         <select id="mic-mode">
           <option value="off">Do not record microphone</option>
           <option value="mixed">Mix into tab recording</option>
           <option value="separate" selected>Save as separate audio file</option>
         </select>
+        <label class="checkbox-label">
+          <input type="checkbox" id="record-self-video" checked />
+          Record my camera separately
+        </label>
       </div>
 
       <div class="section">
@@ -507,10 +568,19 @@
           <option value="local">Save to Local Disk (OPFS)</option>
           <option value="drive" selected>Save to Google Drive (after stop)</option>
         </select>
-        <label class="checkbox-label">
-          <input type="checkbox" id="record-self-video" checked />
-          Record my camera separately
-        </label>
+        <div class="field-row">
+          <span class="field-name">Tab content</span>
+          <div id="tab-content-type" class="segmented" role="radiogroup" aria-label="Tab content type">
+            <label class="seg">
+              <input type="radio" name="tab-content-type" value="screen" checked />
+              <span>Screen</span>
+            </label>
+            <label class="seg">
+              <input type="radio" name="tab-content-type" value="video" />
+              <span>Video</span>
+            </label>
+          </div>
+        </div>
       </div>
 
       <button id="start-rec" class="btn btn-primary start-btn">

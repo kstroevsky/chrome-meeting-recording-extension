@@ -10,6 +10,7 @@ import type {
   RecordingPhase,
   RecordingRunConfig,
   StorageMode,
+  TabContentType,
 } from './recordingTypes';
 
 type RecordingModeDefault = 'opfs' | 'drive';
@@ -31,6 +32,7 @@ export const EXTENSION_DEFAULTS = Object.freeze({
     storageMode: DEFAULT_STORAGE_MODE,
     micMode: CONFIGURABLE_RUN_DEFAULTS.microphoneRecordingMode,
     recordSelfVideo: CONFIGURABLE_RUN_DEFAULTS.separateCameraCapture,
+    tabContentType: 'screen' as const,
   }) satisfies Readonly<RecordingRunConfig>,
   capture: Object.freeze({
     tab: Object.freeze({
@@ -66,3 +68,4 @@ export const BUSY_RECORDING_PHASES = ['starting', 'recording', 'stopping', 'uplo
 export const NON_IDLE_RECORDING_PHASES = [...BUSY_RECORDING_PHASES, 'failed'] as const satisfies readonly RecordingPhase[];
 export const VALID_STORAGE_MODES = ['local', 'drive'] as const satisfies readonly StorageMode[];
 export const VALID_MIC_MODES = ['off', 'mixed', 'separate'] as const satisfies readonly MicMode[];
+export const VALID_TAB_CONTENT_TYPES = ['screen', 'video'] as const satisfies readonly TabContentType[];
