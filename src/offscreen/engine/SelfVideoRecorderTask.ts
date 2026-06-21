@@ -216,7 +216,7 @@ async function startWiredSelfVideoRecorder(
     deps.log('Self video track ended');
     if (recorder.state !== 'inactive') try { recorder.stop(); } catch {}
   });
-  recorder.ondataavailable = makeChunkHandler(target, 'self-video', deps);
+  recorder.ondataavailable = makeChunkHandler(target, 'self-video', deps, videoBitsPerSecond);
   recorder.onerror = (e: any) => { deps.error('Self video MediaRecorder error', e); void finalize('Self video'); };
   recorder.onstop = () => { void finalize('Self video'); };
 

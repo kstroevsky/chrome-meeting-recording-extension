@@ -75,7 +75,7 @@ export async function startMicRecorder(
     }
   };
 
-  recorder.ondataavailable = makeChunkHandler(target, 'mic', deps);
+  recorder.ondataavailable = makeChunkHandler(target, 'mic', deps, 96_000);
   recorder.onerror = (e: any) => {
     deps.error('Mic MediaRecorder error', e);
     void finalize('Mic');

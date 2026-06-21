@@ -31,6 +31,7 @@ import {
   applyLifecycle,
   applyObserverCount,
   applyCpuSample,
+  applyRecorderBitrateObserved,
   applyRecorderChunk,
   applyRecorderStarted,
   applyRuntimeSample,
@@ -94,6 +95,9 @@ export class PerfDebugStore {
         break;
       case 'recorder:chunk_persisted':
         applyRecorderChunk(this.snapshot, entry);
+        break;
+      case 'recorder:bitrate_observed':
+        applyRecorderBitrateObserved(this.snapshot, entry);
         break;
       case 'recorder:artifact_sealed':
         applyArtifactSealed(this.snapshot, entry);

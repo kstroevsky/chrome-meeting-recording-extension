@@ -77,6 +77,10 @@ export type PerfDebugSummary = {
     lastTimesliceMsByStream: Partial<Record<RecordingStream, number>>;
     lastSelfVideoBitrate: number | null;
     lastVideoBitsPerSecondByStream: Partial<Record<RecordingStream, number>>;
+    /** Actual encoded bitrate measured from chunk sizes (vs. the requested hint above). */
+    lastObservedBitsPerSecondByStream: Partial<Record<RecordingStream, number>>;
+    /** Observed/requested bitrate ratio — <1 means the encoder undershot the hint. */
+    lastObservedBitrateRatioByStream: Partial<Record<RecordingStream, number>>;
     lastAudioBridgeMode: AudioPlaybackBridgeMode | null;
     lastAudioBridgeSuppressed: boolean | null;
     lastAudioBridgeEnabled: boolean | null;

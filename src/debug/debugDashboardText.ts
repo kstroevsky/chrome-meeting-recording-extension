@@ -39,6 +39,7 @@ export function buildRecorderText(snapshot: PerfDebugSnapshot): string {
     `Finalization: completed=${finalization?.count ?? 0}, downloads=${finalization?.downloadCount ?? 0}, latest=${formatMetric(finalization?.lastDurationMs, 'ms')}`,
     `Lifecycle: starts=${lifecycle?.startCompletedCount ?? 0}, stops=${lifecycle?.stopCompletedCount ?? 0}, failures=${lifecycle?.failureCount ?? 0}, activeTracks=${lifecycle?.activeTracks ?? 0}`,
     `Self-video bitrate: ${formatBitrate(summary.recorder.lastSelfVideoBitrate)}`,
+    `Encoded bitrate (req→obs): tab=${formatBitrate(summary.recorder.lastVideoBitsPerSecondByStream?.tab ?? null)}→${formatBitrate(summary.recorder.lastObservedBitsPerSecondByStream?.tab ?? null)} (${summary.recorder.lastObservedBitrateRatioByStream?.tab ?? 'n/a'}x), camera=${formatBitrate(summary.recorder.lastVideoBitsPerSecondByStream?.['self-video'] ?? null)}→${formatBitrate(summary.recorder.lastObservedBitsPerSecondByStream?.['self-video'] ?? null)} (${summary.recorder.lastObservedBitrateRatioByStream?.['self-video'] ?? 'n/a'}x)`,
     `Audio bridge: mode=${summary.recorder.lastAudioBridgeMode ?? 'n/a'}, suppressed=${formatBool(summary.recorder.lastAudioBridgeSuppressed)}, enabled=${formatBool(summary.recorder.lastAudioBridgeEnabled)}`,
   ].join('\n');
 }

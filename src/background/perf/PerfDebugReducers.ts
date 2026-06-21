@@ -175,6 +175,16 @@ export function applyRecorderChunk(snapshot: Readonly<PerfDebugSnapshot>, entry:
   }
 }
 
+export function applyRecorderBitrateObserved(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfEventEntry): void {
+  const stream = toRecordingStream(entry.fields.stream);
+  if (!stream) return;
+  const actual = toNumber(entry.fields.actualBitsPerSecond);
+  const ratio = toNumber(entry.fields.ratio);
+  const recorder = snapshot.summary.recorder;
+  if (actual != null) recorder.lastObservedBitsPerSecondByStream[stream] = actual;
+  if (ratio != null) recorder.lastObservedBitrateRatioByStream[stream] = ratio;
+}
+
 export function applyArtifactSealed(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfEventEntry): void {
   const stream = toRecordingStream(entry.fields.stream);
   if (!stream) return;

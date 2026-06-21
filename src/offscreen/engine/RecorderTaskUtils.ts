@@ -6,9 +6,10 @@
  */
 
 import { describeMediaError } from '../RecorderSupport';
-import { debugPerf, logPerf, nowMs, roundMs } from '../../shared/perf';
+import { debugPerf, isPerfDebugMode, logPerf, nowMs, roundMs } from '../../shared/perf';
 import { TIMEOUTS } from '../../shared/timeouts';
 import { WriteBackpressure } from '../storage/WriteBackpressure';
+import { BitrateObserver } from './BitrateObserver';
 import type { RecorderEngineDeps, SealedStorageFile, StorageTarget } from './RecorderEngineTypes';
 import { InMemoryStorageTarget } from './RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
@@ -133,10 +134,15 @@ const MAX_CONSECUTIVE_WRITE_FAILURES = 3;
 export function makeChunkHandler(
   target: StorageTarget,
   stream: RecordingStream,
-  deps: Pick<RecorderEngineDeps, 'log' | 'error' | 'reportWarning' | 'requestProtectiveStop'>
+  deps: Pick<RecorderEngineDeps, 'log' | 'error' | 'reportWarning' | 'requestProtectiveStop'>,
+  requestedBitsPerSecond?: number
 ): (e: BlobEvent) => void {
   let consecutiveWriteFailures = 0;
   let escalated = false;
+  // Observe-only: measure the bitrate the encoder actually produced so the gap
+  // against the requested hint (which HW VBR paths may ignore) is visible in
+  // diagnostics. Never feeds back into the recording — see Phase 1 of the bitrate plan.
+  const bitrateObserver = new BitrateObserver();
 
   // Escalate a persistent storage failure (repeated write rejections, or a
   // write backlog past the hard ceiling) to a protective stop: warn the user and
@@ -185,6 +191,28 @@ export function makeChunkHandler(
     if (!e.data?.size) return;
     const bytes = e.data.size;
     const writeStartedAt = nowMs();
+
+    // Encoded-bitrate observation (requested vs. actual), measured at chunk
+    // arrival from the encoded byte size — independent of whether the disk write
+    // below succeeds, since this is about what the encoder produced, not what
+    // landed. Gated on perf-debug mode (off in production) so it is exactly
+    // zero cost on the hot path for normal users; only diagnostics runs pay it.
+    if (isPerfDebugMode()) {
+      const observed = bitrateObserver.record(bytes, writeStartedAt);
+      if (observed) {
+        debugPerf(deps.log, 'recorder', 'bitrate_observed', {
+          stream,
+          requestedBitsPerSecond: requestedBitsPerSecond ?? null,
+          actualBitsPerSecond: observed.actualBitsPerSecond,
+          ratio: requestedBitsPerSecond
+            ? Math.round((observed.actualBitsPerSecond / requestedBitsPerSecond) * 100) / 100
+            : null,
+          windowMs: observed.windowMs,
+          windowChunks: observed.chunks,
+        });
+      }
+    }
+
     backpressure.enqueue(bytes);
     void target.write(e.data)
       .then(() => {

@@ -57,6 +57,8 @@ export function createEmptySummary(): PerfDebugSummary {
       lastTimesliceMsByStream: {},
       lastSelfVideoBitrate: null,
       lastVideoBitsPerSecondByStream: {},
+      lastObservedBitsPerSecondByStream: {},
+      lastObservedBitrateRatioByStream: {},
       lastAudioBridgeMode: null,
       lastAudioBridgeSuppressed: null,
       lastAudioBridgeEnabled: null,

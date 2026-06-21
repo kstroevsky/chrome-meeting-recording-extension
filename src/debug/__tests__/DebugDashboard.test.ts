@@ -74,6 +74,9 @@ describe('DebugDashboard', () => {
             lastPersistedChunkBytes: 1024,
             lastTimesliceMs: 4000,
             lastSelfVideoBitrate: 1200000,
+            lastVideoBitsPerSecondByStream: { tab: 1500000 },
+            lastObservedBitsPerSecondByStream: { tab: 1350000 },
+            lastObservedBitrateRatioByStream: { tab: 0.9 },
             lastAudioBridgeMode: 'always',
             lastAudioBridgeSuppressed: true,
             lastAudioBridgeEnabled: true,
@@ -135,6 +138,9 @@ describe('DebugDashboard', () => {
     expect(elements.eventsBodyEl.textContent).toContain('.321');
     expect(elements.runtimeEl.textContent).toContain('CPU pressure proxy');
     expect(elements.recorderEl.textContent).toContain('OPFS:');
+    // Encoded-bitrate observability line surfaces requested→observed (+ratio).
+    expect(elements.recorderEl.textContent).toContain('Encoded bitrate (req→obs): tab=');
+    expect(elements.recorderEl.textContent).toContain('(0.9x)');
     expect(elements.captionsEl.textContent).toContain('Caption mutations: 0');
     expect(elements.systemEl.textContent).toContain('Chrome extension APIs');
 

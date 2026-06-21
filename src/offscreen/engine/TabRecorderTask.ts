@@ -94,7 +94,7 @@ export async function startTabRecorder(
     }
   };
 
-  recorder.ondataavailable = makeChunkHandler(target, 'tab', deps);
+  recorder.ondataavailable = makeChunkHandler(target, 'tab', deps, videoBitsPerSecond);
 
   recorder.onerror = (e: any) => {
     deps.error('Tab MediaRecorder error', e);
