@@ -34,6 +34,8 @@ export {
   TAB_SCREEN_QUALITY_FACTOR,
   TAB_VIDEO_QUALITY_FACTOR,
   TAB_CONTENT_TYPE_OPTIONS,
+  SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
+  SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
 } from './defaults';
 
 // Normalization for persisted payloads and snapshots received over RPC.

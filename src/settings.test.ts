@@ -18,9 +18,7 @@ describe('settings page', () => {
       selfVideoUseAutoResolution: true,
     },
     professional: {
-      selfVideoBitrate: 3_000_000,
       selfVideoFrameRate: 30,
-      selfVideoMinAdaptiveBitrate: 1_000_000,
       tabContentType: 'screen' as const,
       tabResolutionPreset: '854x480',
       tabMaxFrameRate: 24,
@@ -76,9 +74,7 @@ describe('settings page', () => {
         selfVideoUseAutoResolution: true,
       },
       professional: {
-        selfVideoBitrate: 3000000,
         selfVideoFrameRate: 30,
-        selfVideoMinAdaptiveBitrate: 1000000,
         tabContentType: 'screen',
         tabResolutionPreset: '1920x1080',
         tabMaxFrameRate: 24,

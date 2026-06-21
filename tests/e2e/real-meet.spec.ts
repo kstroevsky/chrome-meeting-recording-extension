@@ -4,6 +4,10 @@ import fs from 'node:fs/promises';
 import type { PerfDebugSnapshot } from '../../src/shared/perf';
 import type { RecordingStream } from '../../src/shared/recording';
 import {
+  SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
+  SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
+} from '../../src/shared/settings';
+import {
   analyzeMediaArtifact,
   assertMediaToolsAvailable,
   type MediaArtifactAnalysis,
@@ -210,10 +214,20 @@ function assertScenarioSnapshot(
       cameraCapture?.requestedFrameRate,
       scenario.settings.selfVideoFrameRate
     );
-    assert.equal(
-      cameraRecorder?.videoBitsPerSecond,
-      scenario.settings.selfVideoBitrate
-    );
+    // Camera bitrate is automatic (adaptive default on): clamp the delivered
+    // W×H×fps estimate to the internal floor/ceiling, falling back to the
+    // ceiling when the delivered dimensions are unavailable. Mirrors
+    // resolveSelfVideoBitrate().
+    const camW = Number(cameraCapture?.width);
+    const camH = Number(cameraCapture?.height);
+    const camFps = Number(cameraCapture?.frameRate);
+    const expectedCameraBitrate = camW && camH && camFps
+      ? Math.min(
+          Math.max(Math.round(camW * camH * camFps * 0.1), SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND),
+          SELF_VIDEO_DEFAULT_BITS_PER_SECOND
+        )
+      : SELF_VIDEO_DEFAULT_BITS_PER_SECOND;
+    assert.equal(cameraRecorder?.videoBitsPerSecond, expectedCameraBitrate);
     assert.equal(
       cameraRecorder?.timesliceMs,
       scenario.settings.chunkExtendedTimesliceMs

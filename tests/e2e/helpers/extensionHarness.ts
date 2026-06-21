@@ -64,8 +64,6 @@ export type RecordingSettings = {
   tabFrameRate?: number;
   selfVideoResolution?: ResolutionPreset;
   selfVideoFrameRate?: number;
-  selfVideoBitrate?: number;
-  selfVideoMinAdaptiveBitrate?: number;
   chunkDefaultTimesliceMs?: number;
   chunkExtendedTimesliceMs?: number;
 };
@@ -304,15 +302,7 @@ export async function saveRecordingSettings(
     '#self-video-frame-rate',
     String(settings.selfVideoFrameRate ?? 30)
   );
-  if (settings.selfVideoBitrate != null) {
-    await controlPage.fill('#self-video-bitrate', String(settings.selfVideoBitrate));
-  }
-  if (settings.selfVideoMinAdaptiveBitrate != null) {
-    await controlPage.fill(
-      '#self-video-min-adaptive-bitrate',
-      String(settings.selfVideoMinAdaptiveBitrate)
-    );
-  }
+  // Camera bitrate is fully automatic (no user knob), so there is nothing to set.
   if (settings.chunkDefaultTimesliceMs != null) {
     await controlPage.fill(
       '#chunk-default-timeslice',

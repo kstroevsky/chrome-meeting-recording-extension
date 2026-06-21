@@ -7,9 +7,7 @@ export type FullRecordingSettings = {
   micMode: MicMode;
   separateCamera: boolean;
   selfVideoResolutionPreset: ResolutionPreset;
-  selfVideoBitrate: number;
   selfVideoFrameRate: number;
-  selfVideoMinAdaptiveBitrate: number;
   tabResolutionPreset: ResolutionPreset;
   tabVideoBitrate: number;
   tabMaxFrameRate: number;
@@ -31,18 +29,15 @@ export async function applyFullRecordingSettings(
     '#self-video-resolution-preset',
     settings.selfVideoResolutionPreset
   );
-  await page.fill('#self-video-bitrate', String(settings.selfVideoBitrate));
   await page.fill('#self-video-frame-rate', String(settings.selfVideoFrameRate));
-  await page.fill(
-    '#self-video-min-adaptive-bitrate',
-    String(settings.selfVideoMinAdaptiveBitrate)
-  );
   await page.selectOption('#tab-resolution-preset', settings.tabResolutionPreset);
-  // NOTE: the tab video-bitrate input was removed — bitrate is now derived from the
-  // content type's quality factor × delivered resolution (capped at the internal
-  // ceiling), with no user knob. `settings.tabVideoBitrate` is retained in the e2e
-  // config but no longer applied; the bitrate assertions in the specs predate the
-  // #1/#2 model change and need realignment under a real Playwright run.
+  // NOTE: the tab and camera video-bitrate inputs were removed — both bitrates are
+  // now fully automatic (tab: content-type quality factor × delivered resolution;
+  // camera: delivered W×H×fps adapted within an internal floor/ceiling), with no
+  // user knobs. The camera specs assert the delivered dims + internal envelope
+  // directly, so no camera bitrate config remains. `settings.tabVideoBitrate` is
+  // still retained but no longer applied — the tab bitrate assertions predate the
+  // content-type model change and need realignment under a real Playwright run.
   await page.fill('#tab-max-frame-rate', String(settings.tabMaxFrameRate));
   await page.setChecked('#mic-echo-cancellation', settings.micEchoCancellation);
   await page.setChecked('#mic-noise-suppression', settings.micNoiseSuppression);
@@ -69,9 +64,7 @@ export function baseRecordingSettings(
     micMode: 'separate',
     separateCamera: true,
     selfVideoResolutionPreset: '1920x1080',
-    selfVideoBitrate: 3_000_000,
     selfVideoFrameRate: 30,
-    selfVideoMinAdaptiveBitrate: 1_000_000,
     tabResolutionPreset: '1920x1080',
     tabVideoBitrate: 1_500_000,
     tabMaxFrameRate: 30,

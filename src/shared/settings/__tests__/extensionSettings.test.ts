@@ -143,7 +143,7 @@ describe('settings', () => {
     expect((settings.professional as Record<string, unknown>).tabVideoBitrate).toBeUndefined();
   });
 
-  it('caps persisted self-video bitrate settings at the new 3 Mbps ceiling', () => {
+  it('drops legacy persisted self-video bitrate settings (the envelope is now internal-only)', () => {
     const settings = normalizeExtensionSettings({
       professional: {
         selfVideoBitrate: 6_000_000,
@@ -151,8 +151,8 @@ describe('settings', () => {
       },
     });
 
-    expect(settings.professional.selfVideoBitrate).toBe(3_000_000);
-    expect(settings.professional.selfVideoMinAdaptiveBitrate).toBe(3_000_000);
+    expect((settings.professional as Record<string, unknown>).selfVideoBitrate).toBeUndefined();
+    expect((settings.professional as Record<string, unknown>).selfVideoMinAdaptiveBitrate).toBeUndefined();
   });
 
   it('builds a recorder runtime snapshot from the normalized capture settings', () => {
@@ -162,8 +162,6 @@ describe('settings', () => {
       },
       professional: {
         selfVideoFrameRate: 24,
-        selfVideoBitrate: 2_000_000,
-        selfVideoMinAdaptiveBitrate: 1_000_000,
         tabResolutionPreset: '640x360',
         tabMaxFrameRate: 20,
         microphoneEchoCancellation: false,
@@ -184,7 +182,8 @@ describe('settings', () => {
           height: 720,
           frameRate: 24,
           aspectRatio: 1280 / 720,
-          defaultBitsPerSecond: 2_000_000,
+          // Camera bitrate envelope is now internal (constants), not user-set.
+          defaultBitsPerSecond: 3_000_000,
           minAdaptiveBitsPerSecond: 1_000_000,
           autoResolution: true,
         },

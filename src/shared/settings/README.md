@@ -26,7 +26,7 @@ The single source of *configuration*. Two responsibilities: (1) hold the user's 
 
 | Field | Drives |
 | :--- | :--- |
-| `selfVideoBitrate`, `selfVideoMinAdaptiveBitrate`, `selfVideoFrameRate` | camera encode profile (bitrate ceiling/floor, fps) |
+| `selfVideoFrameRate` | camera capture fps. The camera bitrate has **no** user knob — it is fully automatic (delivered `W×H×fps` adapted within the internal `SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND` floor / `SELF_VIDEO_DEFAULT_BITS_PER_SECOND` ceiling), mirroring the tab. |
 | `tabResolutionPreset`, `tabMaxFrameRate` | tab capture target dimensions + fps ceiling |
 | `tabContentType` | `'screen' \| 'video'` — the **only** tab-bitrate knob. Selects the quality factor (screen ≈ low bits/pixel for UI/code; video ≈ high bits/pixel for motion). The ceiling is the internal `MAX_TAB_VIDEO_BITRATE`, not user-facing. |
 | `microphoneEchoCancellation`, `microphoneNoiseSuppression`, `microphoneAutoGainControl` | mic `getUserMedia` constraints (DSP) |

@@ -27,9 +27,7 @@ export type ExtensionSettings = {
     selfVideoUseAutoResolution: boolean;
   };
   professional: {
-    selfVideoBitrate: number;
     selfVideoFrameRate: number;
-    selfVideoMinAdaptiveBitrate: number;
     tabResolutionPreset: ResolutionPreset;
     tabMaxFrameRate: number;
     tabContentType: TabContentType;

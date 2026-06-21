@@ -10,6 +10,8 @@ import { getLocalStorageValues, hasLocalStorageArea, setLocalStorageValues } fro
 import {
   DEFAULT_EXTENSION_SETTINGS,
   EXTENSION_SETTINGS_STORAGE_KEY,
+  SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
+  SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
   TAB_MIN_VIDEO_BITRATE,
   MAX_TAB_VIDEO_BITRATE,
 } from './defaults';
@@ -65,8 +67,10 @@ export function getSelfVideoProfileSettings(
     height,
     frameRate: settings.professional.selfVideoFrameRate,
     aspectRatio: width / height,
-    defaultBitsPerSecond: settings.professional.selfVideoBitrate,
-    minAdaptiveBitsPerSecond: settings.professional.selfVideoMinAdaptiveBitrate,
+    // Camera bitrate is fully automatic — these are the internal envelope the
+    // offscreen adapts within (resolveSelfVideoBitrate), not user settings.
+    defaultBitsPerSecond: SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
+    minAdaptiveBitsPerSecond: SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
     autoResolution: settings.basic.selfVideoUseAutoResolution,
   };
 }

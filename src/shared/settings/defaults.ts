@@ -31,7 +31,11 @@ export const LEGACY_VIDEO_FORMAT_OPTIONS = [
   1080, 720, 480, 360,
 ] as const satisfies readonly LegacyVideoFormat[];
 export const DEFAULT_RESOLUTION_PRESET: ResolutionPreset = '1920x1080';
-export const MAX_SELF_VIDEO_BITRATE = EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond;
+// Internal camera bitrate envelope. The camera bitrate is fully automatic —
+// resolveSelfVideoBitrate adapts the delivered W×H×fps and clamps it to this
+// floor/ceiling — so there is no user-facing knob (mirrors the tab).
+export const SELF_VIDEO_DEFAULT_BITS_PER_SECOND = EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond;
+export const SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND = EXTENSION_DEFAULTS.capture.selfVideo.minAdaptiveBitsPerSecond;
 
 /** Chrome tab capture hard ceiling on frame rate — values above this have no effect on the capture FPS. */
 export const TAB_MAX_FRAME_RATE = EXTENSION_DEFAULTS.capture.tab.maxFrameRate;
@@ -76,9 +80,7 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     selfVideoUseAutoResolution: true,
   }),
   professional: Object.freeze({
-    selfVideoBitrate: EXTENSION_DEFAULTS.capture.selfVideo.defaultBitsPerSecond,
     selfVideoFrameRate: EXTENSION_DEFAULTS.capture.selfVideo.frameRate,
-    selfVideoMinAdaptiveBitrate: EXTENSION_DEFAULTS.capture.selfVideo.minAdaptiveBitsPerSecond,
     tabResolutionPreset: DEFAULT_RESOLUTION_PRESET,
     tabMaxFrameRate: EXTENSION_DEFAULTS.capture.tab.maxFrameRate,
     // Tab bitrate is computed from this content type's quality factor × the delivered

@@ -35,6 +35,10 @@ import {
   applyFullRecordingSettings,
   baseRecordingSettings,
 } from './helpers/recordingSettings';
+import {
+  SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
+  SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
+} from '../../src/shared/settings';
 
 const REAL_MEDIA = process.env.PW_REAL_MEDIA === '1';
 const DEVICE_MODE: DeviceMode = REAL_MEDIA ? 'hardware' : 'fake';
@@ -117,8 +121,9 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
     try {
       await ensureRealMediaOrSkip(harness);
 
-      // Adaptive OFF so selfVideoBitrate is used verbatim; extended-timeslice OFF
-      // so the mic recorder uses chunkDefaultTimesliceMs (tab/cam use extended).
+      // Adaptive OFF so the camera uses the internal default (ceiling) bitrate
+      // verbatim; extended-timeslice OFF so the mic recorder uses
+      // chunkDefaultTimesliceMs (tab/cam use extended).
       await setPerfSettings(harness.controlPage, {
         adaptiveSelfVideoProfile: false,
         extendedTimeslice: false,
@@ -134,7 +139,6 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
         tabVideoBitrate: tabVideoBitrateReference,
         selfVideoResolutionPreset: '854x480',
         selfVideoFrameRate: 24,
-        selfVideoBitrate: 1_200_000,
         chunkDefaultTimesliceMs: 750,
         chunkExtendedTimesliceMs: 3_000,
         // Distinctive, mixed DSP toggles so each maps independently.
@@ -186,9 +190,9 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
       expect(camCapture!.requestedHeight).toBe(480);
       expect(camCapture!.requestedFrameRate).toBe(24);
 
-      // selfVideoBitrate (adaptive off) -> exact camera MediaRecorder bitrate.
+      // Adaptive off -> the camera uses the internal default (ceiling) bitrate.
       expect(camRec).not.toBeNull();
-      expect(camRec!.videoBitsPerSecond).toBe(1_200_000);
+      expect(camRec!.videoBitsPerSecond).toBe(SELF_VIDEO_DEFAULT_BITS_PER_SECOND);
 
       // chunkExtendedTimesliceMs -> tab + camera timeslice.
       expect(tabRec).not.toBeNull();
@@ -207,7 +211,7 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
       );
       expect(tabRec!.videoBitsPerSecond).toBe(expectedTabBitrate);
       expect(startSnap.summary.recorder.lastVideoBitsPerSecondByStream.tab).toBe(expectedTabBitrate);
-      expect(startSnap.summary.recorder.lastVideoBitsPerSecondByStream['self-video']).toBe(1_200_000);
+      expect(startSnap.summary.recorder.lastVideoBitsPerSecondByStream['self-video']).toBe(SELF_VIDEO_DEFAULT_BITS_PER_SECOND);
 
       // microphoneEcho/Noise/AutoGain -> mic getUserMedia constraints, now logged
       // (requested + applied) so the DSP toggles are observable.
@@ -250,7 +254,7 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
     }
   });
 
-  test('adaptive bitrate clamps the camera to selfVideoMinAdaptiveBitrate / selfVideoBitrate', async ({}, testInfo) => {
+  test('adaptive bitrate clamps the camera to the internal floor/ceiling envelope', async ({}, testInfo) => {
     test.setTimeout(180_000);
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), {
       deviceMode: DEVICE_MODE,
@@ -260,16 +264,16 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
       await ensureRealMediaOrSkip(harness);
       await setPerfSettings(harness.controlPage, { adaptiveSelfVideoProfile: true });
 
-      const ceiling = 1_500_000;
-      const floor = 1_200_000;
+      // The camera bitrate envelope is internal (no user knob); the adaptive
+      // estimate is clamped to this floor/ceiling.
+      const ceiling = SELF_VIDEO_DEFAULT_BITS_PER_SECOND;
+      const floor = SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND;
       await applyFullRecordingSettings(harness.controlPage, baseRecordingSettings({
         recordingMode: 'opfs',
         micMode: 'off',
         separateCamera: true,
         selfVideoResolutionPreset: '854x480',
         selfVideoFrameRate: 24,
-        selfVideoBitrate: ceiling,
-        selfVideoMinAdaptiveBitrate: floor,
       }));
 
       await openMockMeetPage(harness.context);

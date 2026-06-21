@@ -284,15 +284,6 @@
       <h2>Professional</h2>
       <div class="field-grid">
         <div class="field-label">
-          <label for="self-video-bitrate">Camera bitrate (bits/s)</label>
-          <span class="tooltip-shell">
-            <button class="tooltip-toggle" type="button" aria-label="Explain camera bitrate" aria-controls="tooltip-self-video-bitrate" aria-expanded="false">?</button>
-            <span id="tooltip-self-video-bitrate" class="tooltip-bubble" role="tooltip" hidden>Higher bitrate preserves more camera detail but increases file size and upload time.</span>
-          </span>
-        </div>
-        <input id="self-video-bitrate" type="number" min="100000" max="3000000" step="1000" />
-
-        <div class="field-label">
           <label for="self-video-frame-rate">Camera frame rate (FPS)</label>
           <span class="tooltip-shell">
             <button class="tooltip-toggle" type="button" aria-label="Explain camera frame rate" aria-controls="tooltip-self-video-frame-rate" aria-expanded="false">?</button>
@@ -300,15 +291,6 @@
           </span>
         </div>
         <input id="self-video-frame-rate" type="number" min="1" max="120" />
-
-        <div class="field-label">
-          <label for="self-video-min-adaptive-bitrate">Minimum adaptive bitrate (bits/s)</label>
-          <span class="tooltip-shell">
-            <button class="tooltip-toggle" type="button" aria-label="Explain minimum adaptive bitrate" aria-controls="tooltip-self-video-min-adaptive-bitrate" aria-expanded="false">?</button>
-            <span id="tooltip-self-video-min-adaptive-bitrate" class="tooltip-bubble" role="tooltip" hidden>Sets the floor when adaptive camera bitrate is enabled so video quality does not drop below this level.</span>
-          </span>
-        </div>
-        <input id="self-video-min-adaptive-bitrate" type="number" min="100000" step="1000" />
 
         <div class="field-label">
           <label for="tab-content-type">Default tab content type</label>

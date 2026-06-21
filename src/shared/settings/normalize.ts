@@ -12,7 +12,6 @@ import {
   DEFAULT_EXTENSION_SETTINGS,
   LEGACY_CAMERA_FORMAT_TO_PRESET,
   LEGACY_VIDEO_FORMAT_OPTIONS,
-  MAX_SELF_VIDEO_BITRATE,
   MICROPHONE_MODE_OPTIONS,
   RECORDING_MODE_OPTIONS,
   RESOLUTION_PRESET_DIMENSIONS,
@@ -164,9 +163,7 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
   };
 
   const professional: ExtensionSettings['professional'] = {
-    selfVideoBitrate: normalizePositiveInt(professionalCandidate.selfVideoBitrate, DEFAULT_EXTENSION_SETTINGS.professional.selfVideoBitrate, 100_000, MAX_SELF_VIDEO_BITRATE),
     selfVideoFrameRate: normalizePositiveInt(professionalCandidate.selfVideoFrameRate, DEFAULT_EXTENSION_SETTINGS.professional.selfVideoFrameRate, 1, 120),
-    selfVideoMinAdaptiveBitrate: normalizePositiveInt(professionalCandidate.selfVideoMinAdaptiveBitrate, DEFAULT_EXTENSION_SETTINGS.professional.selfVideoMinAdaptiveBitrate, 100_000, 50_000_000),
     tabResolutionPreset: normalizeTabResolutionPreset(professionalCandidate),
     tabMaxFrameRate: normalizePositiveInt(professionalCandidate.tabMaxFrameRate, DEFAULT_EXTENSION_SETTINGS.professional.tabMaxFrameRate, 1, 120),
     tabContentType: hasAllowedString(professionalCandidate.tabContentType, TAB_CONTENT_TYPE_OPTIONS)
@@ -187,9 +184,6 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
 
   if (professional.chunkExtendedTimesliceMs < professional.chunkDefaultTimesliceMs) {
     professional.chunkExtendedTimesliceMs = professional.chunkDefaultTimesliceMs;
-  }
-  if (professional.selfVideoMinAdaptiveBitrate > professional.selfVideoBitrate) {
-    professional.selfVideoMinAdaptiveBitrate = professional.selfVideoBitrate;
   }
 
   return { basic, professional };

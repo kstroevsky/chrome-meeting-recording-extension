@@ -17,9 +17,7 @@ type SettingsElements = {
   separateCamera: HTMLInputElement | null;
   selfVideoResolutionPreset: HTMLSelectElement | null;
   selfVideoAutoResolution: HTMLInputElement | null;
-  selfVideoBitrate: HTMLInputElement | null;
   selfVideoFrameRate: HTMLInputElement | null;
-  selfVideoMinAdaptiveBitrate: HTMLInputElement | null;
   tabContentType: HTMLSelectElement | null;
   tabResolutionPreset: HTMLSelectElement | null;
   tabMaxFrameRate: HTMLInputElement | null;
@@ -45,9 +43,7 @@ const el: SettingsElements = {
   separateCamera: document.getElementById('separate-camera') as HTMLInputElement | null,
   selfVideoResolutionPreset: document.getElementById('self-video-resolution-preset') as HTMLSelectElement | null,
   selfVideoAutoResolution: document.getElementById('self-video-auto-resolution') as HTMLInputElement | null,
-  selfVideoBitrate: document.getElementById('self-video-bitrate') as HTMLInputElement | null,
   selfVideoFrameRate: document.getElementById('self-video-frame-rate') as HTMLInputElement | null,
-  selfVideoMinAdaptiveBitrate: document.getElementById('self-video-min-adaptive-bitrate') as HTMLInputElement | null,
   tabContentType: document.getElementById('tab-content-type') as HTMLSelectElement | null,
   tabResolutionPreset: document.getElementById('tab-resolution-preset') as HTMLSelectElement | null,
   tabMaxFrameRate: document.getElementById('tab-max-frame-rate') as HTMLInputElement | null,
@@ -79,11 +75,7 @@ function applySettings(settings: Readonly<ExtensionSettings>): void {
   if (el.selfVideoAutoResolution) {
     el.selfVideoAutoResolution.checked = settings.basic.selfVideoUseAutoResolution;
   }
-  if (el.selfVideoBitrate) el.selfVideoBitrate.value = String(settings.professional.selfVideoBitrate);
   if (el.selfVideoFrameRate) el.selfVideoFrameRate.value = String(settings.professional.selfVideoFrameRate);
-  if (el.selfVideoMinAdaptiveBitrate) {
-    el.selfVideoMinAdaptiveBitrate.value = String(settings.professional.selfVideoMinAdaptiveBitrate);
-  }
   if (el.tabContentType) el.tabContentType.value = settings.professional.tabContentType;
   if (el.tabResolutionPreset) {
     el.tabResolutionPreset.value = settings.professional.tabResolutionPreset;
@@ -107,9 +99,7 @@ function readSettingsFromForm(): unknown {
       selfVideoUseAutoResolution: !!el.selfVideoAutoResolution?.checked,
     },
     professional: {
-      selfVideoBitrate: Number(el.selfVideoBitrate?.value),
       selfVideoFrameRate: Number(el.selfVideoFrameRate?.value),
-      selfVideoMinAdaptiveBitrate: Number(el.selfVideoMinAdaptiveBitrate?.value),
       tabContentType: el.tabContentType?.value,
       tabResolutionPreset: el.tabResolutionPreset?.value,
       tabMaxFrameRate: Number(el.tabMaxFrameRate?.value),
