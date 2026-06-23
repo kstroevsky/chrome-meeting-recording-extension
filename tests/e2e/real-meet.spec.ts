@@ -6,6 +6,7 @@ import type { RecordingStream } from '../../src/shared/recording';
 import {
   SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
   SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
+  SELF_VIDEO_QUALITY_FACTOR,
 } from '../../src/shared/settings';
 import {
   analyzeMediaArtifact,
@@ -223,7 +224,7 @@ function assertScenarioSnapshot(
     const camFps = Number(cameraCapture?.frameRate);
     const expectedCameraBitrate = camW && camH && camFps
       ? Math.min(
-          Math.max(Math.round(camW * camH * camFps * 0.1), SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND),
+          Math.max(Math.round(camW * camH * camFps * SELF_VIDEO_QUALITY_FACTOR), SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND),
           SELF_VIDEO_DEFAULT_BITS_PER_SECOND
         )
       : SELF_VIDEO_DEFAULT_BITS_PER_SECOND;

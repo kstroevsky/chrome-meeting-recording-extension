@@ -38,6 +38,7 @@ import {
 import {
   SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
   SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
+  SELF_VIDEO_QUALITY_FACTOR,
 } from '../../src/shared/settings';
 
 const REAL_MEDIA = process.env.PW_REAL_MEDIA === '1';
@@ -298,8 +299,8 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
       const w = Number(camCapture!.width);
       const h = Number(camCapture!.height);
       const fps = Number(camCapture!.frameRate);
-      // Mirrors resolveSelfVideoBitrate(): clamp(round(w*h*fps*0.1), floor, ceiling).
-      const estimated = Math.round(w * h * fps * 0.1);
+      // Mirrors resolveSelfVideoBitrate(): clamp(round(w*h*fps*factor), floor, ceiling).
+      const estimated = Math.round(w * h * fps * SELF_VIDEO_QUALITY_FACTOR);
       const expectedBitrate = Math.min(Math.max(estimated, floor), ceiling);
       await attachJson(testInfo, 'adaptive-computation', {
         delivered: { w, h, fps },

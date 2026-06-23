@@ -49,6 +49,16 @@ export const TAB_CONTENT_TYPE_OPTIONS = ['screen', 'video'] as const satisfies r
 export const TAB_SCREEN_QUALITY_FACTOR = 0.024;
 export const TAB_VIDEO_QUALITY_FACTOR = 0.08;
 
+// Self-video (camera) bitrate quality factor (bits / pixel / frame), used by
+// resolveSelfVideoBitrate to scale the camera encode to its delivered W×H×fps.
+// A webcam talking head is low-motion, so it needs no more bits/pixel than
+// general video (0.08) and far fewer than its historical 0.1: 0.05 gives
+// ~1.38 Mbps at 720p30 (the common camera-contention size), ~halving the camera
+// file with negligible perceptual loss on a face. 1080p stays ceiling-bound
+// (unchanged), and the SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND floor (1 Mbps)
+// protects low resolutions this factor would otherwise underprovision.
+export const SELF_VIDEO_QUALITY_FACTOR = 0.05;
+
 export const TAB_MIN_VIDEO_BITRATE = 250_000;
 export const MAX_TAB_VIDEO_BITRATE = 8_000_000;
 

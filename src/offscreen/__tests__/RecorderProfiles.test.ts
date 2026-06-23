@@ -54,9 +54,18 @@ describe('RecorderProfiles', () => {
   it('adapts self-video bitrate within the allowed ceiling when profiling is enabled', () => {
     PERF_FLAGS.adaptiveSelfVideoProfile = true;
 
+    // Factor-bound (the binding case): 1280x720x30 * 0.05 quality factor.
+    expect(resolveSelfVideoBitrate(3_000_000, { width: 1280, height: 720, frameRate: 30 })).toBe(1_382_400);
+    // Floor- and ceiling-bound cases clamp regardless of the factor.
     expect(resolveSelfVideoBitrate(3_000_000, { width: 640, height: 360, frameRate: 15 })).toBe(1_000_000);
     expect(resolveSelfVideoBitrate(3_000_000, { width: 3840, height: 2160, frameRate: 60 })).toBe(3_000_000);
     expect(resolveSelfVideoBitrate(3_000_000, undefined)).toBe(3_000_000);
+  });
+
+  it('returns the fallback bitrate unchanged when adaptive profiling is disabled', () => {
+    PERF_FLAGS.adaptiveSelfVideoProfile = false;
+
+    expect(resolveSelfVideoBitrate(3_000_000, { width: 1280, height: 720, frameRate: 30 })).toBe(3_000_000);
   });
 
   it('builds a deterministic self-video constraint fallback ladder', () => {

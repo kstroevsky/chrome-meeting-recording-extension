@@ -9,6 +9,7 @@ import {
   type ChunkingSettings,
   type SelfVideoProfileSettings,
   DEFAULT_EXTENSION_SETTINGS,
+  SELF_VIDEO_QUALITY_FACTOR,
   getChunkingSettings,
   getSelfVideoProfileSettings,
 } from '../shared/settings';
@@ -199,6 +200,6 @@ export function resolveSelfVideoBitrate(
   const frameRate = settings?.frameRate;
   if (!width || !height || !frameRate) return fallbackBitsPerSecond;
 
-  const estimated = Math.round(width * height * frameRate * 0.1);
+  const estimated = Math.round(width * height * frameRate * SELF_VIDEO_QUALITY_FACTOR);
   return clamp(estimated, minAdaptiveBitsPerSecond, fallbackBitsPerSecond);
 }
