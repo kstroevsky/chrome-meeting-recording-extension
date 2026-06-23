@@ -73,6 +73,9 @@ export function createEmptySummary(): PerfDebugSummary {
       mutationThroughputPerSecond: null,
       processingDurationMs: createEmptyDistribution(),
       sourceLatencyMs: createEmptyDistribution(),
+      longTaskCount: 0,
+      longTaskTotalMs: 0,
+      maxLongTaskMs: null,
     },
     storage: {
       openCount: 0,

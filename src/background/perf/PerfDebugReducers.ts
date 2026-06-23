@@ -266,6 +266,25 @@ export function applyCaptionMutation(snapshot: Readonly<PerfDebugSnapshot>, entr
   }
 }
 
+/**
+ * Accumulates content-script main-thread long tasks. The producer emits one
+ * aggregate per PerformanceObserver batch (count/totalMs/maxMs) rather than per
+ * entry, so counts add, total accumulates, and max is the running peak.
+ */
+export function applyCaptionLongTask(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfEventEntry): void {
+  const captions = snapshot.summary.captions;
+  const count = toNumber(entry.fields.count);
+  const totalMs = toNumber(entry.fields.totalMs);
+  const maxMs = toNumber(entry.fields.maxMs);
+  if (count != null) captions.longTaskCount += count;
+  if (totalMs != null) captions.longTaskTotalMs = round(captions.longTaskTotalMs + totalMs);
+  if (maxMs != null) {
+    captions.maxLongTaskMs = captions.maxLongTaskMs == null
+      ? maxMs
+      : Math.max(captions.maxLongTaskMs, maxMs);
+  }
+}
+
 export function applyStorage(snapshot: Readonly<PerfDebugSnapshot>, entry: PerfEventEntry): void {
   const storage = snapshot.summary.storage;
   const stream = toRecordingStream(entry.fields.stream);

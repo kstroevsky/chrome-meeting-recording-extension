@@ -95,6 +95,12 @@ export type PerfDebugSummary = {
     mutationThroughputPerSecond: number | null;
     processingDurationMs: PerfDistribution;
     sourceLatencyMs: PerfDistribution;
+    // Long tasks (>50ms) on the Meet-tab (content-script) main thread — the
+    // user-facing surface. Debug-only; deliberately separate from
+    // runtime.longTaskCount, which measures the offscreen recorder thread.
+    longTaskCount: number;
+    longTaskTotalMs: number;
+    maxLongTaskMs: number | null;
   };
   storage: {
     openCount: number;

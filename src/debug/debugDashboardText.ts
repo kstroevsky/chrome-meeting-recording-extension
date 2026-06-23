@@ -71,6 +71,7 @@ export function buildCaptionsText(snapshot: PerfDebugSnapshot): string {
     `Mutation throughput: ${formatMetric(summary.captions.mutationThroughputPerSecond, 'events/s')}`,
     `Changed/coalesced: ${summary.captions.changedMutationCount ?? 0}/${summary.captions.coalescedMutationCount ?? 0}`,
     `Processing latency: p50=${formatMetric(summary.captions.processingDurationMs?.p50, 'ms')}, p95=${formatMetric(summary.captions.processingDurationMs?.p95, 'ms')}`,
+    `Main-thread long tasks: count=${summary.captions.longTaskCount ?? 0}, total=${formatMetric(summary.captions.longTaskTotalMs, 'ms')}, max=${formatMetric(summary.captions.maxLongTaskMs, 'ms')}`,
   ].join('\n');
 }
 

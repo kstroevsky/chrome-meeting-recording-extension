@@ -21,6 +21,7 @@ import { createEmptySnapshot, normalizeSummary } from './perf/PerfDebugState';
 import {
   applyAudioBridge,
   applyArtifactSealed,
+  applyCaptionLongTask,
   applyCaptionMutation,
   applyCapture,
   applyDriveChunk,
@@ -113,6 +114,9 @@ export class PerfDebugStore {
         break;
       case 'captions:mutation_processed':
         applyCaptionMutation(this.snapshot, entry);
+        break;
+      case 'captions:long_task':
+        applyCaptionLongTask(this.snapshot, entry);
         break;
       case 'capture:stream_acquired':
       case 'capture:stream_failed':

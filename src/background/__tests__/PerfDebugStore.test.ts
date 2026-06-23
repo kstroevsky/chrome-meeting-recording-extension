@@ -197,6 +197,25 @@ describe('PerfDebugStore', () => {
     expect(snapshot.summary.lifecycle.lastStopDurationMs).toBe(35);
   });
 
+  it('aggregates content-script main-thread long tasks separately from the offscreen runtime', () => {
+    const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
+
+    // Two PerformanceObserver batches from the Meet tab (content script).
+    store.record(event('captions', 'long_task', { count: 2, totalMs: 180, maxMs: 120 }));
+    store.record(event('captions', 'long_task', { count: 1, totalMs: 75, maxMs: 75 }));
+    // The offscreen recorder thread's long-task counters must stay independent.
+    store.record(event('runtime', 'sample', { phase: 'recording', longTaskCount: 5, maxLongTaskMs: 200 }));
+
+    const snapshot = store.getSnapshot();
+
+    expect(snapshot.summary.captions.longTaskCount).toBe(3);
+    expect(snapshot.summary.captions.longTaskTotalMs).toBe(255);
+    expect(snapshot.summary.captions.maxLongTaskMs).toBe(120);
+    // Cross-check: offscreen runtime long tasks are not polluted by the content thread.
+    expect(snapshot.summary.runtime.longTaskCount).toBe(5);
+    expect(snapshot.summary.runtime.maxLongTaskMs).toBe(200);
+  });
+
   it('normalizes persisted snapshots created before expanded metrics existed', () => {
     const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
     store.hydrate({
