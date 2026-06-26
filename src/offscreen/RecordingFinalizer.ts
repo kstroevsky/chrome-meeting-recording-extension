@@ -39,6 +39,12 @@ export type RecordingFinalizerDeps = {
    * persist (e.g. unit tests).
    */
   pendingUploads?: PendingUploadStore;
+  /**
+   * Live aggregate Drive-upload progress as a fraction in [0, 1] across all
+   * artifacts, already throttled to whole-percent steps. Optional: absent in
+   * contexts with no UI to drive (e.g. crash recovery, unit tests).
+   */
+  onUploadProgress?: (fraction: number) => void;
 };
 
 export type FinalizeArtifactsOptions = {
@@ -151,14 +157,33 @@ export class RecordingFinalizer {
       this.deps.warn('Drive setup failed; all artifacts will fall back locally', sharedSetupError);
     }
 
+    // Aggregate per-file committed bytes into one overall fraction. A file that
+    // falls back locally counts as fully "done" for progress purposes (it is no
+    // longer uploading) so the ring still reaches 100% on a partial-fallback run.
+    // The report is throttled to whole-percent steps so a many-chunk upload can't
+    // flood the OFFSCREEN_STATE → persist → popup path with redundant updates.
+    const totalBytes = artifacts.reduce((sum, { artifact }) => sum + artifact.file.size, 0);
+    const loadedPerFile = new Array<number>(artifacts.length).fill(0);
+    let lastReportedPercent = -1;
+    const reportProgress = () => {
+      if (!this.deps.onUploadProgress || totalBytes === 0) return;
+      const loaded = loadedPerFile.reduce((sum, n) => sum + n, 0);
+      const percent = Math.min(100, Math.floor((loaded / totalBytes) * 100));
+      if (percent <= lastReportedPercent) return;
+      lastReportedPercent = percent;
+      this.deps.onUploadProgress(loaded / totalBytes);
+    };
+
     const summary: UploadSummary = { uploaded: [], localFallbacks: [] };
     const outcomes = await runWithConcurrency(
       artifacts,
       Math.min(PERF_FLAGS.parallelUploadConcurrency, 2),
-      async ({ artifact, stream }) => {
+      async ({ artifact, stream }, index) => {
+        const markFileDone = () => { loadedPerFile[index] = artifact.file.size; reportProgress(); };
         const startedAt = nowMs();
         if (sharedSetupError) {
           this.saveArtifactLocally(artifact, stream, 'fallback');
+          markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: false, error: sharedSetupError } satisfies UploadOutcome;
         }
@@ -167,6 +192,7 @@ export class RecordingFinalizer {
           rootFolderName: DRIVE_ROOT_FOLDER_NAME,
           recordingFolderName,
           shared: { getUploadToken: sharedGetUploadToken, folderResolver, log: this.deps.log },
+          onProgress: (uploaded) => { loadedPerFile[index] = uploaded; reportProgress(); },
         });
 
         // Mark the upload as in-flight so a crash/power-off mid-upload is
@@ -181,6 +207,7 @@ export class RecordingFinalizer {
           await driveTarget.upload(artifact.file);
           if (opfsFilename) await this.deps.pendingUploads?.remove(opfsFilename);
           await this.cleanupArtifact(artifact);
+          markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: true, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: true } satisfies UploadOutcome;
         } catch (e) {
@@ -190,6 +217,7 @@ export class RecordingFinalizer {
           if (opfsFilename) await this.deps.pendingUploads?.remove(opfsFilename);
           this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
           this.saveArtifactLocally(artifact, stream, 'fallback');
+          markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: false, error } satisfies UploadOutcome;
         }

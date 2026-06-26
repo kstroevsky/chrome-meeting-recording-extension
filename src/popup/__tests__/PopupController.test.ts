@@ -65,6 +65,9 @@ describe('PopupController', () => {
 
       // Finalizing view
       finalizingLabel: document.createElement('div'),
+      uploadRing: document.createElement('div'),
+      uploadRingArc: document.createElement('div'),
+      uploadRingLabel: document.createElement('span'),
       metaStorage: document.createElement('span'),
       metaDuration: document.createElement('span'),
       metaMic: document.createElement('span'),
@@ -150,6 +153,39 @@ describe('PopupController', () => {
     expect(elements.metaCamera.textContent).toBe('Separate');
     expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
     expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
+  });
+
+  it('renders a determinate upload ring from live upload progress', async () => {
+    mockSendMessage.mockResolvedValueOnce({
+      session: {
+        phase: 'uploading',
+        runConfig: { storageMode: 'drive', micMode: 'mixed', recordSelfVideo: false },
+        uploadProgress: 0.42,
+        updatedAt: Date.now(),
+      },
+    });
+    controller.init();
+    await new Promise(process.nextTick);
+
+    expect(elements.uploadRing.dataset.mode).toBe('determinate');
+    expect(elements.uploadRingLabel.textContent).toBe('42%');
+    // The arc declares pathLength=100, so the offset is simply 100 − percent.
+    expect(elements.uploadRingArc.style.strokeDashoffset).toBe('58');
+  });
+
+  it('keeps the upload ring indeterminate while finalizing without progress', async () => {
+    mockSendMessage.mockResolvedValueOnce({
+      session: {
+        phase: 'stopping',
+        runConfig: { storageMode: 'drive', micMode: 'mixed', recordSelfVideo: false },
+        updatedAt: Date.now(),
+      },
+    });
+    controller.init();
+    await new Promise(process.nextTick);
+
+    expect(elements.uploadRing.dataset.mode).toBe('indeterminate');
+    expect(elements.uploadRingLabel.textContent).toBe('');
   });
 
   it('handles START_RECORDING click', async () => {

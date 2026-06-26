@@ -34,6 +34,8 @@ export type DriveUploadSharedContext = {
 
 type DriveTargetCtorOptions = DriveFolderHierarchy & {
   shared?: DriveUploadSharedContext;
+  /** Per-chunk progress hook reporting committed/total bytes for this one file. */
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void;
 };
 
 /**
@@ -49,6 +51,7 @@ export class DriveTarget {
   private readonly folderResolver: DriveFolderResolver;
   private readonly hierarchy: DriveFolderHierarchy;
   private readonly log: (...a: any[]) => void;
+  private readonly onProgress?: (uploadedBytes: number, totalBytes: number) => void;
   private used = false;
 
   constructor(
@@ -65,6 +68,7 @@ export class DriveTarget {
       recordingFolderName: options.recordingFolderName,
     };
     this.log = shared?.log ?? (() => {});
+    this.onProgress = options.onProgress;
   }
 
   /** Uploads the sealed artifact using Drive's resumable upload flow. */
@@ -87,6 +91,7 @@ export class DriveTarget {
       const isFinal = endExclusive >= total;
       const chunkResult = await uploadChunk(this.sessionUri!, this.getUploadToken, start, body, total, isFinal);
       start = chunkResult.nextStart;
+      this.onProgress?.(Math.min(start, total), total);
 
       logPerf(this.log, 'drive', 'chunk_uploaded', {
         filename: this.filename,

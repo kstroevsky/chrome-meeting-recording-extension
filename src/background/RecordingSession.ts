@@ -235,7 +235,7 @@ export class RecordingSession {
    * code, so it is trusted as-is — no defensive normalization.
    */
   applyOffscreenPhase(update: OffscreenPhaseUpdate): RecordingSessionSnapshot {
-    const { phase: reported, error, uploadSummary, warnings } = update;
+    const { phase: reported, error, uploadSummary, warnings, uploadProgress } = update;
 
     // A fenced same-run `idle` is a genuine end-of-run — the offscreen finalized,
     // whether we commanded the stop or capture ended on its own — so finalize and
@@ -270,6 +270,9 @@ export class RecordingSession {
       paused: this.snapshot.paused,
       ...this.nextTimer(phase, now),
       uploadSummary: undefined,
+      // Live progress is only meaningful while uploading; absent for every other
+      // observed phase so the popup falls back to the indeterminate spinner.
+      uploadProgress: reported === 'uploading' ? uploadProgress : undefined,
       epoch: this.snapshot.epoch,
       updatedAt: now,
     };

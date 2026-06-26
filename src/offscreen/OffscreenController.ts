@@ -81,7 +81,7 @@ export class OffscreenController {
   onStopRequested = (): void => { void this.finalize(); };
 
   /** Advances the broadcast phase, rebaselining the lag clock on a new active phase. */
-  pushState = (phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>): void => {
+  pushState = (phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error' | 'uploadProgress'>): void => {
     if (phase !== this.phase && phase !== 'idle') {
       this.deps.sampler.markActivePhaseStart(this.now());
     }
@@ -93,6 +93,17 @@ export class OffscreenController {
       ...(this.warnings.length ? { warnings: this.warnings } : {}),
       ...(extra ?? {}),
     });
+  };
+
+  /**
+   * Re-broadcasts the live Drive-upload fraction during the `uploading` phase so the
+   * popup can render a determinate ring. Inert outside `uploading` (the finalizer can
+   * still settle a final chunk after we've already advanced to `idle`), and the
+   * fraction is clamped to [0, 1] before it crosses the wire.
+   */
+  reportUploadProgress = (fraction: number): void => {
+    if (this.phase !== 'uploading' || !Number.isFinite(fraction)) return;
+    this.pushState('uploading', { uploadProgress: Math.min(1, Math.max(0, fraction)) });
   };
 
   /** Records a de-duplicated, trimmed warning and re-broadcasts the current phase. */

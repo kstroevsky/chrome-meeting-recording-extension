@@ -55,6 +55,9 @@ const controller = new PopupController({
 
   // Finalizing view
   finalizingLabel: byId('finalizing-label'),
+  uploadRing: byId('upload-ring'),
+  uploadRingArc: byId('upload-ring-arc'),
+  uploadRingLabel: byId('upload-ring-label'),
   metaStorage: byId('meta-storage'),
   metaDuration: byId('meta-duration'),
   metaMic: byId('meta-mic'),

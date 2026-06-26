@@ -160,6 +160,7 @@ const finalizer = new RecordingFinalizer({
   getDriveToken,
   reportWarning: controller.reportWarning,
   pendingUploads: pendingUploadStore,
+  onUploadProgress: controller.reportUploadProgress,
 });
 
 const engine = new RecorderEngine({

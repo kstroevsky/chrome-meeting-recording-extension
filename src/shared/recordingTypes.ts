@@ -129,6 +129,12 @@ export type RecordingSessionSnapshot = {
    */
   recordedMs?: number;
   runningSince?: number;
+  /**
+   * Live Drive-upload progress as a fraction in [0, 1] while `phase === 'uploading'`.
+   * Mirrors the offscreen's throttled OFFSCREEN_STATE progress so a reopened popup
+   * renders a determinate ring. Omitted in every other phase. See ADR-0003.
+   */
+  uploadProgress?: number;
   updatedAt: number;
 };
 
@@ -152,5 +158,7 @@ export type RecordingStatusView = {
   /** Pause-aware recording timer state; see {@link RecordingSessionSnapshot.recordedMs}. */
   recordedMs?: number;
   runningSince?: number;
+  /** Live Drive-upload progress; see {@link RecordingSessionSnapshot.uploadProgress}. */
+  uploadProgress?: number;
   updatedAt: number;
 };

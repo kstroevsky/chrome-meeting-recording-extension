@@ -48,6 +48,38 @@ describe('OffscreenController', () => {
     });
   });
 
+  describe('reportUploadProgress', () => {
+    it('re-broadcasts a clamped fraction while uploading', () => {
+      const { controller, postMessage } = makeController();
+      controller.pushState('uploading');
+      postMessage.mockClear();
+
+      controller.reportUploadProgress(0.5);
+      expect(lastState(postMessage)).toEqual({
+        type: 'OFFSCREEN_STATE',
+        phase: 'uploading',
+        epoch: 0,
+        uploadProgress: 0.5,
+      });
+
+      controller.reportUploadProgress(1.4); // clamped to 1
+      expect(lastState(postMessage).uploadProgress).toBe(1);
+    });
+
+    it('ignores progress outside the uploading phase and non-finite values', () => {
+      const { controller, postMessage } = makeController();
+      controller.pushState('uploading');
+      controller.reportUploadProgress(Number.NaN);
+      postMessage.mockClear();
+
+      controller.pushState('idle'); // finalize advanced past uploading
+      postMessage.mockClear();
+      controller.reportUploadProgress(0.9); // a late settling chunk
+
+      expect(postMessage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('reportWarning', () => {
     it('trims, de-duplicates, and ignores empty warnings', () => {
       const { controller, postMessage } = makeController();

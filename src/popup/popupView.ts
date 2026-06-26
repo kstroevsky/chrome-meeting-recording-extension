@@ -45,6 +45,12 @@ export type PopupElements = {
 
   // Finalizing view
   finalizingLabel: HTMLElement | null;
+  /** Progress-ring container; its `data-mode` toggles determinate vs. indeterminate. */
+  uploadRing: HTMLElement | null;
+  /** The ring's foreground arc; its `stroke-dashoffset` encodes the upload fraction. */
+  uploadRingArc: HTMLElement | null;
+  /** Centered percentage label, shown only while a Drive upload reports progress. */
+  uploadRingLabel: HTMLElement | null;
   metaStorage: HTMLElement | null;
   metaDuration: HTMLElement | null;
   metaMic: HTMLElement | null;

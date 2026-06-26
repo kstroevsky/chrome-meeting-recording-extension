@@ -383,12 +383,13 @@ export class PopupController {
     if (this.el.chipTranscript) this.el.chipTranscript.classList.toggle('off', !active);
   }
 
-  /** Populates the finalizing view: spinner label + run metadata (storage/duration/mic/camera). */
+  /** Populates the finalizing view: progress ring + run metadata (storage/duration/mic/camera). */
   private updateFinalizingView(phase: RecordingPhase, session?: RecordingStatusView) {
     if (this.el.finalizingLabel) {
       this.el.finalizingLabel.textContent =
         phase === 'uploading' ? 'Uploading to Google Drive…' : 'Finalizing files…';
     }
+    this.updateUploadRing(phase, session);
     const cfg = session?.runConfig;
     if (this.el.metaStorage) {
       this.el.metaStorage.textContent = cfg?.storageMode === 'drive' ? 'Google Drive' : 'Local Disk (OPFS)';
@@ -396,6 +397,29 @@ export class PopupController {
     if (this.el.metaDuration) this.el.metaDuration.textContent = formatDuration(session?.recordedMs ?? 0);
     if (this.el.metaMic) this.el.metaMic.textContent = micModeLabel(cfg?.micMode);
     if (this.el.metaCamera) this.el.metaCamera.textContent = cfg?.recordSelfVideo ? 'Separate' : 'Off';
+  }
+
+  /**
+   * Drives the finalizing ring. A Drive upload reporting a fraction renders a
+   * determinate arc with a centered percentage ("how much is left"); every other
+   * case (local finalize, or the brief pre-first-chunk window) falls back to the
+   * indeterminate spinner. The arc circle declares `pathLength="100"`, so the
+   * fraction maps straight onto `stroke-dashoffset = 100 - percent`.
+   */
+  private updateUploadRing(phase: RecordingPhase, session?: RecordingStatusView) {
+    const ring = this.el.uploadRing;
+    if (!ring) return;
+    const fraction = phase === 'uploading' ? session?.uploadProgress : undefined;
+    if (typeof fraction === 'number' && Number.isFinite(fraction)) {
+      const percent = Math.round(Math.min(1, Math.max(0, fraction)) * 100);
+      ring.dataset.mode = 'determinate';
+      if (this.el.uploadRingArc) this.el.uploadRingArc.style.strokeDashoffset = String(100 - percent);
+      if (this.el.uploadRingLabel) this.el.uploadRingLabel.textContent = `${percent}%`;
+    } else {
+      ring.dataset.mode = 'indeterminate';
+      if (this.el.uploadRingArc) this.el.uploadRingArc.style.strokeDashoffset = '100';
+      if (this.el.uploadRingLabel) this.el.uploadRingLabel.textContent = '';
+    }
   }
 
   private wireSettingsLink() {

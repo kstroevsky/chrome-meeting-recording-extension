@@ -288,4 +288,56 @@ describe('RecordingFinalizer', () => {
     expect(mic.cleanup).toHaveBeenCalledTimes(1);
     expect(tab.cleanup).not.toHaveBeenCalled();
   });
+
+  it('reports throttled aggregate upload progress that reaches 100%', async () => {
+    resetPerfFlags();
+    // Pin serial uploads so the aggregated fraction sequence is deterministic.
+    PERF_FLAGS.parallelUploadConcurrency = 1;
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    // Each mocked upload streams its file's bytes in two equal halves.
+    jest.spyOn(DriveTarget.prototype, 'upload').mockImplementation(async function (this: any, file: Blob) {
+      this.onProgress?.(file.size / 2, file.size);
+      this.onProgress?.(file.size, file.size);
+    });
+
+    const onUploadProgress = jest.fn();
+    const finalizerWithProgress = new RecordingFinalizer({ ...deps, onUploadProgress });
+
+    // Two 4-byte files ⇒ 8 bytes total; serial halves land at 2,4 then 6,8 bytes.
+    await finalizerWithProgress.finalize({
+      storageMode: 'drive',
+      artifacts: [
+        { stream: 'tab', artifact: makeArtifact('tab.webm') },
+        { stream: 'mic', artifact: makeArtifact('mic.webm') },
+      ],
+    });
+
+    const fractions = onUploadProgress.mock.calls.map((c) => c[0]);
+    expect(fractions).toEqual([0.25, 0.5, 0.75, 1]);
+  });
+
+  it('drives upload progress to 100% even when a file falls back locally', async () => {
+    resetPerfFlags();
+    PERF_FLAGS.parallelUploadConcurrency = 1;
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    jest.spyOn(DriveTarget.prototype, 'upload').mockImplementation(function (this: any) {
+      return this.filename === 'tab.webm'
+        ? Promise.reject(new DOMException('network timeout', 'AbortError'))
+        : Promise.resolve();
+    });
+
+    const onUploadProgress = jest.fn();
+    const finalizerWithProgress = new RecordingFinalizer({ ...deps, onUploadProgress });
+
+    await finalizerWithProgress.finalize({
+      storageMode: 'drive',
+      artifacts: [
+        { stream: 'tab', artifact: makeArtifact('tab.webm') },
+        { stream: 'mic', artifact: makeArtifact('mic.webm') },
+      ],
+    });
+
+    const fractions = onUploadProgress.mock.calls.map((c) => c[0]);
+    expect(fractions[fractions.length - 1]).toBe(1);
+  });
 });
