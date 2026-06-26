@@ -25,7 +25,7 @@ The snapshot (`shared/types/perfTypes.ts`) has two halves the dashboard renders:
 | `lifecycle` | start/stop requested-vs-completed, failures, warnings, peak active tracks |
 | `runtime` | heap, **event-loop lag**, **long-task** counts, and dev-only system CPU % |
 
-Durations are `PerfDistribution` (`count/avg/p50/p95/max/last`) — so "write p95" etc. are first-class. The event log is **bounded**: `entries` is capped and `droppedEvents` counts what overflowed, so a long run can't grow the snapshot without limit; `enabled` + `settings` record whether diagnostics are on and which perf flags the run used.
+Durations are `PerfDistribution` (`count/avg/p50/p95/max/last`) — so "write p95" etc. are first-class. The event log is **bounded**: `entries` is capped at `PERF_EVENT_BUFFER_LIMIT` (oldest evicted, `droppedEvents` counts the overflow), so the snapshot stays well under the `chrome.storage.session` quota no matter how long the run — the persisted copy keeps the **newest** events (including the uploading phase) instead of silently freezing once the quota is hit. On a run long enough to overflow, `count`/`avg`/`max` stay whole-session (maintained incrementally) while `p50`/`p95` reflect the retained window. As a final guard, if a persist is still rejected the store falls back to writing a summary-only snapshot so the aggregates never freeze. `enabled` + `settings` record whether diagnostics are on and which perf flags the run used.
 
 ## What the numbers mean (and don't)
 

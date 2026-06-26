@@ -7,6 +7,7 @@
 
 import {
   PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
+  PERF_EVENT_BUFFER_LIMIT,
   type PerfDebugSnapshot,
   type PerfEventEntry,
   type PerfPhase,
@@ -84,6 +85,17 @@ export class PerfDebugStore {
   record(entry: PerfEventEntry): void {
     if (!this.snapshot.enabled) return;
     this.snapshot.entries.push(entry);
+    // Bound the raw event log so the persisted snapshot can't outgrow the
+    // chrome.storage.session quota and silently freeze mid-run (losing the tail
+    // of a long recording + the entire uploading phase). Whole-session aggregates
+    // in `summary` are maintained incrementally and are unaffected; only the
+    // windowed percentiles (recomputed from `entries`) reflect the retained
+    // window. `droppedEvents` records what was evicted.
+    if (this.snapshot.entries.length > PERF_EVENT_BUFFER_LIMIT) {
+      const overflow = this.snapshot.entries.length - PERF_EVENT_BUFFER_LIMIT;
+      this.snapshot.entries.splice(0, overflow);
+      this.snapshot.droppedEvents += overflow;
+    }
     this.snapshot.updatedAt = entry.ts;
 
     const summary = this.snapshot.summary;
@@ -203,8 +215,17 @@ export class PerfDebugStore {
   }
 
   private persistNow(): void {
-    void setSessionStorageValues({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: this.getSnapshot() })
-      .catch((error: any) => this.warn('Failed to persist perf debug snapshot', error));
+    const snapshot = this.getSnapshot();
+    void setSessionStorageValues({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: snapshot })
+      .catch(() => {
+        // Safety net: the bounded buffer keeps us well under the storage quota,
+        // but if a write is still rejected (quota or serialization), persist a
+        // summary-only snapshot so the analysis-critical aggregates survive the
+        // whole run instead of silently freezing the persisted copy.
+        void setSessionStorageValues({
+          [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: { ...snapshot, entries: [] },
+        }).catch((error: any) => this.warn('Failed to persist perf debug snapshot', error));
+      });
   }
 
   private removePersistedSnapshot(): void {

@@ -9,8 +9,13 @@ import type { PerfFlags, PerfSettings } from '../types/perfTypes';
 
 export const PERF_SETTINGS_STORAGE_KEY = 'perfSettings';
 export const PERF_DEBUG_SNAPSHOT_STORAGE_KEY = 'perfDebugSnapshot';
-export const PERF_EVENT_BUFFER_LIMIT = 120;
-export const PERF_EVENT_MAX_AGE_MS = 15 * 60 * 1000;
+// Hard ceiling on the retained raw event log. The whole snapshot is persisted to
+// chrome.storage.session (~10MB quota) on every event, so an unbounded log would
+// eventually exceed quota and silently freeze the persisted copy mid-run. 4000
+// keeps the payload to a few MB while leaving a multi-minute window for the
+// windowed percentiles; whole-session count/avg/max are maintained incrementally
+// and are unaffected by eviction.
+export const PERF_EVENT_BUFFER_LIMIT = 4000;
 
 export const DEFAULT_PERF_SETTINGS: PerfSettings = {
   audioPlaybackBridgeMode: 'always',

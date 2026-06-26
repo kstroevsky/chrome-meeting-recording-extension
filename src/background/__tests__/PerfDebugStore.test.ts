@@ -1,5 +1,5 @@
 import { PerfDebugStore } from '../PerfDebugStore';
-import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY, normalizePerfSettings, type PerfEventEntry } from '../../shared/perf';
+import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY, PERF_EVENT_BUFFER_LIMIT, normalizePerfSettings, type PerfEventEntry } from '../../shared/perf';
 
 function event(
   scope: string,
@@ -281,6 +281,43 @@ describe('PerfDebugStore', () => {
     expect(snapshot.entries).toHaveLength(2);
     expect(snapshot.entries[0].fields.phase).toBe('recording');
     expect(snapshot.entries[1].fields.phase).toBe('uploading');
+  });
+
+  it('bounds the raw event buffer and counts dropped events without losing whole-session aggregates', () => {
+    const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
+    const overflow = 50;
+    const total = PERF_EVENT_BUFFER_LIMIT + overflow;
+    for (let i = 0; i < total; i += 1) {
+      store.record(event('runtime', 'sample', { phase: 'recording' }));
+    }
+
+    const snapshot = store.getSnapshot();
+    // The raw log is capped (so the persisted snapshot can't outgrow the quota)...
+    expect(snapshot.entries.length).toBe(PERF_EVENT_BUFFER_LIMIT);
+    expect(snapshot.droppedEvents).toBe(overflow);
+    // ...but the incremental aggregates still count every event, even evicted ones.
+    expect(snapshot.summary.runtime.sampleCount).toBe(total);
+  });
+
+  it('persists a summary-only snapshot when a full write is rejected (quota safety net)', async () => {
+    const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
+    store.record(event('captions', 'long_task', { count: 1, totalMs: 60, maxMs: 60 }));
+
+    const setMock = chrome.storage.session.set as jest.Mock;
+    setMock.mockReset();
+    setMock
+      .mockRejectedValueOnce(new Error('QUOTA_BYTES quota exceeded'))
+      .mockResolvedValue(undefined);
+
+    store.setPhase('recording'); // persist(0) -> immediate persistNow
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setMock).toHaveBeenCalledTimes(2);
+    const fallback = setMock.mock.calls[1][0][PERF_DEBUG_SNAPSHOT_STORAGE_KEY];
+    expect(fallback.entries).toEqual([]);
+    // The analysis-critical summary still made it through.
+    expect(fallback.summary.captions.longTaskCount).toBe(1);
   });
 
   it('clears in-memory and persisted diagnostics snapshots on clear()', async () => {
