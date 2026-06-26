@@ -53,6 +53,36 @@ export type UploadSummary = {
   localFallbacks: UploadSummaryEntry[];
 };
 
+/** Terminal-or-running state of one background Drive-upload job (ADR-0004). */
+export type UploadJobStatus = 'uploading' | 'completed' | 'failed' | 'partial';
+
+/** Per-stream file outcome shown in an upload job's detail view. */
+export type UploadJobFile = {
+  stream: RecordingStream;
+  filename: string;
+  status: 'uploading' | 'uploaded' | 'fallback';
+};
+
+/**
+ * One background Drive-upload job: the sealed artifacts of a single finished
+ * recording, uploaded independently of the (possibly already-restarted) recording
+ * session. A job carries its own `id` because it **outlives the run that created
+ * it** (ADR-0004) — the recording epoch fences capture status, jobs are keyed by
+ * id — so it can keep uploading while a new recording records.
+ */
+export type UploadJob = {
+  id: string;
+  /** Human label for the upload tab (meeting slug, or folder/timestamp fallback). */
+  label: string;
+  status: UploadJobStatus;
+  /** Aggregate upload progress across the job's files, fraction in [0, 1]. */
+  progress: number;
+  files: UploadJobFile[];
+  startedAt: number;
+  /** Set once the job reaches a terminal status (completed / failed / partial). */
+  finishedAt?: number;
+};
+
 /**
  * Background-owned, persisted session state. Carries control-plane bookkeeping
  * (`targetTabId`, `meetingSlug`) that only the background reads — for auto-stop
@@ -133,8 +163,18 @@ export type RecordingSessionSnapshot = {
    * Live Drive-upload progress as a fraction in [0, 1] while `phase === 'uploading'`.
    * Mirrors the offscreen's throttled OFFSCREEN_STATE progress so a reopened popup
    * renders a determinate ring. Omitted in every other phase. See ADR-0003.
+   *
+   * @deprecated Superseded by per-job {@link uploadJobs} (ADR-0004); removed once
+   * the decoupled upload UI lands.
    */
   uploadProgress?: number;
+  /**
+   * Background Drive-upload jobs that have been detached from the recording
+   * session (ADR-0004). Phase-independent — a job keeps running (and stays on the
+   * snapshot) while a new recording starts — and persisted so a reopened popup can
+   * render in-flight uploads.
+   */
+  uploadJobs?: UploadJob[];
   updatedAt: number;
 };
 
@@ -160,5 +200,7 @@ export type RecordingStatusView = {
   runningSince?: number;
   /** Live Drive-upload progress; see {@link RecordingSessionSnapshot.uploadProgress}. */
   uploadProgress?: number;
+  /** Background Drive-upload jobs; see {@link RecordingSessionSnapshot.uploadJobs}. */
+  uploadJobs?: UploadJob[];
   updatedAt: number;
 };

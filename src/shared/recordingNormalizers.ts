@@ -28,6 +28,9 @@ import type {
   RecordingStream,
   StorageMode,
   TabContentType,
+  UploadJob,
+  UploadJobFile,
+  UploadJobStatus,
   UploadSummary,
   UploadSummaryEntry,
 } from './recordingTypes';
@@ -118,6 +121,51 @@ export function normalizeUploadSummary(value: unknown): UploadSummary | undefine
     uploaded: normalizeEntries(candidate.uploaded),
     localFallbacks: normalizeEntries(candidate.localFallbacks),
   };
+}
+
+const VALID_UPLOAD_JOB_STATUSES: readonly UploadJobStatus[] = ['uploading', 'completed', 'failed', 'partial'];
+const VALID_UPLOAD_JOB_FILE_STATUSES: readonly UploadJobFile['status'][] = ['uploading', 'uploaded', 'fallback'];
+const VALID_RECORDING_STREAMS: readonly RecordingStream[] = ['tab', 'mic', 'self-video'];
+
+function parseUploadJobFile(value: unknown): UploadJobFile | null {
+  if (!isRecord(value)) return null;
+  const stream = value.stream;
+  const filename = value.filename;
+  const status = value.status;
+  if (!(VALID_RECORDING_STREAMS as readonly unknown[]).includes(stream)) return null;
+  if (typeof filename !== 'string' || !filename) return null;
+  if (!(VALID_UPLOAD_JOB_FILE_STATUSES as readonly unknown[]).includes(status)) return null;
+  return { stream: stream as RecordingStream, filename, status: status as UploadJobFile['status'] };
+}
+
+function parseUploadJob(value: unknown): UploadJob | null {
+  if (!isRecord(value)) return null;
+  const { id, label, status, progress, startedAt, finishedAt, files } = value;
+  if (typeof id !== 'string' || !id) return null;
+  if (!(VALID_UPLOAD_JOB_STATUSES as readonly unknown[]).includes(status)) return null;
+  const normalizedFiles = Array.isArray(files)
+    ? files.map(parseUploadJobFile).filter((f): f is UploadJobFile => f != null)
+    : [];
+  return {
+    id,
+    label: typeof label === 'string' ? label : id,
+    status: status as UploadJobStatus,
+    progress: typeof progress === 'number' && progress >= 0 ? Math.min(1, progress) : 0,
+    files: normalizedFiles,
+    startedAt: typeof startedAt === 'number' && startedAt > 0 ? startedAt : Date.now(),
+    finishedAt: typeof finishedAt === 'number' && finishedAt > 0 ? finishedAt : undefined,
+  };
+}
+
+/**
+ * Normalizes the persisted background upload-job list (ADR-0004). Phase-independent:
+ * jobs outlive the recording session, so they are NOT cleared on idle. Returns
+ * undefined for an empty/absent list to match the optional-field convention.
+ */
+export function normalizeUploadJobs(value: unknown): UploadJob[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const jobs = value.map(parseUploadJob).filter((j): j is UploadJob => j != null);
+  return jobs.length ? jobs : undefined;
 }
 
 /** Normalizes session warnings into trimmed, unique strings. */
@@ -241,6 +289,9 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     meetingSlug,
     // Phase-independent: the epoch is preserved across idle so it stays monotonic.
     epoch: normalizeEpoch(candidate.epoch),
+    // Phase-independent (ADR-0004): background upload jobs outlive the recording
+    // session, so they survive across idle and a new run.
+    uploadJobs: normalizeUploadJobs(candidate.uploadJobs),
     uploadSummary: normalizeUploadSummary(candidate.uploadSummary),
     error: typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error : undefined,
     warnings: normalizeWarnings(candidate.warnings),
@@ -266,6 +317,15 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
 /** Returns true when the phase should disable popup controls and keep background alive. */
 export function isBusyPhase(phase: RecordingPhase): boolean {
   return (BUSY_RECORDING_PHASES as readonly RecordingPhase[]).includes(phase);
+}
+
+/**
+ * True when any background upload job is still running (ADR-0004). The extension is
+ * "busy" — and must defer update-reloads / offscreen teardown — when the recording
+ * phase is busy OR this is true, so a decoupled upload is never torn down mid-flight.
+ */
+export function hasUploadsInFlight(jobs: UploadJob[] | undefined): boolean {
+  return !!jobs?.some((job) => job.status === 'uploading');
 }
 
 /** True when a stop request can act on the phase (active capture in progress). */

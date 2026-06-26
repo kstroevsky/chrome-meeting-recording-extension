@@ -21,6 +21,9 @@ export type {
   RecordingStatusView,
   RecordingStream,
   StorageMode,
+  UploadJob,
+  UploadJobFile,
+  UploadJobStatus,
   UploadSummary,
   UploadSummaryEntry,
 } from './recordingTypes';
@@ -37,12 +40,14 @@ export {
 
 export {
   createIdleSession,
+  hasUploadsInFlight,
   isBusyPhase,
   isStoppablePhase,
   normalizeMicMode,
   normalizePhase,
   normalizeSessionSnapshot,
   normalizeStorageMode,
+  normalizeUploadJobs,
   normalizeUploadSummary,
   normalizeWarnings,
   parseRunConfig,

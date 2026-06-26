@@ -13,6 +13,7 @@ import {
   type ObservedState,
   type RecordingRunConfig,
   type RecordingSessionSnapshot,
+  type UploadJob,
   type UploadSummary,
 } from '../shared/recording';
 import type { OffscreenPhaseUpdate } from '../shared/protocol';
@@ -85,6 +86,9 @@ export class RecordingSession {
       warnings: undefined,
       // Fencing token (ADR-0003): a fresh, strictly-increasing epoch per run.
       epoch: (this.snapshot.epoch ?? 0) + 1,
+      // Background uploads outlive the run that spawned them (ADR-0004): carry any
+      // in-flight jobs into the new recording so starting one never drops them.
+      uploadJobs: this.snapshot.uploadJobs,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -111,6 +115,7 @@ export class RecordingSession {
       paused: this.snapshot.paused,
       ...this.nextTimer(phase, now),
       epoch: this.snapshot.epoch,
+      uploadJobs: this.snapshot.uploadJobs,
       updatedAt: now,
     };
     return this.commit();
@@ -128,6 +133,9 @@ export class RecordingSession {
       warnings,
       // Preserved across idle so the next run's epoch stays strictly increasing.
       epoch: this.snapshot.epoch,
+      // Background upload jobs are phase-independent (ADR-0004): an idle session
+      // can still have uploads draining from the recording that just ended.
+      uploadJobs: this.snapshot.uploadJobs,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -154,6 +162,7 @@ export class RecordingSession {
       paused: this.snapshot.paused,
       recordedMs: this.elapsedRecordedMs(now),
       runningSince: undefined,
+      uploadJobs: this.snapshot.uploadJobs,
       updatedAt: now,
     };
     return this.commit();
@@ -274,7 +283,33 @@ export class RecordingSession {
       // observed phase so the popup falls back to the indeterminate spinner.
       uploadProgress: reported === 'uploading' ? uploadProgress : undefined,
       epoch: this.snapshot.epoch,
+      uploadJobs: this.snapshot.uploadJobs,
       updatedAt: now,
+    };
+    return this.commit();
+  }
+
+  /**
+   * Inserts or updates a background upload job (ADR-0004). Jobs are keyed by id and
+   * phase-independent — preserved across recording starts and idle — so this merges
+   * by id without touching the recording planes or the displayed phase.
+   */
+  upsertUploadJob(job: UploadJob): RecordingSessionSnapshot {
+    const existing = this.snapshot.uploadJobs ?? [];
+    const next = existing.some((j) => j.id === job.id)
+      ? existing.map((j) => (j.id === job.id ? job : j))
+      : [...existing, job];
+    this.snapshot = { ...this.snapshot, uploadJobs: next, updatedAt: Date.now() };
+    return this.commit();
+  }
+
+  /** Drops a background upload job (e.g. once a finished job's tab is dismissed). */
+  removeUploadJob(id: string): RecordingSessionSnapshot {
+    const next = (this.snapshot.uploadJobs ?? []).filter((j) => j.id !== id);
+    this.snapshot = {
+      ...this.snapshot,
+      uploadJobs: next.length ? next : undefined,
+      updatedAt: Date.now(),
     };
     return this.commit();
   }

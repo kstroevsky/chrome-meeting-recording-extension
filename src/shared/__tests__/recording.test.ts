@@ -2,15 +2,17 @@ import {
   DEFAULT_RECORDING_RUN_CONFIG,
   createDefaultRunConfig,
   getRunConfigOrDefault,
+  hasUploadsInFlight,
   isBusyPhase,
   isStoppablePhase,
   normalizeMicMode,
   normalizeSessionSnapshot,
+  normalizeUploadJobs,
   normalizeUploadSummary,
   normalizeWarnings,
   toStatusView,
 } from '../recording';
-import type { DesiredState, ObservedState, RecordingPhase } from '../recording';
+import type { DesiredState, ObservedState, RecordingPhase, UploadJob } from '../recording';
 
 describe('shared/recording helpers', () => {
   it('preserves micMode=off during normalization', () => {
@@ -261,5 +263,61 @@ describe('session snapshot desired/observed migration (ADR-0003 Decision 4)', ()
     expect(view).not.toHaveProperty('epoch');
     expect(view).not.toHaveProperty('targetTabId');
     expect(view).not.toHaveProperty('meetingSlug');
+  });
+});
+
+describe('background upload jobs (ADR-0004)', () => {
+  const validJob: UploadJob = {
+    id: 'job-1',
+    label: 'abc-defg-hij',
+    status: 'uploading',
+    progress: 0.4,
+    files: [{ stream: 'tab', filename: 'tab.webm', status: 'uploading' }],
+    startedAt: 1000,
+  };
+
+  it('normalizes a valid job list and drops malformed entries', () => {
+    const jobs = normalizeUploadJobs([
+      validJob,
+      { id: '', status: 'uploading' }, // no id → dropped
+      { id: 'x', status: 'bogus' }, // bad status → dropped
+      { id: 'job-2', status: 'completed', progress: 5, files: 'nope' }, // clamps progress, coerces files
+    ]);
+    expect(jobs).toHaveLength(2);
+    expect(jobs?.[0]).toEqual(validJob);
+    expect(jobs?.[1]).toMatchObject({ id: 'job-2', status: 'completed', progress: 1, files: [] });
+  });
+
+  it('returns undefined for an empty or non-array list', () => {
+    expect(normalizeUploadJobs([])).toBeUndefined();
+    expect(normalizeUploadJobs(undefined)).toBeUndefined();
+    expect(normalizeUploadJobs('nope')).toBeUndefined();
+  });
+
+  it('preserves upload jobs phase-independently, even on an idle snapshot', () => {
+    const idle = normalizeSessionSnapshot({ phase: 'idle', uploadJobs: [validJob], updatedAt: 1 });
+    expect(idle.phase).toBe('idle');
+    // Unlike micMuted/recordedMs, jobs are NOT cleared on idle — they outlive the run.
+    expect(idle.uploadJobs).toEqual([validJob]);
+  });
+
+  it('hasUploadsInFlight is true only while a job is still uploading', () => {
+    expect(hasUploadsInFlight([validJob])).toBe(true);
+    expect(hasUploadsInFlight([{ ...validJob, status: 'completed' }])).toBe(false);
+    expect(hasUploadsInFlight([])).toBe(false);
+    expect(hasUploadsInFlight(undefined)).toBe(false);
+  });
+
+  it('projects upload jobs onto the popup-facing status view', () => {
+    const view = toStatusView({
+      phase: 'recording',
+      desired: 'recording',
+      observed: 'recording',
+      failed: false,
+      runConfig: { storageMode: 'drive', micMode: 'off', recordSelfVideo: false },
+      uploadJobs: [validJob],
+      updatedAt: 1,
+    });
+    expect(view.uploadJobs).toEqual([validJob]);
   });
 });

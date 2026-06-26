@@ -40,6 +40,7 @@ export function toStatusView(snapshot: RecordingSessionSnapshot): RecordingStatu
     recordedMs: snapshot.recordedMs,
     runningSince: snapshot.runningSince,
     uploadProgress: snapshot.uploadProgress,
+    uploadJobs: snapshot.uploadJobs,
     updatedAt: snapshot.updatedAt,
   };
 }
