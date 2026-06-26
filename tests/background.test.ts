@@ -1,4 +1,5 @@
 import { TIMEOUTS } from '../src/shared/timeouts';
+import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY } from '../src/shared/perf';
 
 describe('background runtime messages', () => {
   const activeSession = {
@@ -335,7 +336,7 @@ describe('background runtime messages', () => {
     }
   });
 
-  it('clears diagnostics only after the debug dashboard disconnects while the session is idle', async () => {
+  it('keeps diagnostics after a recording finishes so they can be exported later (no clear-on-idle)', async () => {
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
     const offscreenInstance = {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
@@ -358,91 +359,14 @@ describe('background runtime messages', () => {
     await import('../src/background');
     await new Promise(process.nextTick);
 
-    const connectListener = (chrome.runtime.onConnect.addListener as jest.Mock).mock.calls[0][0];
-    const onDisconnect = { addListener: jest.fn() };
-    connectListener({
-      name: 'debug-dashboard',
-      onDisconnect,
-    });
-
-    expect(chrome.storage.session.remove).not.toHaveBeenCalled();
+    (chrome.storage.session.remove as jest.Mock).mockClear();
+    // Recording finishes -> idle. Under the clear-on-start policy this must NOT
+    // wipe diagnostics, so they survive until the next recording begins and can be
+    // opened/exported after the fact even if the dashboard was never open during it.
     offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
-    expect(chrome.storage.session.remove).not.toHaveBeenCalled();
-
-    const disconnectListener = onDisconnect.addListener.mock.calls[0][0];
-    disconnectListener();
-
-    expect(chrome.storage.session.remove).toHaveBeenCalled();
-  });
-
-  it('preserves diagnostics when the debug dashboard disconnects before recording ends', async () => {
-    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
-    const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
-      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
-      hydratePhase: jest.fn(),
-      attachPort: jest.fn(),
-      ensureReady: jest.fn(),
-      stopIfPossibleOnSuspend: jest.fn(),
-      rpc: jest.fn(),
-      revokeBlobUrl: jest.fn(),
-    };
-
-    jest.doMock('../src/background/driveAuth', () => ({
-      fetchDriveTokenWithFallback: jest.fn(),
-    }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
-      OffscreenManager: jest.fn(() => offscreenInstance),
-    }));
-
-    await import('../src/background');
     await new Promise(process.nextTick);
 
-    const connectListener = (chrome.runtime.onConnect.addListener as jest.Mock).mock.calls[0][0];
-    const onDisconnect = { addListener: jest.fn() };
-    connectListener({
-      name: 'debug-dashboard',
-      onDisconnect,
-    });
-
-    const disconnectListener = onDisconnect.addListener.mock.calls[0][0];
-    disconnectListener();
-
-    expect(chrome.storage.session.remove).not.toHaveBeenCalled();
-  });
-
-  it('preserves diagnostics after recording finishes while the debug dashboard is still open', async () => {
-    (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
-    const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
-      onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
-      hydratePhase: jest.fn(),
-      attachPort: jest.fn(),
-      ensureReady: jest.fn(),
-      stopIfPossibleOnSuspend: jest.fn(),
-      rpc: jest.fn(),
-      revokeBlobUrl: jest.fn(),
-    };
-
-    jest.doMock('../src/background/driveAuth', () => ({
-      fetchDriveTokenWithFallback: jest.fn(),
-    }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
-      OffscreenManager: jest.fn(() => offscreenInstance),
-    }));
-
-    await import('../src/background');
-    await new Promise(process.nextTick);
-
-    const connectListener = (chrome.runtime.onConnect.addListener as jest.Mock).mock.calls[0][0];
-    connectListener({
-      name: 'debug-dashboard',
-      onDisconnect: { addListener: jest.fn() },
-    });
-
-    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
-
-    expect(chrome.storage.session.remove).not.toHaveBeenCalled();
+    expect(chrome.storage.session.remove).not.toHaveBeenCalledWith(PERF_DEBUG_SNAPSHOT_STORAGE_KEY);
   });
 
   it('stops the active recording when the recorded tab is closed', async () => {

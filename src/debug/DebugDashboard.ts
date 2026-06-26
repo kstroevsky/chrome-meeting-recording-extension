@@ -6,7 +6,6 @@
  */
 
 import { isDevBuild } from '../shared/build';
-import { connectRuntimePort } from '../platform/chrome/runtime';
 import {
   addStorageChangedListener,
   getSessionStorageValues,
@@ -44,7 +43,6 @@ type Elements = {
 export class DebugDashboard {
   private snapshot: PerfDebugSnapshot | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private debugPort: chrome.runtime.Port | null = null;
   private systemInfoText = 'Loading system info...';
   private readonly eventTable: EventTableRenderer;
 
@@ -70,7 +68,6 @@ export class DebugDashboard {
       return;
     }
 
-    this.debugPort = connectRuntimePort('debug-dashboard');
     this.el.downloadBtn?.addEventListener('click', () => this.downloadSnapshot());
     addStorageChangedListener(this.storageListener);
 
@@ -89,8 +86,6 @@ export class DebugDashboard {
       this.pollTimer = null;
     }
     removeStorageChangedListener(this.storageListener);
-    try { this.debugPort?.disconnect(); } catch {}
-    this.debugPort = null;
   }
 
   private async refreshSnapshot() {

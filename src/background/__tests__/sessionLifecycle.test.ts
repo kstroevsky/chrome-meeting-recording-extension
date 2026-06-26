@@ -10,7 +10,7 @@ jest.mock('../../shared/messages', () => ({
 }));
 
 import {
-  maybeClearPerfDiagnostics,
+  isFreshRecordingStart,
   registerSaveHandler,
   startKeepAlive,
   stopKeepAlive,
@@ -112,40 +112,24 @@ describe('registerSaveHandler', () => {
   });
 });
 
-describe('maybeClearPerfDiagnostics', () => {
-  function makeDeps(over: Partial<{ phase: string; hydrated: boolean; dashboards: number }>) {
-    const clear = jest.fn();
-    const deps = {
-      session: { getSnapshot: () => ({ phase: over.phase ?? 'idle' }) } as any,
-      perfDebugStore: { clear } as any,
-      isSessionHydrated: () => over.hydrated ?? true,
-      getActiveDebugDashboards: () => over.dashboards ?? 0,
-    };
-    return { deps, clear };
-  }
-
-  it('clears diagnostics when hydrated, idle, and no dashboard is open', () => {
-    const { deps, clear } = makeDeps({});
-    maybeClearPerfDiagnostics(deps);
-    expect(clear).toHaveBeenCalledTimes(1);
+describe('isFreshRecordingStart', () => {
+  it('is true when entering a busy phase from a non-busy one (a new recording begins)', () => {
+    expect(isFreshRecordingStart('idle', 'starting')).toBe(true);
+    expect(isFreshRecordingStart('failed', 'starting')).toBe(true);
   });
 
-  it('does not clear before the session has hydrated', () => {
-    const { deps, clear } = makeDeps({ hydrated: false });
-    maybeClearPerfDiagnostics(deps);
-    expect(clear).not.toHaveBeenCalled();
+  it('is false for busy-to-busy transitions within a run', () => {
+    expect(isFreshRecordingStart('starting', 'recording')).toBe(false);
+    expect(isFreshRecordingStart('recording', 'uploading')).toBe(false);
   });
 
-  it('does not clear while a debug dashboard is open', () => {
-    const { deps, clear } = makeDeps({ dashboards: 1 });
-    maybeClearPerfDiagnostics(deps);
-    expect(clear).not.toHaveBeenCalled();
+  it('is false when a run finishes (busy to idle) — diagnostics persist until the next start', () => {
+    expect(isFreshRecordingStart('uploading', 'idle')).toBe(false);
+    expect(isFreshRecordingStart('recording', 'idle')).toBe(false);
   });
 
-  it('does not clear while the session is busy', () => {
-    const { deps, clear } = makeDeps({ phase: 'recording' });
-    maybeClearPerfDiagnostics(deps);
-    expect(clear).not.toHaveBeenCalled();
+  it('is false for idle-to-idle', () => {
+    expect(isFreshRecordingStart('idle', 'idle')).toBe(false);
   });
 });
 

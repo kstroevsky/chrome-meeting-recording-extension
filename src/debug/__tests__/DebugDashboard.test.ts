@@ -30,11 +30,6 @@ describe('DebugDashboard', () => {
     (globalThis as any).__DEV_BUILD__ = true;
     const elements = makeElements();
     const dashboard = new DebugDashboard(elements);
-    const disconnect = jest.fn();
-    (chrome.runtime.connect as jest.Mock).mockReturnValue({
-      disconnect,
-      onDisconnect: { addListener: jest.fn() },
-    });
     const timestamp = new Date('2026-03-08T12:34:56.321Z').getTime();
 
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({
@@ -150,7 +145,6 @@ describe('DebugDashboard', () => {
     expect(anchorClick).toHaveBeenCalledTimes(1);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:debug');
     dashboard.destroy();
-    expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
   it('renders the full event history instead of truncating to the last rows', async () => {

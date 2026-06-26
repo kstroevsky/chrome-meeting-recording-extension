@@ -7,19 +7,10 @@
 
 import { pokeRuntime } from '../platform/chrome/runtime';
 import { awaitDownloadSettled, downloadFile } from '../platform/chrome/downloads';
-import { isBusyPhase } from '../shared/recording';
+import { isBusyPhase, type RecordingPhase } from '../shared/recording';
 import { broadcastToPopup } from '../shared/messages';
-import type { RecordingSession } from './RecordingSession';
-import type { PerfDebugStore } from './PerfDebugStore';
 import type { OffscreenManager } from './OffscreenManager';
 import { debugPerf, nowMs, roundMs } from '../shared/perf';
-
-export type SessionLifecycleDeps = {
-  session: RecordingSession;
-  perfDebugStore: PerfDebugStore;
-  isSessionHydrated: () => boolean;
-  getActiveDebugDashboards: () => number;
-};
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -97,12 +88,12 @@ export function registerSaveHandler(
 }
 
 /**
- * Clears stored diagnostics only when the session is idle and no debug dashboard
- * is open. Called after phase changes and after initial hydration.
+ * True when a phase transition begins a fresh recording, so the previous run's
+ * diagnostics should be reset. Clearing at start — rather than on idle — lets a
+ * finished run's diagnostics survive until the next recording begins, so the
+ * debug dashboard can be opened and exported after the fact even if it was never
+ * open during the run.
  */
-export function maybeClearPerfDiagnostics(deps: SessionLifecycleDeps) {
-  if (!deps.isSessionHydrated()) return;
-  if (deps.getActiveDebugDashboards() > 0) return;
-  if (isBusyPhase(deps.session.getSnapshot().phase)) return;
-  deps.perfDebugStore.clear();
+export function isFreshRecordingStart(previousPhase: RecordingPhase, nextPhase: RecordingPhase): boolean {
+  return !isBusyPhase(previousPhase) && isBusyPhase(nextPhase);
 }

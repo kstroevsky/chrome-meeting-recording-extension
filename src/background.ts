@@ -23,7 +23,7 @@ import { createChromeCpuSampler } from './background/perf/CpuSampler';
 import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { createPhaseWatchdog } from './background/phaseWatchdog';
-import { startKeepAlive, stopKeepAlive, maybeClearPerfDiagnostics, registerSaveHandler } from './background/sessionLifecycle';
+import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
 import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
 import { makeLogger } from './shared/logger';
@@ -37,14 +37,17 @@ import {
   isBusyPhase,
   RECORDING_SESSION_STORAGE_KEY,
   toStatusView,
+  type RecordingPhase,
 } from './shared/recording';
 import { TIMEOUTS } from './shared/timeouts';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
 
-let activeDebugDashboards = 0;
 let sessionHydrated = false;
+// Tracks the prior phase so we can reset diagnostics at the START of a new
+// recording (not on idle) — see isFreshRecordingStart.
+let previousPhase: RecordingPhase = 'idle';
 // Set when an extension update arrives mid-recording; applied once work finishes.
 let pendingReload = false;
 
@@ -67,13 +70,18 @@ const session = new RecordingSession(
       stopKeepAlive();
     }
     offscreen.hydratePhase(snapshot.phase);
+    // Reset diagnostics at the start of a new recording, so a finished run's
+    // diagnostics survive (idle no longer wipes them) until the next one begins.
+    // Guarded by sessionHydrated so a rehydrated busy phase after a SW restart is
+    // not mistaken for a fresh start.
+    if (sessionHydrated && isFreshRecordingStart(previousPhase, snapshot.phase)) {
+      perfDebugStore.clear();
+    }
+    previousPhase = snapshot.phase;
     perfDebugStore.setPhase(snapshot.phase);
-    if (!isBusyPhase(snapshot.phase)) {
-      maybeClearPerfDiagnostics({ session, perfDebugStore, isSessionHydrated: () => sessionHydrated, getActiveDebugDashboards: () => activeDebugDashboards });
-      if (pendingReload) {
-        L.log('Applying deferred update reload now that work has finished');
-        chrome.runtime.reload();
-      }
+    if (!isBusyPhase(snapshot.phase) && pendingReload) {
+      L.log('Applying deferred update reload now that work has finished');
+      chrome.runtime.reload();
     }
     void import('./shared/messages').then(({ broadcastToPopup }) =>
       broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) })
@@ -136,16 +144,7 @@ registerRecordingAutoStop({ session, controller });
 chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
   if (port.name === 'offscreen') {
     offscreen.attachPort(port);
-    return;
   }
-
-  if (port.name !== 'debug-dashboard') return;
-
-  activeDebugDashboards += 1;
-  port.onDisconnect.addListener(() => {
-    activeDebugDashboards = Math.max(0, activeDebugDashboards - 1);
-    maybeClearPerfDiagnostics({ session, perfDebugStore, isSessionHydrated: () => sessionHydrated, getActiveDebugDashboards: () => activeDebugDashboards });
-  });
 });
 
 // Register suspend handler for graceful stop on service-worker sleep.
@@ -193,9 +192,6 @@ chrome.runtime.onInstalled?.addListener(async (details) => {
     const snapshot = session.hydrate(
       res?.[RECORDING_SESSION_STORAGE_KEY] ?? hydrateLegacySession(res)
     );
-    if (!isBusyPhase(snapshot.phase)) {
-      maybeClearPerfDiagnostics({ session, perfDebugStore, isSessionHydrated: () => sessionHydrated, getActiveDebugDashboards: () => activeDebugDashboards });
-    }
     if (isBusyPhase(snapshot.phase)) {
       L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
@@ -205,6 +201,5 @@ chrome.runtime.onInstalled?.addListener(async (details) => {
     L.warn('Session re-hydration failed (non-fatal):', e);
   } finally {
     sessionHydrated = true;
-    maybeClearPerfDiagnostics({ session, perfDebugStore, isSessionHydrated: () => sessionHydrated, getActiveDebugDashboards: () => activeDebugDashboards });
   }
 })();
