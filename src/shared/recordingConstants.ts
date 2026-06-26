@@ -43,7 +43,11 @@ export const EXTENSION_DEFAULTS = Object.freeze({
     selfVideo: Object.freeze({
       width: 1920,
       height: 1080,
-      frameRate: 30,
+      // 24 fps: a webcam talking head is low-motion, so dropping from 30 removes
+      // ~20% of frames from the encode (cutting CPU super-linearly vs a bitrate
+      // cut) and ~20% of bytes, with no perceptible smoothness loss for a face.
+      // User-overridable via the selfVideoFrameRate professional setting.
+      frameRate: 24,
       aspectRatio: 16 / 9,
       defaultBitsPerSecond: 3_000_000,
       minAdaptiveBitsPerSecond: 1_000_000,

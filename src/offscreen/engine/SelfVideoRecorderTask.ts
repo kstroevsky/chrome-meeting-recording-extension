@@ -164,6 +164,15 @@ async function startWiredSelfVideoRecorder(
     recorderSettings.selfVideo.profile.minAdaptiveBitsPerSecond
   );
 
+  // A webcam is motion-dominated; bias the encoder toward temporal smoothness
+  // over per-frame detail. The resize-pump generator already carries this hint;
+  // setting it here also covers the direct (auto-resolution) path, the common
+  // case. Advisory — MediaRecorder may ignore it.
+  try {
+    const videoTrack = recordingStream.getVideoTracks()[0];
+    if (videoTrack) videoTrack.contentHint = 'motion';
+  } catch {}
+
   const recorder = new MediaRecorder(recordingStream, { mimeType: mime, videoBitsPerSecond });
   const target = await openStorageTarget(
     buildRecordingFilename(suffix, 'self-video'),

@@ -19,7 +19,7 @@ describe('RecorderProfiles', () => {
     expect(SELF_VIDEO_PROFILE).toEqual({
       width: 1920,
       height: 1080,
-      frameRate: 30,
+      frameRate: 24,
       aspectRatio: 16 / 9,
       defaultBitsPerSecond: 3_000_000,
     });
@@ -27,7 +27,7 @@ describe('RecorderProfiles', () => {
       expect.objectContaining({
         width: { ideal: 1920, max: 1920 },
         height: { ideal: 1080, max: 1080 },
-        frameRate: { ideal: 30, max: 30 },
+        frameRate: { ideal: 24, max: 24 },
         aspectRatio: { ideal: 16 / 9 },
       })
     );
@@ -75,7 +75,7 @@ describe('RecorderProfiles', () => {
         constraints: expect.objectContaining({
           width: { exact: 1920 },
           height: { exact: 1080 },
-          frameRate: { exact: 30 },
+          frameRate: { exact: 24 },
         }),
       }),
       expect.objectContaining({
@@ -83,7 +83,7 @@ describe('RecorderProfiles', () => {
         constraints: expect.objectContaining({
           width: { exact: 1920 },
           height: { exact: 1080 },
-          frameRate: { ideal: 30, max: 30 },
+          frameRate: { ideal: 24, max: 24 },
         }),
       }),
       {

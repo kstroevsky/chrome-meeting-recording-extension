@@ -68,6 +68,16 @@ export async function startTabRecorder(
     qualityFactor
   );
 
+  // Per-content encoder hint: screen/UI/text wants spatial sharpness (legible
+  // text), video/animation wants temporal smoothness. Advisory — MediaRecorder
+  // may ignore it; the observed-bitrate ratio in diagnostics tells us if it moved.
+  try {
+    const videoTrack = recordingStream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.contentHint = recorderSettings.tab.output.contentType === 'video' ? 'motion' : 'text';
+    }
+  } catch {}
+
   const recorder = new MediaRecorder(recordingStream, {
     mimeType: mime,
     videoBitsPerSecond,

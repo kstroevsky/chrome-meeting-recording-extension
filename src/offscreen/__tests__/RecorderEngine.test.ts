@@ -813,7 +813,7 @@ describe('RecorderEngine', () => {
     const selfVideoRecorder = FakeMediaRecorder.instances.find((instance) => instance.kind === 'self-video');
     expect(selfVideoRecorder?.options.videoBitsPerSecond).toBe(1_000_000);
     expect(deps.reportWarning).toHaveBeenCalledWith(
-      expect.stringContaining('Camera recording requested 1920x1080@30fps, but browser delivered 640x360@15fps.')
+      expect.stringContaining('Camera recording requested 1920x1080@24fps, but browser delivered 640x360@15fps.')
     );
   });
 

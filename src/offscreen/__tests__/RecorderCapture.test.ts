@@ -102,7 +102,7 @@ describe('RecorderCapture', () => {
         video: expect.objectContaining({
           width: { exact: 1920 },
           height: { exact: 1080 },
-          frameRate: { exact: 30 },
+          frameRate: { exact: 24 },
         }),
       })
     );
@@ -146,7 +146,7 @@ describe('RecorderCapture', () => {
         video: expect.objectContaining({
           width: { exact: 1920 },
           height: { exact: 1080 },
-          frameRate: { exact: 30 },
+          frameRate: { exact: 24 },
         }),
       })
     );
@@ -157,7 +157,7 @@ describe('RecorderCapture', () => {
         video: expect.objectContaining({
           width: { exact: 1920 },
           height: { exact: 1080 },
-          frameRate: { ideal: 30, max: 30 },
+          frameRate: { ideal: 24, max: 24 },
         }),
       })
     );
