@@ -25,8 +25,10 @@ import type { DesiredState, ObservedState, RecordingPhase } from './recordingTyp
  *   want recording, observed recording → 'recording'
  *   want recording, not yet observed   → 'starting'  (intent ahead of observation)
  *   want idle, still capturing         → 'stopping'  (observation lagging the stop)
- *   want idle, observed uploading      → 'uploading'
  *   want idle, observed idle / none    → 'idle'
+ *
+ * Uploads are no longer a recording phase (ADR-0004): a stop seals capture and
+ * returns to idle while the upload runs as a separate background job.
  */
 export function projectPhase(desired: DesiredState, observed: ObservedState, failed: boolean): RecordingPhase {
   if (failed) return 'failed';
@@ -41,6 +43,5 @@ export function projectPhase(desired: DesiredState, observed: ObservedState, fai
   if (observed === 'starting' || observed === 'recording' || observed === 'stopping') {
     return 'stopping';
   }
-  if (observed === 'uploading') return 'uploading';
   return 'idle';
 }

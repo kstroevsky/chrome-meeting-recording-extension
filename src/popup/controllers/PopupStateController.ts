@@ -43,7 +43,6 @@ export class PopupStateController {
   private activeWarnings: string[] = [];
   private idleDefaultRunConfig: RecordingRunConfig = createDefaultRunConfig();
   private shownUploadSummary = '';
-  private lastPhase: RecordingPhase = 'idle';
 
   constructor(private readonly el: PopupElements, private readonly callbacks: PopupStateCallbacks) {}
 
@@ -68,8 +67,6 @@ export class PopupStateController {
 
   /** Applies the popup-facing status view from background into the popup state. */
   applySession(snapshot: RecordingStatusView) {
-    const prevPhase = this.lastPhase;
-    this.lastPhase = snapshot.phase;
     const runConfig = snapshot.phase === 'idle'
       ? { ...this.idleDefaultRunConfig }
       : getRunConfigOrDefault(snapshot.runConfig);
@@ -81,7 +78,7 @@ export class PopupStateController {
       this.callbacks.onToast(`Recording error: ${snapshot.error}`);
     }
 
-    this.handleUploadSummary(prevPhase, snapshot.phase, snapshot.uploadSummary);
+    this.handleUploadSummary(snapshot.phase, snapshot.uploadSummary);
   }
 
   /** Builds the persistent status line text based on current phase, pause state, and warnings. */
@@ -119,11 +116,7 @@ export class PopupStateController {
     this.activeWarnings = warnings ? [...warnings] : [];
   }
 
-  private handleUploadSummary(
-    prevPhase: RecordingPhase,
-    phase: RecordingPhase,
-    summary?: UploadSummary
-  ) {
+  private handleUploadSummary(phase: RecordingPhase, summary?: UploadSummary) {
     if (phase !== 'idle' || !summary) return;
 
     const key = JSON.stringify(summary);
@@ -136,7 +129,7 @@ export class PopupStateController {
       return;
     }
 
-    if (prevPhase === 'uploading' && summary.uploaded.length > 0) {
+    if (summary.uploaded.length > 0) {
       this.callbacks.onToast(`Uploaded ${summary.uploaded.length} file(s) to Google Drive`);
     }
   }

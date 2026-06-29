@@ -10,7 +10,7 @@ import { parseRunConfig, type RecordingSessionSnapshot } from '../shared/recordi
 export const LEGACY_SESSION_PHASE_KEY = 'phase';
 export const LEGACY_SESSION_RUN_CONFIG_KEY = 'activeRunConfig';
 
-const VALID_PHASES = ['starting', 'recording', 'stopping', 'uploading', 'failed', 'idle'] as const;
+const VALID_PHASES = ['starting', 'recording', 'stopping', 'failed', 'idle'] as const;
 type ValidPhase = typeof VALID_PHASES[number];
 
 function normalizeLegacyPhase(value: unknown): ValidPhase | null {

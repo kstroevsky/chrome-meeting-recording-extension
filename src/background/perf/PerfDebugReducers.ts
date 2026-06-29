@@ -490,7 +490,6 @@ export function applyRuntimeSample(snapshot: Readonly<PerfDebugSnapshot>, entry:
     || phase === 'starting'
     || phase === 'recording'
     || phase === 'stopping'
-    || phase === 'uploading'
     || phase === 'failed'
   ) {
     runtime.state = phase;

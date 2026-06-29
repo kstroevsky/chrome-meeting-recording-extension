@@ -91,7 +91,7 @@ export class OffscreenController {
   onStopRequested = (): void => { void this.finalize(); };
 
   /** Advances the broadcast phase, rebaselining the lag clock on a new active phase. */
-  pushState = (phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error' | 'uploadProgress'>): void => {
+  pushState = (phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>): void => {
     if (phase !== this.phase && phase !== 'idle') {
       this.deps.sampler.markActivePhaseStart(this.now());
     }
@@ -103,17 +103,6 @@ export class OffscreenController {
       ...(this.warnings.length ? { warnings: this.warnings } : {}),
       ...(extra ?? {}),
     });
-  };
-
-  /**
-   * Re-broadcasts the live Drive-upload fraction during the `uploading` phase so the
-   * popup can render a determinate ring. Inert outside `uploading` (the finalizer can
-   * still settle a final chunk after we've already advanced to `idle`), and the
-   * fraction is clamped to [0, 1] before it crosses the wire.
-   */
-  reportUploadProgress = (fraction: number): void => {
-    if (this.phase !== 'uploading' || !Number.isFinite(fraction)) return;
-    this.pushState('uploading', { uploadProgress: Math.min(1, Math.max(0, fraction)) });
   };
 
   /** Records a de-duplicated, trimmed warning and re-broadcasts the current phase. */
@@ -139,20 +128,18 @@ export class OffscreenController {
 
     this.finalizeRunPromise = (async () => {
       const artifacts = await engine.stop();
-      if (artifacts.length > 0 && this.storageMode === 'drive' && this.enqueueUpload) {
-        // ADR-0004: capture is sealed, so hand it to the background upload manager
-        // and return to idle at once — a new recording can start while it uploads.
-        this.enqueueUpload(artifacts);
-        this.pushState('idle');
-        return;
+      if (artifacts.length > 0) {
+        if (this.storageMode === 'drive') {
+          // ADR-0004: capture is sealed — hand it to the background upload manager
+          // and return to idle at once so a new recording can start while it uploads.
+          if (!this.enqueueUpload) throw new Error('Drive finalize requires an upload manager');
+          this.enqueueUpload(artifacts);
+        } else {
+          // Local saves are instant; finalize inline.
+          await finalizer.finalize({ artifacts, storageMode: 'local' });
+        }
       }
-      // Local mode (instant save), or no upload manager wired (legacy / tests):
-      // finalize inline and surface the summary on the way back to idle.
-      if (this.storageMode === 'drive' && artifacts.length > 0) {
-        this.pushState('uploading');
-      }
-      const summary = await finalizer.finalize({ artifacts, storageMode: this.storageMode });
-      this.pushState('idle', summary ? { uploadSummary: summary } : undefined);
+      this.pushState('idle');
     })()
       .catch((e) => {
         this.deps.error('Stop/finalize pipeline failed', describeRuntimeError(e));

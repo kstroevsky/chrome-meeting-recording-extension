@@ -65,6 +65,8 @@ export type PopupElements = {
   uploadJobRingLabel: HTMLElement | null;
   uploadJobLabel: HTMLElement | null;
   uploadJobFiles: HTMLElement | null;
+  /** Primary CTA on an upload screen: jump to Setup to start a new recording. */
+  uploadJobNew: HTMLButtonElement | null;
   uploadJobDismiss: HTMLButtonElement | null;
 
   // Shared status / toast line
@@ -74,7 +76,7 @@ export type PopupElements = {
 /** Maps a recording phase to the top-level view it should display. */
 export function viewForPhase(phase: RecordingPhase): PopupView {
   if (phase === 'starting' || phase === 'recording') return 'recording';
-  if (phase === 'stopping' || phase === 'uploading') return 'finalizing';
+  if (phase === 'stopping') return 'finalizing';
   return 'config'; // idle, failed
 }
 

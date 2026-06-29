@@ -98,6 +98,11 @@ export class PopupController {
   /** Last phase/session, replayed when a tab is clicked without a new background push. */
   private lastPhase: RecordingPhase = 'idle';
   private lastSession?: RecordingStatusView;
+  /** Upload-job ids already seen, so a *newly*-appeared job (a recording that just
+   *  finished) can auto-focus its tab — but a reopen, where jobs are seen on the
+   *  first render, still lands on Setup (ADR-0004). */
+  private seenUploadJobIds = new Set<string>();
+  private hasRenderedSession = false;
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -141,6 +146,7 @@ export class PopupController {
   private onPhaseChange(phase: RecordingPhase, session?: RecordingStatusView) {
     this.lastPhase = phase;
     this.lastSession = session;
+    this.autoFocusFinishedUpload(session);
     this.renderSessionTabs(phase, session);
 
     // An upload tab is selected: show only that job's upload view and stop the
@@ -446,13 +452,10 @@ export class PopupController {
     if (this.el.chipTranscript) this.el.chipTranscript.classList.toggle('off', !active);
   }
 
-  /** Populates the finalizing view: progress ring + run metadata (storage/duration/mic/camera). */
-  private updateFinalizingView(phase: RecordingPhase, session?: RecordingStatusView) {
-    if (this.el.finalizingLabel) {
-      this.el.finalizingLabel.textContent =
-        phase === 'uploading' ? 'Uploading to Google Drive…' : 'Finalizing files…';
-    }
-    this.updateUploadRing(phase, session);
+  /** Populates the finalizing view: indeterminate spinner + run metadata (storage/duration/mic/camera). */
+  private updateFinalizingView(_phase: RecordingPhase, session?: RecordingStatusView) {
+    if (this.el.finalizingLabel) this.el.finalizingLabel.textContent = 'Finalizing files…';
+    this.updateUploadRing();
     const cfg = session?.runConfig;
     if (this.el.metaStorage) {
       this.el.metaStorage.textContent = cfg?.storageMode === 'drive' ? 'Google Drive' : 'Local Disk (OPFS)';
@@ -463,29 +466,35 @@ export class PopupController {
   }
 
   /**
-   * Drives the finalizing ring. A Drive upload reporting a fraction renders a
-   * determinate arc with a centered percentage ("how much is left"); every other
-   * case (local finalize, or the brief pre-first-chunk window) falls back to the
-   * indeterminate spinner. The arc circle declares `pathLength="100"`, so the
-   * fraction maps straight onto `stroke-dashoffset = 100 - percent`.
+   * The finalizing view now only appears while `stopping` (sealing files), which has
+   * no measurable progress, so its ring is always the indeterminate spinner. Live
+   * Drive-upload progress lives in the per-job upload tabs (ADR-0004).
    */
-  private updateUploadRing(phase: RecordingPhase, session?: RecordingStatusView) {
+  private updateUploadRing() {
     const ring = this.el.uploadRing;
     if (!ring) return;
-    const fraction = phase === 'uploading' ? session?.uploadProgress : undefined;
-    if (typeof fraction === 'number' && Number.isFinite(fraction)) {
-      const percent = Math.round(Math.min(1, Math.max(0, fraction)) * 100);
-      ring.dataset.mode = 'determinate';
-      if (this.el.uploadRingArc) this.el.uploadRingArc.style.strokeDashoffset = String(100 - percent);
-      if (this.el.uploadRingLabel) this.el.uploadRingLabel.textContent = `${percent}%`;
-    } else {
-      ring.dataset.mode = 'indeterminate';
-      if (this.el.uploadRingArc) this.el.uploadRingArc.style.strokeDashoffset = '100';
-      if (this.el.uploadRingLabel) this.el.uploadRingLabel.textContent = '';
-    }
+    ring.dataset.mode = 'indeterminate';
+    if (this.el.uploadRingArc) this.el.uploadRingArc.style.strokeDashoffset = '100';
+    if (this.el.uploadRingLabel) this.el.uploadRingLabel.textContent = '';
   }
 
   // ── Session tabs + background upload jobs (ADR-0004) ──────────────────────────
+
+  /**
+   * When a recording just finished it produces a *new* upload job; focus its tab so
+   * the user lands on the upload screen (with a "New recording" button) rather than
+   * an empty Setup form (ADR-0004). The first render only records the existing job
+   * ids — so reopening the popup mid-upload still defaults to Setup.
+   */
+  private autoFocusFinishedUpload(session?: RecordingStatusView) {
+    const jobs = session?.uploadJobs ?? [];
+    if (this.hasRenderedSession) {
+      const freshlyFinished = jobs.filter((j) => !this.seenUploadJobIds.has(j.id));
+      if (freshlyFinished.length) this.selectedTab = freshlyFinished[freshlyFinished.length - 1].id;
+    }
+    this.seenUploadJobIds = new Set(jobs.map((j) => j.id));
+    this.hasRenderedSession = true;
+  }
 
   /** The upload job for the selected tab, or null when the live tab is active. */
   private activeUploadTabJob(session?: RecordingStatusView): UploadJob | null {
@@ -512,8 +521,9 @@ export class PopupController {
     }
     tabsEl.hidden = false;
     const frag = document.createDocumentFragment();
-    frag.appendChild(this.buildTab('live', liveTabLabel(phase), null));
+    // Upload tabs first, in creation order, then the live/Setup tab as a stable end anchor.
     for (const job of jobs) frag.appendChild(this.buildTab(job.id, job.label, job));
+    frag.appendChild(this.buildTab('live', liveTabLabel(phase), null));
     tabsEl.replaceChildren(frag);
   }
 
@@ -573,6 +583,9 @@ export class PopupController {
 
   private wireUploadDismiss() {
     this.el.uploadJobDismiss?.addEventListener('click', () => void this.dismissUploadJob());
+    // "New recording" leaves the upload screen for Setup (the live tab) — the upload
+    // keeps running in the background and stays reachable via its tab (ADR-0004).
+    this.el.uploadJobNew?.addEventListener('click', () => this.selectTab('live'));
   }
 
   /** Dismisses the shown job's tab; the background drops it and pushes a fresh view. */

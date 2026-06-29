@@ -39,7 +39,6 @@ export function toStatusView(snapshot: RecordingSessionSnapshot): RecordingStatu
     paused: snapshot.paused,
     recordedMs: snapshot.recordedMs,
     runningSince: snapshot.runningSince,
-    uploadProgress: snapshot.uploadProgress,
     uploadJobs: snapshot.uploadJobs,
     updatedAt: snapshot.updatedAt,
   };

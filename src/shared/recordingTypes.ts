@@ -5,7 +5,7 @@
  * contexts.
  */
 
-export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'uploading' | 'failed';
+export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'failed';
 
 /**
  * Command-plane intent (ADR-0003, Decision 4): what the background *wants* the
@@ -22,7 +22,7 @@ export type DesiredState = 'idle' | 'recording';
  * to the derived {@link RecordingPhase}. Failure is tracked separately (a terminal
  * flag set by either plane), so it is not represented as an observed value here.
  */
-export type ObservedState = 'none' | 'starting' | 'recording' | 'stopping' | 'uploading' | 'idle';
+export type ObservedState = 'none' | 'starting' | 'recording' | 'stopping' | 'idle';
 
 export type RecordingStream = 'tab' | 'mic' | 'self-video';
 export type StorageMode = 'local' | 'drive';
@@ -160,15 +160,6 @@ export type RecordingSessionSnapshot = {
   recordedMs?: number;
   runningSince?: number;
   /**
-   * Live Drive-upload progress as a fraction in [0, 1] while `phase === 'uploading'`.
-   * Mirrors the offscreen's throttled OFFSCREEN_STATE progress so a reopened popup
-   * renders a determinate ring. Omitted in every other phase. See ADR-0003.
-   *
-   * @deprecated Superseded by per-job {@link uploadJobs} (ADR-0004); removed once
-   * the decoupled upload UI lands.
-   */
-  uploadProgress?: number;
-  /**
    * Background Drive-upload jobs that have been detached from the recording
    * session (ADR-0004). Phase-independent — a job keeps running (and stays on the
    * snapshot) while a new recording starts — and persisted so a reopened popup can
@@ -198,8 +189,6 @@ export type RecordingStatusView = {
   /** Pause-aware recording timer state; see {@link RecordingSessionSnapshot.recordedMs}. */
   recordedMs?: number;
   runningSince?: number;
-  /** Live Drive-upload progress; see {@link RecordingSessionSnapshot.uploadProgress}. */
-  uploadProgress?: number;
   /** Background Drive-upload jobs; see {@link RecordingSessionSnapshot.uploadJobs}. */
   uploadJobs?: UploadJob[];
   updatedAt: number;

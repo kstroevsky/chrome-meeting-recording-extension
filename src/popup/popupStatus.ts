@@ -10,7 +10,6 @@ export const STATUS_BY_PHASE: Record<Exclude<RecordingPhase, 'idle'>, string> = 
   starting: 'Starting recording...',
   recording: 'Recording in progress.',
   stopping: 'Stopping recording and sealing files...',
-  uploading: 'Finalizing and saving files... you can close this popup.',
   failed: 'The last recording attempt failed.',
 };
 

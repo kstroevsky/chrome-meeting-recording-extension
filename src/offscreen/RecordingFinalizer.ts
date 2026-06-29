@@ -39,12 +39,6 @@ export type RecordingFinalizerDeps = {
    * persist (e.g. unit tests).
    */
   pendingUploads?: PendingUploadStore;
-  /**
-   * Live aggregate Drive-upload progress as a fraction in [0, 1] across all
-   * artifacts, already throttled to whole-percent steps. Optional: absent in
-   * contexts with no UI to drive (e.g. crash recovery, unit tests).
-   */
-  onUploadProgress?: (fraction: number) => void;
 };
 
 export type FinalizeArtifactsOptions = {
@@ -169,7 +163,7 @@ export class RecordingFinalizer {
     // longer uploading) so the ring still reaches 100% on a partial-fallback run.
     // The report is throttled to whole-percent steps so a many-chunk upload can't
     // flood the OFFSCREEN_STATE → persist → popup path with redundant updates.
-    const progressSink = onUploadProgress ?? this.deps.onUploadProgress;
+    const progressSink = onUploadProgress;
     const totalBytes = artifacts.reduce((sum, { artifact }) => sum + artifact.file.size, 0);
     const loadedPerFile = new Array<number>(artifacts.length).fill(0);
     let lastReportedPercent = -1;

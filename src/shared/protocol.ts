@@ -121,14 +121,6 @@ export type OffscreenPhaseUpdate = {
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];
-  /**
-   * Live Drive-upload progress as a fraction in [0, 1], emitted only while
-   * `phase === 'uploading'`. Throttled to whole-percent steps by the finalizer so
-   * a many-chunk upload re-broadcasts at most ~100 times. Absent in every other
-   * phase (and during the brief pre-first-chunk window) so the popup falls back to
-   * the indeterminate spinner.
-   */
-  uploadProgress?: number;
 };
 
 export type BgToOffscreenRpc =

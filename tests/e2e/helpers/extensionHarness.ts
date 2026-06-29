@@ -15,7 +15,6 @@ export type RecordingPhase =
   | 'starting'
   | 'recording'
   | 'stopping'
-  | 'uploading'
   | 'failed';
 
 export type RecordingSessionSnapshot = {

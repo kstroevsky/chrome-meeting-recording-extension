@@ -209,7 +209,6 @@ const VALID_OBSERVED_STATES: readonly ObservedState[] = [
   'starting',
   'recording',
   'stopping',
-  'uploading',
   'idle',
 ];
 
@@ -239,8 +238,6 @@ function decomposeLegacyPhase(phase: RecordingPhase): { desired: DesiredState; o
       return { desired: 'recording', observed: 'recording', failed: false };
     case 'stopping':
       return { desired: 'idle', observed: 'stopping', failed: false };
-    case 'uploading':
-      return { desired: 'idle', observed: 'uploading', failed: false };
     case 'failed':
       return { desired: 'idle', observed: 'none', failed: true };
   }

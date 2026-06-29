@@ -362,14 +362,12 @@ export class OffscreenManager {
   /** Updates the extension action badge to reflect the last known runtime phase. */
   private setBadge(phase: RecordingPhase) {
     const text =
-      phase === 'uploading'
-        ? 'UP'
-        : phase === 'failed'
-          ? 'ERR'
-          : phase === 'idle'
-            ? // ADR-0004: a decoupled upload can still be draining while idle.
-              this.activeUploadJobs.size > 0 ? 'UP' : ''
-            : 'REC';
+      phase === 'failed'
+        ? 'ERR'
+        : phase === 'idle'
+          ? // ADR-0004: a decoupled upload can still be draining while idle.
+            this.activeUploadJobs.size > 0 ? 'UP' : ''
+          : 'REC';
     void setActionBadgeText(text);
   }
 

@@ -161,7 +161,6 @@ const finalizer = new RecordingFinalizer({
   getDriveToken,
   reportWarning: controller.reportWarning,
   pendingUploads: pendingUploadStore,
-  onUploadProgress: controller.reportUploadProgress,
 });
 
 // Background Drive-upload jobs (ADR-0004): a stopped recording's upload is detached

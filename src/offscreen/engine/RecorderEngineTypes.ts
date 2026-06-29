@@ -6,7 +6,7 @@
 
 import type { RecordingPhase, RecordingStream } from '../../shared/recording';
 
-export type EngineState = Exclude<RecordingPhase, 'uploading' | 'failed'>;
+export type EngineState = Exclude<RecordingPhase, 'failed'>;
 
 
 export interface SealedStorageFile {
