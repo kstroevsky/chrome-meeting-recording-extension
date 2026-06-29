@@ -132,6 +132,7 @@ describe('PopupController', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers(); // never let a fake-timer test leak into the next
     controller.destroy();
     (globalThis as any).__DEV_BUILD__ = false;
     jest.restoreAllMocks();
@@ -304,6 +305,53 @@ describe('PopupController', () => {
       expect(elements.viewUpload.hidden).toBe(true);
       expect(elements.viewConfig.hidden).toBe(false); // back on Setup; the upload keeps running
       expect(elements.sessionTabs.hidden).toBe(false); // its tab is still there
+    });
+
+    it('exposes tablist semantics with a roving tabindex', async () => {
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job()]));
+      controller.init();
+      await new Promise(process.nextTick);
+
+      const tabs = Array.from(elements.sessionTabs.querySelectorAll('.session-tab')) as HTMLButtonElement[];
+      expect(elements.sessionTabs.getAttribute('role')).toBe('tablist');
+      expect(tabs.every((t) => t.getAttribute('role') === 'tab')).toBe(true);
+      // Order [job, live]; live is selected → tabindex 0, the job tab → -1.
+      expect(tabs[0].tabIndex).toBe(-1);
+      expect(tabs[1].tabIndex).toBe(0);
+    });
+
+    it('navigates tabs with the arrow keys', async () => {
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job()]));
+      controller.init();
+      await new Promise(process.nextTick);
+
+      // Live (last) is selected; ArrowRight wraps to the first (job) tab and activates it.
+      elements.sessionTabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      expect(elements.viewUpload.hidden).toBe(false);
+      expect(elements.uploadJobLabel.textContent).toContain('Uploading to Google Drive');
+    });
+
+    it('auto-dismisses a completed tab after it lingers', async () => {
+      jest.useFakeTimers();
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job({ status: 'completed', progress: 1 })]));
+      controller.init();
+      await jest.advanceTimersByTimeAsync(0); // flush the initial status fetch
+      mockSendMessage.mockClear(); // forget the status fetch (and any prior test's calls)
+
+      expect(mockSendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'DISMISS_UPLOAD_JOB' }));
+      await jest.advanceTimersByTimeAsync(10_000 + 300); // linger + fade
+      expect(mockSendMessage).toHaveBeenCalledWith({ type: 'DISMISS_UPLOAD_JOB', jobId: 'j1' });
+    });
+
+    it('keeps a partial/failed tab (it needs attention) past the linger', async () => {
+      jest.useFakeTimers();
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job({ status: 'partial', progress: 1 })]));
+      controller.init();
+      await jest.advanceTimersByTimeAsync(0);
+      mockSendMessage.mockClear();
+
+      await jest.advanceTimersByTimeAsync(10_000 + 300);
+      expect(mockSendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'DISMISS_UPLOAD_JOB' }));
     });
   });
 

@@ -62,6 +62,14 @@ function writeCachedPhase(phase: RecordingPhase): void {
   try { localStorage.setItem(LAST_PHASE_KEY, phase); } catch { /* ignore */ }
 }
 
+/** How long a completed upload tab lingers before it auto-fades out of the bar. */
+const COMPLETED_TAB_LINGER_MS = 10_000;
+
+/** Escapes a value for use in an attribute selector (CSS.escape with a safe fallback). */
+function cssEscape(value: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
+}
+
 /** Label for the always-present live tab, reflecting the current recording phase. */
 function liveTabLabel(phase: RecordingPhase): string {
   if (phase === 'recording' || phase === 'starting') return '● Recording';
@@ -123,6 +131,8 @@ export class PopupController {
    *  first render, still lands on Setup (ADR-0004). */
   private seenUploadJobIds = new Set<string>();
   private hasRenderedSession = false;
+  /** Pending auto-dismiss timers for completed upload tabs, keyed by job id. */
+  private readonly fadeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -150,6 +160,7 @@ export class PopupController {
     this.wireSettingsLink();
     this.wireDiagnosticsLink();
     this.wireUploadDismiss();
+    this.wireSessionTabsKeyboard();
     void this.state.refreshInitialState();
   }
 
@@ -161,6 +172,8 @@ export class PopupController {
     }
     this.stopTimer();
     this.stopCaptionPoll();
+    for (const timer of this.fadeTimers.values()) clearTimeout(timer);
+    this.fadeTimers.clear();
   }
 
   /**
@@ -551,13 +564,20 @@ export class PopupController {
     for (const job of jobs) frag.appendChild(this.buildTab(job.id, job.label, job));
     frag.appendChild(this.buildTab('live', liveTabLabel(phase), null));
     tabsEl.replaceChildren(frag);
+    this.scheduleTerminalFade(jobs);
   }
 
   private buildTab(tab: string, label: string, job: UploadJob | null): HTMLButtonElement {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'session-tab';
-    btn.setAttribute('aria-selected', String(this.selectedTab === tab));
+    btn.setAttribute('role', 'tab');
+    btn.dataset.tab = tab;
+    const selected = this.selectedTab === tab;
+    btn.setAttribute('aria-selected', String(selected));
+    // Roving tabindex: only the selected tab is in the Tab order; arrow keys move
+    // focus within the group (see wireSessionTabsKeyboard).
+    btn.tabIndex = selected ? 0 : -1;
     if (job) btn.dataset.status = job.status;
     const labelEl = document.createElement('span');
     labelEl.className = 'session-tab-label';
@@ -578,6 +598,67 @@ export class PopupController {
     if (this.selectedTab === tab) return;
     this.selectedTab = tab;
     this.onPhaseChange(this.lastPhase, this.lastSession);
+  }
+
+  /**
+   * Roving-tabindex keyboard navigation for the tablist: Arrow keys (and Home/End)
+   * move focus between tabs and activate them; Enter/Space activate via the native
+   * button click. Wired once — the container persists across `replaceChildren`.
+   */
+  private wireSessionTabsKeyboard() {
+    const tabsEl = this.el.sessionTabs;
+    if (!tabsEl) return;
+    tabsEl.setAttribute('role', 'tablist');
+    tabsEl.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) return;
+      const tabs = Array.from(tabsEl.querySelectorAll<HTMLButtonElement>('.session-tab'));
+      if (tabs.length < 2) return;
+      const current = Math.max(0, tabs.findIndex((t) => t.getAttribute('aria-selected') === 'true'));
+      const next =
+        e.key === 'Home' ? 0
+        : e.key === 'End' ? tabs.length - 1
+        : e.key === 'ArrowRight' ? (current + 1) % tabs.length
+        : (current - 1 + tabs.length) % tabs.length;
+      e.preventDefault();
+      const id = tabs[next].dataset.tab;
+      if (id) {
+        this.selectTab(id);
+        // selectTab re-rendered the bar; move focus to the now-selected tab.
+        tabsEl.querySelector<HTMLButtonElement>('.session-tab[aria-selected="true"]')?.focus();
+      }
+    });
+  }
+
+  /**
+   * Auto-dismisses a *completed* upload tab a few seconds after it finishes, to keep
+   * the bar uncluttered. Partial/failed jobs are left in place — they need the user's
+   * attention — and the tab the user is currently viewing is never auto-cleared.
+   */
+  private scheduleTerminalFade(jobs: UploadJob[]) {
+    const ids = new Set(jobs.map((j) => j.id));
+    for (const [id, timer] of this.fadeTimers) {
+      if (!ids.has(id)) { clearTimeout(timer); this.fadeTimers.delete(id); }
+    }
+    for (const job of jobs) {
+      const eligible = job.status === 'completed' && this.selectedTab !== job.id;
+      if (eligible && !this.fadeTimers.has(job.id)) {
+        this.fadeTimers.set(job.id, setTimeout(() => this.fadeAndDismiss(job.id), COMPLETED_TAB_LINGER_MS));
+      } else if (!eligible && this.fadeTimers.has(job.id)) {
+        clearTimeout(this.fadeTimers.get(job.id)!);
+        this.fadeTimers.delete(job.id);
+      }
+    }
+  }
+
+  private fadeAndDismiss(id: string) {
+    this.fadeTimers.delete(id);
+    const tab = this.el.sessionTabs?.querySelector<HTMLElement>(`.session-tab[data-tab="${cssEscape(id)}"]`);
+    if (tab) {
+      tab.classList.add('session-tab--fading');
+      setTimeout(() => void this.dismissJob(id, false), 280);
+    } else {
+      void this.dismissJob(id, false);
+    }
   }
 
   /** Populates the upload view (ring + status + per-file outcomes) for one job. */
@@ -608,17 +689,22 @@ export class PopupController {
   }
 
   private wireUploadDismiss() {
-    this.el.uploadJobDismiss?.addEventListener('click', () => void this.dismissUploadJob());
+    // The manual Dismiss button acts on the shown job and returns to Setup.
+    this.el.uploadJobDismiss?.addEventListener('click', () => {
+      if (this.shownJobId) void this.dismissJob(this.shownJobId, true);
+    });
     // "New recording" leaves the upload screen for Setup (the live tab) — the upload
     // keeps running in the background and stays reachable via its tab (ADR-0004).
     this.el.uploadJobNew?.addEventListener('click', () => this.selectTab('live'));
   }
 
-  /** Dismisses the shown job's tab; the background drops it and pushes a fresh view. */
-  private async dismissUploadJob() {
-    const id = this.shownJobId;
-    if (!id) return;
-    this.selectedTab = 'live'; // leave the tab before it disappears
+  /**
+   * Drops an upload job's tab: the background removes it and pushes a fresh view.
+   * `leaveToLive` returns to Setup first (manual dismiss of the viewed job); an
+   * auto-fade of an unviewed completed tab passes false so the current tab stays put.
+   */
+  private async dismissJob(id: string, leaveToLive: boolean) {
+    if (leaveToLive) this.selectedTab = 'live'; // leave the tab before it disappears
     try {
       const resp = await sendToBackground({ type: 'DISMISS_UPLOAD_JOB', jobId: id });
       this.state.applySession(resp.session);

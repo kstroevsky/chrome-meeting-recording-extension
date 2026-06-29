@@ -533,6 +533,17 @@
         background: #25304a;
       }
 
+      .session-tab:focus-visible {
+        outline: 2px solid #4c7fe3;
+        outline-offset: 1px;
+      }
+
+      /* A completed tab gently fades out before it auto-dismisses. */
+      .session-tab--fading {
+        opacity: 0;
+        transition: opacity 0.28s ease;
+      }
+
       .session-tab-label {
         min-width: 0;
         max-width: 92px;
@@ -648,7 +659,7 @@
     </div>
 
     <!-- ════════ SESSION TABS (live session + background uploads, ADR-0004) ════════ -->
-    <nav id="session-tabs" class="session-tabs" hidden></nav>
+    <nav id="session-tabs" class="session-tabs" role="tablist" aria-label="Recording and uploads" hidden></nav>
 
     <!-- ════════ CONFIG VIEW (idle / failed) ════════ -->
     <section id="view-config" class="view">
@@ -812,7 +823,7 @@
           </svg>
           <span id="upload-job-ring-label" class="upload-ring-label"></span>
         </div>
-        <div id="upload-job-label" class="finalizing-label">Uploading to Google Drive…</div>
+        <div id="upload-job-label" class="finalizing-label" aria-live="polite">Uploading to Google Drive…</div>
         <ul id="upload-job-files" class="meta-list"></ul>
         <button id="upload-job-new" class="btn btn-primary" type="button">
           <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
@@ -826,15 +837,6 @@
 
     <!-- Shared status / toast line -->
     <div id="recording-status"></div>
-
-    <button id="pause-recording" class="btn btn-secondary pause-btn" type="button" hidden aria-pressed="false"
-      title="Pause the whole recording (records nothing); resume joins seamlessly with no gap">
-      <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-        <rect x="2" y="2" width="3" height="8" rx="1" />
-        <rect x="7" y="2" width="3" height="8" rx="1" />
-      </svg>
-      <span data-pause-label>Pause</span>
-    </button>
 
     <button id="open-diagnostics" class="btn btn-secondary" hidden>Open Diagnostics</button>
 
