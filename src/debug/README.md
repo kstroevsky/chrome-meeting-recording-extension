@@ -20,12 +20,12 @@ The snapshot (`shared/types/perfTypes.ts`) has two halves the dashboard renders:
 | `capture` | per-stream attempt/success/failure counts, requested vs. delivered profile, mic DSP constraints |
 | `recorder` | start latency, persisted chunk count/bytes, write-duration distributions, timeslice, bitrate |
 | `storage` | open/write/close counts, **worker** vs main-thread writes, backpressure-warning count, peak pending bytes |
-| `captions` | observer count, mutation/coalesced/missed counts, processing + source-latency distributions |
+| `captions` | observer count, mutation/coalesced/missed counts, processing + source-latency distributions, and **Meet-tab main-thread long-task** count/total/max (content-script, dev-only) |
 | `finalization` / `upload` | file counts, local-fallback counts, durations, upload retries, throughput, concurrency |
 | `lifecycle` | start/stop requested-vs-completed, failures, warnings, peak active tracks |
 | `runtime` | heap, **event-loop lag**, **long-task** counts, and dev-only system CPU % |
 
-Durations are `PerfDistribution` (`count/avg/p50/p95/max/last`) — so "write p95" etc. are first-class. The event log is **bounded**: `entries` is capped at `PERF_EVENT_BUFFER_LIMIT` (oldest evicted, `droppedEvents` counts the overflow), so the snapshot stays well under the `chrome.storage.session` quota no matter how long the run — the persisted copy keeps the **newest** events (including the uploading phase) instead of silently freezing once the quota is hit. On a run long enough to overflow, `count`/`avg`/`max` stay whole-session (maintained incrementally) while `p50`/`p95` reflect the retained window. As a final guard, if a persist is still rejected the store falls back to writing a summary-only snapshot so the aggregates never freeze. `enabled` + `settings` record whether diagnostics are on and which perf flags the run used.
+Durations are `PerfDistribution` (`count/avg/p50/p95/max/last`) — so "write p95" etc. are first-class. The event log is **bounded**: `entries` is capped at `PERF_EVENT_BUFFER_LIMIT` (oldest evicted, `droppedEvents` counts the overflow), so the snapshot stays well under the `chrome.storage.session` quota no matter how long the run — the persisted copy keeps the **newest** events (including the tail of the run — the Drive upload) instead of silently freezing once the quota is hit. On a run long enough to overflow, `count`/`avg`/`max` stay whole-session (maintained incrementally) while `p50`/`p95` reflect the retained window. As a final guard, if a persist is still rejected the store falls back to writing a summary-only snapshot so the aggregates never freeze. `enabled` + `settings` record whether diagnostics are on and which perf flags the run used.
 
 ## What the numbers mean (and don't)
 
@@ -50,7 +50,7 @@ flowchart LR
 
 - **Dev-only gate:** `init()` short-circuits to a "diagnostics only in `npm run dev`" message in production builds.
 - **Two sync paths:** a `storage.onChanged` listener (live) plus a **3 s poll** backstop, so the view stays current even if a change event is missed.
-- **Open-dashboard signal:** it connects a `debug-dashboard` runtime port — the background counts active dashboards (`getActiveDebugDashboards`) and **won't clear diagnostics** while one is open.
+- **Diagnostics survive a finished run.** The snapshot is reset at the **start of the next recording** (`isFreshRecordingStart` in `background`), not when a run goes idle — so you can record without the dashboard open, then open it afterward and export the full run (the bounded buffer keeps the newest events). The previous mechanism (a `debug-dashboard` port + an open-dashboard "keep" lock) was removed.
 - **Incremental events table:** `EventTableRenderer` appends only new rows (resets only if the entry prefix diverges) and auto-scrolls when near the bottom — so a long event log doesn't re-render every poll. Row text is HTML-escaped.
 
 ## Key invariants & gotchas
@@ -80,7 +80,7 @@ Entry: `../debug.ts` (page wiring). The snapshot **type** lives in `shared/types
 ## Related
 
 - [Storage & instrumentation architecture](../../docs/plans/storage-and-instrumentation-architecture.md) — **why** the perf split exists (offscreen samples its own thread; background owns the persisted snapshot) and the revisit triggers.
-- [`background`](../background/README.md) — `PerfDebugStore` (the producer + reducer) and the open-dashboard accounting.
+- [`background`](../background/README.md) — `PerfDebugStore` (the producer + reducer) and the clear-on-start retention policy (`isFreshRecordingStart`).
 - [`offscreen/storage`](../offscreen/storage/README.md) — emits the `storage` events (`write_backpressure`, …) this dashboard surfaces.
 
 ## External references

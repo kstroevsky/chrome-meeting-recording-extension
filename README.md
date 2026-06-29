@@ -6,81 +6,50 @@ No permission is granted to use, copy, modify, merge, publish, distribute, subli
 
 ---
 
-Scrape live captions from a Google Meet and save them as a `.txt` transcript, or record the current Google Meet tab (video + audio) to a `.webm` file. Microphone capture is explicit per run: off, mixed into the main recording, or saved as a separate audio file.
+Scrape live captions from a Google Meet into a timestamped `.txt` transcript, or record the current Meet tab (video + system audio) — plus an optional microphone and camera — to `.webm` files. Save locally or straight to Google Drive.
 
-Everything happens in your browser. Capture is **local-first**: recording data streams to the Origin Private File System (OPFS) during capture and is finalized to a local download or Google Drive only after you stop. No audio or video ever leaves your device during an active recording session.
+Everything runs in your browser. Capture is **local-first**: recording data streams to the Origin Private File System (OPFS) during the call and is finalized to a download or Drive only after you stop. No audio or video leaves your device while you're recording.
+
+## Why this extension
+
+- **Private by design** — nothing leaves the device during capture, and transcripts live only in the page until you explicitly download them.
+- **Built for long meetings** — chunks stream to disk continuously, so memory stays flat on multi-hour recordings instead of growing until the tab crashes.
+- **Efficient encoding** — the camera bitrate adapts to the frame Chrome actually delivers (and defaults to 24 fps for a talking head), and the tab bitrate follows its content type — so files and CPU stay low with no visible quality loss.
+- **Flexible per run** — microphone off / mixed / separate, optional camera, screen-vs-video tab quality, and local-or-Drive, all chosen per recording.
+- **Adjust without stopping** — mute the mic, hide the camera, or pause/resume the whole recording mid-call; paused spans are cut so the files resume as a seamless join.
+- **Resilient** — survives service-worker eviction, and recovers the captured file (and resumes interrupted Drive uploads) on the next launch after a crash or power loss.
 
 ---
 
 ## Features
 
-**Transcript saver** — parses Google Meet's live captions and downloads a timestamped `.txt` file. Turn captions on in Google Meet, then hit Download Transcript at any point during or after the meeting.
+**Transcript saver** — parses Meet's live captions into a timestamped `.txt`. Turn captions on in Meet, then hit Download Transcript at any point during or after the call.
 
-**Tab recorder** — captures the Google Meet tab (video + system audio) into a `.webm` via `MediaRecorder`. The selected resolution preset is requested as the tab-capture ceiling; the final file reflects the stream Chrome actually delivers.
+**Tab recorder** — captures the Meet tab (video + system audio) to `.webm` via `MediaRecorder`. The resolution preset is the capture *ceiling*; the file reflects what Chrome actually delivers. A **per-recording tab content type** (`Screen` vs `Video`) sets the bitrate target — `Screen` for slides/UI/whiteboards (sharp text, small files), `Video` for motion-heavy content.
 
-**Direct-to-disk streaming** — recording chunks stream continuously to OPFS during capture, keeping memory bounded to a small working buffer under normal disk throughput. If storage falls behind, a soft warning fires first and a hard ceiling triggers a protective stop that seals what was captured, so memory stays bounded even on a slow or failing disk. This prevents memory crashes on 2-hour+ meetings. Drive uploads happen after stop, not during capture.
+**Direct-to-disk streaming** — chunks stream continuously to OPFS during capture, keeping memory bounded to a small working buffer. If the disk falls behind, a soft warning fires first and a hard ceiling triggers a protective stop that seals what was captured — so memory stays bounded even on a slow or failing disk, and a 2-hour+ meeting never crashes the tab.
 
-**Explicit microphone modes** — three options per run:
+**Explicit microphone modes** — chosen per run:
 
 - `Off` — no microphone capture
-- `Mix into tab recording` — mic audio is blended into the main tab file via a real audio graph
+- `Mix into tab recording` — mic audio is blended into the main tab file via a real Web Audio graph
 - `Save separately` — mic is recorded as a second `.webm` artifact
 
-**Optional self-video capture** — record your camera feed as a separate `.webm` file. The extension tries the same fallback ladder on every run: exact preset size/FPS → exact size with bounded FPS → best-effort constraints. The encoded camera resolution is enforced to the selected preset even when Google Meet holds the same camera open at a higher resolution (Chrome otherwise records the shared native buffer); a settings toggle lets you opt out and keep Meet's auto-selected resolution.
+**Optional self-video capture** — record your camera feed to its own `.webm`. A constraint ladder (exact size+FPS → exact size with bounded FPS → best-effort) keeps it working across cameras, and the encoded resolution is enforced to your preset even when Meet holds the camera open at a higher one (Chrome otherwise records the shared native buffer; a toggle opts out to keep Meet's auto-resolution). The camera bitrate is fully automatic — it adapts to the delivered frame so the camera never wastes bits.
 
 **Live recording controls** — adjust a recording in place, without stopping it:
 
 - **Mute / unmute the microphone** — records true digital silence for the muted span (the mic track stays live, so the timeline never breaks). Works in both `mixed` and `separate` mic modes.
 - **Hide / show the camera** — records black frames while hidden, on the separate self-video file.
-- **Pause / resume the whole recording** — pauses every stream (tab, mic, camera) at once. The paused span is **not** written, so the files resume as a **seamless join** — before and after are stitched directly together, with no black/blank/frozen filler. Tracks stay live so resume is instant, and the audio mixer and camera-resize work idle while paused so nothing churns during the wait.
+- **Pause / resume the whole recording** — pauses every stream (tab, mic, camera) at once. The paused span is **not** written, so the files resume as a **seamless join** — before and after are stitched directly together, with no black/blank/frozen filler. Tracks stay live so resume is instant.
 
-**State-driven popup** — the popup shows a different layout per phase: a clean **configuration** screen before recording, a **recording** screen with a red banner, a pause-aware elapsed **timer** (counts recorded time only — it freezes on pause and equals the saved file's duration), live **status chips** (a Transcript indicator that tracks whether Meet captions are actually on, plus the storage target), and on/off **toggle rows** for the mic and camera; and a **finalizing** screen with a spinner and the run summary while files seal/upload.
+**State-driven popup** — a different layout per phase: a clean **configuration** screen before recording, a **recording** screen with a red banner, a pause-aware elapsed **timer** (counts recorded time only — it freezes on pause and equals the saved file's duration), live **status chips** (a Transcript indicator that tracks whether Meet captions are actually on, plus the storage target), mic/camera **toggle rows**, and a **finalizing** screen with the run summary.
 
-**Google Drive storage** — after stop, finalized files are uploaded to `Google Meet Records/<meeting-id>-<timestamp>/` in your Drive. Drive upload falls back per-file to a local download if an individual upload fails.
+**Local or Google Drive output** — finalized files download locally or upload to `Google Meet Records/<meeting-id>-<timestamp>/` in your Drive, with an upload progress indicator. Drive uploads use resumable sessions and fall back per-file to a local download if an individual upload fails.
 
-**MV3/Offscreen architecture** — recording runs in a hidden offscreen document, which is the only place Chrome MV3 allows `MediaRecorder` and `AudioContext`. The background service worker maintains a keep-alive loop and rehydrates session state from `chrome.storage.session` after Chrome suspends and restarts it.
+**MV3 / offscreen architecture** — recording runs in a hidden offscreen document, the only MV3 context Chrome allows `MediaRecorder` and `AudioContext`. The background service worker keeps the run alive and rehydrates session state from `chrome.storage.session` after Chrome suspends and restarts it.
 
-**Diagnostics dashboard** — a debug page (dev builds) aggregates structured perf events from all runtime contexts: recorder start latency, chunk persistence, audio bridge behavior, Drive upload timings, memory, event-loop lag, and long tasks.
-
----
-
-## How it works
-
-```
-User
- ├─ Popup ────────────────────────────────► Background Service Worker
- │    START_RECORDING / STOP_RECORDING        │   canonical state owner · MV3 keep-alive · re-hydrates after suspend
- │    GET_TRANSCRIPT → Content Script          ├─ RecordingController    single start/stop orchestrator (one seam)
- │                                             ├─ RecordingSession       phase state machine (idle…uploading…failed)
- │                                             ├─ OffscreenManager       reconnecting Port RPC + action badge
- │                                             ├─ recordingAutoStop      tab closed / navigated / MEETING_ENDED
- │                                             ├─ driveAuth              OAuth token (silent → interactive)
- │                                             ├─ PerfDebugStore         aggregates PERF_EVENTs
- │                                             └─ Offscreen Document  ◄── only MV3 context allowed media APIs
- │                                                 │   OFFSCREEN_START/STOP ▸ OFFSCREEN_READY/STATE/SAVE
- │                                                 ├─ RecorderEngine (facade + state machine)
- │                                                 │   ├─ TabRecorderTask       ◄── tabCapture streamId (video + system audio)
- │                                                 │   ├─ MicRecorderTask       ◄── getUserMedia(microphone)
- │                                                 │   ├─ SelfVideoRecorderTask ◄── getUserMedia(camera)
- │                                                 │   └─ MixedAudioMixer / AudioPlaybackBridge (AudioContext audio graph)
- │                                                 ├─ StorageTarget: WorkerStorageTarget (OPFS sync-handle worker) ▸ LocalFileTarget (OPFS) ▸ InMemory fallback
- │                                                 └─ RecordingFinalizer (runs only after capture stops)
- │                                                     ├─ local : blob URL ─OFFSCREEN_SAVE→ Chrome Downloads API
- │                                                     └─ drive : DriveTarget ─resumable upload→ Google Drive API
- │
- ├─ Content Script (meet.google.com tab)
- │    ├─ GoogleMeetAdapter → CaptionBuffer ─(GET_TRANSCRIPT)→ Popup
- │    └─ MeetingEndDetector ─MEETING_ENDED→ Background (auto-stop)
- │
- └─ Debug Dashboard (dev builds) ─reads aggregated perf snapshot→ Background
-
-State persistence:  chrome.storage.session → RecordingSessionSnapshot + perf snapshot   ·   chrome.storage.local → user settings
-```
-
-1. **Content script** observes the Google Meet caption DOM, debounces speech fragments into committed transcript lines, and serves them on demand.
-2. **Popup** collects user intent (run config), checks permissions, and sends commands to the background worker.
-3. **Background service worker** owns session state, coordinates the offscreen document, acquires the tab capture stream ID, and handles local downloads.
-4. **Offscreen document** runs the recorder engine, streams chunks to OPFS, and drives the post-stop finalization pipeline (local save or Drive upload).
+**Diagnostics dashboard** (dev builds) — aggregates structured perf events from every runtime context: recorder start latency, chunk persistence, audio-bridge behavior, Drive upload timings, memory, event-loop lag, and long tasks (offscreen and the Meet-tab main thread).
 
 ---
 
@@ -334,6 +303,46 @@ npm run test:e2e:real -- https://meet.google.com/abc-defg-hij  # run the live ma
 It requires OS camera/microphone access for Google Chrome and **Accessibility** permission for the launching terminal/app, because the suite starts recording with a real `Control+Shift+9` keystroke so Chrome grants `activeTab` to `tabCapture`. Validated recordings are saved as named `.webm` files under `output/real-meet/recordings/`.
 
 Full setup, OS permissions, Google login, run options, scenarios, named recordings, reports, and troubleshooting are in the [Scenario B guide](docs/testing-scenario-b.md).
+
+---
+
+## How it works
+
+```
+User
+ ├─ Popup ────────────────────────────────► Background Service Worker
+ │    START_RECORDING / STOP_RECORDING        │   canonical state owner · MV3 keep-alive · re-hydrates after suspend
+ │    GET_TRANSCRIPT → Content Script          ├─ RecordingController    single start/stop orchestrator (one seam)
+ │                                             ├─ RecordingSession       phase state machine (idle…uploading…failed)
+ │                                             ├─ OffscreenManager       reconnecting Port RPC + action badge
+ │                                             ├─ recordingAutoStop      tab closed / navigated / MEETING_ENDED
+ │                                             ├─ driveAuth              OAuth token (silent → interactive)
+ │                                             ├─ PerfDebugStore         aggregates PERF_EVENTs
+ │                                             └─ Offscreen Document  ◄── only MV3 context allowed media APIs
+ │                                                 │   OFFSCREEN_START/STOP ▸ OFFSCREEN_READY/STATE/SAVE
+ │                                                 ├─ RecorderEngine (facade + state machine)
+ │                                                 │   ├─ TabRecorderTask       ◄── tabCapture streamId (video + system audio)
+ │                                                 │   ├─ MicRecorderTask       ◄── getUserMedia(microphone)
+ │                                                 │   ├─ SelfVideoRecorderTask ◄── getUserMedia(camera)
+ │                                                 │   └─ MixedAudioMixer / AudioPlaybackBridge (AudioContext audio graph)
+ │                                                 ├─ StorageTarget: WorkerStorageTarget (OPFS sync-handle worker) ▸ LocalFileTarget (OPFS) ▸ InMemory fallback
+ │                                                 └─ RecordingFinalizer (runs only after capture stops)
+ │                                                     ├─ local : blob URL ─OFFSCREEN_SAVE→ Chrome Downloads API
+ │                                                     └─ drive : DriveTarget ─resumable upload→ Google Drive API
+ │
+ ├─ Content Script (meet.google.com tab)
+ │    ├─ GoogleMeetAdapter → CaptionBuffer ─(GET_TRANSCRIPT)→ Popup
+ │    └─ MeetingEndDetector ─MEETING_ENDED→ Background (auto-stop)
+ │
+ └─ Debug Dashboard (dev builds) ─reads aggregated perf snapshot→ Background
+
+State persistence:  chrome.storage.session → RecordingSessionSnapshot + perf snapshot   ·   chrome.storage.local → user settings
+```
+
+1. **Content script** observes the Google Meet caption DOM, debounces speech fragments into committed transcript lines, and serves them on demand.
+2. **Popup** collects user intent (run config), checks permissions, and sends commands to the background worker.
+3. **Background service worker** owns session state, coordinates the offscreen document, acquires the tab capture stream ID, and handles local downloads.
+4. **Offscreen document** runs the recorder engine, streams chunks to OPFS, and drives the post-stop finalization pipeline (local save or Drive upload).
 
 ---
 
@@ -1001,12 +1010,12 @@ stateDiagram-v2
 
 ### 17. Diagnostics / Perf Event Flow
 
-All runtime contexts emit structured `PERF_EVENT`s through `configurePerfRuntime`. The background store reduces them into a session-scoped snapshot that the dev dashboard renders; the snapshot is cleared when idle and no dashboard is open.
+All runtime contexts emit structured `PERF_EVENT`s through `configurePerfRuntime`. The background store reduces them into a session-scoped snapshot that the dev dashboard renders; the snapshot is reset at the **start of the next recording** (not on idle), so a finished run survives for export, and the event log is bounded so a long run can't overflow the storage quota.
 
 ```mermaid
 flowchart LR
     subgraph SRC["PERF_EVENT sources (configurePerfRuntime)"]
-        CS["content<br/>observer_count"]
+        CS["content<br/>observer_count · long_task"]
         OS["offscreen<br/>recorder_started · chunk_persisted<br/>drive_* · runtime sample"]
         BG["background"]
     end
@@ -1019,7 +1028,7 @@ flowchart LR
     ST --> PERSIST["chrome.storage.session"]
     ST --> DASH["DebugDashboard (dev)<br/>EventTableRenderer + SystemInfoReader"]
     PERSIST -.->|hydrate on SW restart| STORE
-    ST -.->|cleared when idle & no dashboard open| X["maybeClearPerfDiagnostics"]
+    ST -.->|reset at next recording start| X["isFreshRecordingStart"]
 ```
 
 ---

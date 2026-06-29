@@ -73,11 +73,12 @@ flowchart LR
 
 - **Constraint ladder** (`getSelfVideoConstraintRequests`): try `exact-size-and-fps` → `exact-size` → `best-effort`, so a camera that can't hit the exact preset still yields a usable stream.
 - **Resolution enforcement / resize:** if the delivered track resolution ≠ the preset, a per-frame resize re-rasterizes to the target. `selfVideoUseAutoResolution` **skips** this (records the browser-delivered resolution), trading enforced dimensions for the CPU of the resize pump.
-- **Adaptive bitrate** (`resolveSelfVideoBitrate`, gated by the `adaptiveSelfVideoProfile` flag): estimate `width × height × fps × 0.1`, clamped to `[minAdaptive, configured]` — so a camera delivering less than the preset doesn't waste bits, and one delivering the full preset gets the configured ceiling.
+- **Adaptive bitrate** (`resolveSelfVideoBitrate`, gated by the `adaptiveSelfVideoProfile` flag): estimate `width × height × fps × SELF_VIDEO_QUALITY_FACTOR` (0.05 bits/pixel/frame — a webcam talking head is low-motion, so it needs far fewer bits/pixel than general video), clamped to `[minAdaptive, configured]` — so a camera delivering less than the preset doesn't waste bits, and one delivering the full preset gets the configured ceiling.
 
 ## Codec & timeslice policy (`RecorderProfiles`)
 
 - **MIME**: VP8/Opus preferred for tab (falls back VP9 → generic webm), VP8 for self-video, Opus for mic — chosen via `MediaRecorder.isTypeSupported`.
+- **Content hints**: each recorded video track is tagged with a `MediaStreamTrack.contentHint` — camera → `motion` (a talking head; bias toward temporal smoothness), tab → `text` for `screen` content / `motion` for `video` content — an advisory hint that steers the encoder's rate/quality tradeoff. Best-effort: `MediaRecorder` may ignore it.
 - **Timeslice** (`getChunkTimesliceMs`): tab + self-video use the **extended** (longer) cadence — fewer, larger OPFS writes cut churn; a crash loses at most one timeslice of unflushed buffer, and a power cut is bounded by storage's ~10 s flush window anyway. The mic stays on the **default** (shorter) cadence unless `extendedTimeslice` opts it in.
 
 ## Live controls (actuation, not policy)

@@ -1,6 +1,30 @@
 {
     "name": "google-meet-caption-extension",
-    "version": "0.9.0",
+    "version": "0.9.1",
+    "description": "Chrome (Manifest V3) extension that records Google Meet calls — tab audio/video, microphone, and camera — and scrapes the live caption transcript, saving locally to OPFS or uploading to Google Drive.",
+    "keywords": [
+        "chrome-extension",
+        "manifest-v3",
+        "google-meet",
+        "screen-recording",
+        "transcription",
+        "captions",
+        "mediarecorder",
+        "offscreen-document",
+        "google-drive",
+        "opfs"
+    ],
+    "homepage": "https://github.com/kstroevsky/chrome-meeting-recording-extension#readme",
+    "bugs": {
+        "url": "https://github.com/kstroevsky/chrome-meeting-recording-extension/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/kstroevsky/chrome-meeting-recording-extension.git"
+    },
+    "license": "PolyForm-Noncommercial-1.0.0",
+    "author": "kstroevsky <ks7.1498@gmail.com>",
+    "private": true,
     "engines": {
         "node": ">=20",
         "npm": ">=10"
@@ -57,11 +81,6 @@
         "webpack": "^5.99.9",
         "webpack-cli": "^6.0.1"
     },
-    "main": "webpack.config.js",
-    "keywords": [],
-    "author": "",
-    "license": "ISC",
-    "description": "",
     "dependencies": {
         "webm-duration-fix": "^1.0.4"
     }

@@ -26,9 +26,9 @@ The single source of *configuration*. Two responsibilities: (1) hold the user's 
 
 | Field | Drives |
 | :--- | :--- |
-| `selfVideoFrameRate` | camera capture fps. The camera bitrate has **no** user knob — it is fully automatic (delivered `W×H×fps` adapted within the internal `SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND` floor / `SELF_VIDEO_DEFAULT_BITS_PER_SECOND` ceiling), mirroring the tab. |
+| `selfVideoFrameRate` | camera capture fps (**default 24** — a talking head is low-motion, so 24 cuts encode work and bytes vs. 30 with no perceptible loss). The camera bitrate has **no** user knob — fully automatic: delivered `W×H×fps × SELF_VIDEO_QUALITY_FACTOR` (0.05), clamped within the `SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND` floor / `SELF_VIDEO_DEFAULT_BITS_PER_SECOND` ceiling, mirroring the tab. |
 | `tabResolutionPreset`, `tabMaxFrameRate` | tab capture target dimensions + fps ceiling |
-| `tabContentType` | `'screen' \| 'video'` — the **only** tab-bitrate knob. Selects the quality factor (screen ≈ low bits/pixel for UI/code; video ≈ high bits/pixel for motion). The ceiling is the internal `MAX_TAB_VIDEO_BITRATE`, not user-facing. |
+| `tabContentType` | `'screen' \| 'video'` — the **only** tab-bitrate knob. Selects the quality factor (screen ≈ low bits/pixel for UI/code/slides; video ≈ high bits/pixel for motion). The ceiling is the internal `MAX_TAB_VIDEO_BITRATE`, not user-facing. This is the **default**; the popup also exposes it as a **per-recording** choice (`RunConfig.tabContentType`) that overrides the default for one run. |
 | `microphoneEchoCancellation`, `microphoneNoiseSuppression`, `microphoneAutoGainControl` | mic `getUserMedia` constraints (DSP) |
 | `chunkDefaultTimesliceMs`, `chunkExtendedTimesliceMs` | `MediaRecorder` timeslice selection |
 

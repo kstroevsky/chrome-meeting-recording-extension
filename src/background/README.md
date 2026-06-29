@@ -107,7 +107,7 @@ The background owns the **persisted** perf snapshot and its **reducers** (`PerfD
 | `RecordingController.ts` | start/stop/mute/pause orchestration (validate → command offscreen) |
 | `OffscreenManager.ts` | offscreen document lifecycle: ensure/reconnect, version handshake, recorder-tab fallback, RPC |
 | `phaseWatchdog.ts` | liveness backstop for orphaned `starting`/`stopping` |
-| `sessionLifecycle.ts` | keep-alive loop, the crash-safe save handler, perf-diagnostics clearing |
+| `sessionLifecycle.ts` | keep-alive loop, the crash-safe save handler, and `isFreshRecordingStart` (resets diagnostics at the start of a new run, so a finished run's snapshot survives for export) |
 | `recordingAutoStop.ts` | auto-stop when the recorded tab is **closed** or **navigates away** from the meeting → `controller.stop()` |
 | `recordingCommands.ts` | keyboard-shortcut start path (preserves `activeTab`) |
 | `messageHandlers.ts` | registers the `chrome.runtime.onMessage` listener and dispatches popup commands to their handlers |
@@ -115,7 +115,7 @@ The background owns the **persisted** perf snapshot and its **reducers** (`PerfD
 | `driveAuth.ts` | Drive OAuth token acquisition (silent→interactive, bad-client-id diagnosis) — token *use* is [`offscreen/drive`](../offscreen/drive/README.md) |
 | `PerfDebugStore.ts` + `perf/` | the persisted perf snapshot + reducers (`PerfDebugReducers`, `PerfDebugState`) + `CpuSampler` (dev-only); see the [instrumentation doc](../../docs/plans/storage-and-instrumentation-architecture.md) |
 
-Wiring entry: `src/background.ts` (the SW entrypoint) routes messages/commands to `RecordingController` (including the content script's `MEETING_ENDED` → `controller.stop()`), drives the session change-listener (persist → broadcast → keep-alive → `watchdog.observe` → maybe-clear-diagnostics), and rehydrates on startup.
+Wiring entry: `src/background.ts` (the SW entrypoint) routes messages/commands to `RecordingController` (including the content script's `MEETING_ENDED` → `controller.stop()`), drives the session change-listener (persist → broadcast → keep-alive → `watchdog.observe` → reset diagnostics on a fresh-run start), and rehydrates on startup.
 
 ## Testing notes
 

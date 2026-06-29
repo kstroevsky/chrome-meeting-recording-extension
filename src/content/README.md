@@ -91,7 +91,7 @@ Rule of thumb: **if it's a selector or a Meet-DOM shape, the fix is in `GoogleMe
 
 ## Observability
 
-The pipeline emits `logPerf(console.log, 'captions', …)` events: `mutation_processed` (with `durationMs`, `sourceLatencyMs`, `coalesced`, `textLength`) and `observer_count` (`activeBlockObservers`). `sourceLatencyMs` (now − the caption's `emittedAt`) is the best signal for "are we keeping up with Meet's caption rate."
+The pipeline emits `logPerf(console.log, 'captions', …)` events: `mutation_processed` (with `durationMs`, `sourceLatencyMs`, `coalesced`, `textLength`) and `observer_count` (`activeBlockObservers`). `sourceLatencyMs` (now − the caption's `emittedAt`) is the best signal for "are we keeping up with Meet's caption rate." A **dev-only** `PerformanceObserver('longtask')` also emits `long_task` batches (`count` / `totalMs` / `maxMs`) — the one way to see whether content-script work actually blocks the Meet tab's main thread, since the offscreen `RuntimeSampler` can't observe this thread.
 
 ## Configuration
 
