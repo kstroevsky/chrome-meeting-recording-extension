@@ -70,11 +70,12 @@ function cssEscape(value: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
 }
 
-/** Label for the always-present live tab, reflecting the current recording phase. */
+/** Label for the always-present live/end-anchor tab. When idle it's the "new recording"
+ *  action; while a capture is active it reflects the phase. */
 function liveTabLabel(phase: RecordingPhase): string {
   if (phase === 'recording' || phase === 'starting') return '● Recording';
   if (phase === 'stopping') return 'Finishing';
-  return 'Setup';
+  return '＋ New';
 }
 
 /** Compact tab badge for an upload job: percent while uploading, a glyph once done. */
@@ -121,8 +122,6 @@ export class PopupController {
   private timerRunningSince: number | null = null;
   /** Selected session tab: 'live' (config/recording) or an upload job id (ADR-0004). */
   private selectedTab = 'live';
-  /** The upload job currently rendered in the upload view, for the dismiss button. */
-  private shownJobId: string | null = null;
   /** Last phase/session, replayed when a tab is clicked without a new background push. */
   private lastPhase: RecordingPhase = 'idle';
   private lastSession?: RecordingStatusView;
@@ -159,7 +158,6 @@ export class PopupController {
     this.wirePause();
     this.wireSettingsLink();
     this.wireDiagnosticsLink();
-    this.wireUploadDismiss();
     this.wireSessionTabsKeyboard();
     void this.state.refreshInitialState();
   }
@@ -560,9 +558,14 @@ export class PopupController {
     }
     tabsEl.hidden = false;
     const frag = document.createDocumentFragment();
-    // Upload tabs first, in creation order, then the live/Setup tab as a stable end anchor.
+    // Upload tabs first, in creation order, then the live/end-anchor tab.
     for (const job of jobs) frag.appendChild(this.buildTab(job.id, job.label, job));
-    frag.appendChild(this.buildTab('live', liveTabLabel(phase), null));
+    const liveTab = this.buildTab('live', liveTabLabel(phase), null);
+    // When idle the live tab is the "＋ New" action; give it the action styling.
+    if (phase !== 'starting' && phase !== 'recording' && phase !== 'stopping') {
+      liveTab.classList.add('session-tab--new');
+    }
+    frag.appendChild(liveTab);
     tabsEl.replaceChildren(frag);
     this.scheduleTerminalFade(jobs);
   }
@@ -589,6 +592,19 @@ export class PopupController {
       badge.textContent = uploadTabBadge(job);
       btn.appendChild(badge);
     }
+    // A finished upload tab gets a browser-style "×" to clear it (keyboard: Delete on
+    // the focused tab — see wireSessionTabsKeyboard). In-flight and live tabs have none.
+    if (job && job.status !== 'uploading') {
+      const close = document.createElement('span');
+      close.className = 'session-tab-close';
+      close.textContent = '×';
+      close.title = 'Dismiss';
+      close.addEventListener('click', (e) => {
+        e.stopPropagation(); // don't also select the tab
+        void this.dismissJob(job.id, this.selectedTab === job.id);
+      });
+      btn.appendChild(close);
+    }
     btn.addEventListener('click', () => this.selectTab(tab));
     return btn;
   }
@@ -603,13 +619,23 @@ export class PopupController {
   /**
    * Roving-tabindex keyboard navigation for the tablist: Arrow keys (and Home/End)
    * move focus between tabs and activate them; Enter/Space activate via the native
-   * button click. Wired once — the container persists across `replaceChildren`.
+   * button click; Delete/Backspace dismisses a focused finished upload tab. Wired once
+   * — the container persists across `replaceChildren`.
    */
   private wireSessionTabsKeyboard() {
     const tabsEl = this.el.sessionTabs;
     if (!tabsEl) return;
     tabsEl.setAttribute('role', 'tablist');
     tabsEl.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const focused = (e.target as HTMLElement)?.closest<HTMLElement>('.session-tab');
+        const id = focused?.dataset.tab;
+        if (id && id !== 'live' && focused?.dataset.status && focused.dataset.status !== 'uploading') {
+          e.preventDefault();
+          void this.dismissJob(id, this.selectedTab === id);
+        }
+        return;
+      }
       if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) return;
       const tabs = Array.from(tabsEl.querySelectorAll<HTMLButtonElement>('.session-tab'));
       if (tabs.length < 2) return;
@@ -663,7 +689,6 @@ export class PopupController {
 
   /** Populates the upload view (ring + status + per-file outcomes) for one job. */
   private updateUploadJobView(job: UploadJob) {
-    this.shownJobId = job.id;
     const percent = Math.round(Math.min(1, Math.max(0, job.progress)) * 100);
     if (this.el.uploadJobRing) this.el.uploadJobRing.dataset.mode = 'determinate';
     if (this.el.uploadJobRingArc) this.el.uploadJobRingArc.style.strokeDashoffset = String(100 - percent);
@@ -684,18 +709,6 @@ export class PopupController {
       }
       this.el.uploadJobFiles.replaceChildren(frag);
     }
-    // Dismiss only makes sense once the job is finished.
-    if (this.el.uploadJobDismiss) this.el.uploadJobDismiss.hidden = job.status === 'uploading';
-  }
-
-  private wireUploadDismiss() {
-    // The manual Dismiss button acts on the shown job and returns to Setup.
-    this.el.uploadJobDismiss?.addEventListener('click', () => {
-      if (this.shownJobId) void this.dismissJob(this.shownJobId, true);
-    });
-    // "New recording" leaves the upload screen for Setup (the live tab) — the upload
-    // keeps running in the background and stays reachable via its tab (ADR-0004).
-    this.el.uploadJobNew?.addEventListener('click', () => this.selectTab('live'));
   }
 
   /**

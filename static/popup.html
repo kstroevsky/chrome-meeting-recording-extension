@@ -538,6 +538,33 @@
         outline-offset: 1px;
       }
 
+      /* The end-anchor tab when idle: a "＋ New" action, dashed so it reads as one. */
+      .session-tab--new {
+        border-style: dashed;
+        color: #8fb0f0;
+      }
+
+      .session-tab--new[aria-selected='true'] {
+        border-style: solid;
+      }
+
+      /* Per-tab close affordance on finished uploads (browser-tab style). */
+      .session-tab-close {
+        margin-left: 1px;
+        margin-right: -3px;
+        padding: 0 3px;
+        border-radius: 50%;
+        color: #6c7180;
+        font-size: 13px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .session-tab-close:hover {
+        color: #e8eaed;
+        background: #3a3d44;
+      }
+
       /* A completed tab gently fades out before it auto-dismisses. */
       .session-tab--fading {
         opacity: 0;
@@ -630,17 +657,6 @@
         margin-top: 8px;
       }
 
-      /* Start a new recording from an upload's screen (ADR-0004). */
-      #upload-job-new {
-        width: 100%;
-        margin-top: 14px;
-      }
-
-      /* Dismiss a finished upload job's tab. */
-      #upload-job-dismiss {
-        width: 100%;
-        margin-top: 8px;
-      }
     </style>
   </head>
 
@@ -825,13 +841,6 @@
         </div>
         <div id="upload-job-label" class="finalizing-label" aria-live="polite">Uploading to Google Drive…</div>
         <ul id="upload-job-files" class="meta-list"></ul>
-        <button id="upload-job-new" class="btn btn-primary" type="button">
-          <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-            <circle cx="6" cy="6" r="4" />
-          </svg>
-          New recording
-        </button>
-        <button id="upload-job-dismiss" class="btn btn-secondary" type="button" hidden>Dismiss</button>
       </div>
     </section>
 

@@ -84,8 +84,6 @@ describe('PopupController', () => {
       uploadJobRingLabel: document.createElement('span'),
       uploadJobLabel: document.createElement('div'),
       uploadJobFiles: document.createElement('ul'),
-      uploadJobNew: document.createElement('button'),
-      uploadJobDismiss: document.createElement('button'),
 
       // Shared
       recordingStatusEl: document.createElement('div'),
@@ -234,9 +232,11 @@ describe('PopupController', () => {
       expect(elements.sessionTabs.hidden).toBe(false);
       const tabs = elements.sessionTabs.querySelectorAll('.session-tab');
       expect(tabs).toHaveLength(2);
-      // Order: [upload job, …, live]. Live (Setup) is last and selected by default.
+      // Order: [upload job, …, live]. The live end-anchor is the "＋ New" action.
       expect(tabs[0].textContent).toContain('meet-abc');
       expect(tabs[0].textContent).toContain('42%');
+      expect(tabs[1].textContent).toContain('New');
+      expect(tabs[1].classList.contains('session-tab--new')).toBe(true);
       expect(tabs[1].getAttribute('aria-selected')).toBe('true');
     });
 
@@ -253,10 +253,11 @@ describe('PopupController', () => {
       expect(elements.uploadJobRingArc.style.strokeDashoffset).toBe('58'); // pathLength 100 ⇒ 100 − 42
       expect(elements.uploadJobLabel.textContent).toContain('Uploading to Google Drive');
       expect(elements.uploadJobFiles.children).toHaveLength(1);
-      expect(elements.uploadJobDismiss.hidden).toBe(true); // not dismissible while uploading
+      // An in-flight upload tab has no × close affordance.
+      expect(elements.sessionTabs.querySelector('.session-tab-close')).toBeNull();
     });
 
-    it('shows a done state and dismisses a finished upload job', async () => {
+    it('shows a done state and clears a finished upload via its tab ×', async () => {
       mockSendMessage.mockResolvedValueOnce(
         sessionWith([job({ status: 'completed', progress: 1, files: [{ stream: 'tab', filename: 'tab.webm', status: 'uploaded' }], finishedAt: 2 })])
       );
@@ -265,10 +266,12 @@ describe('PopupController', () => {
 
       (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
       expect(elements.uploadJobRingLabel.textContent).toBe('✓');
-      expect(elements.uploadJobDismiss.hidden).toBe(false);
 
+      // Re-query after the select re-rendered the bar; the finished tab carries a ×.
+      const close = elements.sessionTabs.querySelector('.session-tab-close') as HTMLElement;
+      expect(close).not.toBeNull();
       mockSendMessage.mockResolvedValueOnce({ session: { phase: 'idle', runConfig: null, updatedAt: Date.now() } });
-      elements.uploadJobDismiss.click();
+      close.click();
       await new Promise(process.nextTick);
 
       expect(mockSendMessage).toHaveBeenCalledWith({ type: 'DISMISS_UPLOAD_JOB', jobId: 'j1' });
@@ -293,7 +296,7 @@ describe('PopupController', () => {
       expect(elements.uploadJobRingLabel.textContent).toBe('10%'); // the new job j2
     });
 
-    it('the New recording button leaves the upload screen for Setup', async () => {
+    it('the ＋ New tab leaves the upload screen for Setup', async () => {
       mockSendMessage.mockResolvedValueOnce(sessionWith([job()]));
       controller.init();
       await new Promise(process.nextTick);
@@ -301,7 +304,7 @@ describe('PopupController', () => {
       (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
       expect(elements.viewUpload.hidden).toBe(false);
 
-      elements.uploadJobNew.click();
+      (elements.sessionTabs.querySelector('.session-tab[data-tab="live"]') as HTMLButtonElement).click();
       expect(elements.viewUpload.hidden).toBe(true);
       expect(elements.viewConfig.hidden).toBe(false); // back on Setup; the upload keeps running
       expect(elements.sessionTabs.hidden).toBe(false); // its tab is still there
@@ -329,6 +332,20 @@ describe('PopupController', () => {
       elements.sessionTabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
       expect(elements.viewUpload.hidden).toBe(false);
       expect(elements.uploadJobLabel.textContent).toContain('Uploading to Google Drive');
+    });
+
+    it('dismisses a focused finished tab with the Delete key', async () => {
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job({ status: 'completed', progress: 1 })]));
+      controller.init();
+      await new Promise(process.nextTick);
+      mockSendMessage.mockClear();
+      mockSendMessage.mockResolvedValueOnce({ session: { phase: 'idle', runConfig: null, updatedAt: Date.now() } });
+
+      const jobTab = elements.sessionTabs.querySelector('.session-tab[data-status="completed"]') as HTMLButtonElement;
+      jobTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+      await new Promise(process.nextTick);
+
+      expect(mockSendMessage).toHaveBeenCalledWith({ type: 'DISMISS_UPLOAD_JOB', jobId: 'j1' });
     });
 
     it('auto-dismisses a completed tab after it lingers', async () => {
