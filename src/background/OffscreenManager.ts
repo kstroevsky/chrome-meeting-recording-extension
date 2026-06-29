@@ -24,8 +24,9 @@ import { isOffscreenToBgMessage } from '../shared/protocol';
 
 export type OffscreenStateListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_STATE' }>) => void;
 export type OffscreenSaveListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>) => void;
+export type OffscreenUploadListener = (job: UploadJob) => void;
 import { TIMEOUTS } from '../shared/timeouts';
-import { isBusyPhase, isStoppablePhase, normalizePhase, type RecordingPhase } from '../shared/recording';
+import { isBusyPhase, isStoppablePhase, normalizePhase, type RecordingPhase, type UploadJob } from '../shared/recording';
 
 const L = makeLogger('background');
 const RECORDER_TAB_CLEANUP_DELAY_MS = 15_000;
@@ -45,6 +46,11 @@ export class OffscreenManager {
 
   public onStateChanged?: OffscreenStateListener;
   public onSaveRequested?: OffscreenSaveListener;
+  public onUploadJobChanged?: OffscreenUploadListener;
+  /** Ids of background upload jobs still uploading (ADR-0004). Keeps the runtime
+   *  "busy" — defers update-teardown / recorder-tab cleanup — while a decoupled
+   *  upload drains, even though the recording phase is idle. */
+  private readonly activeUploadJobs = new Set<string>();
 
   private readonly rpcClient = createPortRpcClient(() => this.port, { timeoutMs: TIMEOUTS.RPC_MS });
 
@@ -208,7 +214,9 @@ export class OffscreenManager {
    * can never tear down active work; the caller defers the refresh in that case.
    */
   async closeForUpdate(): Promise<boolean> {
-    if (isBusyPhase(this.lastKnownPhase)) {
+    // ADR-0004: a decoupled upload keeps the runtime busy even at an idle phase,
+    // so an update can never tear down the offscreen mid-upload.
+    if (isBusyPhase(this.lastKnownPhase) || this.activeUploadJobs.size > 0) {
       L.log('Update arrived during active work; deferring offscreen refresh');
       return false;
     }
@@ -285,7 +293,8 @@ export class OffscreenManager {
     this.cancelRecorderTabCleanup();
     this.recorderTabCleanupTimer = setTimeout(() => {
       this.recorderTabCleanupTimer = null;
-      if (this.lastKnownPhase !== 'idle') return;
+      // Keep the recorder runtime alive while a decoupled upload is draining (ADR-0004).
+      if (this.lastKnownPhase !== 'idle' || this.activeUploadJobs.size > 0) return;
       void this.closeRecorderTab();
     }, RECORDER_TAB_CLEANUP_DELAY_MS);
   }
@@ -333,6 +342,18 @@ export class OffscreenManager {
       return;
     }
 
+    if (msg.type === 'OFFSCREEN_UPLOAD_STATE') {
+      // ADR-0004: a background upload job changed. Track in-flight ids so the
+      // runtime stays "busy" while it drains, refresh the badge, and forward the
+      // job so the session can persist it for the popup.
+      if (msg.job.status === 'uploading') this.activeUploadJobs.add(msg.job.id);
+      else this.activeUploadJobs.delete(msg.job.id);
+      if (this.activeUploadJobs.size > 0) this.cancelRecorderTabCleanup();
+      this.setBadge(this.lastKnownPhase);
+      this.onUploadJobChanged?.(msg.job);
+      return;
+    }
+
     if (msg.type === 'OFFSCREEN_SAVE') {
       this.onSaveRequested?.(msg);
     }
@@ -346,7 +367,8 @@ export class OffscreenManager {
         : phase === 'failed'
           ? 'ERR'
           : phase === 'idle'
-            ? ''
+            ? // ADR-0004: a decoupled upload can still be draining while idle.
+              this.activeUploadJobs.size > 0 ? 'UP' : ''
             : 'REC';
     void setActionBadgeText(text);
   }

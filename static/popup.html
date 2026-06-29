@@ -499,6 +499,60 @@
         }
       }
 
+      /* ── Session tabs (live session + background uploads, ADR-0004) ── */
+      .session-tabs {
+        display: flex;
+        gap: 6px;
+        padding: 8px 12px 0;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .session-tabs::-webkit-scrollbar {
+        display: none;
+      }
+
+      .session-tab {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 150px;
+        padding: 5px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #9aa0ab;
+        background: #1e1f24;
+        border: 1px solid #2c2e33;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+
+      .session-tab[aria-selected='true'] {
+        color: #e8eaed;
+        border-color: #4c7fe3;
+        background: #25304a;
+      }
+
+      .session-tab-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .session-tab-pct {
+        color: #4c7fe3;
+      }
+
+      .session-tab[data-status='completed'] .session-tab-pct {
+        color: #3fae6b;
+      }
+
+      .session-tab[data-status='failed'] .session-tab-pct,
+      .session-tab[data-status='partial'] .session-tab-pct {
+        color: #e0a23a;
+      }
+
       .finalizing-label {
         font-size: 13px;
         font-weight: 600;
@@ -578,6 +632,9 @@
         </svg>
       </button>
     </div>
+
+    <!-- ════════ SESSION TABS (live session + background uploads, ADR-0004) ════════ -->
+    <nav id="session-tabs" class="session-tabs" hidden></nav>
 
     <!-- ════════ CONFIG VIEW (idle / failed) ════════ -->
     <section id="view-config" class="view">
@@ -728,6 +785,22 @@
           <li><span>Camera</span><span id="meta-camera">—</span></li>
         </ul>
         <div class="finalizing-hint">You can close this popup.</div>
+      </div>
+    </section>
+
+    <!-- ════════ UPLOAD VIEW (a selected background upload job, ADR-0004) ════════ -->
+    <section id="view-upload" class="view" hidden>
+      <div class="finalizing">
+        <div id="upload-job-ring" class="upload-ring" data-mode="determinate">
+          <svg class="upload-ring-svg" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="upload-ring-track" cx="18" cy="18" r="16" />
+            <circle id="upload-job-ring-arc" class="upload-ring-arc" cx="18" cy="18" r="16" pathLength="100" />
+          </svg>
+          <span id="upload-job-ring-label" class="upload-ring-label"></span>
+        </div>
+        <div id="upload-job-label" class="finalizing-label">Uploading to Google Drive…</div>
+        <ul id="upload-job-files" class="meta-list"></ul>
+        <button id="upload-job-dismiss" class="btn btn-secondary" type="button" hidden>Dismiss</button>
       </div>
     </section>
 

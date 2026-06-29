@@ -34,6 +34,7 @@ import {
   type PerfDebugSnapshot,
 } from './shared/perf';
 import {
+  hasUploadsInFlight,
   isBusyPhase,
   RECORDING_SESSION_STORAGE_KEY,
   toStatusView,
@@ -64,7 +65,9 @@ const session = new RecordingSession(
     // Liveness backstop: (re)arm/clear the phase watchdog on every transition,
     // including the rehydrated one after a service-worker restart (ADR-0003).
     phaseWatchdog.observe(snapshot);
-    if (isBusyPhase(snapshot.phase)) {
+    // ADR-0004: keep the worker alive while a decoupled upload drains so its
+    // OFFSCREEN_UPLOAD_STATE progress keeps reaching (and persisting on) the session.
+    if (isBusyPhase(snapshot.phase) || hasUploadsInFlight(snapshot.uploadJobs)) {
       startKeepAlive();
     } else {
       stopKeepAlive();
@@ -79,7 +82,7 @@ const session = new RecordingSession(
     }
     previousPhase = snapshot.phase;
     perfDebugStore.setPhase(snapshot.phase);
-    if (!isBusyPhase(snapshot.phase) && pendingReload) {
+    if (!isBusyPhase(snapshot.phase) && !hasUploadsInFlight(snapshot.uploadJobs) && pendingReload) {
       L.log('Applying deferred update reload now that work has finished');
       chrome.runtime.reload();
     }
@@ -101,6 +104,12 @@ offscreen.onStateChanged = (msg) => {
     return;
   }
   session.applyOffscreenPhase(msg);
+};
+
+// ADR-0004: a background upload job changed — persist it on the session (keyed by
+// id, phase-independent) so the popup can render it and "busy" reflects it.
+offscreen.onUploadJobChanged = (job) => {
+  session.upsertUploadJob(job);
 };
 
 // Liveness backstop for an orphaned `starting`/`stopping` (ADR-0003). Complements

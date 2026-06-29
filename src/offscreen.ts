@@ -23,6 +23,7 @@ import { LocalFileTarget } from './offscreen/LocalFileTarget';
 import { WorkerStorageTarget } from './offscreen/storage/WorkerStorageTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
+import { UploadManager } from './offscreen/UploadManager';
 import { createChromePendingUploadStore } from './offscreen/drive/PendingUploadStore';
 import { resumePendingDriveUploadsWithChrome } from './offscreen/drive/resumePendingUploads';
 import { recoverOrphanRecordingsWithChrome } from './offscreen/storage/recoverOrphanRecordings';
@@ -163,6 +164,15 @@ const finalizer = new RecordingFinalizer({
   onUploadProgress: controller.reportUploadProgress,
 });
 
+// Background Drive-upload jobs (ADR-0004): a stopped recording's upload is detached
+// from the recording session and reported to the background as OFFSCREEN_UPLOAD_STATE,
+// so a new recording can start while it finishes.
+const uploadManager = new UploadManager({
+  finalizer,
+  report: (job) => getPort().postMessage({ type: 'OFFSCREEN_UPLOAD_STATE', job }),
+  warn: L.warn,
+});
+
 const engine = new RecorderEngine({
   log: L.log,
   warn: L.warn,
@@ -197,7 +207,7 @@ const engine = new RecorderEngine({
   },
 });
 
-controller.attachServices(engine, finalizer);
+controller.attachServices(engine, finalizer, (artifacts) => uploadManager.enqueue(artifacts));
 
 // Captured during synchronous module load — before any OFFSCREEN_START RPC can
 // create this session's recording files — so orphan recovery can tell a stale

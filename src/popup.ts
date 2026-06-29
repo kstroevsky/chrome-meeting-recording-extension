@@ -63,6 +63,16 @@ const controller = new PopupController({
   metaMic: byId('meta-mic'),
   metaCamera: byId('meta-camera'),
 
+  // Session tabs + per-job upload view
+  sessionTabs: byId('session-tabs'),
+  viewUpload: byId('view-upload'),
+  uploadJobRing: byId('upload-job-ring'),
+  uploadJobRingArc: byId('upload-job-ring-arc'),
+  uploadJobRingLabel: byId('upload-job-ring-label'),
+  uploadJobLabel: byId('upload-job-label'),
+  uploadJobFiles: byId('upload-job-files'),
+  uploadJobDismiss: byId<HTMLButtonElement>('upload-job-dismiss'),
+
   // Shared status / toast line
   recordingStatusEl: byId('recording-status'),
 });

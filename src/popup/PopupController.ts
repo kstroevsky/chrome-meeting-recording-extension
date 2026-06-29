@@ -32,7 +32,7 @@ import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
 import type { BgToPopup } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
-import type { MicMode, RecordingPhase, RecordingStatusView } from '../shared/recording';
+import type { MicMode, RecordingPhase, RecordingStatusView, RecordingStream, UploadJob, UploadJobFile } from '../shared/recording';
 
 /** How often the recording view polls the content script for live caption presence. */
 const CAPTION_POLL_MS = 3000;
@@ -40,6 +40,40 @@ const CAPTION_POLL_MS = 3000;
 /** Maps a mic mode to its finalizing-view metadata label. */
 function micModeLabel(mode: MicMode | undefined): string {
   return mode === 'mixed' ? 'Mixed' : mode === 'separate' ? 'Separate' : 'Off';
+}
+
+/** Label for the always-present live tab, reflecting the current recording phase. */
+function liveTabLabel(phase: RecordingPhase): string {
+  if (phase === 'recording' || phase === 'starting') return '● Recording';
+  if (phase === 'stopping') return 'Finishing';
+  return 'Setup';
+}
+
+/** Compact tab badge for an upload job: percent while uploading, a glyph once done. */
+function uploadTabBadge(job: UploadJob): string {
+  if (job.status === 'completed') return '✓';
+  if (job.status === 'failed' || job.status === 'partial') return '!';
+  return `${Math.round(Math.min(1, Math.max(0, job.progress)) * 100)}%`;
+}
+
+/** Headline status line for an upload job's view. */
+function uploadJobStatusText(job: UploadJob): string {
+  switch (job.status) {
+    case 'completed': return 'Uploaded to Google Drive';
+    case 'partial': return 'Uploaded — some files saved locally';
+    case 'failed': return 'Upload failed — saved locally';
+    default: return 'Uploading to Google Drive…';
+  }
+}
+
+/** Per-file outcome label inside an upload job's view. */
+function uploadFileStatusText(status: UploadJobFile['status']): string {
+  return status === 'uploaded' ? 'Uploaded' : status === 'fallback' ? 'Saved locally' : 'Uploading…';
+}
+
+/** Human label for a recording stream in an upload job's file list. */
+function streamLabel(stream: RecordingStream): string {
+  return stream === 'tab' ? 'Screen / Tab' : stream === 'mic' ? 'Microphone' : 'Camera';
 }
 
 export class PopupController {
@@ -57,6 +91,13 @@ export class PopupController {
   private captionPollInterval: ReturnType<typeof setInterval> | null = null;
   private timerRecordedMs = 0;
   private timerRunningSince: number | null = null;
+  /** Selected session tab: 'live' (config/recording) or an upload job id (ADR-0004). */
+  private selectedTab = 'live';
+  /** The upload job currently rendered in the upload view, for the dismiss button. */
+  private shownJobId: string | null = null;
+  /** Last phase/session, replayed when a tab is clicked without a new background push. */
+  private lastPhase: RecordingPhase = 'idle';
+  private lastSession?: RecordingStatusView;
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -78,6 +119,7 @@ export class PopupController {
     this.wirePause();
     this.wireSettingsLink();
     this.wireDiagnosticsLink();
+    this.wireUploadDismiss();
     void this.state.refreshInitialState();
   }
 
@@ -97,6 +139,27 @@ export class PopupController {
    * the caption-state poll) run only while the recording view is active.
    */
   private onPhaseChange(phase: RecordingPhase, session?: RecordingStatusView) {
+    this.lastPhase = phase;
+    this.lastSession = session;
+    this.renderSessionTabs(phase, session);
+
+    // An upload tab is selected: show only that job's upload view and stop the
+    // live-recording intervals (we're not on the recording view).
+    const job = this.activeUploadTabJob(session);
+    if (job) {
+      this.stopTimer();
+      this.stopCaptionPoll();
+      if (this.el.viewConfig) this.el.viewConfig.hidden = true;
+      if (this.el.viewRecording) this.el.viewRecording.hidden = true;
+      if (this.el.viewFinalizing) this.el.viewFinalizing.hidden = true;
+      if (this.el.viewUpload) this.el.viewUpload.hidden = false;
+      this.updateUploadJobView(job);
+      this.persistentStatus = this.state.buildPersistentStatus(phase, session?.paused === true);
+      if (!this.statusTimer) setStatusText(this.el, this.persistentStatus);
+      return;
+    }
+
+    if (this.el.viewUpload) this.el.viewUpload.hidden = true;
     const view = setActiveView(this.el, phase);
 
     if (view === 'recording') {
@@ -419,6 +482,109 @@ export class PopupController {
       ring.dataset.mode = 'indeterminate';
       if (this.el.uploadRingArc) this.el.uploadRingArc.style.strokeDashoffset = '100';
       if (this.el.uploadRingLabel) this.el.uploadRingLabel.textContent = '';
+    }
+  }
+
+  // ── Session tabs + background upload jobs (ADR-0004) ──────────────────────────
+
+  /** The upload job for the selected tab, or null when the live tab is active. */
+  private activeUploadTabJob(session?: RecordingStatusView): UploadJob | null {
+    if (this.selectedTab === 'live') return null;
+    return session?.uploadJobs?.find((j) => j.id === this.selectedTab) ?? null;
+  }
+
+  /**
+   * Rebuilds the tab bar from the live phase plus the background upload jobs. The
+   * bar is hidden when there are no uploads (a single view needs no tabs), and a
+   * selected job that has been dismissed/pruned falls back to the live tab.
+   */
+  private renderSessionTabs(phase: RecordingPhase, session?: RecordingStatusView) {
+    const tabsEl = this.el.sessionTabs;
+    if (!tabsEl) return;
+    const jobs = session?.uploadJobs ?? [];
+    if (this.selectedTab !== 'live' && !jobs.some((j) => j.id === this.selectedTab)) {
+      this.selectedTab = 'live';
+    }
+    if (jobs.length === 0) {
+      tabsEl.hidden = true;
+      tabsEl.replaceChildren();
+      return;
+    }
+    tabsEl.hidden = false;
+    const frag = document.createDocumentFragment();
+    frag.appendChild(this.buildTab('live', liveTabLabel(phase), null));
+    for (const job of jobs) frag.appendChild(this.buildTab(job.id, job.label, job));
+    tabsEl.replaceChildren(frag);
+  }
+
+  private buildTab(tab: string, label: string, job: UploadJob | null): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'session-tab';
+    btn.setAttribute('aria-selected', String(this.selectedTab === tab));
+    if (job) btn.dataset.status = job.status;
+    const labelEl = document.createElement('span');
+    labelEl.className = 'session-tab-label';
+    labelEl.textContent = label;
+    btn.appendChild(labelEl);
+    if (job) {
+      const badge = document.createElement('span');
+      badge.className = 'session-tab-pct';
+      badge.textContent = uploadTabBadge(job);
+      btn.appendChild(badge);
+    }
+    btn.addEventListener('click', () => this.selectTab(tab));
+    return btn;
+  }
+
+  /** Switches tabs and re-renders the body from the last known phase/session. */
+  private selectTab(tab: string) {
+    if (this.selectedTab === tab) return;
+    this.selectedTab = tab;
+    this.onPhaseChange(this.lastPhase, this.lastSession);
+  }
+
+  /** Populates the upload view (ring + status + per-file outcomes) for one job. */
+  private updateUploadJobView(job: UploadJob) {
+    this.shownJobId = job.id;
+    const percent = Math.round(Math.min(1, Math.max(0, job.progress)) * 100);
+    if (this.el.uploadJobRing) this.el.uploadJobRing.dataset.mode = 'determinate';
+    if (this.el.uploadJobRingArc) this.el.uploadJobRingArc.style.strokeDashoffset = String(100 - percent);
+    if (this.el.uploadJobRingLabel) {
+      this.el.uploadJobRingLabel.textContent = job.status === 'completed' ? '✓' : `${percent}%`;
+    }
+    if (this.el.uploadJobLabel) this.el.uploadJobLabel.textContent = uploadJobStatusText(job);
+    if (this.el.uploadJobFiles) {
+      const frag = document.createDocumentFragment();
+      for (const file of job.files) {
+        const li = document.createElement('li');
+        const name = document.createElement('span');
+        name.textContent = streamLabel(file.stream);
+        const status = document.createElement('span');
+        status.textContent = uploadFileStatusText(file.status);
+        li.append(name, status);
+        frag.appendChild(li);
+      }
+      this.el.uploadJobFiles.replaceChildren(frag);
+    }
+    // Dismiss only makes sense once the job is finished.
+    if (this.el.uploadJobDismiss) this.el.uploadJobDismiss.hidden = job.status === 'uploading';
+  }
+
+  private wireUploadDismiss() {
+    this.el.uploadJobDismiss?.addEventListener('click', () => void this.dismissUploadJob());
+  }
+
+  /** Dismisses the shown job's tab; the background drops it and pushes a fresh view. */
+  private async dismissUploadJob() {
+    const id = this.shownJobId;
+    if (!id) return;
+    this.selectedTab = 'live'; // leave the tab before it disappears
+    try {
+      const resp = await sendToBackground({ type: 'DISMISS_UPLOAD_JOB', jobId: id });
+      this.state.applySession(resp.session);
+    } catch (e: unknown) {
+      console.error('[popup] DISMISS_UPLOAD_JOB error', e);
     }
   }
 

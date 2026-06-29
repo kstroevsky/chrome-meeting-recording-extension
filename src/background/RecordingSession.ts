@@ -75,6 +75,7 @@ export class RecordingSession {
   start(runConfig: RecordingRunConfig, target?: RecordingTarget): RecordingSessionSnapshot {
     const desired: DesiredState = 'recording';
     const observed: ObservedState = 'starting';
+    const carriedUploads = this.snapshot.uploadJobs?.filter((j) => j.status === 'uploading');
     this.snapshot = {
       phase: projectPhase(desired, observed, false),
       desired,
@@ -87,8 +88,9 @@ export class RecordingSession {
       // Fencing token (ADR-0003): a fresh, strictly-increasing epoch per run.
       epoch: (this.snapshot.epoch ?? 0) + 1,
       // Background uploads outlive the run that spawned them (ADR-0004): carry any
-      // in-flight jobs into the new recording so starting one never drops them.
-      uploadJobs: this.snapshot.uploadJobs,
+      // still-uploading jobs into the new recording so starting one never drops them,
+      // while pruning finished tabs so the list can't grow without bound.
+      uploadJobs: carriedUploads?.length ? carriedUploads : undefined,
       updatedAt: Date.now(),
     };
     return this.commit();

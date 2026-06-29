@@ -50,6 +50,12 @@ export type RecordingFinalizerDeps = {
 export type FinalizeArtifactsOptions = {
   artifacts: CompletedRecordingArtifact[];
   storageMode: 'local' | 'drive';
+  /**
+   * Per-call aggregate Drive-upload progress (fraction in [0, 1], throttled to
+   * whole-percent steps). Lets a per-job caller (the UploadManager, ADR-0004) get
+   * its own progress; falls back to the construction-time `onUploadProgress` dep.
+   */
+  onUploadProgress?: (fraction: number) => void;
 };
 
 /** Runs async work with bounded concurrency while preserving input order in the results. */
@@ -95,7 +101,7 @@ export class RecordingFinalizer {
 
     if (options.storageMode === 'drive') {
       const recordingFolderName = inferDriveRecordingFolderName(orderedArtifacts[0].artifact.filename);
-      const summary = await this.uploadArtifactsToDrive(orderedArtifacts, recordingFolderName);
+      const summary = await this.uploadArtifactsToDrive(orderedArtifacts, recordingFolderName, options.onUploadProgress);
       logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
         durationMs: roundMs(nowMs() - startedAt),
         artifactCount: orderedArtifacts.length,
@@ -145,7 +151,8 @@ export class RecordingFinalizer {
 
   private async uploadArtifactsToDrive(
     artifacts: CompletedRecordingArtifact[],
-    recordingFolderName: string
+    recordingFolderName: string,
+    onUploadProgress?: (fraction: number) => void
   ): Promise<UploadSummary> {
     const sharedGetUploadToken = createCachedTokenProvider(this.deps.getDriveToken);
     const folderResolver = new DriveFolderResolver(sharedGetUploadToken);
@@ -162,16 +169,17 @@ export class RecordingFinalizer {
     // longer uploading) so the ring still reaches 100% on a partial-fallback run.
     // The report is throttled to whole-percent steps so a many-chunk upload can't
     // flood the OFFSCREEN_STATE → persist → popup path with redundant updates.
+    const progressSink = onUploadProgress ?? this.deps.onUploadProgress;
     const totalBytes = artifacts.reduce((sum, { artifact }) => sum + artifact.file.size, 0);
     const loadedPerFile = new Array<number>(artifacts.length).fill(0);
     let lastReportedPercent = -1;
     const reportProgress = () => {
-      if (!this.deps.onUploadProgress || totalBytes === 0) return;
+      if (!progressSink || totalBytes === 0) return;
       const loaded = loadedPerFile.reduce((sum, n) => sum + n, 0);
       const percent = Math.min(100, Math.floor((loaded / totalBytes) * 100));
       if (percent <= lastReportedPercent) return;
       lastReportedPercent = percent;
-      this.deps.onUploadProgress(loaded / totalBytes);
+      progressSink(loaded / totalBytes);
     };
 
     const summary: UploadSummary = { uploaded: [], localFallbacks: [] };

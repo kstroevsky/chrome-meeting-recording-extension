@@ -55,16 +55,26 @@ export class OffscreenController {
   private finalizeRunPromise: Promise<void> | null = null;
   private engine: FinalizableEngine | null = null;
   private finalizer: ArtifactFinalizer | null = null;
+  private enqueueUpload: ((artifacts: CompletedRecordingArtifact[]) => void) | null = null;
   private readonly now: () => number;
 
   constructor(private readonly deps: OffscreenControllerDeps) {
     this.now = deps.now ?? Date.now;
   }
 
-  /** Wires the recording engine and finalizer used by the stop/finalize pipeline. */
-  attachServices(engine: FinalizableEngine, finalizer: ArtifactFinalizer): void {
+  /**
+   * Wires the recording engine and finalizer used by the stop/finalize pipeline.
+   * `enqueueUpload` (ADR-0004) detaches Drive uploads into a background job manager;
+   * when omitted, Drive uploads finalize inline (the legacy single-session path).
+   */
+  attachServices(
+    engine: FinalizableEngine,
+    finalizer: ArtifactFinalizer,
+    enqueueUpload?: (artifacts: CompletedRecordingArtifact[]) => void
+  ): void {
     this.engine = engine;
     this.finalizer = finalizer;
+    this.enqueueUpload = enqueueUpload ?? null;
   }
 
   currentPhase = (): RecordingPhase => this.phase;
@@ -129,6 +139,15 @@ export class OffscreenController {
 
     this.finalizeRunPromise = (async () => {
       const artifacts = await engine.stop();
+      if (artifacts.length > 0 && this.storageMode === 'drive' && this.enqueueUpload) {
+        // ADR-0004: capture is sealed, so hand it to the background upload manager
+        // and return to idle at once — a new recording can start while it uploads.
+        this.enqueueUpload(artifacts);
+        this.pushState('idle');
+        return;
+      }
+      // Local mode (instant save), or no upload manager wired (legacy / tests):
+      // finalize inline and surface the summary on the way back to idle.
       if (this.storageMode === 'drive' && artifacts.length > 0) {
         this.pushState('uploading');
       }

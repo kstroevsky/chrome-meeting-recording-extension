@@ -56,6 +56,17 @@ export type PopupElements = {
   metaMic: HTMLElement | null;
   metaCamera: HTMLElement | null;
 
+  // Session tabs + per-job upload view (ADR-0004)
+  /** Tab bar populated with the live tab + one tab per background upload job. */
+  sessionTabs: HTMLElement | null;
+  viewUpload: HTMLElement | null;
+  uploadJobRing: HTMLElement | null;
+  uploadJobRingArc: HTMLElement | null;
+  uploadJobRingLabel: HTMLElement | null;
+  uploadJobLabel: HTMLElement | null;
+  uploadJobFiles: HTMLElement | null;
+  uploadJobDismiss: HTMLButtonElement | null;
+
   // Shared status / toast line
   recordingStatusEl: HTMLElement | null;
 };

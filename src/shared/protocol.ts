@@ -12,6 +12,7 @@ import type {
   RecordingRunConfig,
   RecordingStatusView,
   RecordingPhase,
+  UploadJob,
   UploadSummary,
 } from './recording';
 import {
@@ -52,6 +53,8 @@ export type PopupSetMicMuted = { type: 'SET_MIC_MUTED'; muted: boolean };
 export type PopupSetCameraMuted = { type: 'SET_CAMERA_MUTED'; muted: boolean };
 /** Pauses/resumes the whole recording; the paused span is absent from the files (seamless join). */
 export type PopupSetPaused = { type: 'SET_PAUSED'; paused: boolean };
+/** Dismisses a finished background upload job's tab (ADR-0004). */
+export type PopupDismissUploadJob = { type: 'DISMISS_UPLOAD_JOB'; jobId: string };
 
 export type PopupToBg =
   | PopupStartRecording
@@ -60,7 +63,8 @@ export type PopupToBg =
   | PopupGetDriveToken
   | PopupSetMicMuted
   | PopupSetCameraMuted
-  | PopupSetPaused;
+  | PopupSetPaused
+  | PopupDismissUploadJob;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -70,6 +74,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupSetMicMuted ? CommandResult :
   T extends PopupSetCameraMuted ? CommandResult :
   T extends PopupSetPaused ? CommandResult :
+  T extends PopupDismissUploadJob ? { session: RecordingStatusView } :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -151,6 +156,7 @@ export type BgToOffscreenRuntime =
 export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY'; version?: string }
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
+  | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob }
   | { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string };
 
 export type PerfEventMessage = {
