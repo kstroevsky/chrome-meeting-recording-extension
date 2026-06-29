@@ -15,6 +15,9 @@ describe('PopupController', () => {
   let mockTabSendMessage: jest.Mock;
 
   beforeEach(() => {
+    // The popup caches its last phase in localStorage for the synchronous first paint;
+    // clear it so one test's phase can't leak into another's optimistic initial view.
+    localStorage.clear();
     const makeRunConfig = (overrides: Partial<RecordingRunConfig> = {}): RecordingRunConfig => ({
       storageMode: 'local',
       micMode: 'off',
@@ -73,6 +76,17 @@ describe('PopupController', () => {
       metaMic: document.createElement('span'),
       metaCamera: document.createElement('span'),
 
+      // Session tabs + per-job upload view
+      sessionTabs: document.createElement('nav'),
+      viewUpload: document.createElement('section'),
+      uploadJobRing: document.createElement('div'),
+      uploadJobRingArc: document.createElement('div'),
+      uploadJobRingLabel: document.createElement('span'),
+      uploadJobLabel: document.createElement('div'),
+      uploadJobFiles: document.createElement('ul'),
+      uploadJobNew: document.createElement('button'),
+      uploadJobDismiss: document.createElement('button'),
+
       // Shared
       recordingStatusEl: document.createElement('div'),
     };
@@ -123,10 +137,31 @@ describe('PopupController', () => {
     jest.restoreAllMocks();
   });
 
-  it('initializes UI correctly from existing uploading state', async () => {
+  it('paints the cached phase synchronously on open so it never flashes Setup', async () => {
+    // Simulate a popup reopened during a recording: the last render cached 'recording'.
+    localStorage.setItem('meetRecorder.lastPhase', 'recording');
+    mockSendMessage.mockResolvedValueOnce({ session: { phase: 'recording', runConfig: null, updatedAt: Date.now() } });
+
+    controller.init();
+    // BEFORE the async status fetch resolves, the recording view is already shown and
+    // the Setup/config view is hidden — no flash.
+    expect(elements.viewRecording.hidden).toBe(false);
+    expect(elements.viewConfig.hidden).toBe(true);
+
+    await new Promise(process.nextTick); // fetch confirms it; still recording
+    expect(elements.viewRecording.hidden).toBe(false);
+  });
+
+  it('defaults the synchronous first paint to Setup when no phase is cached', () => {
+    controller.init(); // no localStorage cache → idle → config
+    expect(elements.viewConfig.hidden).toBe(false);
+    expect(elements.viewRecording.hidden).toBe(true);
+  });
+
+  it('initializes UI correctly from an existing stopping state', async () => {
     mockSendMessage.mockResolvedValueOnce({
       session: {
-        phase: 'uploading',
+        phase: 'stopping',
         runConfig: {
           storageMode: 'drive',
           micMode: 'mixed',
@@ -139,7 +174,7 @@ describe('PopupController', () => {
     await new Promise(process.nextTick);
 
     expect(mockSendMessage).toHaveBeenCalledWith({ type: 'GET_RECORDING_STATUS' });
-    // Uploading → the finalizing view is shown and config/recording are hidden,
+    // Stopping → the finalizing view is shown and config/recording are hidden,
     // so start/stop are simply not reachable (no per-control disabling needed).
     expect(elements.viewConfig.hidden).toBe(true);
     expect(elements.viewRecording.hidden).toBe(true);
@@ -147,30 +182,12 @@ describe('PopupController', () => {
     expect(elements.storageModeSelect.value).toBe('drive');
     expect(elements.micModeSelect.value).toBe('mixed');
     expect(elements.recordSelfVideoCheckbox.checked).toBe(true);
-    expect(elements.finalizingLabel.textContent).toContain('Uploading to Google Drive');
+    expect(elements.finalizingLabel.textContent).toContain('Finalizing files');
     expect(elements.metaStorage.textContent).toBe('Google Drive');
     expect(elements.metaMic.textContent).toBe('Mixed');
     expect(elements.metaCamera.textContent).toBe('Separate');
-    expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
+    expect(elements.recordingStatusEl.textContent).toContain('Stopping recording');
     expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
-  });
-
-  it('renders a determinate upload ring from live upload progress', async () => {
-    mockSendMessage.mockResolvedValueOnce({
-      session: {
-        phase: 'uploading',
-        runConfig: { storageMode: 'drive', micMode: 'mixed', recordSelfVideo: false },
-        uploadProgress: 0.42,
-        updatedAt: Date.now(),
-      },
-    });
-    controller.init();
-    await new Promise(process.nextTick);
-
-    expect(elements.uploadRing.dataset.mode).toBe('determinate');
-    expect(elements.uploadRingLabel.textContent).toBe('42%');
-    // The arc declares pathLength=100, so the offset is simply 100 − percent.
-    expect(elements.uploadRingArc.style.strokeDashoffset).toBe('58');
   });
 
   it('keeps the upload ring indeterminate while finalizing without progress', async () => {
@@ -186,6 +203,108 @@ describe('PopupController', () => {
 
     expect(elements.uploadRing.dataset.mode).toBe('indeterminate');
     expect(elements.uploadRingLabel.textContent).toBe('');
+  });
+
+  describe('session tabs + background uploads (ADR-0004)', () => {
+    const sessionWith = (uploadJobs: unknown[], phase = 'idle') => ({
+      session: { phase, runConfig: null, uploadJobs, updatedAt: Date.now() },
+    });
+    const job = (over: Record<string, unknown> = {}) => ({
+      id: 'j1',
+      label: 'meet-abc',
+      status: 'uploading',
+      progress: 0.42,
+      files: [{ stream: 'tab', filename: 'tab.webm', status: 'uploading' }],
+      startedAt: 1,
+      ...over,
+    });
+
+    it('hides the tab bar when there are no background uploads', async () => {
+      controller.init(); // default mock: idle, no uploadJobs
+      await new Promise(process.nextTick);
+      expect(elements.sessionTabs.hidden).toBe(true);
+    });
+
+    it('renders the upload tabs first with the live tab as the end anchor', async () => {
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job()]));
+      controller.init();
+      await new Promise(process.nextTick);
+
+      expect(elements.sessionTabs.hidden).toBe(false);
+      const tabs = elements.sessionTabs.querySelectorAll('.session-tab');
+      expect(tabs).toHaveLength(2);
+      // Order: [upload job, …, live]. Live (Setup) is last and selected by default.
+      expect(tabs[0].textContent).toContain('meet-abc');
+      expect(tabs[0].textContent).toContain('42%');
+      expect(tabs[1].getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('switches to a determinate per-job upload view when its tab is clicked', async () => {
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job()]));
+      controller.init();
+      await new Promise(process.nextTick);
+
+      (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
+
+      expect(elements.viewUpload.hidden).toBe(false);
+      expect(elements.viewConfig.hidden).toBe(true);
+      expect(elements.uploadJobRingLabel.textContent).toBe('42%');
+      expect(elements.uploadJobRingArc.style.strokeDashoffset).toBe('58'); // pathLength 100 ⇒ 100 − 42
+      expect(elements.uploadJobLabel.textContent).toContain('Uploading to Google Drive');
+      expect(elements.uploadJobFiles.children).toHaveLength(1);
+      expect(elements.uploadJobDismiss.hidden).toBe(true); // not dismissible while uploading
+    });
+
+    it('shows a done state and dismisses a finished upload job', async () => {
+      mockSendMessage.mockResolvedValueOnce(
+        sessionWith([job({ status: 'completed', progress: 1, files: [{ stream: 'tab', filename: 'tab.webm', status: 'uploaded' }], finishedAt: 2 })])
+      );
+      controller.init();
+      await new Promise(process.nextTick);
+
+      (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
+      expect(elements.uploadJobRingLabel.textContent).toBe('✓');
+      expect(elements.uploadJobDismiss.hidden).toBe(false);
+
+      mockSendMessage.mockResolvedValueOnce({ session: { phase: 'idle', runConfig: null, updatedAt: Date.now() } });
+      elements.uploadJobDismiss.click();
+      await new Promise(process.nextTick);
+
+      expect(mockSendMessage).toHaveBeenCalledWith({ type: 'DISMISS_UPLOAD_JOB', jobId: 'j1' });
+      expect(elements.viewUpload.hidden).toBe(true);
+      expect(elements.sessionTabs.hidden).toBe(true); // bar gone with the last job
+    });
+
+    it('auto-focuses a newly-finished upload but stays on Setup on the first render', async () => {
+      // First render already has an upload (simulates a reopen mid-upload) → Setup.
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job()]));
+      controller.init();
+      await new Promise(process.nextTick);
+      expect(elements.viewUpload.hidden).toBe(true);
+      expect(elements.viewConfig.hidden).toBe(false);
+
+      // A later push introduces a NEW job (a recording just finished) → focus its tab.
+      (controller as unknown as { state: { applySession: (s: unknown) => void } }).state.applySession({
+        phase: 'idle', runConfig: null, updatedAt: Date.now(), uploadJobs: [job(), job({ id: 'j2', label: 'new-mtg', progress: 0.1 })],
+      });
+
+      expect(elements.viewUpload.hidden).toBe(false);
+      expect(elements.uploadJobRingLabel.textContent).toBe('10%'); // the new job j2
+    });
+
+    it('the New recording button leaves the upload screen for Setup', async () => {
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job()]));
+      controller.init();
+      await new Promise(process.nextTick);
+
+      (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
+      expect(elements.viewUpload.hidden).toBe(false);
+
+      elements.uploadJobNew.click();
+      expect(elements.viewUpload.hidden).toBe(true);
+      expect(elements.viewConfig.hidden).toBe(false); // back on Setup; the upload keeps running
+      expect(elements.sessionTabs.hidden).toBe(false); // its tab is still there
+    });
   });
 
   it('handles START_RECORDING click', async () => {
@@ -306,22 +425,6 @@ describe('PopupController', () => {
     expect(console.log).toHaveBeenCalledWith('[popup]', expect.stringContaining('Stopping...'));
   });
 
-  it('shows uploading status while Drive upload continues after popup stop', async () => {
-    controller.init();
-    await new Promise(process.nextTick);
-
-    (controller as any).state.applySession({
-      phase: 'uploading',
-      runConfig: { storageMode: 'drive', micMode: 'separate', recordSelfVideo: true },
-      updatedAt: Date.now(),
-    });
-
-    expect(elements.viewConfig.hidden).toBe(true);
-    expect(elements.viewFinalizing.hidden).toBe(false);
-    expect(elements.recordingStatusEl.textContent).toContain('Finalizing and saving files');
-    expect(elements.recordingStatusEl.textContent).toContain('Mode: Drive');
-  });
-
   it('opens the settings page from the gear button', async () => {
     controller.init();
     await new Promise(process.nextTick);
@@ -343,7 +446,7 @@ describe('PopupController', () => {
     runtimeListener({
       type: 'RECORDING_STATE',
       session: {
-        phase: 'uploading',
+        phase: 'stopping',
         runConfig: (global as any).__TEST_RUN_CONFIG__({ storageMode: 'drive' }),
         updatedAt: Date.now(),
       },
@@ -643,7 +746,7 @@ describe('PopupController', () => {
     });
 
     it('does not show the recording view (or Pause) while finalizing', async () => {
-      mockSendMessage.mockResolvedValueOnce(recordingSession({ phase: 'uploading' }));
+      mockSendMessage.mockResolvedValueOnce(recordingSession({ phase: 'stopping' }));
       controller.init();
       await new Promise(process.nextTick);
       expect(elements.viewRecording.hidden).toBe(true);

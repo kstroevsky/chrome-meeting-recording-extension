@@ -26,11 +26,11 @@ describe('OffscreenController', () => {
     it('includes accumulated warnings and merged extra fields', () => {
       const { controller, postMessage } = makeController();
       controller.reportWarning('low disk');
-      controller.pushState('uploading', { uploadSummary: { uploaded: [], localFallbacks: [] } });
+      controller.pushState('stopping', { uploadSummary: { uploaded: [], localFallbacks: [] } });
 
       expect(lastState(postMessage)).toEqual({
         type: 'OFFSCREEN_STATE',
-        phase: 'uploading',
+        phase: 'stopping',
         epoch: 0,
         warnings: ['low disk'],
         uploadSummary: { uploaded: [], localFallbacks: [] },
@@ -45,38 +45,6 @@ describe('OffscreenController', () => {
       controller.pushState('recording'); // unchanged phase → no rebaseline
       controller.pushState('idle'); // idle never rebaselines
       expect(sampler.markActivePhaseStart).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe('reportUploadProgress', () => {
-    it('re-broadcasts a clamped fraction while uploading', () => {
-      const { controller, postMessage } = makeController();
-      controller.pushState('uploading');
-      postMessage.mockClear();
-
-      controller.reportUploadProgress(0.5);
-      expect(lastState(postMessage)).toEqual({
-        type: 'OFFSCREEN_STATE',
-        phase: 'uploading',
-        epoch: 0,
-        uploadProgress: 0.5,
-      });
-
-      controller.reportUploadProgress(1.4); // clamped to 1
-      expect(lastState(postMessage).uploadProgress).toBe(1);
-    });
-
-    it('ignores progress outside the uploading phase and non-finite values', () => {
-      const { controller, postMessage } = makeController();
-      controller.pushState('uploading');
-      controller.reportUploadProgress(Number.NaN);
-      postMessage.mockClear();
-
-      controller.pushState('idle'); // finalize advanced past uploading
-      postMessage.mockClear();
-      controller.reportUploadProgress(0.9); // a late settling chunk
-
-      expect(postMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -135,19 +103,6 @@ describe('OffscreenController', () => {
       expect(controller.currentPhase()).toBe('idle');
     });
 
-    it('signals uploading for Drive runs with artifacts and carries the summary to idle', async () => {
-      const { controller, postMessage } = makeController();
-      const summary = { uploaded: [{ stream: 'tab', filename: 'tab.webm' }], localFallbacks: [] };
-      attach(controller, { artifacts: [artifact('tab')], summary });
-      controller.onStartRequested({ storageMode: 'drive', micMode: 'off', recordSelfVideo: false }, 'drive', 7);
-
-      await controller.finalize();
-
-      const phases = postMessage.mock.calls.map((c) => c[0].phase);
-      expect(phases).toEqual(['uploading', 'idle']);
-      expect(lastState(postMessage)).toEqual({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 7, uploadSummary: summary });
-    });
-
     it('does not signal uploading for a Drive run that produced no artifacts', async () => {
       const { controller, postMessage } = makeController();
       attach(controller, { artifacts: [] });
@@ -157,6 +112,37 @@ describe('OffscreenController', () => {
 
       const phases = postMessage.mock.calls.map((c) => c[0].phase);
       expect(phases).toEqual(['idle']);
+    });
+
+    it('detaches Drive uploads to the upload manager and idles at once (ADR-0004)', async () => {
+      const { controller, postMessage } = makeController();
+      const stop = jest.fn().mockResolvedValue([artifact('tab')]);
+      const finalize = jest.fn().mockResolvedValue(undefined);
+      const enqueueUpload = jest.fn();
+      controller.attachServices({ stop } as any, { finalize } as any, enqueueUpload);
+      controller.onStartRequested({ storageMode: 'drive', micMode: 'off', recordSelfVideo: false }, 'drive', 9);
+
+      await controller.finalize();
+
+      expect(enqueueUpload).toHaveBeenCalledWith([expect.objectContaining({ stream: 'tab' })]);
+      expect(finalize).not.toHaveBeenCalled(); // upload is detached, not finalized inline
+      const phases = postMessage.mock.calls.map((c) => c[0].phase);
+      expect(phases).toEqual(['idle']); // never enters 'uploading'
+      expect(controller.currentPhase()).toBe('idle');
+    });
+
+    it('still finalizes local runs inline even when an upload manager is wired', async () => {
+      const { controller } = makeController();
+      const stop = jest.fn().mockResolvedValue([artifact('tab')]);
+      const finalize = jest.fn().mockResolvedValue(undefined);
+      const enqueueUpload = jest.fn();
+      controller.attachServices({ stop } as any, { finalize } as any, enqueueUpload);
+      controller.onStartRequested({ storageMode: 'local', micMode: 'off', recordSelfVideo: false }, 'local', 9);
+
+      await controller.finalize();
+
+      expect(enqueueUpload).not.toHaveBeenCalled();
+      expect(finalize).toHaveBeenCalledWith({ artifacts: [expect.objectContaining({ stream: 'tab' })], storageMode: 'local' });
     });
 
     it('shares one in-flight run across concurrent finalize calls', async () => {

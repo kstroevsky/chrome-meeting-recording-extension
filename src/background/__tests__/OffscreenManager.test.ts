@@ -220,12 +220,12 @@ describe('OffscreenManager', () => {
     const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
     const setBadgeTextSpy = jest.spyOn(chrome.action, 'setBadgeText');
 
-    onMessageListener({ type: 'OFFSCREEN_STATE', phase: 'uploading' });
+    onMessageListener({ type: 'OFFSCREEN_STATE', phase: 'recording' });
 
-    expect(manager.getRecordingStatus()).toBe('uploading');
-    expect(setBadgeTextSpy).toHaveBeenCalledWith({ text: 'UP' });
+    expect(manager.getRecordingStatus()).toBe('recording');
+    expect(setBadgeTextSpy).toHaveBeenCalledWith({ text: 'REC' });
     expect(manager.onStateChanged).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'OFFSCREEN_STATE', phase: 'uploading' })
+      expect.objectContaining({ type: 'OFFSCREEN_STATE', phase: 'recording' })
     );
   });
 
@@ -255,6 +255,49 @@ describe('OffscreenManager', () => {
       type: 'REVOKE_BLOB_URL',
       blobUrl: 'blob:fail',
       opfsFilename: undefined,
+    });
+  });
+
+  describe('background upload jobs (ADR-0004)', () => {
+    const job = (id: string, status: string) => ({
+      id,
+      label: id,
+      status,
+      progress: status === 'uploading' ? 0.3 : 1,
+      files: [],
+      startedAt: 1,
+    });
+
+    function connect() {
+      manager.attachPort(mockPort);
+      return mockPort.onMessage.addListener.mock.calls[0][0] as (m: unknown) => void;
+    }
+
+    it('forwards upload-state messages to the upload listener', () => {
+      const onUploadJobChanged = jest.fn();
+      manager.onUploadJobChanged = onUploadJobChanged;
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_UPLOAD_STATE', job: job('j1', 'uploading') });
+
+      expect(onUploadJobChanged).toHaveBeenCalledWith(expect.objectContaining({ id: 'j1', status: 'uploading' }));
+    });
+
+    it('stays busy for update while a decoupled upload is in flight, then frees once it settles', async () => {
+      const closeDocumentSpy = jest
+        .spyOn(chrome.offscreen, 'closeDocument')
+        .mockImplementation(async () => {});
+      manager.hydratePhase('idle'); // the recording already returned to idle
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_UPLOAD_STATE', job: job('j1', 'uploading') });
+      await expect(manager.closeForUpdate()).resolves.toBe(false);
+      expect(closeDocumentSpy).not.toHaveBeenCalled();
+
+      // A terminal report clears the in-flight id, so the update can proceed.
+      listener({ type: 'OFFSCREEN_UPLOAD_STATE', job: job('j1', 'completed') });
+      await expect(manager.closeForUpdate()).resolves.toBe(true);
+      expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

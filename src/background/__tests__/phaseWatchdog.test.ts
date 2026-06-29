@@ -53,7 +53,7 @@ describe('phaseWatchdog', () => {
 
   it('does not arm for any non-starting phase', () => {
     const wd = makeWatchdog();
-    for (const phase of ['idle', 'recording', 'stopping', 'uploading', 'failed'] as const) {
+    for (const phase of ['idle', 'recording', 'stopping', 'failed'] as const) {
       wd.observe(snap(phase, nowMs));
       expect(pending).toBeNull();
     }
@@ -148,9 +148,9 @@ describe('phaseWatchdog — multiple watched phases (starting + stopping)', () =
     expect(onStuck).toHaveBeenCalledWith(snapshot);
   });
 
-  it('still ignores unwatched phases (idle / recording / uploading / failed)', () => {
+  it('still ignores unwatched phases (idle / recording / failed)', () => {
     const wd = makeWatchdog();
-    for (const phase of ['idle', 'recording', 'uploading', 'failed'] as const) {
+    for (const phase of ['idle', 'recording', 'failed'] as const) {
       wd.observe(snap(phase, nowMs));
       expect(pending).toBeNull();
     }

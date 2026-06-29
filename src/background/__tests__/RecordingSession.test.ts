@@ -55,9 +55,9 @@ describe('RecordingSession state machine', () => {
     expect(stopping.phase).toBe('stopping');
     expect(stopping.runConfig).toEqual(RUN_CONFIG);
 
-    const uploading = session.applyOffscreenPhase({ phase: 'uploading' });
-    expect(uploading.phase).toBe('uploading');
-    expect(uploading.runConfig).toEqual(RUN_CONFIG);
+    // A same-run idle is a genuine end-of-run; the run config is cleared on idle.
+    const idle = session.applyOffscreenPhase({ phase: 'idle' });
+    expect(idle.phase).toBe('idle');
   });
 
   it('clears run state and carries the upload summary on markIdle', () => {

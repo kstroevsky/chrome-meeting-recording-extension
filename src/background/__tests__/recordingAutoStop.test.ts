@@ -100,7 +100,7 @@ describe('handleMeetingEndedMessage', () => {
   });
 
   it('does not stop when the session is no longer in a stoppable phase', async () => {
-    const { deps, stop } = makeDeps({ ...RECORDING_SNAPSHOT, phase: 'uploading' });
+    const { deps, stop } = makeDeps({ ...RECORDING_SNAPSHOT, phase: 'failed' });
 
     const result = await handleMeetingEndedMessage(
       { type: 'MEETING_ENDED', meetingId: 'abc-defg-hij' },

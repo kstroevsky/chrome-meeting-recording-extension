@@ -1,7 +1,7 @@
 import { projectPhase } from '../recording';
 import type { DesiredState, ObservedState, RecordingPhase } from '../recording';
 
-const ALL_OBSERVED: ObservedState[] = ['none', 'starting', 'recording', 'stopping', 'uploading', 'idle'];
+const ALL_OBSERVED: ObservedState[] = ['none', 'starting', 'recording', 'stopping', 'idle'];
 const ALL_DESIRED: DesiredState[] = ['idle', 'recording'];
 
 describe('projectPhase (ADR-0003 Decision 4)', () => {
@@ -25,14 +25,13 @@ describe('projectPhase (ADR-0003 Decision 4)', () => {
       ['recording', 'starting', 'starting'],
       ['recording', 'recording', 'recording'],
       ['recording', 'stopping', 'starting'],
-      ['recording', 'uploading', 'starting'],
       ['recording', 'idle', 'starting'],
-      // Want idle: the recorder may still be draining capture or uploading.
+      // Want idle: the recorder may still be draining capture (uploads are now a
+      // separate background job, ADR-0004, not a recording phase).
       ['idle', 'none', 'idle'],
       ['idle', 'starting', 'stopping'],
       ['idle', 'recording', 'stopping'],
       ['idle', 'stopping', 'stopping'],
-      ['idle', 'uploading', 'uploading'],
       ['idle', 'idle', 'idle'],
     ];
 
@@ -59,7 +58,6 @@ describe('projectPhase (ADR-0003 Decision 4)', () => {
       ['starting', 'recording', 'none', false],
       ['recording', 'recording', 'recording', false],
       ['stopping', 'idle', 'recording', false],
-      ['uploading', 'idle', 'uploading', false],
       ['failed', 'idle', 'none', true],
     ];
 

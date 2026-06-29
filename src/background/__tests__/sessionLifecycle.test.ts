@@ -120,11 +120,11 @@ describe('isFreshRecordingStart', () => {
 
   it('is false for busy-to-busy transitions within a run', () => {
     expect(isFreshRecordingStart('starting', 'recording')).toBe(false);
-    expect(isFreshRecordingStart('recording', 'uploading')).toBe(false);
+    expect(isFreshRecordingStart('recording', 'stopping')).toBe(false);
   });
 
   it('is false when a run finishes (busy to idle) — diagnostics persist until the next start', () => {
-    expect(isFreshRecordingStart('uploading', 'idle')).toBe(false);
+    expect(isFreshRecordingStart('stopping', 'idle')).toBe(false);
     expect(isFreshRecordingStart('recording', 'idle')).toBe(false);
   });
 

@@ -301,11 +301,11 @@ describe('RecordingFinalizer', () => {
     });
 
     const onUploadProgress = jest.fn();
-    const finalizerWithProgress = new RecordingFinalizer({ ...deps, onUploadProgress });
 
     // Two 4-byte files ⇒ 8 bytes total; serial halves land at 2,4 then 6,8 bytes.
-    await finalizerWithProgress.finalize({
+    await finalizer.finalize({
       storageMode: 'drive',
+      onUploadProgress,
       artifacts: [
         { stream: 'tab', artifact: makeArtifact('tab.webm') },
         { stream: 'mic', artifact: makeArtifact('mic.webm') },
@@ -327,10 +327,10 @@ describe('RecordingFinalizer', () => {
     });
 
     const onUploadProgress = jest.fn();
-    const finalizerWithProgress = new RecordingFinalizer({ ...deps, onUploadProgress });
 
-    await finalizerWithProgress.finalize({
+    await finalizer.finalize({
       storageMode: 'drive',
+      onUploadProgress,
       artifacts: [
         { stream: 'tab', artifact: makeArtifact('tab.webm') },
         { stream: 'mic', artifact: makeArtifact('mic.webm') },

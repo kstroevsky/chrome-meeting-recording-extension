@@ -105,9 +105,8 @@ describe('PopupStateController', () => {
       expect(callbacks.onToast).toHaveBeenCalledWith('Recording error: capture lost');
     });
 
-    it('toasts an upload confirmation when an upload run finishes cleanly', () => {
+    it('toasts an upload confirmation when an upload summary lands on idle', () => {
       const { controller, callbacks } = makeController();
-      controller.applySession(idleView({ phase: 'uploading', runConfig: { storageMode: 'drive', micMode: 'off', recordSelfVideo: false } }));
       controller.applySession(idleView({
         phase: 'idle',
         uploadSummary: { uploaded: [{ stream: 'tab', filename: 'tab.webm' }], localFallbacks: [] },

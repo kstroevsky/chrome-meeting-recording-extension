@@ -52,7 +52,7 @@ describe('PerfDebugStore', () => {
       uploaded: false,
     }));
     store.record(event('runtime', 'sample', {
-      phase: 'uploading',
+      phase: 'stopping',
       activeRecorders: 0,
       hardwareConcurrency: 8,
       deviceMemoryGb: 16,
@@ -68,7 +68,7 @@ describe('PerfDebugStore', () => {
     const snapshot = store.getSnapshot();
 
     expect(snapshot.enabled).toBe(true);
-    expect(snapshot.summary.currentPhase).toBe('uploading');
+    expect(snapshot.summary.currentPhase).toBe('stopping');
     expect(snapshot.summary.recorder.lastStartLatencyMsByStream.tab).toBe(120);
     expect(snapshot.summary.recorder.lastTimesliceMs).toBe(4000);
     expect(snapshot.summary.recorder.persistedChunkCount).toBe(1);
@@ -275,12 +275,12 @@ describe('PerfDebugStore', () => {
   it('keeps the full active-session event history until explicitly cleared', () => {
     const store = new PerfDebugStore(normalizePerfSettings({ debugMode: true }));
     store.record(event('runtime', 'sample', { phase: 'recording' }));
-    store.record(event('runtime', 'sample', { phase: 'uploading' }));
+    store.record(event('runtime', 'sample', { phase: 'stopping' }));
     const snapshot = store.getSnapshot();
 
     expect(snapshot.entries).toHaveLength(2);
     expect(snapshot.entries[0].fields.phase).toBe('recording');
-    expect(snapshot.entries[1].fields.phase).toBe('uploading');
+    expect(snapshot.entries[1].fields.phase).toBe('stopping');
   });
 
   it('bounds the raw event buffer and counts dropped events without losing whole-session aggregates', () => {

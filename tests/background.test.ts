@@ -17,7 +17,7 @@ describe('background runtime messages', () => {
   it('forwards refresh=true on GET_DRIVE_TOKEN to the auth helper', async () => {
     const fetchDriveTokenWithFallback = jest.fn().mockResolvedValue({ ok: true, token: 'fresh-token' });
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
@@ -75,7 +75,7 @@ describe('background runtime messages', () => {
     const getMediaStreamIdForTab = jest.fn().mockResolvedValue('stream-1');
     const getCapturedTabs = jest.fn().mockResolvedValue([]);
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
@@ -141,7 +141,7 @@ describe('background runtime messages', () => {
     const getMediaStreamIdForTab = jest.fn().mockResolvedValue('stream-1');
     const getCapturedTabs = jest.fn().mockResolvedValue([]);
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
@@ -226,13 +226,13 @@ describe('background runtime messages', () => {
     const phase = async () =>
       (await new Promise<any>((resolve) => listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve))).session.phase;
 
-    // Matching the current run's epoch → applied (observed=uploading ⇒ uploading).
-    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'uploading', epoch: 1 });
-    expect(await phase()).toBe('uploading');
+    // Matching the current run's epoch → applied (a same-run idle ends the run).
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 1 });
+    expect(await phase()).toBe('idle');
 
     // A stale update from a previous run (wrong epoch) → dropped; phase unchanged.
-    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 99 });
-    expect(await phase()).toBe('uploading');
+    offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'recording', epoch: 99 });
+    expect(await phase()).toBe('idle');
   });
 
   it('start watchdog fails and tears down a session left orphaned in starting past the budget', async () => {
@@ -252,7 +252,7 @@ describe('background runtime messages', () => {
         },
       });
       const offscreenInstance = {
-        onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+        onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
         onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
         hydratePhase: jest.fn(),
         attachPort: jest.fn(),
@@ -303,7 +303,7 @@ describe('background runtime messages', () => {
         },
       });
       const offscreenInstance = {
-        onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+        onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
         onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
         hydratePhase: jest.fn(),
         attachPort: jest.fn(),
@@ -339,7 +339,7 @@ describe('background runtime messages', () => {
   it('keeps diagnostics after a recording finishes so they can be exported later (no clear-on-idle)', async () => {
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({ recordingSession: activeSession });
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
@@ -380,7 +380,7 @@ describe('background runtime messages', () => {
       },
     });
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
@@ -420,7 +420,7 @@ describe('background runtime messages', () => {
       },
     });
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
@@ -459,7 +459,7 @@ describe('background runtime messages', () => {
       },
     });
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
@@ -499,7 +499,7 @@ describe('background runtime messages', () => {
       },
     });
     const offscreenInstance = {
-      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'uploading' }) => void) | undefined,
+      onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),

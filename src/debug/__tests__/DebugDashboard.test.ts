@@ -55,7 +55,7 @@ describe('DebugDashboard', () => {
           },
         ],
         summary: {
-          currentPhase: 'uploading',
+          currentPhase: 'stopping',
           totalEvents: 3,
           countsByScope: { drive: 1 },
           recorder: {
@@ -99,7 +99,7 @@ describe('DebugDashboard', () => {
           },
           runtime: {
             sampleCount: 2,
-            state: 'uploading',
+            state: 'stopping',
             activeRecorders: 0,
             hardwareConcurrency: 8,
             deviceMemoryGb: 16,
@@ -126,7 +126,7 @@ describe('DebugDashboard', () => {
     await new Promise(process.nextTick);
 
     expect(elements.buildBadgeEl.textContent).toBe('Dev build');
-    expect(elements.summaryEl.textContent).toContain('Phase: uploading');
+    expect(elements.summaryEl.textContent).toContain('Phase: stopping');
     expect(elements.summaryEl.textContent).toContain('Retained events: 1');
     expect(elements.updatedAtEl.textContent).toContain('.321');
     expect(elements.eventsBodyEl.textContent).toContain('chunk_uploaded');

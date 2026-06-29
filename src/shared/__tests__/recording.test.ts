@@ -35,11 +35,11 @@ describe('shared/recording helpers', () => {
 
   it('treats only active capture phases as stoppable', () => {
     expect((['starting', 'recording', 'stopping'] as const).map(isStoppablePhase)).toEqual([true, true, true]);
-    expect((['idle', 'uploading', 'failed'] as const).map(isStoppablePhase)).toEqual([false, false, false]);
+    expect((['idle', 'failed'] as const).map(isStoppablePhase)).toEqual([false, false]);
   });
 
   it('treats every non-terminal working phase as busy', () => {
-    expect((['starting', 'recording', 'stopping', 'uploading'] as const).map(isBusyPhase)).toEqual([true, true, true, true]);
+    expect((['starting', 'recording', 'stopping'] as const).map(isBusyPhase)).toEqual([true, true, true]);
     expect((['idle', 'failed'] as const).map(isBusyPhase)).toEqual([false, false]);
   });
 
@@ -164,7 +164,6 @@ describe('session snapshot desired/observed migration (ADR-0003 Decision 4)', ()
       ['starting', 'recording', 'starting', false],
       ['recording', 'recording', 'recording', false],
       ['stopping', 'idle', 'stopping', false],
-      ['uploading', 'idle', 'uploading', false],
       ['failed', 'idle', 'none', true],
     ];
 
