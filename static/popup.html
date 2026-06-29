@@ -500,27 +500,26 @@
       }
 
       /* ── Session tabs (live session + background uploads, ADR-0004) ── */
+      /* Wrap rather than clip: the popup is narrow, so extra upload tabs flow onto
+         a second row instead of overflowing off the right edge. */
       .session-tabs {
         display: flex;
+        flex-wrap: wrap;
         gap: 6px;
-        padding: 8px 12px 0;
-        overflow-x: auto;
-        scrollbar-width: none;
-      }
-
-      .session-tabs::-webkit-scrollbar {
-        display: none;
+        margin-bottom: 12px;
       }
 
       .session-tab {
-        flex: 0 0 auto;
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 100%;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        max-width: 150px;
-        padding: 5px 10px;
+        gap: 5px;
+        padding: 4px 9px;
         font-size: 11px;
         font-weight: 600;
+        line-height: 1.45;
         color: #9aa0ab;
         background: #1e1f24;
         border: 1px solid #2c2e33;
@@ -535,13 +534,16 @@
       }
 
       .session-tab-label {
+        min-width: 0;
+        max-width: 92px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
       .session-tab-pct {
-        color: #4c7fe3;
+        flex: 0 0 auto;
+        color: #6f9bef;
       }
 
       .session-tab[data-status='completed'] .session-tab-pct {
@@ -613,6 +615,18 @@
 
       /* ── Diagnostics ── */
       #open-diagnostics {
+        width: 100%;
+        margin-top: 8px;
+      }
+
+      /* Start a new recording from an upload's screen (ADR-0004). */
+      #upload-job-new {
+        width: 100%;
+        margin-top: 14px;
+      }
+
+      /* Dismiss a finished upload job's tab. */
+      #upload-job-dismiss {
         width: 100%;
         margin-top: 8px;
       }
@@ -800,6 +814,12 @@
         </div>
         <div id="upload-job-label" class="finalizing-label">Uploading to Google Drive…</div>
         <ul id="upload-job-files" class="meta-list"></ul>
+        <button id="upload-job-new" class="btn btn-primary" type="button">
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <circle cx="6" cy="6" r="4" />
+          </svg>
+          New recording
+        </button>
         <button id="upload-job-dismiss" class="btn btn-secondary" type="button" hidden>Dismiss</button>
       </div>
     </section>

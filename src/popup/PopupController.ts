@@ -42,6 +42,26 @@ function micModeLabel(mode: MicMode | undefined): string {
   return mode === 'mixed' ? 'Mixed' : mode === 'separate' ? 'Separate' : 'Off';
 }
 
+/**
+ * The popup is a fresh document each open and only learns the real phase from an
+ * async status fetch. We mirror the last rendered phase into `localStorage` (the
+ * one store the popup can read *synchronously*) so the next open can paint the
+ * right view on the first frame and never flash the wrong screen.
+ */
+const LAST_PHASE_KEY = 'meetRecorder.lastPhase';
+
+function readCachedPhase(): RecordingPhase {
+  try {
+    const v = localStorage.getItem(LAST_PHASE_KEY);
+    if (v === 'starting' || v === 'recording' || v === 'stopping' || v === 'failed') return v;
+  } catch { /* localStorage unavailable */ }
+  return 'idle';
+}
+
+function writeCachedPhase(phase: RecordingPhase): void {
+  try { localStorage.setItem(LAST_PHASE_KEY, phase); } catch { /* ignore */ }
+}
+
 /** Label for the always-present live tab, reflecting the current recording phase. */
 function liveTabLabel(phase: RecordingPhase): string {
   if (phase === 'recording' || phase === 'starting') return '● Recording';
@@ -115,6 +135,11 @@ export class PopupController {
 
   /** Wires every popup interaction and kicks off the initial status refresh. */
   init() {
+    // Paint the last-known view synchronously, before the async GET_RECORDING_STATUS
+    // round-trip resolves, so a popup reopened mid-recording shows the recording view
+    // on the first frame instead of flashing the Setup screen. The fetch then corrects
+    // it in the rare case the phase changed while the popup was closed.
+    setActiveView(this.el, readCachedPhase());
     this.wireRecordingStateListener();
     this.wireTranscriptDownload();
     this.wireStartStop();
@@ -146,6 +171,7 @@ export class PopupController {
   private onPhaseChange(phase: RecordingPhase, session?: RecordingStatusView) {
     this.lastPhase = phase;
     this.lastSession = session;
+    writeCachedPhase(phase);
     this.autoFocusFinishedUpload(session);
     this.renderSessionTabs(phase, session);
 
