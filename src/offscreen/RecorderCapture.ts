@@ -18,6 +18,7 @@ import {
 } from '../shared/settings';
 import { TIMEOUTS } from '../shared/timeouts';
 import { describeMediaError } from './RecorderSupport';
+import { createE2EMockTabStream } from './RecorderCaptureE2EMock';
 import {
   formatSelfVideoProfile,
   getSelfVideoConstraintRequests,
@@ -25,7 +26,7 @@ import {
 } from './RecorderProfiles';
 import { debugPerf, nowMs, roundMs } from '../shared/perf';
 
-type RecorderCaptureDeps = {
+export type RecorderCaptureDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
 };
@@ -116,103 +117,6 @@ function makeTabCaptureConstraints(
       },
     } as any,
   };
-}
-
-function patchTrackStop(track: MediaStreamTrack | undefined, cleanup: () => void): void {
-  if (!track) return;
-  const originalStop = track.stop.bind(track);
-  let cleaned = false;
-  track.stop = () => {
-    if (!cleaned) {
-      cleaned = true;
-      cleanup();
-    }
-    originalStop();
-  };
-}
-
-function createE2EMockTabStream(
-  tabOutput: Readonly<TabCaptureSettings>,
-  deps: RecorderCaptureDeps
-): MediaStream {
-  const captureStartedAt = nowMs();
-  const canvas = document.createElement('canvas');
-  canvas.width = tabOutput.maxWidth;
-  canvas.height = tabOutput.maxHeight;
-  const ctx = canvas.getContext('2d');
-  let frame = 0;
-  const captureFrameRate = Math.max(1, Math.min(tabOutput.maxFrameRate, 30));
-  let markerGain: GainNode | null = null;
-  let markerOscillator: OscillatorNode | null = null;
-
-  const draw = () => {
-    if (!ctx) return;
-    const hue = (frame * 6) % 360;
-    ctx.fillStyle = `hsl(${hue}, 60%, 24%)`;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = '40px sans-serif';
-    ctx.fillText('E2E mock tab capture', 32, 72);
-    ctx.font = '24px sans-serif';
-    ctx.fillText(`Frame ${frame}`, 32, 116);
-    const markerActive = frame % captureFrameRate < Math.max(1, Math.round(captureFrameRate / 10));
-    ctx.fillStyle = markerActive ? '#ffffff' : '#000000';
-    ctx.fillRect(canvas.width - 96, 32, 64, 64);
-    if (markerGain && markerOscillator) {
-      markerGain.gain.value = markerActive ? 0.08 : 0;
-      markerOscillator.frequency.value = markerActive ? 880 : 440;
-    }
-    frame += 1;
-  };
-
-  draw();
-  const timer = window.setInterval(draw, 1000 / captureFrameRate);
-  const stream = canvas.captureStream(captureFrameRate);
-  const cleanupCallbacks: Array<() => void> = [() => clearInterval(timer)];
-
-  try {
-    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
-    if (AudioContextCtor) {
-      const audio = new AudioContextCtor();
-      const oscillator = audio.createOscillator();
-      const gain = audio.createGain();
-      const destination = audio.createMediaStreamDestination();
-      gain.gain.value = 0;
-      oscillator.frequency.value = 440;
-      oscillator.connect(gain);
-      gain.connect(destination);
-      oscillator.start();
-      markerGain = gain;
-      markerOscillator = oscillator;
-      const audioTrack = destination.stream.getAudioTracks()[0];
-      if (audioTrack) stream.addTrack(audioTrack);
-      cleanupCallbacks.push(() => {
-        try { oscillator.stop(); } catch {}
-        void audio.close().catch(() => {});
-      });
-    }
-  } catch (error) {
-    deps.warn('E2E mock tab audio setup failed; continuing with video-only stream', describeMediaError(error));
-  }
-
-  const cleanup = () => {
-    while (cleanupCallbacks.length) cleanupCallbacks.shift()?.();
-  };
-  stream.getTracks().forEach((track) => patchTrackStop(track, cleanup));
-  const videoSettings = stream.getVideoTracks()[0]?.getSettings?.();
-  debugPerf(deps.log, 'capture', 'stream_acquired', {
-    stream: 'tab',
-    durationMs: roundMs(nowMs() - captureStartedAt),
-    requestedWidth: tabOutput.maxWidth,
-    requestedHeight: tabOutput.maxHeight,
-    requestedFrameRate: tabOutput.maxFrameRate,
-    width: videoSettings?.width ?? tabOutput.maxWidth,
-    height: videoSettings?.height ?? tabOutput.maxHeight,
-    frameRate: videoSettings?.frameRate ?? Math.min(tabOutput.maxFrameRate, 30),
-    synthetic: true,
-  });
-  deps.log('Using E2E mock tab capture stream');
-  return stream;
 }
 
 /** Acquires the tab stream from the background-provided stream id with desktop fallback. */
