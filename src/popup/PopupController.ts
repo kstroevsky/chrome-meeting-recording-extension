@@ -7,7 +7,9 @@
  */
 
 import { CameraPermissionService } from './CameraPermissionService';
+import { CaptionPoller } from './CaptionPoller';
 import { MicPermissionService } from './MicPermissionService';
+import { RecordingTimer } from './RecordingTimer';
 import { PopupStateController } from './controllers/PopupStateController';
 import {
   buildLocalSaveFailedAlert,
@@ -30,12 +32,9 @@ import { formatDuration } from './popupStatus';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
-import type { BgToPopup } from '../shared/protocol';
+import type { BgToPopup, CommandResult } from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
 import type { MicMode, RecordingPhase, RecordingStatusView, RecordingStream, UploadJob, UploadJobFile } from '../shared/recording';
-
-/** How often the recording view polls the content script for live caption presence. */
-const CAPTION_POLL_MS = 3000;
 
 /** Maps a mic mode to its finalizing-view metadata label. */
 function micModeLabel(mode: MicMode | undefined): string {
@@ -110,16 +109,14 @@ export class PopupController {
   private readonly mic = new MicPermissionService();
   private readonly camera = new CameraPermissionService();
   private readonly state: PopupStateController;
+  private readonly timer: RecordingTimer;
+  private readonly captionPoller: CaptionPoller;
   private inFlight = false;
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentStatus = '';
   private micMuted = false;
   private cameraMuted = false;
   private paused = false;
-  private timerInterval: ReturnType<typeof setInterval> | null = null;
-  private captionPollInterval: ReturnType<typeof setInterval> | null = null;
-  private timerRecordedMs = 0;
-  private timerRunningSince: number | null = null;
   /** Selected session tab: 'live' (config/recording) or an upload job id (ADR-0004). */
   private selectedTab = 'live';
   /** Last phase/session, replayed when a tab is clicked without a new background push. */
@@ -135,6 +132,8 @@ export class PopupController {
 
   constructor(el: PopupElements) {
     this.el = el;
+    this.timer = new RecordingTimer(el.recTimer);
+    this.captionPoller = new CaptionPoller(el.chipTranscriptLabel, el.chipTranscript);
     this.state = new PopupStateController(el, {
       onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
       onToast: (msg) => this.toast(msg),
@@ -169,8 +168,8 @@ export class PopupController {
       clearTimeout(this.statusTimer);
       this.statusTimer = null;
     }
-    this.stopTimer();
-    this.stopCaptionPoll();
+    this.timer.stop();
+    this.captionPoller.stop();
     for (const timer of this.fadeTimers.values()) clearTimeout(timer);
     this.fadeTimers.clear();
   }
@@ -191,8 +190,8 @@ export class PopupController {
     // live-recording intervals (we're not on the recording view).
     const job = this.activeUploadTabJob(session);
     if (job) {
-      this.stopTimer();
-      this.stopCaptionPoll();
+      this.timer.stop();
+      this.captionPoller.stop();
       if (this.el.viewConfig) this.el.viewConfig.hidden = true;
       if (this.el.viewRecording) this.el.viewRecording.hidden = true;
       if (this.el.viewFinalizing) this.el.viewFinalizing.hidden = true;
@@ -213,11 +212,11 @@ export class PopupController {
       this.updateCameraControl(session);
       this.updatePauseControl(phase, session);
       if (this.el.stopBtn) this.el.stopBtn.disabled = false;
-      this.syncTimer(phase, session);
-      this.startCaptionPoll();
+      this.timer.sync(phase, session);
+      this.captionPoller.start();
     } else {
-      this.stopTimer();
-      this.stopCaptionPoll();
+      this.timer.stop();
+      this.captionPoller.stop();
       this.micMuted = this.cameraMuted = this.paused = false;
       if (view === 'finalizing') this.updateFinalizingView(phase, session);
       if (view === 'config' && this.el.startBtn) this.el.startBtn.disabled = false;
@@ -269,24 +268,48 @@ export class PopupController {
   }
 
   /**
+   * Shared scaffolding for the mute/camera/pause toggles: optimistically disables
+   * the button, sends the command, syncs the UI from the authoritative session in
+   * the response (so a rejected toggle reverts), and re-enables the button on
+   * failure. The live recording is never interrupted by any of these.
+   */
+  private async runToggleCommand(opts: {
+    btn: HTMLButtonElement | null;
+    current: boolean;
+    send: (next: boolean) => Promise<CommandResult>;
+    toast: (next: boolean) => string;
+    fallbackError: string;
+    logLabel: string;
+  }): Promise<void> {
+    const { btn, current, send, toast, fallbackError, logLabel } = opts;
+    if (!btn || btn.disabled) return;
+    const next = !current;
+    btn.disabled = true;
+    try {
+      const resp = await send(next);
+      if (resp.ok === false) throw new Error(resp.error || fallbackError);
+      this.state.applySession(resp.session);
+      this.toast(toast(next));
+    } catch (e: unknown) {
+      console.error(`[popup] ${logLabel} error`, e);
+      btn.disabled = false;
+    }
+  }
+
+  /**
    * Toggles mic mute on the live recording. Optimistically disables the button,
    * sends the command, and syncs the UI from the authoritative session in the
    * response (so a rejected toggle reverts). Recording is never interrupted.
    */
-  private async toggleMute(): Promise<void> {
-    const btn = this.el.muteMicBtn;
-    if (!btn || btn.disabled) return;
-    const next = !this.micMuted;
-    btn.disabled = true;
-    try {
-      const resp = await sendToBackground({ type: 'SET_MIC_MUTED', muted: next });
-      if (resp.ok === false) throw new Error(resp.error || 'Failed to toggle microphone');
-      this.state.applySession(resp.session);
-      this.toast(next ? POPUP_TOAST_TEXT.micMuted : POPUP_TOAST_TEXT.micUnmuted);
-    } catch (e: unknown) {
-      console.error('[popup] SET_MIC_MUTED error', e);
-      btn.disabled = false;
-    }
+  private toggleMute(): Promise<void> {
+    return this.runToggleCommand({
+      btn: this.el.muteMicBtn,
+      current: this.micMuted,
+      send: (muted) => sendToBackground({ type: 'SET_MIC_MUTED', muted }),
+      toast: (next) => (next ? POPUP_TOAST_TEXT.micMuted : POPUP_TOAST_TEXT.micUnmuted),
+      fallbackError: 'Failed to toggle microphone',
+      logLabel: 'SET_MIC_MUTED',
+    });
   }
 
   /**
@@ -308,12 +331,20 @@ export class PopupController {
 
     if (this.el.micModeLabel) this.el.micModeLabel.textContent = `· ${micMode}`;
     this.micMuted = session?.micMuted === true;
+    this.renderTogglePill(btn, this.micMuted, '[data-mute-label]');
+  }
+
+  /**
+   * Renders an on/off pill button (the mic-mute and camera-hide rows share this).
+   * `muted` is the "off" state: the pill reads "off"/`aria-pressed=true` when muted.
+   */
+  private renderTogglePill(btn: HTMLButtonElement, muted: boolean, labelSelector: string): void {
     btn.disabled = false;
-    btn.setAttribute('aria-pressed', String(this.micMuted));
-    btn.classList.toggle('on', !this.micMuted);
-    btn.classList.toggle('off', this.micMuted);
-    const label = btn.querySelector<HTMLElement>('[data-mute-label]') ?? btn;
-    label.textContent = this.micMuted ? 'off' : 'on';
+    btn.setAttribute('aria-pressed', String(muted));
+    btn.classList.toggle('on', !muted);
+    btn.classList.toggle('off', muted);
+    const label = btn.querySelector<HTMLElement>(labelSelector) ?? btn;
+    label.textContent = muted ? 'off' : 'on';
   }
 
   private wireHideCamera() {
@@ -323,20 +354,15 @@ export class PopupController {
   }
 
   /** Toggles the camera (black frames) on the live recording; see {@link toggleMute}. */
-  private async toggleCamera(): Promise<void> {
-    const btn = this.el.hideCameraBtn;
-    if (!btn || btn.disabled) return;
-    const next = !this.cameraMuted;
-    btn.disabled = true;
-    try {
-      const resp = await sendToBackground({ type: 'SET_CAMERA_MUTED', muted: next });
-      if (resp.ok === false) throw new Error(resp.error || 'Failed to toggle camera');
-      this.state.applySession(resp.session);
-      this.toast(next ? POPUP_TOAST_TEXT.cameraHidden : POPUP_TOAST_TEXT.cameraShown);
-    } catch (e: unknown) {
-      console.error('[popup] SET_CAMERA_MUTED error', e);
-      btn.disabled = false;
-    }
+  private toggleCamera(): Promise<void> {
+    return this.runToggleCommand({
+      btn: this.el.hideCameraBtn,
+      current: this.cameraMuted,
+      send: (muted) => sendToBackground({ type: 'SET_CAMERA_MUTED', muted }),
+      toast: (next) => (next ? POPUP_TOAST_TEXT.cameraHidden : POPUP_TOAST_TEXT.cameraShown),
+      fallbackError: 'Failed to toggle camera',
+      logLabel: 'SET_CAMERA_MUTED',
+    });
   }
 
   /**
@@ -357,12 +383,7 @@ export class PopupController {
     }
 
     this.cameraMuted = session?.cameraMuted === true;
-    btn.disabled = false;
-    btn.setAttribute('aria-pressed', String(this.cameraMuted));
-    btn.classList.toggle('on', !this.cameraMuted);
-    btn.classList.toggle('off', this.cameraMuted);
-    const label = btn.querySelector<HTMLElement>('[data-camera-label]') ?? btn;
-    label.textContent = this.cameraMuted ? 'off' : 'on';
+    this.renderTogglePill(btn, this.cameraMuted, '[data-camera-label]');
   }
 
   private wirePause() {
@@ -375,20 +396,15 @@ export class PopupController {
    * Pauses/resumes the whole recording; see {@link toggleMute}. The paused span is
    * never written, so resume yields a seamless join with no black/blank filler.
    */
-  private async togglePause(): Promise<void> {
-    const btn = this.el.pauseBtn;
-    if (!btn || btn.disabled) return;
-    const next = !this.paused;
-    btn.disabled = true;
-    try {
-      const resp = await sendToBackground({ type: 'SET_PAUSED', paused: next });
-      if (resp.ok === false) throw new Error(resp.error || 'Failed to pause recording');
-      this.state.applySession(resp.session);
-      this.toast(next ? POPUP_TOAST_TEXT.recordingPaused : POPUP_TOAST_TEXT.recordingResumed);
-    } catch (e: unknown) {
-      console.error('[popup] SET_PAUSED error', e);
-      btn.disabled = false;
-    }
+  private togglePause(): Promise<void> {
+    return this.runToggleCommand({
+      btn: this.el.pauseBtn,
+      current: this.paused,
+      send: (paused) => sendToBackground({ type: 'SET_PAUSED', paused }),
+      toast: (next) => (next ? POPUP_TOAST_TEXT.recordingPaused : POPUP_TOAST_TEXT.recordingResumed),
+      fallbackError: 'Failed to pause recording',
+      logLabel: 'SET_PAUSED',
+    });
   }
 
   /**
@@ -425,69 +441,6 @@ export class PopupController {
       this.el.chipStorageLabel.textContent =
         session?.runConfig?.storageMode === 'drive' ? 'Google Drive' : 'Local Disk';
     }
-  }
-
-  // ── Recording timer (pause-aware; driven by session recordedMs/runningSince) ──
-
-  /** Syncs the timer fields from the session and starts/stops the 1s tick. */
-  private syncTimer(phase: RecordingPhase, session?: RecordingStatusView) {
-    this.timerRecordedMs = session?.recordedMs ?? 0;
-    this.timerRunningSince =
-      phase === 'recording' && session?.paused !== true ? (session?.runningSince ?? null) : null;
-    this.renderTimer();
-    if (this.timerRunningSince != null) this.startTimer();
-    else this.stopTimer();
-  }
-
-  private renderTimer() {
-    const elapsed =
-      this.timerRecordedMs + (this.timerRunningSince != null ? Date.now() - this.timerRunningSince : 0);
-    if (this.el.recTimer) this.el.recTimer.textContent = formatDuration(elapsed);
-  }
-
-  private startTimer() {
-    if (this.timerInterval != null) return;
-    this.timerInterval = setInterval(() => this.renderTimer(), 1000);
-  }
-
-  private stopTimer() {
-    if (this.timerInterval != null) {
-      clearInterval(this.timerInterval);
-      this.timerInterval = null;
-    }
-  }
-
-  // ── Live transcript chip (polls the content script for caption presence) ──
-
-  private startCaptionPoll() {
-    if (this.captionPollInterval != null) return;
-    void this.pollCaptionState();
-    this.captionPollInterval = setInterval(() => void this.pollCaptionState(), CAPTION_POLL_MS);
-  }
-
-  private stopCaptionPoll() {
-    if (this.captionPollInterval != null) {
-      clearInterval(this.captionPollInterval);
-      this.captionPollInterval = null;
-    }
-  }
-
-  /** Best-effort: asks the active tab whether Meet captions are live; off if unreachable. */
-  private async pollCaptionState() {
-    let active = false;
-    try {
-      const tab = await queryActiveTab();
-      if (tab?.id) {
-        const res = await sendToContent(tab.id, { type: 'GET_CAPTION_STATE' }).catch(() => undefined);
-        active = res?.captionsActive === true;
-      }
-    } catch {
-      active = false;
-    }
-    if (this.el.chipTranscriptLabel) {
-      this.el.chipTranscriptLabel.textContent = active ? 'Transcript on' : 'Transcript off';
-    }
-    if (this.el.chipTranscript) this.el.chipTranscript.classList.toggle('off', !active);
   }
 
   /** Populates the finalizing view: indeterminate spinner + run metadata (storage/duration/mic/camera). */
