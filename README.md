@@ -647,7 +647,7 @@ The long-meeting safety mechanism: chunks stream straight to OPFS (default off t
 
 ### 7.1 Settings Page
 
-→ The settings schema + derive pipeline: **[`src/shared/settings`](src/shared/settings/README.md)** (the page UI is `src/settings.ts`).
+→ The settings schema + derive pipeline: **[`src/shared/settings`](src/shared/settings/README.md)** (the page UI is a thin `src/settings.ts` shell over `src/settings/SettingsController.ts`).
 
 ### 8. Meeting Provider Adapter Boundary
 
@@ -1095,7 +1095,7 @@ flowchart LR
 │  ├─ background.ts / background/    # service worker and session lifecycle
 │  ├─ offscreen.ts / offscreen/      # media runtime (recorder engine, OPFS, Drive upload)
 │  ├─ popup.ts / popup/              # popup UI and permission flows
-│  ├─ settings.ts                    # settings page
+│  ├─ settings.ts / settings/        # settings page (thin shell + controller)
 │  ├─ scrapingScript.ts / content/   # caption scraping content script
 │  ├─ debug.ts / debug/              # diagnostics dashboard
 │  ├─ platform/chrome/               # thin Chrome API wrappers

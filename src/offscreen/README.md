@@ -65,7 +65,7 @@ flowchart TD
 | `rpcHandlers.ts` | the background→offscreen command handlers + the reconnect runtime listener |
 | `RuntimeSampler.ts` | samples event-loop lag / long-tasks / heap for the perf snapshot |
 
-Subsystems (own READMEs): [`engine/`](./engine/README.md), [`storage/`](./storage/README.md), [`drive/`](./drive/README.md). Support modules (`RecorderAudio`, `RecorderCapture`, `RecorderProfiles`, `DriveTarget`, `LocalFileTarget`) sit at this root and are documented by the subsystem that owns them.
+Subsystems (own READMEs): [`engine/`](./engine/README.md), [`storage/`](./storage/README.md), [`drive/`](./drive/README.md). Support modules (`RecorderAudio`, `RecorderCapture` — its e2e-only synthetic tab stream lives in the sibling `RecorderCaptureE2EMock` so the production capture path carries no test scaffolding — `RecorderProfiles`, `DriveTarget`, `LocalFileTarget`) sit at this root and are documented by the subsystem that owns them.
 
 ## Observability
 
