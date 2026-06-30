@@ -55,6 +55,8 @@ export type PopupSetCameraMuted = { type: 'SET_CAMERA_MUTED'; muted: boolean };
 export type PopupSetPaused = { type: 'SET_PAUSED'; paused: boolean };
 /** Dismisses a finished background upload job's tab (ADR-0004). */
 export type PopupDismissUploadJob = { type: 'DISMISS_UPLOAD_JOB'; jobId: string };
+/** Retries a failed/partial background upload job (ADR-0004). */
+export type PopupRetryUploadJob = { type: 'RETRY_UPLOAD_JOB'; jobId: string };
 
 export type PopupToBg =
   | PopupStartRecording
@@ -64,7 +66,8 @@ export type PopupToBg =
   | PopupSetMicMuted
   | PopupSetCameraMuted
   | PopupSetPaused
-  | PopupDismissUploadJob;
+  | PopupDismissUploadJob
+  | PopupRetryUploadJob;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -75,6 +78,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupSetCameraMuted ? CommandResult :
   T extends PopupSetPaused ? CommandResult :
   T extends PopupDismissUploadJob ? { session: RecordingStatusView } :
+  T extends PopupRetryUploadJob ? CommandResult :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -137,7 +141,8 @@ export type BgToOffscreenRpc =
   | RpcRequest<{ type: 'OFFSCREEN_STOP' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_CAMERA_MUTED'; muted: boolean }>
-  | RpcRequest<{ type: 'OFFSCREEN_SET_PAUSED'; paused: boolean }>;
+  | RpcRequest<{ type: 'OFFSCREEN_SET_PAUSED'; paused: boolean }>
+  | RpcRequest<{ type: 'OFFSCREEN_RETRY_UPLOAD'; jobId: string }>;
 
 export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string };

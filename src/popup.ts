@@ -71,6 +71,7 @@ const controller = new PopupController({
   uploadJobRingLabel: byId('upload-job-ring-label'),
   uploadJobLabel: byId('upload-job-label'),
   uploadJobFiles: byId('upload-job-files'),
+  uploadJobRetry: byId<HTMLButtonElement>('upload-job-retry'),
 
   // Shared status / toast line
   recordingStatusEl: byId('recording-status'),

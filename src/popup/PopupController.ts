@@ -158,6 +158,7 @@ export class PopupController {
     this.wirePause();
     this.wireSettingsLink();
     this.wireDiagnosticsLink();
+    this.wireUploadActions();
     this.wireSessionTabsKeyboard();
     void this.state.refreshInitialState();
   }
@@ -708,6 +709,28 @@ export class PopupController {
         frag.appendChild(li);
       }
       this.el.uploadJobFiles.replaceChildren(frag);
+    }
+    // Retry is offered only for a job that ended with fallbacks.
+    if (this.el.uploadJobRetry) {
+      this.el.uploadJobRetry.hidden = !(job.status === 'failed' || job.status === 'partial');
+      this.el.uploadJobRetry.dataset.jobId = job.id;
+    }
+  }
+
+  private wireUploadActions() {
+    this.el.uploadJobRetry?.addEventListener('click', () => void this.retryUploadJob());
+  }
+
+  /** Re-uploads the shown failed/partial job; the offscreen flips its tab to uploading. */
+  private async retryUploadJob() {
+    const id = this.el.uploadJobRetry?.dataset.jobId;
+    if (!id) return;
+    try {
+      const resp = await sendToBackground({ type: 'RETRY_UPLOAD_JOB', jobId: id });
+      if (resp.ok === false) this.toast(resp.error || 'This upload can no longer be retried');
+      if (resp.session) this.state.applySession(resp.session);
+    } catch (e: unknown) {
+      console.error('[popup] RETRY_UPLOAD_JOB error', e);
     }
   }
 

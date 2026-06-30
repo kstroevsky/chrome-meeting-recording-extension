@@ -184,6 +184,23 @@ export class RecordingController {
    * popup reflects it. Mute is silence-in-place: the mic stream keeps flowing,
    * so a failed toggle leaves the recording untouched (no session failure).
    */
+  /**
+   * Retries a failed/partial background upload job (ADR-0004). Independent of the
+   * recording phase — uploads run detached — so there is no capture guard; the
+   * offscreen re-uploads the retained artifacts and reports the job back to
+   * `uploading` via OFFSCREEN_UPLOAD_STATE before this resolves.
+   */
+  async retryUpload(jobId: string): Promise<CommandResult> {
+    try {
+      await this.offscreen.ensureReady();
+      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_RETRY_UPLOAD', jobId });
+      if (!r?.ok) return this.fail(r?.error || 'Retry failed in offscreen');
+      return this.ok();
+    } catch (e: any) {
+      return this.fail(`RETRY_UPLOAD failed: ${e?.message || e}`);
+    }
+  }
+
   async setMicMuted(muted: boolean): Promise<CommandResult> {
     const snapshot = this.session.getSnapshot();
     if (!isStoppablePhase(snapshot.phase)) {

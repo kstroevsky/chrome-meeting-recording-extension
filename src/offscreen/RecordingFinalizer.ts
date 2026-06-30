@@ -50,6 +50,13 @@ export type FinalizeArtifactsOptions = {
    * its own progress; falls back to the construction-time `onUploadProgress` dep.
    */
   onUploadProgress?: (fraction: number) => void;
+  /**
+   * Suppresses the local-download failsafe when a Drive upload fails (ADR-0004). Set
+   * for a *retry*: the file was already downloaded on the original failure, so failing
+   * again should not drop a duplicate copy in Downloads. The file is still reported as
+   * a fallback (not uploaded) — it just isn't re-saved.
+   */
+  skipLocalFallback?: boolean;
 };
 
 /** Runs async work with bounded concurrency while preserving input order in the results. */
@@ -95,7 +102,7 @@ export class RecordingFinalizer {
 
     if (options.storageMode === 'drive') {
       const recordingFolderName = inferDriveRecordingFolderName(orderedArtifacts[0].artifact.filename);
-      const summary = await this.uploadArtifactsToDrive(orderedArtifacts, recordingFolderName, options.onUploadProgress);
+      const summary = await this.uploadArtifactsToDrive(orderedArtifacts, recordingFolderName, options.onUploadProgress, options.skipLocalFallback === true);
       logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
         durationMs: roundMs(nowMs() - startedAt),
         artifactCount: orderedArtifacts.length,
@@ -146,7 +153,8 @@ export class RecordingFinalizer {
   private async uploadArtifactsToDrive(
     artifacts: CompletedRecordingArtifact[],
     recordingFolderName: string,
-    onUploadProgress?: (fraction: number) => void
+    onUploadProgress?: (fraction: number) => void,
+    skipLocalFallback = false
   ): Promise<UploadSummary> {
     const sharedGetUploadToken = createCachedTokenProvider(this.deps.getDriveToken);
     const folderResolver = new DriveFolderResolver(sharedGetUploadToken);
@@ -184,7 +192,7 @@ export class RecordingFinalizer {
         const markFileDone = () => { loadedPerFile[index] = artifact.file.size; reportProgress(); };
         const startedAt = nowMs();
         if (sharedSetupError) {
-          this.saveArtifactLocally(artifact, stream, 'fallback');
+          if (!skipLocalFallback) this.saveArtifactLocally(artifact, stream, 'fallback');
           markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: false, error: sharedSetupError } satisfies UploadOutcome;
@@ -215,10 +223,15 @@ export class RecordingFinalizer {
         } catch (e) {
           const error = describeRuntimeError(e);
           // Falling back to a local download saves the file and cleans up OPFS,
-          // so there is nothing left to recover — drop the marker.
+          // so there is nothing left to recover — drop the marker. On a retry we skip
+          // the download: the original failure already saved a local copy (ADR-0004).
           if (opfsFilename) await this.deps.pendingUploads?.remove(opfsFilename);
-          this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
-          this.saveArtifactLocally(artifact, stream, 'fallback');
+          if (skipLocalFallback) {
+            this.deps.warn('Retry upload failed; keeping the existing local copy', artifact.filename, error);
+          } else {
+            this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
+            this.saveArtifactLocally(artifact, stream, 'fallback');
+          }
           markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, uploaded: false, error } satisfies UploadOutcome;

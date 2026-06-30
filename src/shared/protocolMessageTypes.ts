@@ -13,6 +13,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'SET_CAMERA_MUTED',
   'SET_PAUSED',
   'DISMISS_UPLOAD_JOB',
+  'RETRY_UPLOAD_JOB',
 ] as const;
 
 export const POPUP_TO_CONTENT_MESSAGE_TYPES = [

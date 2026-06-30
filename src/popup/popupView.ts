@@ -65,6 +65,8 @@ export type PopupElements = {
   uploadJobRingLabel: HTMLElement | null;
   uploadJobLabel: HTMLElement | null;
   uploadJobFiles: HTMLElement | null;
+  /** "Retry upload" CTA, shown only for a failed/partial job. */
+  uploadJobRetry: HTMLButtonElement | null;
 
   // Shared status / toast line
   recordingStatusEl: HTMLElement | null;

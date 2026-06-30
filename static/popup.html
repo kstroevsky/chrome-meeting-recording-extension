@@ -651,6 +651,12 @@
         display: none;
       }
 
+      /* Retry a failed/partial upload from its screen (ADR-0004). */
+      #upload-job-retry {
+        width: 100%;
+        margin-top: 14px;
+      }
+
       /* ── Diagnostics ── */
       #open-diagnostics {
         width: 100%;
@@ -841,6 +847,12 @@
         </div>
         <div id="upload-job-label" class="finalizing-label" aria-live="polite">Uploading to Google Drive…</div>
         <ul id="upload-job-files" class="meta-list"></ul>
+        <button id="upload-job-retry" class="btn btn-primary" type="button" hidden>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M13.65 2.35A8 8 0 108 16v-2a6 6 0 114.24-1.76L10 10h6V4l-2.35-1.65z" />
+          </svg>
+          Retry upload
+        </button>
       </div>
     </section>
 

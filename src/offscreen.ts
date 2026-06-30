@@ -107,6 +107,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     clearWarnings: controller.clearWarnings,
     onStartRequested: controller.onStartRequested,
     onStopRequested: controller.onStopRequested,
+    retryUpload: (jobId) => uploadManager.retry(jobId),
     pushState: controller.pushState,
     log: L.log,
     error: L.error,

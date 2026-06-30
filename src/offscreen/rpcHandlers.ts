@@ -29,6 +29,8 @@ export type RpcHandlerDeps = {
   isFinalizing: () => boolean;
   onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number) => void;
   onStopRequested: () => void;
+  /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
+  retryUpload: (jobId: string) => boolean;
   pushState: (phase: RecordingPhase, extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error'>) => void;
   clearWarnings: () => void;
   log: (...a: any[]) => void;
@@ -117,6 +119,15 @@ async function handleOffscreenSetPaused(
   return { ok: true };
 }
 
+async function handleOffscreenRetryUpload(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_RETRY_UPLOAD' }>,
+  deps: RpcHandlerDeps
+): Promise<{ ok: boolean; error?: string }> {
+  if (typeof msg.jobId !== 'string') return { ok: false, error: 'Missing jobId' };
+  const retried = deps.retryUpload(msg.jobId);
+  return retried ? { ok: true } : { ok: false, error: 'Upload is no longer retryable' };
+}
+
 async function handleRevokeBlobUrl(
   msg: Extract<BgToOffscreenOneWay, { type: 'REVOKE_BLOB_URL' }>,
   deps: RpcHandlerDeps
@@ -145,6 +156,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_SET_MIC_MUTED: (msg) => handleOffscreenSetMicMuted(msg, deps),
       OFFSCREEN_SET_CAMERA_MUTED: (msg) => handleOffscreenSetCameraMuted(msg, deps),
       OFFSCREEN_SET_PAUSED: (msg) => handleOffscreenSetPaused(msg, deps),
+      OFFSCREEN_RETRY_UPLOAD: (msg) => handleOffscreenRetryUpload(msg, deps),
       REVOKE_BLOB_URL:   (msg) => handleRevokeBlobUrl(msg, deps),
     },
     (reqId, payload) => respond(deps.getPort, reqId, payload),
