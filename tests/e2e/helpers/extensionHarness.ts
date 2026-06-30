@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { PerfDebugSnapshot, PerfSettings } from '../../../src/shared/perf';
 import type { MicMode, RecordingStream } from '../../../src/shared/recording';
+import type { TabContentType } from '../../../src/shared/settings';
 import type { ResolutionPreset } from '../../../src/shared/settings';
 
 const repoRoot = process.cwd();
@@ -385,6 +386,7 @@ export async function startRecording(
     storageMode: 'local' | 'drive';
     micMode: MicMode;
     recordSelfVideo: boolean;
+    tabContentType?: TabContentType;
   }
 ): Promise<void> {
   const response = await sendRuntimeMessage<CommandResult>(controlPage, {

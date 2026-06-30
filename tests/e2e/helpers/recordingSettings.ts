@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import type { MicMode } from '../../../src/shared/recording';
-import type { ResolutionPreset } from '../../../src/shared/settings';
+import type { ResolutionPreset, TabContentType } from '../../../src/shared/settings';
 
 export type FullRecordingSettings = {
   recordingMode: 'opfs' | 'drive';
@@ -9,7 +9,7 @@ export type FullRecordingSettings = {
   selfVideoResolutionPreset: ResolutionPreset;
   selfVideoFrameRate: number;
   tabResolutionPreset: ResolutionPreset;
-  tabVideoBitrate: number;
+  tabContentType: TabContentType;
   tabMaxFrameRate: number;
   micEchoCancellation: boolean;
   micNoiseSuppression: boolean;
@@ -31,13 +31,11 @@ export async function applyFullRecordingSettings(
   );
   await page.fill('#self-video-frame-rate', String(settings.selfVideoFrameRate));
   await page.selectOption('#tab-resolution-preset', settings.tabResolutionPreset);
-  // NOTE: the tab and camera video-bitrate inputs were removed — both bitrates are
-  // now fully automatic (tab: content-type quality factor × delivered resolution;
-  // camera: delivered W×H×fps adapted within an internal floor/ceiling), with no
-  // user knobs. The camera specs assert the delivered dims + internal envelope
-  // directly, so no camera bitrate config remains. `settings.tabVideoBitrate` is
-  // still retained but no longer applied — the tab bitrate assertions predate the
-  // content-type model change and need realignment under a real Playwright run.
+  // The tab bitrate is automatic: the content-type quality factor (screen vs. video)
+  // × the delivered resolution/fps, with no explicit bitrate knob. `tabContentType`
+  // selects that factor and is applied here. The camera bitrate is likewise automatic
+  // (delivered W×H×fps within an internal floor/ceiling), so no bitrate knobs remain.
+  await page.selectOption('#tab-content-type', settings.tabContentType);
   await page.fill('#tab-max-frame-rate', String(settings.tabMaxFrameRate));
   await page.setChecked('#mic-echo-cancellation', settings.micEchoCancellation);
   await page.setChecked('#mic-noise-suppression', settings.micNoiseSuppression);
@@ -66,7 +64,7 @@ export function baseRecordingSettings(
     selfVideoResolutionPreset: '1920x1080',
     selfVideoFrameRate: 30,
     tabResolutionPreset: '1920x1080',
-    tabVideoBitrate: 1_500_000,
+    tabContentType: 'screen',
     tabMaxFrameRate: 30,
     micEchoCancellation: true,
     micNoiseSuppression: true,

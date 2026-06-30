@@ -4,9 +4,12 @@ import fs from 'node:fs/promises';
 import type { PerfDebugSnapshot } from '../../src/shared/perf';
 import type { RecordingStream } from '../../src/shared/recording';
 import {
+  resolveTabVideoBitrate,
   SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
   SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
   SELF_VIDEO_QUALITY_FACTOR,
+  TAB_SCREEN_QUALITY_FACTOR,
+  TAB_VIDEO_QUALITY_FACTOR,
 } from '../../src/shared/settings';
 import {
   analyzeMediaArtifact,
@@ -92,13 +95,15 @@ function expectedCaptureStreams(scenario: RealMeetScenario): RecordingStream[] {
 
 function clampTabBitrate(scenario: RealMeetScenario): number {
   const [width, height] = scenario.settings.tabResolutionPreset.split('x').map(Number);
-  const ratio =
-    (width * height * scenario.settings.tabMaxFrameRate)
-    / (1920 * 1080 * 30);
-  return Math.min(
-    Math.max(Math.round(scenario.settings.tabVideoBitrate * ratio), 250_000),
-    8_000_000
-  );
+  // The tab bitrate is derived from the content-type quality factor × resolution/fps
+  // (mirrors resolveTabVideoBitrate). NOTE: uses the *requested* preset dims; on real
+  // hardware the delivered dims can differ, so this remains an approximation pending a
+  // real-Playwright realignment against the delivered track settings.
+  const factor =
+    scenario.settings.tabContentType === 'video'
+      ? TAB_VIDEO_QUALITY_FACTOR
+      : TAB_SCREEN_QUALITY_FACTOR;
+  return resolveTabVideoBitrate(width, height, scenario.settings.tabMaxFrameRate, factor);
 }
 
 function assertScenarioSnapshot(

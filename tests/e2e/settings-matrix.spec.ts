@@ -36,9 +36,11 @@ import {
   baseRecordingSettings,
 } from './helpers/recordingSettings';
 import {
+  resolveTabVideoBitrate,
   SELF_VIDEO_DEFAULT_BITS_PER_SECOND,
   SELF_VIDEO_MIN_ADAPTIVE_BITS_PER_SECOND,
   SELF_VIDEO_QUALITY_FACTOR,
+  TAB_VIDEO_QUALITY_FACTOR,
 } from '../../src/shared/settings';
 
 const REAL_MEDIA = process.env.PW_REAL_MEDIA === '1';
@@ -130,14 +132,13 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
         extendedTimeslice: false,
       });
 
-      const tabVideoBitrateReference = 6_000_000;
       const s = baseRecordingSettings({
         recordingMode: 'opfs',
         micMode: 'separate',
         separateCamera: true,
         tabResolutionPreset: '1280x720',
         tabMaxFrameRate: 15,
-        tabVideoBitrate: tabVideoBitrateReference,
+        tabContentType: 'video',
         selfVideoResolutionPreset: '854x480',
         selfVideoFrameRate: 24,
         chunkDefaultTimesliceMs: 750,
@@ -155,6 +156,7 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
         storageMode: 'local',
         micMode: 'separate',
         recordSelfVideo: true,
+        tabContentType: 'video',
       });
 
       // Snapshot taken right after the three recorders start — few events so
@@ -203,13 +205,9 @@ test.describe('Settings tab — every control changes recorder behaviour', () =>
       expect(micRec).not.toBeNull();
       expect(micRec!.timesliceMs).toBe(750);
 
-      // tabVideoBitrate -> tab MediaRecorder bitrate (scaled to resolution/fps),
-      // now observable per-stream after the instrumentation fix.
-      const ratio = (1280 * 720 * 15) / (1920 * 1080 * 30);
-      const expectedTabBitrate = Math.min(
-        Math.max(Math.round(tabVideoBitrateReference * ratio), 250_000),
-        8_000_000
-      );
+      // tabContentType -> tab MediaRecorder bitrate: the content-type quality factor
+      // (video here) × the delivered resolution/fps, clamped to the internal envelope.
+      const expectedTabBitrate = resolveTabVideoBitrate(1280, 720, 15, TAB_VIDEO_QUALITY_FACTOR);
       expect(tabRec!.videoBitsPerSecond).toBe(expectedTabBitrate);
       expect(startSnap.summary.recorder.lastVideoBitsPerSecondByStream.tab).toBe(expectedTabBitrate);
       expect(startSnap.summary.recorder.lastVideoBitsPerSecondByStream['self-video']).toBe(SELF_VIDEO_DEFAULT_BITS_PER_SECOND);
