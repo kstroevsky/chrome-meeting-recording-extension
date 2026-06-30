@@ -397,4 +397,33 @@ describe('RecordingController', () => {
       expect(session.getSnapshot().paused).toBeUndefined();
     });
   });
+
+  describe('retryUpload', () => {
+    it('forwards OFFSCREEN_RETRY_UPLOAD even when idle (uploads are detached)', async () => {
+      // No recording active — retry must still reach the offscreen.
+      expect(session.getSnapshot().phase).toBe('idle');
+
+      const result = await controller.retryUpload('job-1');
+
+      expect(offscreen.ensureReady).toHaveBeenCalled();
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_RETRY_UPLOAD', jobId: 'job-1' });
+      expect(result.ok).toBe(true);
+    });
+
+    it('reports failure when the offscreen says the job is no longer retryable', async () => {
+      offscreen.rpc.mockResolvedValue({ ok: false, error: 'Upload is no longer retryable' });
+
+      const result = await controller.retryUpload('job-1');
+
+      expect(result).toEqual(expect.objectContaining({ ok: false, error: 'Upload is no longer retryable' }));
+    });
+
+    it('reports failure when the retry RPC throws', async () => {
+      offscreen.rpc.mockRejectedValue(new Error('port gone'));
+
+      const result = await controller.retryUpload('job-1');
+
+      expect(result).toEqual(expect.objectContaining({ ok: false, error: expect.stringContaining('RETRY_UPLOAD failed') }));
+    });
+  });
 });

@@ -29,6 +29,7 @@ function wire(overrides: Partial<Record<string, any>> = {}) {
     isFinalizing: () => overrides.isFinalizing ?? false,
     onStartRequested: jest.fn(),
     onStopRequested: jest.fn(),
+    retryUpload: overrides.retryUpload ?? jest.fn().mockReturnValue(true),
     pushState: jest.fn((next: RecordingPhase) => { phase = next; }),
     clearWarnings: jest.fn(),
     log: jest.fn(),
@@ -334,6 +335,37 @@ describe('offscreen rpc handlers', () => {
 
       expect(engine.setPaused).toHaveBeenCalledWith(false);
       expect(responseFor(port, 'pause-3')).toEqual({ ok: true });
+    });
+  });
+
+  describe('OFFSCREEN_RETRY_UPLOAD', () => {
+    it('retries the job and responds ok when it is still retryable', async () => {
+      const retryUpload = jest.fn().mockReturnValue(true);
+      const { port, listener } = wire({ retryUpload });
+
+      await listener({ __id: 'retry-1', type: 'OFFSCREEN_RETRY_UPLOAD', jobId: 'job-1' });
+
+      expect(retryUpload).toHaveBeenCalledWith('job-1');
+      expect(responseFor(port, 'retry-1')).toEqual({ ok: true });
+    });
+
+    it('responds with an error when the job is no longer retryable', async () => {
+      const retryUpload = jest.fn().mockReturnValue(false);
+      const { port, listener } = wire({ retryUpload });
+
+      await listener({ __id: 'retry-2', type: 'OFFSCREEN_RETRY_UPLOAD', jobId: 'job-1' });
+
+      expect(responseFor(port, 'retry-2')).toEqual({ ok: false, error: 'Upload is no longer retryable' });
+    });
+
+    it('rejects a retry with a missing jobId before touching the manager', async () => {
+      const retryUpload = jest.fn();
+      const { port, listener } = wire({ retryUpload });
+
+      await listener({ __id: 'retry-3', type: 'OFFSCREEN_RETRY_UPLOAD', jobId: undefined });
+
+      expect(responseFor(port, 'retry-3')).toEqual({ ok: false, error: 'Missing jobId' });
+      expect(retryUpload).not.toHaveBeenCalled();
     });
   });
 });

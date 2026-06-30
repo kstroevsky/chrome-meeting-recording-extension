@@ -340,4 +340,32 @@ describe('RecordingFinalizer', () => {
     const fractions = onUploadProgress.mock.calls.map((c) => c[0]);
     expect(fractions[fractions.length - 1]).toBe(1);
   });
+
+  it('downloads locally on a normal upload failure (the failsafe)', async () => {
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    jest.spyOn(DriveTarget.prototype, 'upload').mockRejectedValue(new DOMException('network timeout', 'AbortError'));
+
+    const summary = await finalizer.finalize({
+      storageMode: 'drive',
+      artifacts: [{ stream: 'tab', artifact: makeArtifact('tab.webm') }],
+    });
+
+    expect(summary?.localFallbacks).toEqual([{ stream: 'tab', filename: 'tab.webm', error: expect.any(String) }]);
+    expect(deps.requestSave).toHaveBeenCalledWith('tab.webm', expect.any(String), 'tab.webm');
+  });
+
+  it('skips the local-download failsafe on a retry (no duplicate copy)', async () => {
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    jest.spyOn(DriveTarget.prototype, 'upload').mockRejectedValue(new DOMException('network timeout', 'AbortError'));
+
+    const summary = await finalizer.finalize({
+      storageMode: 'drive',
+      skipLocalFallback: true,
+      artifacts: [{ stream: 'tab', artifact: makeArtifact('tab.webm') }],
+    });
+
+    // Still reported as not-uploaded — but NOT re-downloaded (the original failure saved it).
+    expect(summary?.localFallbacks).toEqual([{ stream: 'tab', filename: 'tab.webm', error: expect.any(String) }]);
+    expect(deps.requestSave).not.toHaveBeenCalled();
+  });
 });

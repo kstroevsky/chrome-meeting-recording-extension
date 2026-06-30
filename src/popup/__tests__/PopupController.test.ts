@@ -84,6 +84,7 @@ describe('PopupController', () => {
       uploadJobRingLabel: document.createElement('span'),
       uploadJobLabel: document.createElement('div'),
       uploadJobFiles: document.createElement('ul'),
+      uploadJobRetry: document.createElement('button'),
 
       // Shared
       recordingStatusEl: document.createElement('div'),
@@ -346,6 +347,49 @@ describe('PopupController', () => {
       await new Promise(process.nextTick);
 
       expect(mockSendMessage).toHaveBeenCalledWith({ type: 'DISMISS_UPLOAD_JOB', jobId: 'j1' });
+    });
+
+    it('offers Retry for a failed upload and sends RETRY_UPLOAD_JOB', async () => {
+      mockSendMessage.mockResolvedValueOnce(
+        sessionWith([job({ status: 'failed', progress: 1, files: [{ stream: 'tab', filename: 'tab.webm', status: 'fallback' }], finishedAt: 2 })])
+      );
+      controller.init();
+      await new Promise(process.nextTick);
+
+      (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
+      expect(elements.uploadJobRetry.hidden).toBe(false);
+      expect(elements.uploadJobLabel.textContent).toContain('Upload failed');
+
+      mockSendMessage.mockClear();
+      mockSendMessage.mockResolvedValueOnce({ ok: true, session: { phase: 'idle', runConfig: null, updatedAt: Date.now() } });
+      elements.uploadJobRetry.click();
+      await new Promise(process.nextTick);
+
+      expect(mockSendMessage).toHaveBeenCalledWith({ type: 'RETRY_UPLOAD_JOB', jobId: 'j1' });
+    });
+
+    it('hides Retry for a completed upload', async () => {
+      mockSendMessage.mockResolvedValueOnce(sessionWith([job({ status: 'completed', progress: 1, finishedAt: 2 })]));
+      controller.init();
+      await new Promise(process.nextTick);
+
+      (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
+      expect(elements.uploadJobRetry.hidden).toBe(true);
+    });
+
+    it('toasts when a retry is no longer possible', async () => {
+      mockSendMessage.mockResolvedValueOnce(
+        sessionWith([job({ status: 'failed', progress: 1, files: [{ stream: 'tab', filename: 'tab.webm', status: 'fallback' }], finishedAt: 2 })])
+      );
+      controller.init();
+      await new Promise(process.nextTick);
+      (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
+
+      mockSendMessage.mockResolvedValueOnce({ ok: false, error: 'This upload can no longer be retried' });
+      elements.uploadJobRetry.click();
+      await new Promise(process.nextTick);
+
+      expect(elements.recordingStatusEl.textContent).toContain('no longer be retried');
     });
 
     it('auto-dismisses a completed tab after it lingers', async () => {
