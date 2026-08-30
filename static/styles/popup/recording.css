@@ -7,7 +7,7 @@
 
 .chips { display: flex; align-items: center; justify-content: center; min-height: 0; gap: 9px; margin: 0 0 16px; padding: 0; border: 0; }
 .chip { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
-.chip-storage-icon { width: 14px; height: 14px; color: var(--warn); }
+.chip-storage-icon { width: 14px; height: 14px; color: var(--warn-label); }
 .chip-state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); }
 .chip.off .chip-state-dot { border: 1.5px solid var(--ink-4); background: transparent; }
 .chip + .chip::before { content: none; }
@@ -30,7 +30,7 @@
 .device-trigger:not(:disabled):hover .srow-device,
 .device-trigger:not(:disabled):focus-visible .srow-device { color: var(--ink-2); }
 .srow-mode,
-.srow-sub { margin-left: auto; color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
+.srow-sub { margin-left: auto; color: var(--ink-4); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
 .srow-recdot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--rec); }
 
 .switch { position: relative; width: 34px; height: 20px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 999px; background: var(--control-bg-strong); cursor: pointer; transition: background .15s; }
@@ -65,7 +65,7 @@
 .controls { display: grid; grid-template-columns: 48px 1fr; gap: 8px; margin: 6px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
 .controls .btn { height: 48px; font-size: 14.5px; }
 .controls:not(.paused) #pause-recording [data-pause-label] { display: none; }
-.controls .btn-danger { background: var(--ink); color: var(--surface); box-shadow: none; font-size: 14px; }
+.controls .btn-danger { background: var(--ink); color: var(--surface); box-shadow: none; font-size: 14.5px; }
 .controls .btn-danger:hover:not(:disabled) { background: var(--ink-2); }
 .controls .btn-danger svg { width: 12px; height: 12px; color: var(--accent); }
 .controls .btn-discard { display: none; }

@@ -8,8 +8,8 @@
 .grow-div { height: 1px; margin: 0; background: var(--divider); }
 .native-select { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
 
-.select-trigger { position: relative; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 132px; gap: 7px; padding: 6px 20px 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
-.select-trigger::after { position: absolute; right: 1px; content: '⌄'; color: var(--warn-label); font-size: 15px; }
+.select-trigger { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 132px; gap: 7px; padding: 6px 0 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.select-trigger::after { content: ''; width: 9px; height: 6px; flex: 0 0 auto; background: var(--ink-4); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .select-trigger:hover,
 .select-trigger:focus-visible,
 .select-trigger[aria-expanded='true'] { background: var(--secondary-hover); color: var(--ink); outline: 0; }
@@ -47,8 +47,8 @@
 .segmented { display: flex; width: 136px; padding: 2px; border-radius: 6px; background: var(--tile); }
 .seg { position: relative; flex: 1; cursor: pointer; }
 .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
-.seg span { display: block; padding: 5px 0; border-radius: 4px; color: var(--ink-3); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .03em; text-align: center; }
-.seg input:checked + span { background: var(--ink); color: var(--surface); }
+.seg span { display: block; padding: 4px 0; border-radius: 6px; color: var(--ink-meta); font: 500 11px 'IBM Plex Mono', monospace; letter-spacing: .03em; text-align: center; }
+.seg input:checked + span { background: var(--ink); color: var(--surface); font-weight: 600; }
 .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cam-warn { display: flex; align-items: center; gap: 6px; margin: 9px 0 0; }
 .cam-warn svg { width: 11px; height: 11px; flex: 0 0 auto; }
@@ -111,7 +111,7 @@
 .recording-detail-rename:hover,
 .recording-detail-rename:focus-visible { background: var(--secondary-hover); color: var(--ink-2); outline: 0; }
 .recording-detail-rename svg { width: 13px; height: 13px; }
-.recording-detail-meta { min-height: 13px; margin: 0 0 18px; color: var(--ink-3); font: 500 10.5px 'IBM Plex Mono', monospace; letter-spacing: 0; white-space: nowrap; }
+.recording-detail-meta { min-height: 13px; margin: 0 0 18px; color: var(--ink-meta); font: 500 10.5px 'IBM Plex Mono', monospace; letter-spacing: 0; white-space: nowrap; }
 .recording-detail-eyebrow { margin: 0; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
 .recording-detail-files { margin: 7px 0 16px; }
 .recording-detail-file { display: flex; align-items: center; justify-content: space-between; height: 44px; gap: 8px; border-top: 1px solid var(--divider); }
@@ -129,9 +129,9 @@
 .recording-detail-transcript svg { width: 13px; height: 13px; }
 .recording-detail-footer { margin: 16px -18px 0; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
 .recording-detail-footer .btn { width: 100%; }
-.recording-detail-open-drive { background: var(--ink); color: var(--surface); box-shadow: none; }
+.recording-detail-open-drive { height: 48px; background: var(--ink); color: var(--surface); box-shadow: none; }
 .recording-detail-open-drive:hover:not(:disabled) { background: var(--ink-2); }
-.recording-detail-copy-link { margin-top: 8px; }
+.recording-detail-copy-link { height: 44px; margin-top: 8px; font-size: 13px; font-weight: 600; }
 .recording-detail-open-drive svg,
 .recording-detail-copy-link svg { width: 14px; height: 14px; }
 .recording-detail-copy-link svg { width: 13px; height: 13px; }
@@ -152,6 +152,8 @@
 .permission-hero { padding: 16px 6px 14px; text-align: center; }
 .permission-hero-mark { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin-bottom: 15px; border-radius: 6px; background: #eef1ff; color: #4a63c8; font: 600 24px 'IBM Plex Mono', monospace; }
 :root[data-theme='dark'] .permission-hero-mark { background: #24213b; color: #a99ced; }
+.permission-mark-request { width: 23px; height: 23px; }
+.permission-mark-blocked { display: none; }
 .permission-hero h2 { margin: 0 0 7px; color: var(--ink); font-size: 15.5px; letter-spacing: -.01em; }
 .permission-hero p { max-width: 230px; margin: 0 auto; color: var(--ink-3); font-size: 12.5px; line-height: 1.55; }
 .permission-eyebrow { margin: 2px 0 6px; }
@@ -161,9 +163,9 @@
 #view-permission #permission-continue { width: 100%; height: 40px; margin-top: 8px; border: 0; }
 #view-permission.permission-blocked .permission-hero { position: relative; min-height: 74px; padding: 4px 0 10px 46px; text-align: left; }
 #view-permission.permission-blocked .permission-hero-mark { position: absolute; top: 11px; left: 0; width: 34px; height: 34px; margin: 0; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 17px; }
-#view-permission.permission-blocked .permission-mark-text,
+#view-permission.permission-blocked .permission-mark-request,
 #view-permission.permission-blocked .perm-ico { display: none; }
-#view-permission.permission-blocked .permission-hero-mark svg { display: block; width: 16px; height: 16px; }
+#view-permission.permission-blocked .permission-mark-blocked { display: block; width: 16px; height: 16px; }
 #view-permission.permission-blocked .permission-hero h2 { margin: 0 0 3px; font-size: 15px; }
 #view-permission.permission-blocked .permission-hero p { max-width: none; margin: 0; font-size: 12px; line-height: 1.45; }
 #view-permission.permission-blocked .perm-state { margin-left: auto; color: var(--accent); font: 600 10px 'IBM Plex Mono', monospace; text-transform: uppercase; }

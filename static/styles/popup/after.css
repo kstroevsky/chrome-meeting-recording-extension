@@ -20,13 +20,13 @@
 .meta-list li span:first-child { color: var(--ink-2); }
 .meta-list li span:last-child { color: var(--ink-3); }
 
-.up-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 13px; }
+.up-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; }
 .up-head-ico { display: none; }
-.up-head-pct { order: -1; flex: none; color: var(--ink); font-size: 38px; font-weight: 700; line-height: 1; letter-spacing: -.04em; }
+.up-head-pct { order: -1; flex: none; color: var(--ink); font-size: 38px; font-weight: 700; line-height: 1; letter-spacing: -.02em; }
 .up-head-title { color: var(--ink-3); font-size: 13px; font-weight: 500; }
-.up-bar { height: 6px; margin: 0 0 12px; overflow: hidden; border-radius: 999px; background: var(--tile); }
+.up-bar { height: 6px; margin: 14px 0 18px; overflow: hidden; border-radius: 999px; background: var(--tile); }
 .up-bar-fill { height: 100%; border-radius: inherit; background: var(--ink); transition: width .3s ease; }
-.up-meta { min-height: 13px; margin: 0 0 12px; color: var(--ink-4); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .13em; text-transform: uppercase; }
+.up-meta { min-height: 13px; margin: 0 0 12px; color: var(--ink-4); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .14em; text-transform: uppercase; }
 
 #view-upload { padding-top: 0; }
 #view-upload .file-list { margin: 0; }
@@ -35,7 +35,7 @@
 #view-upload .file-main { width: 100%; min-width: 0; }
 #view-upload .file-head { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 10px; }
 #view-upload .file-title { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-#view-upload .file-sub { flex: 0 0 auto; color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; white-space: nowrap; }
+#view-upload .file-sub { flex: 0 0 auto; color: var(--ink-3); font: 500 10.5px 'IBM Plex Mono', monospace; white-space: nowrap; }
 #view-upload .file-status-uploaded .file-sub { color: var(--ready); }
 #view-upload .file-open { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: 0 0 14px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink-2); font-size: 14px; line-height: 1; cursor: pointer; }
 .file-progress { height: 5px; margin-top: 7px; overflow: hidden; border-radius: 999px; background: var(--tile); }

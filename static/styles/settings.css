@@ -6,9 +6,9 @@
 @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('../fonts/ibm-plex-mono-500.ttf') format('truetype'); }
 @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 600; font-display: swap; src: url('../fonts/ibm-plex-mono-600.ttf') format('truetype'); }
 
-:root { color-scheme: light dark; --surface: #faf8f4; --raised: #f6f2ea; --tile: #f1ece2; --border: #e7e1d6; --divider: #ece7dd; --ink: #1c1a17; --body: #39352f; --muted: #6f695f; --subtle: #a49c8e; --accent: #d23f2f; --accent-hover: #be3626; --success: #3f9e6b; --chevron: #8a6a3f; --focus: rgba(210, 63, 47, .4); }
-:root[data-theme='dark'] { --surface: #1a1714; --raised: #221e18; --tile: #2a251e; --border: #2c2823; --divider: #29251f; --ink: #f2ede3; --body: #d8d1c4; --muted: #8f8674; --subtle: #6f695f; --accent: #e0493a; --accent-hover: #ce4030; --success: #4fae7d; --chevron: #c99a55; --focus: rgba(224, 73, 58, .45); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { color-scheme: dark; --surface: #1a1714; --raised: #221e18; --tile: #2a251e; --border: #2c2823; --divider: #29251f; --ink: #f2ede3; --body: #d8d1c4; --muted: #8f8674; --subtle: #6f695f; --accent: #e0493a; --accent-hover: #ce4030; --success: #4fae7d; --chevron: #c99a55; --focus: rgba(224, 73, 58, .45); } }
+:root { color-scheme: light dark; --surface: #faf8f4; --raised: #f6f2ea; --tile: #f1ece2; --border: #e7e1d6; --divider: #ece7dd; --ink: #1c1a17; --body: #39352f; --muted: #6f695f; --subtle: #a49c8e; --ink-meta: #8a8375; --accent: #d23f2f; --accent-hover: #be3626; --success: #3f9e6b; --chevron: #8a6a3f; --focus: rgba(210, 63, 47, .4); }
+:root[data-theme='dark'] { --surface: #1a1714; --raised: #221e18; --tile: #2a251e; --border: #2c2823; --divider: #29251f; --ink: #f2ede3; --body: #d8d1c4; --muted: #8f8674; --subtle: #6f695f; --ink-meta: #8f8674; --accent: #e0493a; --accent-hover: #ce4030; --success: #4fae7d; --chevron: #c99a55; --focus: rgba(224, 73, 58, .45); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { color-scheme: dark; --surface: #1a1714; --raised: #221e18; --tile: #2a251e; --border: #2c2823; --divider: #29251f; --ink: #f2ede3; --body: #d8d1c4; --muted: #8f8674; --subtle: #6f695f; --ink-meta: #8f8674; --accent: #e0493a; --accent-hover: #ce4030; --success: #4fae7d; --chevron: #c99a55; --focus: rgba(224, 73, 58, .45); } }
 
 * { box-sizing: border-box; }
 body { min-height: 100vh; margin: 0; background: var(--surface); color: var(--body); font: 13px 'Space Grotesk', system-ui, sans-serif; }
@@ -52,14 +52,14 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
 .setting-row:has(.format-capability-note:not([hidden])) { flex-wrap: wrap; padding-bottom: 8px; }
 .format-capability-note { flex: 0 0 100%; color: var(--muted); font-size: 11px; text-align: right; }
 .segment-control { display: flex; flex: 0 0 auto; padding: 2px; border-radius: 6px; background: var(--tile); font-family: 'IBM Plex Mono', monospace; }
-.segment-control button { min-width: 38px; padding: 4px 8px; border-radius: 4px; background: transparent; color: var(--muted); font: 500 11px 'IBM Plex Mono', monospace; transition: background 120ms ease-out, color 120ms ease-out; }
+.segment-control button { min-width: 38px; padding: 4px 11px; border-radius: 6px; background: transparent; color: var(--ink-meta); font: 500 11px 'IBM Plex Mono', monospace; transition: background 120ms ease-out, color 120ms ease-out; }
 .segment-control button:hover { color: var(--ink); }
 .segment-control button[aria-pressed='true'] { background: var(--ink); color: var(--surface); font-weight: 600; }
 
 .professional-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 56px; gap: 16px; padding: 0; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); background: transparent; color: var(--body); text-align: left; }
 .professional-toggle > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .professional-toggle strong { font-size: 13px; font-weight: 600; }
-.professional-toggle small { overflow: hidden; color: var(--muted); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .08em; text-overflow: ellipsis; white-space: nowrap; }
+.professional-toggle small { overflow: hidden; color: var(--ink-meta); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .08em; text-overflow: ellipsis; white-space: nowrap; }
 .toggle-chevron { flex: 0 0 auto; fill: var(--chevron); transition: transform 140ms ease-out; }
 .professional-toggle[aria-expanded='false'] .toggle-chevron { transform: rotate(180deg); }
 .professional-fields { padding-left: 14px; }
