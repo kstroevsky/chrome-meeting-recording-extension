@@ -54,6 +54,22 @@ export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<v
  *   fail()               → failed=true                           ⇒ failed (preserves run context)
  */
 export class RecordingSession {
+  /**
+   * Recorded duration of the run that just ended, keyed by its history id.
+   *
+   * History rows are created asynchronously by the finalize path, sometimes
+   * after the session has already returned to idle and dropped both
+   * `historyId` and `recordedMs`. Holding the finished run's duration here lets
+   * `runDurationMs` answer correctly whichever order those land in.
+   *
+   * Deliberately *not* on the snapshot: it would have to be threaded through
+   * every snapshot rebuild, and it does not need to survive a service-worker
+   * restart — keep-alive is active for the whole stop-to-row window (the phase
+   * is `stopping` and uploads are in flight), and the worst case is a missing
+   * duration, exactly what the field is fixing.
+   */
+  private lastRun?: { historyId: string; durationMs: number };
+
   private snapshot: RecordingSessionSnapshot = createIdleSession();
   private persistenceTail: Promise<void> = Promise.resolve();
 
@@ -132,6 +148,7 @@ export class RecordingSession {
 
   /** Clears run state and moves the session back to idle (desired=idle, observed=idle). */
   markIdle(uploadSummary?: UploadSummary, warnings?: string[]): RecordingSessionSnapshot {
+    this.rememberFinishedRun(Date.now());
     this.snapshot = {
       phase: projectPhase('idle', 'idle', false),
       desired: 'idle',
@@ -153,6 +170,7 @@ export class RecordingSession {
   /** Records a terminal failure (failed=true) while preserving the last active run configuration. */
   fail(error: string): RecordingSessionSnapshot {
     const now = Date.now();
+    this.rememberFinishedRun(now);
     const desired = this.snapshot.desired ?? 'idle';
     const observed = this.snapshot.observed ?? 'starting';
     this.snapshot = {
@@ -234,6 +252,40 @@ export class RecordingSession {
       updatedAt: now,
     };
     return this.commit();
+  }
+
+  /**
+   * Live media-relative position in ms — the offset a mark made *now* maps to
+   * in the produced file. Identical to playback position because a paused span
+   * is never written into the media (`RecorderEngine.setPaused` pauses every
+   * `MediaRecorder`), so no pause-gap correction is needed. See ADR-0005.
+   */
+  currentRecordedMs(now: number = Date.now()): number {
+    return this.elapsedRecordedMs(now);
+  }
+
+  /**
+   * Recorded duration of a run, whether it is still capturing or already
+   * finished — the value a history row should store as its `durationMs`.
+   * Returns `undefined` for a run this session knows nothing about.
+   */
+  runDurationMs(historyId: string | undefined): number | undefined {
+    if (!historyId) return undefined;
+    if (this.snapshot.historyId === historyId) return this.currentRecordedMs();
+    return this.lastRun?.historyId === historyId ? this.lastRun.durationMs : undefined;
+  }
+
+  /**
+   * Banks the ending run's duration so it outlives the snapshot's timer fields,
+   * and announces the end once so open notations can be sealed at that position.
+   * Guarded on `historyId`, which is dropped at idle — so a repeated idle report
+   * cannot re-announce a run that already finished.
+   */
+  private rememberFinishedRun(now: number): void {
+    const { historyId } = this.snapshot;
+    if (!historyId) return;
+    const durationMs = this.elapsedRecordedMs(now);
+    this.lastRun = { historyId, durationMs };
   }
 
   /** Live recorded duration in ms: banked time plus the current running span. */

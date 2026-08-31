@@ -116,6 +116,7 @@ describe('registerSaveHandler', () => {
     const history = {
       createPending: jest.fn(() => new Promise<void>((resolve) => { releaseHistory = resolve; })),
       localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
     };
     registerSaveHandler(offscreen, L, history);
 
@@ -133,6 +134,40 @@ describe('registerSaveHandler', () => {
 
     expect(downloadFile).toHaveBeenCalledTimes(1);
     expect(history.localSaveSettled).toHaveBeenCalledWith('recording:1', 'tab', 1, 'complete');
+  });
+
+  it('stamps the run duration onto the row it just created', async () => {
+    const history = {
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+    };
+    const runDurationMs = jest.fn().mockReturnValue(63_000);
+    registerSaveHandler(offscreen, L, history, runDurationMs);
+
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', filename: 'tab.webm', blobUrl: 'blob:1' });
+    await flushMicrotasks();
+
+    expect(runDurationMs).toHaveBeenCalledWith('recording:1');
+    expect(history.setDuration).toHaveBeenCalledWith('recording:1', 63_000);
+    // Ordering matters: the row has to exist before the duration is written.
+    expect(history.createPending.mock.invocationCallOrder[0])
+      .toBeLessThan(history.setDuration.mock.invocationCallOrder[0]);
+  });
+
+  it('still saves when the run duration is unknown', async () => {
+    const history = {
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+    };
+    registerSaveHandler(offscreen, L, history, () => undefined);
+
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', filename: 'tab.webm', blobUrl: 'blob:1' });
+    await flushMicrotasks();
+
+    expect(history.setDuration).toHaveBeenCalledWith('recording:1', undefined);
+    expect(downloadFile).toHaveBeenCalledTimes(1);
   });
 });
 

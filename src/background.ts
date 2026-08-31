@@ -186,6 +186,10 @@ async function persistUploadState(job: import('./shared/recording').UploadJob): 
       session.upsertUploadJob(job);
       await session.flush();
     }
+    // applyUploadJob creates the row if it is absent, so the duration is stamped
+    // after it. `runDurationMs` answers whether or not the session has already
+    // returned to idle, so this does not depend on message ordering.
+    if (job.historyId) await history.setDuration(job.historyId, session.runDurationMs(job.historyId));
     if (job.status !== 'uploading') await offscreen.acknowledgeUploadState?.(job.id);
   } catch (error) {
     // Do not acknowledge a terminal outbox item unless both persisted views are
@@ -221,7 +225,7 @@ const phaseWatchdog = createPhaseWatchdog({
   },
 });
 
-registerSaveHandler(offscreen, L, history);
+registerSaveHandler(offscreen, L, history, (historyId) => session.runDurationMs(historyId));
 
 // The recording control plane: every start/stop trigger drives this one seam.
 const controller = new RecordingController({ L, offscreen, session, telemetry });

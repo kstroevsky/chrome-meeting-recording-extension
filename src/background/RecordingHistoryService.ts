@@ -27,6 +27,12 @@ export class RecordingHistoryService {
     private readonly openDownload: (downloadId: number) => Promise<void>,
     private readonly now: () => number = Date.now,
     private readonly renameDriveResources?: DriveRecordingRenamer,
+    /**
+     * Runs after an entry is tombstoned, so data owned by other aggregates
+     * (notations, ADR-0005) is dropped with the recording. A callback rather
+     * than a direct dependency keeps this service port-only.
+     */
+    private readonly onRemoved?: (id: string) => Promise<void>,
   ) {}
 
   async listPage(cursor?: RecordingHistoryCursor): Promise<RecordingHistoryPage> {
@@ -110,6 +116,20 @@ export class RecordingHistoryService {
     });
   }
 
+  /**
+   * Stores the run's recorded duration (pause-aware, excludes paused spans).
+   * Written once by the finalize path after the row exists; a no-op for a
+   * missing or deleted row so a late call can never resurrect one.
+   */
+  async setDuration(id: string, durationMs: number | undefined): Promise<RecordingHistoryEntry | undefined> {
+    if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) return undefined;
+    const updated = await this.repository.update(id, (current) => {
+      if (!current || current.deletedAt) return current;
+      return { ...current, durationMs };
+    });
+    return updated?.deletedAt ? undefined : updated;
+  }
+
   async setNote(id: string, note: string): Promise<RecordingHistoryEntry | undefined> {
     const normalized = note.trim();
     const updated = await this.repository.update(id, (current) => {
@@ -126,6 +146,9 @@ export class RecordingHistoryService {
       removed = true;
       return { ...current, deletedAt: this.now() };
     });
+    // The tombstone is the durable outcome; dependent cleanup is best-effort so
+    // a failing side store can never make a delete look like it did not happen.
+    if (removed && this.onRemoved) await this.onRemoved(id).catch(() => {});
     return removed;
   }
 
