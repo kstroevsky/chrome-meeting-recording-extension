@@ -124,6 +124,7 @@ export class RecordingSession {
   /** Signals intent to stop (desired=idle); the phase derives to `stopping` while capture drains. */
   markStopping(): RecordingSessionSnapshot {
     const now = Date.now();
+    this.rememberFinishedRun(now);
     const desired: DesiredState = 'idle';
     const observed = this.snapshot.observed ?? 'starting';
     const failed = this.snapshot.failed ?? false;
@@ -289,9 +290,13 @@ export class RecordingSession {
   private rememberFinishedRun(now: number): void {
     const { historyId } = this.snapshot;
     if (!historyId) return;
-    const durationMs = this.elapsedRecordedMs(now);
+    // A run ends once. `markStopping` announces it — capture has stopped there,
+    // so the duration is final and open notes can be sealed before the stop RPC
+    // carries their export — and the later `markIdle` must not repeat it.
+    const alreadyAnnounced = this.lastRun?.historyId === historyId;
+    const durationMs = alreadyAnnounced ? this.lastRun!.durationMs : this.elapsedRecordedMs(now);
     this.lastRun = { historyId, durationMs };
-    this.onRunFinished?.(historyId, durationMs);
+    if (!alreadyAnnounced) this.onRunFinished?.(historyId, durationMs);
   }
 
   /** Live recorded duration in ms: banked time plus the current running span. */
