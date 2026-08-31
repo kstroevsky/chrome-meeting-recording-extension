@@ -44,7 +44,7 @@ describe('handleMeetingEndedMessage', () => {
       deps
     );
 
-    expect(stop).toHaveBeenCalledWith('meeting ended: post-call state detected');
+    expect(stop).toHaveBeenCalledWith('meeting ended: post-call state detected', 'meeting-ended');
     expect(result).toEqual({ ok: true, stopped: true, reason: 'meeting ended: post-call state detected' });
   });
 
@@ -57,7 +57,7 @@ describe('handleMeetingEndedMessage', () => {
       deps
     );
 
-    expect(stop).toHaveBeenCalledWith('meeting ended');
+    expect(stop).toHaveBeenCalledWith('meeting ended', 'meeting-ended');
     expect(result).toEqual({ ok: true, stopped: true, reason: 'meeting ended' });
   });
 
@@ -129,7 +129,7 @@ describe('registerRecordingAutoStop', () => {
   it('stops when the recorded tab is closed', () => {
     const { onRemoved, stop } = register(RECORDING_SNAPSHOT);
     onRemoved(42, { windowId: 1, isWindowClosing: false });
-    expect(stop).toHaveBeenCalledWith('recorded tab closed');
+    expect(stop).toHaveBeenCalledWith('recorded tab closed', 'tab-closed');
   });
 
   it('ignores closure of an unrelated tab', () => {
@@ -141,13 +141,13 @@ describe('registerRecordingAutoStop', () => {
   it('stops when the recorded tab navigates away from the meeting', () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'https://example.com/' }, { id: 42 });
-    expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting');
+    expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting', 'navigated-away');
   });
 
   it('stops a Meet recording that navigates to a different meeting room', () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'https://meet.google.com/zzz-yyyy-xxx' }, { id: 42 });
-    expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting');
+    expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting', 'navigated-away');
   });
 
   it('does not stop when the URL update keeps the same meeting slug', () => {
@@ -178,7 +178,7 @@ describe('registerRecordingAutoStop', () => {
   it('still stops a non-Meet recording when its tab is closed', () => {
     const { onRemoved, stop } = register(NON_MEET_SNAPSHOT);
     onRemoved(42, { windowId: 1, isWindowClosing: false });
-    expect(stop).toHaveBeenCalledWith('recorded tab closed');
+    expect(stop).toHaveBeenCalledWith('recorded tab closed', 'tab-closed');
   });
 
   it('ignores tab updates without a URL change', () => {
@@ -190,6 +190,6 @@ describe('registerRecordingAutoStop', () => {
   it('treats a malformed URL as leaving the meeting (slug parses to null)', () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'not a valid url' }, { id: 42 });
-    expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting');
+    expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting', 'navigated-away');
   });
 });

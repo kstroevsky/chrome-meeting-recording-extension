@@ -464,6 +464,57 @@ describe('RecordingSession state machine', () => {
       });
     });
 
+    describe('interruption notice (design n4)', () => {
+      it('records what ended the run, where it reached, and which recording it made', () => {
+        session.start(RUN_CONFIG, { targetTabId: 42 });
+        const historyId = session.getSnapshot().historyId!;
+        session.applyOffscreenPhase({ phase: 'recording' });
+
+        t += 401_000;
+        session.markStopping('tab-closed');
+
+        expect(session.getSnapshot().interruption)
+          .toEqual({ reason: 'tab-closed', atMs: 401_000, historyId });
+      });
+
+      it('outlives the run, because the capture is already saved', () => {
+        session.start(RUN_CONFIG, { targetTabId: 42 });
+        session.applyOffscreenPhase({ phase: 'recording' });
+        t += 5_000;
+        session.markStopping('navigated-away');
+        session.applyOffscreenPhase({ phase: 'idle' });
+
+        expect(session.getSnapshot().phase).toBe('idle');
+        expect(session.getSnapshot().interruption?.reason).toBe('navigated-away');
+      });
+
+      it('says nothing when the user stopped the recording themselves', () => {
+        session.start(RUN_CONFIG, { targetTabId: 42 });
+        session.applyOffscreenPhase({ phase: 'recording' });
+        t += 5_000;
+        session.markStopping();
+
+        expect(session.getSnapshot().interruption).toBeUndefined();
+      });
+
+      it('clears on dismissal and on the next run', () => {
+        session.start(RUN_CONFIG, { targetTabId: 42 });
+        session.applyOffscreenPhase({ phase: 'recording' });
+        session.markStopping('tab-closed');
+        session.applyOffscreenPhase({ phase: 'idle' });
+
+        expect(session.dismissInterruption().interruption).toBeUndefined();
+
+        session.start(RUN_CONFIG, { targetTabId: 43 });
+        session.applyOffscreenPhase({ phase: 'recording' });
+        session.markStopping('tab-closed');
+        session.applyOffscreenPhase({ phase: 'idle' });
+        expect(session.getSnapshot().interruption).toBeDefined();
+        session.start(RUN_CONFIG, { targetTabId: 44 });
+        expect(session.getSnapshot().interruption).toBeUndefined();
+      });
+    });
+
     describe('onRunFinished (sealing what the run left open, ADR-0005)', () => {
       const withHook = () => {
         const onRunFinished = jest.fn();

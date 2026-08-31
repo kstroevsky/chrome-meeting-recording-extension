@@ -133,6 +133,22 @@ export const POPUP_STORIES: PopupStory[] = [
     preview: { screen: 'session', session: activeRecording, transcriptActive: true },
   },
   {
+    id: 'recording-interrupted', title: 'Interrupted mid-note', group: 'Saving',
+    description: 'n4 — the tab closed. The capture is already saved; this reports what happened and what was kept.',
+    preview: {
+      screen: 'session',
+      session: session({
+        phase: 'idle',
+        interruption: { reason: 'tab-closed', atMs: 401_000, historyId: 'gallery-history-alex' },
+      }),
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n3', tStartMs: 372_000, tEndMs: 401_000, endedBy: 'auto', text: 'Renewal date' },
+      ],
+    },
+  },
+  {
     id: 'recording-notes-empty', title: 'Notes · nothing yet', group: 'Recording',
     description: 'marks-e5 — the "Make a note" capture row and the ⌥M shortcut tip, before any note exists.',
     preview: { screen: 'session', session: activeRecording, transcriptActive: true, notations: [] },

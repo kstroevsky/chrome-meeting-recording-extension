@@ -20,6 +20,8 @@ const makeEl = (): PopupElements => ({
   uploadJobMeta: document.createElement('div'),
   uploadJobSub: document.createElement('div'),
   uploadJobFiles: document.createElement('ul'),
+  uploadJobNotesLine: document.createElement('div'),
+  uploadJobNotesState: document.createElement('span'),
   uploadJobOpenDrive: document.createElement('button'),
   uploadJobRetry: document.createElement('button'),
   uploadJobCancel: document.createElement('button'),
@@ -206,5 +208,41 @@ describe('SessionTabsView', () => {
 
     expect(mockSend).not.toHaveBeenCalledWith({ type: 'DISMISS_UPLOAD_JOB', jobId: 'j1' });
     jest.useRealTimers();
+  });
+
+  describe('notes sidecar line (d4)', () => {
+    const withNotes = (status: 'uploading' | 'uploaded') => job({
+      files: [
+        { stream: 'tab', kind: 'notes', filename: 'meet-notes.vtt', status, bytes: 400 },
+        { stream: 'tab', filename: 'tab.webm', status: 'uploading', bytes: 1_000_000 },
+      ],
+    });
+
+    it('claims SAVED FIRST only once the sidecar is actually up', () => {
+      view.renderJobView(withNotes('uploading'));
+      expect(el.uploadJobNotesLine!.hidden).toBe(false);
+      expect(el.uploadJobNotesState!.textContent).toBe('SAVING FIRST');
+      expect(el.uploadJobNotesLine!.classList.contains('upload-notes--saved')).toBe(false);
+
+      view.renderJobView(withNotes('uploaded'));
+      expect(el.uploadJobNotesState!.textContent).toBe('SAVED FIRST');
+      expect(el.uploadJobNotesLine!.classList.contains('upload-notes--saved')).toBe(true);
+    });
+
+    it('keeps the sidecar out of the media file list, count and size', () => {
+      view.renderJobView(withNotes('uploaded'));
+
+      // One media file, and the sidecar's bytes do not inflate the size.
+      expect(el.uploadJobFiles!.children).toHaveLength(1);
+      expect(el.uploadJobFiles!.textContent).toContain('tab.webm');
+      expect(el.uploadJobFiles!.textContent).not.toContain('meet-notes.vtt');
+      expect(el.uploadJobMeta!.textContent).toContain('1 file');
+      expect(el.uploadJobSub!.textContent).not.toContain('1.0 MB · 400');
+    });
+
+    it('stays hidden for a recording with no notes', () => {
+      view.renderJobView(job());
+      expect(el.uploadJobNotesLine!.hidden).toBe(true);
+    });
   });
 });

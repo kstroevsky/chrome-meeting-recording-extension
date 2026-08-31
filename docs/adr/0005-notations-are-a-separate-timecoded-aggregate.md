@@ -117,6 +117,19 @@ prefer this form, not safety.
 `mark-notation` command, and the ribbon's toggle. `RecordingController.toggleNotation`
 owns that decision because the keyboard path has no popup state to consult.
 
+**10. An interrupted run is reported, not gated.** When capture ends without the
+user asking (the tab closed, navigated away, or the meeting ended), the recording
+still seals and saves exactly as it always did; the popup then reports what
+happened and what was kept (design n4). The session carries a phase-independent
+`interruption` record — reason, the position capture reached, and the history id
+— which outlives the run and is cleared on dismissal or the next start.
+
+Holding the capture pending a save/discard choice was considered and rejected:
+it would introduce a window where sealed bytes wait on a popup that may never
+open, and every question that raises (browser quits, a new recording starts,
+orphan recovery reclaims it) is a new way to lose a recording. Saving first
+matches how the upload and offline screens already treat bytes as written.
+
 ## Alternatives considered
 
 **Write `Chapters` into the WebM container.** Format-legal — Matroska/WebM

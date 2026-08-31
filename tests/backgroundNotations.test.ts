@@ -10,10 +10,20 @@
 import 'fake-indexeddb/auto';
 
 describe('background notation commands', () => {
+  let stopBackgroundKeepAlive: (() => void) | undefined;
+
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({});
+  });
+
+  // The hydrated sessions below are busy, so the background starts its
+  // service-worker keep-alive interval. `jest.resetModules()` would otherwise
+  // leave one ticking per test against a discarded module instance.
+  afterEach(() => {
+    stopBackgroundKeepAlive?.();
+    stopBackgroundKeepAlive = undefined;
   });
 
   function makeOffscreenInstance() {
@@ -36,7 +46,12 @@ describe('background notation commands', () => {
       OffscreenManager: jest.fn(() => makeOffscreenInstance()),
     }));
     await import('../src/background');
-    await new Promise(process.nextTick);
+    // The bootstrap IIFE initializes telemetry, which with a real `indexedDB`
+    // resolves over several macrotask turns. Anything still pending when the
+    // test ends logs after teardown, which Jest reports as a failed run even
+    // though every assertion passed — so drain it before handing back.
+    for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    ({ stopKeepAlive: stopBackgroundKeepAlive } = await import('../src/background/sessionLifecycle'));
     return (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
   }
 
