@@ -4,6 +4,12 @@ import {
   type RecordingHistoryEntry,
   type RecordingHistoryPage,
 } from '../shared/recordingHistory';
+import {
+  ACTIVE_CREATED_AT_ID_INDEX,
+  RECORDINGS_STORE as STORE_NAME,
+  openRecordingHistoryDatabase,
+  toStoredEntry,
+} from './recordingHistoryDatabase';
 
 export type RecordingHistoryMutation = (
   current: RecordingHistoryEntry | undefined,
@@ -15,26 +21,11 @@ export interface RecordingHistoryRepositoryPort {
   update(id: string, mutate: RecordingHistoryMutation): Promise<RecordingHistoryEntry | undefined>;
 }
 
-const DATABASE_NAME = 'recording-history';
-const DATABASE_VERSION = 3;
-const STORE_NAME = 'recordings';
-const CREATED_AT_ID_INDEX = 'createdAtId';
-const ACTIVE_CREATED_AT_ID_INDEX = 'activeCreatedAtId';
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
 
-/**
- * Tombstones remain durable so late upload/recovery work cannot recreate a
- * deleted history entry. This storage-only key excludes them from the paged
- * index, keeping list work proportional to visible recordings rather than all
- * historical deletions.
- */
-type StoredRecordingHistoryEntry = RecordingHistoryEntry & { activeCreatedAt?: number };
-
 /** IndexedDB adapter. Its update operation is the history module's atomic seam. */
 export class RecordingHistoryRepository implements RecordingHistoryRepositoryPort {
-  private databasePromise: Promise<IDBDatabase> | null = null;
-
   constructor(private readonly factory?: IDBFactory) {}
 
   async listPage(options: { limit?: number; cursor?: RecordingHistoryCursor } = {}): Promise<RecordingHistoryPage> {
@@ -120,41 +111,7 @@ export class RecordingHistoryRepository implements RecordingHistoryRepositoryPor
   }
 
   private open(): Promise<IDBDatabase> {
-    if (this.databasePromise) return this.databasePromise;
-    const factory = this.factory ?? globalThis.indexedDB;
-    if (!factory) return Promise.reject(new Error('IndexedDB is unavailable in this context'));
-    const opening = new Promise<IDBDatabase>((resolve, reject) => {
-      const request = factory.open(DATABASE_NAME, DATABASE_VERSION);
-      request.onupgradeneeded = () => {
-        const database = request.result;
-        const store = database.objectStoreNames.contains(STORE_NAME)
-          ? request.transaction!.objectStore(STORE_NAME)
-          : database.createObjectStore(STORE_NAME, { keyPath: 'id' });
-        if (!store.indexNames.contains(CREATED_AT_ID_INDEX)) {
-          store.createIndex(CREATED_AT_ID_INDEX, ['createdAt', 'id'], { unique: true });
-        }
-        const needsVisibilityMigration = !store.indexNames.contains(ACTIVE_CREATED_AT_ID_INDEX);
-        if (needsVisibilityMigration) {
-          store.createIndex(ACTIVE_CREATED_AT_ID_INDEX, ['activeCreatedAt', 'id'], { unique: true });
-          migrateVisibilityKeys(store);
-        }
-      };
-      request.onsuccess = () => {
-        const database = request.result;
-        database.onversionchange = () => {
-          database.close();
-          if (this.databasePromise === opening) this.databasePromise = null;
-        };
-        resolve(database);
-      };
-      request.onerror = () => reject(request.error ?? new Error('Could not open recording history'));
-      request.onblocked = () => reject(new Error('Recording history upgrade is blocked by another extension context'));
-    });
-    this.databasePromise = opening.catch((error) => {
-      if (this.databasePromise === opening) this.databasePromise = null;
-      throw error;
-    });
-    return this.databasePromise;
+    return openRecordingHistoryDatabase(this.factory);
   }
 
   private request<T>(request: IDBRequest<T>): Promise<T> {
@@ -163,30 +120,4 @@ export class RecordingHistoryRepository implements RecordingHistoryRepositoryPor
       request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'));
     });
   }
-}
-
-function toStoredEntry(entry: RecordingHistoryEntry): StoredRecordingHistoryEntry {
-  const stored: StoredRecordingHistoryEntry = { ...entry };
-  if (entry.deletedAt != null) {
-    delete stored.activeCreatedAt;
-  } else {
-    stored.activeCreatedAt = entry.createdAt;
-  }
-  return stored;
-}
-
-/** Adds the active-list index key to v2 rows without changing their public shape. */
-function migrateVisibilityKeys(store: IDBObjectStore): void {
-  const request = store.openCursor();
-  request.onsuccess = () => {
-    const cursor = request.result;
-    if (!cursor) return;
-    const entry = normalizeRecordingHistoryEntry(cursor.value);
-    if (entry) {
-      const stored = toStoredEntry(entry);
-      const current = cursor.value as StoredRecordingHistoryEntry;
-      if (current.activeCreatedAt !== stored.activeCreatedAt) cursor.update(stored);
-    }
-    cursor.continue();
-  };
 }
