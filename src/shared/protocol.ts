@@ -6,7 +6,7 @@
  */
 
 import type { MeetingProviderInfo } from './provider';
-import type { RecordingNotation } from './notations';
+import type { RecordingNotation, RecordingNotationSummary } from './notations';
 import type { RecorderRuntimeSettingsSnapshot } from './settings';
 import type { PerfSettings } from './perf';
 import type {
@@ -106,7 +106,7 @@ export type PopupAddRecordingNotation = {
   tEndMs?: number;
   text: string;
 };
-export type PopupListRecordingNotationCounts = { type: 'LIST_RECORDING_NOTATION_COUNTS'; recordingIds: string[] };
+export type PopupListRecordingNotationSummaries = { type: 'LIST_RECORDING_NOTATION_SUMMARIES'; recordingIds: string[] };
 export type PopupUpdateRecordingNotation = {
   type: 'UPDATE_RECORDING_NOTATION';
   recordingId: string;
@@ -142,7 +142,7 @@ export type PopupToBg =
   | PopupUpdateActiveNotation
   | PopupRemoveActiveNotation
   | PopupListRecordingNotations
-  | PopupListRecordingNotationCounts
+  | PopupListRecordingNotationSummaries
   | PopupAddRecordingNotation
   | PopupUpdateRecordingNotation
   | PopupRemoveRecordingNotation;
@@ -172,8 +172,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupUpdateActiveNotation ? NotationListResult :
   T extends PopupRemoveActiveNotation ? NotationListResult :
   T extends PopupListRecordingNotations ? NotationListResult :
-  T extends PopupListRecordingNotationCounts ?
-    { ok: true; counts: Record<string, number> } | { ok: false; error: string } :
+  T extends PopupListRecordingNotationSummaries ?
+    { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
   T extends PopupAddRecordingNotation ? NotationResult :
   T extends PopupUpdateRecordingNotation ? NotationListResult :
   T extends PopupRemoveRecordingNotation ? NotationListResult :

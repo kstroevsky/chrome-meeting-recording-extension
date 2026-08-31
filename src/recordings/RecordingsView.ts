@@ -1,3 +1,4 @@
+import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 
 export type RecordingsViewCallbacks = {
@@ -9,8 +10,34 @@ export type RecordingsViewCallbacks = {
   loadMore: () => void;
 };
 
-type Sort = 'time-desc' | 'time-asc' | 'name' | 'duration' | 'size';
+type Sort = 'time-desc' | 'time-asc' | 'name' | 'duration' | 'size' | 'notes';
 type HistoryEntryWithDuration = RecordingHistoryEntry & { durationMs?: number };
+
+const NOTE_CHIP_ICON = '<svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
+
+/**
+ * Writes `text` into `host`, wrapping each occurrence of the active query in a
+ * gold `<b>` so a search says *where* it matched (f2). Falls back to plain text
+ * when there is no query, and never interprets the query as markup.
+ */
+function withHit(host: HTMLElement, text: string, query: string): HTMLElement {
+  if (!query) { host.textContent = text; return host; }
+  const lower = text.toLocaleLowerCase();
+  let from = 0;
+  let at = lower.indexOf(query);
+  if (at < 0) { host.textContent = text; return host; }
+  while (at >= 0) {
+    if (at > from) host.append(text.slice(from, at));
+    const hit = document.createElement('b');
+    hit.className = 'recording-row__hit';
+    hit.textContent = text.slice(at, at + query.length);
+    host.append(hit);
+    from = at + query.length;
+    at = lower.indexOf(query, from);
+  }
+  if (from < text.length) host.append(text.slice(from));
+  return host;
+}
 
 const $ = (tag: string, className?: string): HTMLElement => {
   const element = document.createElement(tag);
@@ -85,6 +112,17 @@ function durationOf(entry: RecordingHistoryEntry): number | undefined {
   return (entry as HistoryEntryWithDuration).durationMs;
 }
 
+/** The design's note timecodes are zero-padded to minutes: `02:34`, not `2:34`. */
+function formatDurationMs(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`
+    : `${String(minutes).padStart(2, '0')}:${seconds}`;
+}
+
 function formatDuration(entry: RecordingHistoryEntry): string {
   const durationMs = durationOf(entry);
   if (durationMs == null || durationMs < 0) return '—';
@@ -125,6 +163,16 @@ export class RecordingsView {
   private query = '';
   private sort: Sort = 'time-desc';
   private selected = new Set<string>();
+  /** Note counts + searchable note text per recording (ADR-0005). */
+  private noteSummaries: Record<string, RecordingNotationSummary> = {};
+
+  /**
+   * Supplies the notes digest for the loaded page. Repainting is the caller's
+   * job — it owns the entry list `render` needs.
+   */
+  setNoteSummaries(summaries: Record<string, RecordingNotationSummary>): void {
+    this.noteSummaries = summaries;
+  }
   private openId: string | null = null;
   private editingId: string | null = null;
 
@@ -178,11 +226,16 @@ export class RecordingsView {
 
   private visibleEntries(): RecordingHistoryEntry[] {
     const query = this.query.trim().toLocaleLowerCase();
-    const filtered = this.entries.filter((entry) => !query || `${entry.name} ${entry.note ?? ''}`.toLocaleLowerCase().includes(query));
+    const filtered = this.entries.filter((entry) => !query
+      || `${entry.name} ${entry.note ?? ''} ${this.noteSummaries[entry.id]?.search ?? ''}`
+        .toLocaleLowerCase().includes(query));
     return [...filtered].sort((left, right) => {
       if (this.sort === 'time-desc') return right.createdAt - left.createdAt;
       if (this.sort === 'time-asc') return left.createdAt - right.createdAt;
       if (this.sort === 'name') return left.name.localeCompare(right.name);
+      if (this.sort === 'notes') {
+        return (this.noteSummaries[right.id]?.count ?? 0) - (this.noteSummaries[left.id]?.count ?? 0);
+      }
       if (this.sort === 'duration') return (durationOf(right) ?? -1) - (durationOf(left) ?? -1);
       return sizeOf(right) - sizeOf(left);
     });
@@ -201,7 +254,11 @@ export class RecordingsView {
       this.redraw({ focusSearch: true });
     });
     const total = $('span', 'recordings-count');
-    total.textContent = `${count} RECORDING${count === 1 ? '' : 'S'}`;
+    // While searching, the count is only useful next to what it was drawn from,
+    // and saying where the match came from is the point of the split below (f2).
+    total.textContent = this.query.trim()
+      ? `${count} OF ${this.entries.length} · IN NAMES AND NOTES`
+      : `${count} RECORDING${count === 1 ? '' : 'S'}`;
     toolbar.append(search, total);
     if (focusSearch) requestAnimationFrame(() => {
       const currentSearch = this.list.querySelector<HTMLInputElement>('.recording-search');
@@ -267,7 +324,7 @@ export class RecordingsView {
       else entries.forEach((entry) => this.selected.add(entry.id));
       this.redraw();
     });
-    header.append(master, $('span'), this.headerButton('NAME', 'name'), this.headerButton('DUR', 'duration', true), this.headerButton('SIZE', 'size', true));
+    header.append(master, $('span'), this.headerButton('NAME', 'name'), this.headerButton('NOTES', 'notes'), this.headerButton('DUR', 'duration', true), this.headerButton('SIZE', 'size', true));
     const destination = $('span', 'table-header-text'); destination.textContent = 'DEST';
     header.append(destination, this.headerButton('TIME', 'time', true), $('span'));
     table.append(header);
@@ -279,9 +336,10 @@ export class RecordingsView {
       scroll.append(empty);
     } else {
       for (const group of this.groups(entries)) {
-        const day = $('div', 'recording-day');
+        const day = $('div', `recording-day${group.plain ? ' recording-day--match' : ''}`);
         const label = $('span', 'recording-day__label'); label.textContent = group.label;
-        const count = $('span', 'recording-day__count'); count.textContent = String(group.entries.length);
+        const count = $('span', 'recording-day__count');
+        count.textContent = group.plain ? '' : String(group.entries.length);
         day.append(label, count);
         scroll.append(day);
         group.entries.forEach((entry) => scroll.append(this.row(entry)));
@@ -291,10 +349,10 @@ export class RecordingsView {
     return table;
   }
 
-  private headerButton(label: string, key: 'name' | 'duration' | 'size' | 'time', right = false): HTMLButtonElement {
+  private headerButton(label: string, key: 'name' | 'duration' | 'notes' | 'size' | 'time', right = false): HTMLButtonElement {
     const active = (key === 'time' && this.sort.startsWith('time')) || this.sort === key;
     const button = document.createElement('button');
-    button.className = `table-header-button${right ? ' table-header-button--right' : ''}${active ? ' table-header-button--active' : ''}`;
+    button.className = `table-header-button${right ? ' table-header-button--right' : ''}${active ? ' table-header-button--active' : ''}${key === 'notes' ? ' table-header-button--notes' : ''}`;
     button.type = 'button';
     button.textContent = label;
     if (active) {
@@ -311,10 +369,26 @@ export class RecordingsView {
     return button;
   }
 
-  private groups(entries: RecordingHistoryEntry[]): Array<{ label: string; entries: RecordingHistoryEntry[] }> {
+  /** True when the query matched this recording's notes rather than its name. */
+  private matchedInNotes(entry: RecordingHistoryEntry, query: string): boolean {
+    return (this.noteSummaries[entry.id]?.search ?? '').toLocaleLowerCase().includes(query);
+  }
+
+  private groups(entries: RecordingHistoryEntry[]): Array<{ label: string; entries: RecordingHistoryEntry[]; plain?: true }> {
+    // A note match is the more interesting of the two and needs saying, so a
+    // search groups by where the hit landed rather than by day (f2).
+    const query = this.query.trim().toLocaleLowerCase();
+    if (query) {
+      const inNotes = entries.filter((entry) => this.matchedInNotes(entry, query));
+      const inName = entries.filter((entry) => !this.matchedInNotes(entry, query));
+      return [
+        ...(inNotes.length ? [{ label: 'MATCHED IN NOTES', entries: inNotes, plain: true as const }] : []),
+        ...(inName.length ? [{ label: 'MATCHED IN NAME', entries: inName, plain: true as const }] : []),
+      ];
+    }
     if (!this.sort.startsWith('time')) {
       const labels: Record<Exclude<Sort, 'time-desc' | 'time-asc'>, string> = {
-        name: 'SORTED BY NAME', duration: 'SORTED BY DURATION', size: 'SORTED BY SIZE',
+        name: 'SORTED BY NAME', duration: 'SORTED BY DURATION', notes: 'SORTED BY NOTES', size: 'SORTED BY SIZE',
       };
       const sort = this.sort as Exclude<Sort, 'time-desc' | 'time-asc'>;
       return [{ label: `${labels[sort]} · ${entries.length}`, entries }];
@@ -351,10 +425,28 @@ export class RecordingsView {
     const dot = $('span', `recording-status-dot${entry.status === 'complete' ? '' : ` recording-status-dot--${entry.status}`}`);
     dot.title = statusLabel(entry.status);
     const name = $('span', 'recording-row__name');
-    const nameText = $('span', 'recording-row__name-text'); nameText.textContent = entry.name; nameText.title = entry.name;
+    const nameText = $('span', 'recording-row__name-text'); nameText.title = entry.name;
+    withHit(nameText, entry.name, this.query.trim().toLocaleLowerCase());
     name.append(nameText);
     if (entry.note) { const note = $('span', 'recording-row__note'); note.title = entry.note; note.textContent = '≡'; name.append(note); }
     const duration = $('span', 'recording-row__meta'); duration.textContent = formatDuration(entry);
+    // The count chip plus the first note is what makes a row worth opening; a
+    // recording with none shows a dash so the column never pads itself (f1).
+    const notes = $('span', 'recording-row__notes');
+    const summary = this.noteSummaries[entry.id];
+    if (summary?.count) {
+      const chip = $('span', 'recording-row__notes-chip');
+      chip.innerHTML = NOTE_CHIP_ICON;
+      chip.append(String(summary.count));
+      const preview = $('span', 'recording-row__notes-preview');
+      const label = summary.firstText || 'Unnamed';
+      withHit(preview, `${formatDurationMs(summary.firstAtMs)} ${label}`, this.query.trim().toLocaleLowerCase());
+      notes.append(chip, preview);
+      notes.title = summary.count === 1 ? '1 note' : `${summary.count} notes`;
+    } else {
+      notes.classList.add('recording-row__notes--none');
+      notes.textContent = '—';
+    }
     const size = $('span', 'recording-row__meta'); size.textContent = formatSize(sizeOf(entry));
     const onDrive = entry.files.some((file) => file.destination === 'drive');
     const onLocal = entry.files.some((file) => file.destination === 'local');
@@ -364,7 +456,7 @@ export class RecordingsView {
     const remove = document.createElement('button');
     remove.className = 'recording-row__remove'; remove.type = 'button'; remove.title = 'Remove from history'; remove.setAttribute('aria-label', `Remove ${entry.name} from history`); remove.textContent = '×';
     remove.addEventListener('click', (event) => { event.stopPropagation(); this.callbacks.remove(entry.id); });
-    row.append(box, dot, name, duration, size, destination, time, remove);
+    row.append(box, dot, name, notes, duration, size, destination, time, remove);
     return row;
   }
 

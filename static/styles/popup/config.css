@@ -233,3 +233,9 @@
 .detail-notes-head-right { display: inline-flex; align-items: center; flex-shrink: 0; gap: 7px; }
 .detail-notes-chevron { width: 9px; height: 9px; transition: transform .15s ease; }
 .detail-notes-toggle[aria-expanded='true'] .detail-notes-chevron { transform: rotate(90deg); }
+
+/* A recording nobody noted (f4): says so, and teaches the shortcut. */
+.detail-notes-empty { margin: 0 0 16px; padding: 13px 14px; border: 1px dashed var(--note-band-border); border-radius: 6px; background: var(--note-band); }
+.detail-notes-empty-title { margin-bottom: 4px; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.detail-notes-empty-body { color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
+.detail-notes-empty-body kbd { padding: 1px 5px; border-radius: 4px; background: var(--control-bg-strong); color: var(--warn-label); font: 10.5px/1.35 'IBM Plex Mono', monospace; }

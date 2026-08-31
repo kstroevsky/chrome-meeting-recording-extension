@@ -29,6 +29,29 @@ flowchart LR
 
 The background creates a pending history record before local download or detached Drive work starts. It then advances that same record as download settlement, Drive-upload updates, crash recovery, local fallback, or Drive metadata rename outcomes arrive. `RecordingHistoryService` owns those transitions; the page never tries to infer a file's availability from an upload tab. A Drive rename is delegated through the offscreen token/data plane; if a later PATCH fails, completed changes are rolled back, and a rare incomplete rollback synchronizes history to the names Drive actually reports.
 
+## Notes column (ADR-0005)
+
+The table carries one 170px `NOTES` column **between `NAME` and `DUR`** (design
+`f1`). Each cell is a gold count chip plus the first note as a preview — that
+preview is what makes a row worth opening. A recording with no notes shows a
+dash, so the column never pads itself. The header reads in the accent colour in
+both themes; it sorts like the other columns.
+
+Both the count and the searchable note text come from a single
+`LIST_RECORDING_NOTATION_SUMMARIES` read per loaded page, not one read per row;
+`RecordingsView.setNoteSummaries` receives the digest and the controller repaints.
+The read is fire-and-forget: if it fails the table still lists, with the column
+empty. The digest's `search` field is folded into the existing
+"Search name or note…" filter alongside the name and the recording's free-text
+note, so one field searches all three.
+
+**Searching regroups the table** (`f2`). While a query is active the day/sort
+groups are replaced by `MATCHED IN NOTES` then `MATCHED IN NAME` — a note match
+is the more interesting of the two and needs saying — and the matched substring
+is wrapped in a gold `<b>` in both the name and the notes preview. The count
+becomes `3 OF 42 · IN NAMES AND NOTES`, because a bare count is only useful next
+to what it was drawn from.
+
 ## Pagination and reconciliation
 
 History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make **Load more** scan every deleted record. `loadMore()` appends only entries not already present, so a repeated response cannot duplicate a card.

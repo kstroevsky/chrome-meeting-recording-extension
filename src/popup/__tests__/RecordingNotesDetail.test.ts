@@ -41,8 +41,21 @@ const rows = (el: HTMLElement) => Array.from(el.querySelectorAll('.detail-notes-
 const pct = (value: string) => Number.parseFloat(value);
 
 describe('RecordingNotesDetail', () => {
-  it('stays hidden for a recording nobody noted', async () => {
+  it('says so, and teaches the shortcut, for a recording nobody noted (f4)', async () => {
     const { view, el } = harness([]);
+    await view.load();
+
+    expect(el.hidden).toBe(false);
+    expect((el.querySelector('.detail-notes-empty') as HTMLElement).hidden).toBe(false);
+    expect(el.querySelector('.detail-notes-empty-title')!.textContent).toBe('No notes in this recording');
+    expect(el.querySelector('.detail-notes-empty-body kbd')!.textContent).toBe('⌥M');
+    // The heading and list stay out of the way; the track keeps the shape.
+    expect((el.querySelector('.detail-notes-head') as HTMLElement).hidden).toBe(true);
+    expect(el.querySelector('.detail-notes-track')).not.toBeNull();
+  });
+
+  it('stays out of the saved screen entirely when there is nothing to fold', async () => {
+    const { view, el } = harness([], 1_360_000, { timeline: false, collapsible: true });
     await view.load();
     expect(el.hidden).toBe(true);
   });
@@ -165,7 +178,8 @@ describe('RecordingNotesDetail', () => {
     };
     const view = new RecordingNotesDetail('recording:1', 1_000, failing);
     await expect(view.load()).resolves.toBeUndefined();
-    expect(view.element.hidden).toBe(true);
+    // Reads as "no notes" rather than breaking the detail screen.
+    expect(view.element.querySelector('.detail-notes-list')!.children).toHaveLength(0);
   });
 
   describe('folded variant (n2a → n2c)', () => {

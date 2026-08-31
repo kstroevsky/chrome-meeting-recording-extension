@@ -12,6 +12,7 @@ import {
   normalizeNotationText,
   sortRecordingNotations,
   type NotationEndedBy,
+  type RecordingNotationSummary,
   type RecordingNotation,
 } from '../shared/notations';
 import type { RecordingNotationRepositoryPort } from './RecordingNotationRepository';
@@ -28,14 +29,22 @@ export class RecordingNotationService {
   }
 
   /**
-   * How many notations each of these recordings has. Lets a list render its
-   * count chips from one message rather than one per row.
+   * What each of these recordings' notes amount to: how many, and their text
+   * joined for searching. Lets a list render counts and filter on note text
+   * from one message rather than one read per row.
    */
-  async counts(recordingIds: string[]): Promise<Record<string, number>> {
-    const entries = await Promise.all(
-      recordingIds.map(async (id) => [id, (await this.repository.list(id)).length] as const),
-    );
-    return Object.fromEntries(entries.filter(([, count]) => count > 0));
+  async summaries(recordingIds: string[]): Promise<Record<string, RecordingNotationSummary>> {
+    const entries = await Promise.all(recordingIds.map(async (id) => {
+      const notations = await this.repository.list(id);
+      const [first] = notations;
+      return [id, {
+        count: notations.length,
+        search: notations.map((notation) => notation.text).filter(Boolean).join(' '),
+        firstAtMs: first?.tStartMs ?? 0,
+        firstText: first?.text ?? '',
+      }] as const;
+    }));
+    return Object.fromEntries(entries.filter(([, summary]) => summary.count > 0));
   }
 
   /** Appends a notation. Returns the stored record, including its assigned id. */

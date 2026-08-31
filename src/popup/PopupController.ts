@@ -1646,10 +1646,12 @@ export class PopupController {
       : await (async () => {
         try {
           const response = await sendToBackground({
-            type: 'LIST_RECORDING_NOTATION_COUNTS',
+            type: 'LIST_RECORDING_NOTATION_SUMMARIES',
             recordingIds: entries.map((entry) => entry.id),
           });
-          return response.ok ? response.counts : {};
+          return response.ok
+            ? Object.fromEntries(Object.entries(response.summaries).map(([id, s]) => [id, s.count]))
+            : {};
         } catch { return {}; }
       })();
 

@@ -32,11 +32,15 @@ export type RecordingNotesDetailActions = {
 };
 
 export class RecordingNotesDetail {
+  /** Only the detail build explains itself when empty; see `render`. */
+  private readonly showsEmptyState: boolean;
+
   private readonly root = document.createElement('section');
   private readonly timeline = document.createElement('div');
   private readonly header = document.createElement('div');
   private readonly count = document.createElement('span');
   private readonly list = document.createElement('div');
+  private readonly empty = document.createElement('div');
   private notations: RecordingNotation[] = [];
   private selectedId: string | null = null;
 
@@ -51,6 +55,7 @@ export class RecordingNotesDetail {
     this.root.hidden = true;
     this.timeline.className = 'detail-notes-timeline';
     this.timeline.hidden = options.timeline !== true;
+    this.showsEmptyState = options.timeline === true;
 
     const label = document.createElement('span');
     label.textContent = 'YOUR NOTES';
@@ -76,7 +81,17 @@ export class RecordingNotesDetail {
     }
 
     this.list.className = 'detail-notes-list';
-    this.root.append(this.timeline, this.header, this.list);
+
+    // A recording nobody noted still says so, and teaches the shortcut that
+    // would have noted it (f4) — an absent section teaches nothing.
+    this.empty.className = 'detail-notes-empty';
+    this.empty.hidden = true;
+    this.empty.innerHTML =
+      '<div class="detail-notes-empty-title">No notes in this recording</div>'
+      + '<div class="detail-notes-empty-body">Press <kbd>⌥M</kbd> during a call to mark a moment. '
+      + 'The popup does not need to be open.</div>';
+
+    this.root.append(this.timeline, this.header, this.list, this.empty);
   }
 
   private toggle(): void {
@@ -102,10 +117,20 @@ export class RecordingNotesDetail {
   }
 
   private render(): void {
-    // Nothing to say about a recording nobody noted — the section stays absent
-    // rather than showing an empty heading.
-    this.root.hidden = this.notations.length === 0;
-    if (!this.notations.length) return;
+    const empty = this.notations.length === 0;
+    // The detail screen says so and teaches ⌥M (f4). The saved screen folds its
+    // notes behind a heading, where an empty state would be noise right after a
+    // recording the user chose not to note.
+    const explains = empty && this.showsEmptyState;
+    this.root.hidden = empty && !explains;
+    this.empty.hidden = !explains;
+    this.header.hidden = empty;
+    this.list.hidden = empty || this.list.hidden;
+    if (empty) {
+      // The track stays, so the screen keeps its shape.
+      this.timeline.replaceChildren(track());
+      return;
+    }
 
     this.count.textContent = String(this.notations.length);
     this.renderTimeline();
@@ -129,9 +154,7 @@ export class RecordingNotesDetail {
     const scale = this.scaleMs();
     this.timeline.replaceChildren();
 
-    const base = document.createElement('span');
-    base.className = 'detail-notes-track';
-    this.timeline.appendChild(base);
+    this.timeline.appendChild(track());
 
     for (const notation of this.notations) {
       const span = document.createElement('button');
@@ -264,6 +287,12 @@ export class RecordingNotesDetail {
     } catch { /* as above */ }
     this.render();
   }
+}
+
+function track(): HTMLElement {
+  const base = document.createElement('span');
+  base.className = 'detail-notes-track';
+  return base;
 }
 
 function chevron(): SVGSVGElement {
