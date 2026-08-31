@@ -102,6 +102,8 @@ export type PopupElements = {
   uploadJobSub: HTMLElement | null;
   uploadJobFiles: HTMLElement | null;
   uploadJobNotes: HTMLElement | null;
+  uploadJobNotesLine: HTMLElement | null;
+  uploadJobNotesState: HTMLElement | null;
   /** Opens the completed job's Google Drive folder when Drive returned one. */
   uploadJobOpenDrive: HTMLButtonElement | null;
   /** "Retry upload" CTA, shown only for a failed/partial job. */

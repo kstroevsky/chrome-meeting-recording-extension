@@ -170,3 +170,14 @@
 .note-held-start { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; }
 .note-held-text { overflow: hidden; flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
 .note-held-state { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+
+/* The notes sidecar's own line on the saving screen (d4). It sits apart from
+   the media file list because it is not one of them — and it is already up. */
+.upload-notes { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 40px; margin: 0 -18px; padding: 0 18px; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); background: var(--note-band); }
+.upload-notes-label { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12.5px; }
+.upload-notes-label svg { width: 13px; height: 13px; color: var(--warn-label); }
+.upload-notes-state { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+.upload-notes-state svg { width: 11px; height: 11px; }
+/* Only once it is actually up does the line claim it. */
+.upload-notes--saved .upload-notes-state { color: var(--ready); }
+.upload-notes:not(.upload-notes--saved) .upload-notes-state svg { opacity: .35; }

@@ -441,6 +441,17 @@
         <div id="upload-job-sub" class="upload-job-sub"></div>
       </div>
       <ul id="upload-job-files" class="meta-list file-list"></ul>
+      <!-- The notes sidecar goes up ahead of the media, and says so (d4). -->
+      <div id="upload-job-notes-line" class="upload-notes" hidden>
+        <span class="upload-notes-label">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z" /></svg>
+          Notes
+        </span>
+        <span class="upload-notes-state">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.2l3 3L12.5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <span id="upload-job-notes-state"></span>
+        </span>
+      </div>
       <!-- Notes on the recording that was just saved (n2a folded → n2c open). -->
       <div id="upload-job-notes"></div>
       <button id="upload-job-transcript" class="upload-transcript" type="button" hidden><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v7m0 0 2.5-2.5M8 9 5.5 6.5M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></svg><strong>Transcript</strong><span>VTT</span></button>
