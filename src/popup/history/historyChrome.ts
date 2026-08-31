@@ -1,5 +1,5 @@
 /**
- * @file popup/historyChrome.ts
+ * @file popup/history/historyChrome.ts
  *
  * The small vocabulary the popup's two history surfaces share — the compact
  * recordings list and the detail screen it pushes to. Both draw the same open
@@ -7,8 +7,8 @@
  * surface happened to need them first.
  */
 
-import { formatDuration } from './popupStatus';
-import type { RecordingHistoryEntry } from '../shared/recordingHistory';
+import { formatDuration } from '../popupStatus';
+import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 
 export const DETAIL_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4h6v6M11.5 4.5L5 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 export const DETAIL_RENAME_ICON = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.5 2.8l2.7 2.7M3 11.4l7.6-7.6 2.7 2.7L5.6 14l-3 .4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';

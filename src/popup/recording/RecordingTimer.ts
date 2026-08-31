@@ -1,5 +1,5 @@
 /**
- * @file popup/RecordingTimer.ts
+ * @file popup/recording/RecordingTimer.ts
  *
  * The popup's pause-aware recording clock. It is driven entirely by the session's
  * `recordedMs` (banked elapsed time) plus `runningSince` (the start of the current
@@ -8,8 +8,8 @@
  * unit-tested in isolation.
  */
 
-import { formatDuration } from './popupStatus';
-import type { RecordingPhase, RecordingStatusView } from '../shared/recording';
+import { formatDuration } from '../popupStatus';
+import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
 
 /** The recording clock re-renders once per second while a live span is running. */
 const TIMER_TICK_MS = 1000;

@@ -1,5 +1,5 @@
 /**
- * @file popup/RecordingCommands.ts
+ * @file popup/recording/RecordingCommands.ts
  *
  * Starting, stopping and discarding a run — the three destructive-or-expensive
  * commands the popup can send, and the permission gate in front of the first.
@@ -15,10 +15,10 @@
  */
 
 import type { CameraPermissionService } from './CameraPermissionService';
-import type { ConfirmDialog } from './ConfirmDialog';
+import type { ConfirmDialog } from '../ConfirmDialog';
 import type { MicPermissionService } from './MicPermissionService';
 import type { PermissionView } from './PermissionView';
-import { formatDuration } from './popupStatus';
+import { formatDuration } from '../popupStatus';
 import {
   buildDiscardConfirmMessage,
   buildDiscardErrorAlert,
@@ -28,12 +28,12 @@ import {
   CAMERA_PERMISSION_ERROR,
   DISCARD_CONFIRM_TEXT,
   POPUP_TOAST_TEXT,
-} from './popupMessages';
-import type { PopupElements } from './popupView';
-import { queryActiveTab } from '../platform/chrome/tabs';
-import { sendToBackground, sendToContent } from '../shared/messages';
-import { describeNotationForList, type RecordingNotation } from '../shared/notations';
-import type { RecordingRunConfig, RecordingStatusView } from '../shared/recording';
+} from '../popupMessages';
+import type { PopupElements } from '../popupView';
+import { queryActiveTab } from '../../platform/chrome/tabs';
+import { sendToBackground, sendToContent } from '../../shared/messages';
+import { describeNotationForList, type RecordingNotation } from '../../shared/notations';
+import type { RecordingRunConfig, RecordingStatusView } from '../../shared/recording';
 
 /** A start held at the permission interstitial, waiting on the user's answer. */
 type PendingStart = { tabId: number; runConfig: RecordingRunConfig };

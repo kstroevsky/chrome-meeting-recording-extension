@@ -1,6 +1,6 @@
 import { RecordingNotesView, type RecordingNotesElements } from '../RecordingNotesView';
-import type { RecordingNotation } from '../../shared/notations';
-import type { RecordingStatusView } from '../../shared/recording';
+import type { RecordingNotation } from '../../../shared/notations';
+import type { RecordingStatusView } from '../../../shared/recording';
 
 function build(): { el: RecordingNotesElements; root: HTMLElement } {
   const root = document.createElement('div');

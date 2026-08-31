@@ -1,9 +1,9 @@
 import { SessionTabsView, type SessionTabsCallbacks } from '../SessionTabsView';
-import { sendToBackground } from '../../shared/messages';
-import type { PopupElements } from '../popupView';
-import type { RecordingStatusView, UploadJob } from '../../shared/recording';
+import { sendToBackground } from '../../../shared/messages';
+import type { PopupElements } from '../../popupView';
+import type { RecordingStatusView, UploadJob } from '../../../shared/recording';
 
-jest.mock('../../shared/messages', () => ({ sendToBackground: jest.fn() }));
+jest.mock('../../../shared/messages', () => ({ sendToBackground: jest.fn() }));
 const mockSend = sendToBackground as jest.MockedFunction<typeof sendToBackground>;
 
 const flush = async () => {

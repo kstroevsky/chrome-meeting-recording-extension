@@ -4,7 +4,7 @@
  * Pure DOM-focused helpers for syncing popup controls with recording state.
  */
 
-import type { RecordingNotesElements } from './RecordingNotesView';
+import type { RecordingNotesElements } from './notes/RecordingNotesView';
 import type { RecordingPhase } from '../shared/recording';
 
 /** Which top-level popup layout a phase maps to. */

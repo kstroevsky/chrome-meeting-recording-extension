@@ -6,26 +6,26 @@
  * closed/reopened at any time without owning the recording lifecycle.
  */
 
-import { CameraPermissionService } from './CameraPermissionService';
-import { CaptionPoller } from './CaptionPoller';
+import { CameraPermissionService } from './recording/CameraPermissionService';
+import { CaptionPoller } from './recording/CaptionPoller';
 import { ConfirmDialog } from './ConfirmDialog';
-import { MicPermissionService } from './MicPermissionService';
-import { RecordingTimer } from './RecordingTimer';
-import { DevicePickerView } from './DevicePickerView';
-import { RecordingNotesView } from './RecordingNotesView';
-import { RecordingNotesDetail } from './RecordingNotesDetail';
-import { RecordingDetailView, type PopupDetailTarget } from './RecordingDetailView';
-import { RecordingsListView } from './RecordingsListView';
-import { InterruptedView } from './InterruptedView';
-import { PermissionView } from './PermissionView';
-import { RecordingControlsView } from './RecordingControlsView';
-import { PopupStatusView } from './PopupStatusView';
-import { PopupNotations } from './PopupNotations';
-import { CompletedNamingPrompt } from './CompletedNamingPrompt';
-import { RecordingCommands } from './RecordingCommands';
+import { MicPermissionService } from './recording/MicPermissionService';
+import { RecordingTimer } from './recording/RecordingTimer';
+import { DevicePickerView } from './recording/DevicePickerView';
+import { RecordingNotesView } from './notes/RecordingNotesView';
+import { RecordingNotesDetail } from './notes/RecordingNotesDetail';
+import { RecordingDetailView, type PopupDetailTarget } from './history/RecordingDetailView';
+import { RecordingsListView } from './history/RecordingsListView';
+import { InterruptedView } from './recording/InterruptedView';
+import { PermissionView } from './recording/PermissionView';
+import { RecordingControlsView } from './recording/RecordingControlsView';
+import { PopupStatusView } from './recording/PopupStatusView';
+import { PopupNotations } from './notes/PopupNotations';
+import { CompletedNamingPrompt } from './history/CompletedNamingPrompt';
+import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
-import { SessionTabsView } from './SessionTabsView';
+import { SessionTabsView } from './history/SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
 import type {
   PopupPreviewState,

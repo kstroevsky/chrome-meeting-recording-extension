@@ -1,3 +1,17 @@
+import {
+  dayLabel,
+  durationOf,
+  formatDuration,
+  formatDurationMs,
+  formatSize,
+  formatTime,
+  fullDate,
+  sizeOf,
+  statusLabel,
+  streamLabel,
+  withHit,
+} from './recordingsFormat';
+import { checkIcon, cloudIcon, diskIcon, editIcon } from './recordingsIcons';
 import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 
@@ -11,33 +25,9 @@ export type RecordingsViewCallbacks = {
 };
 
 type Sort = 'time-desc' | 'time-asc' | 'name' | 'duration' | 'size' | 'notes';
-type HistoryEntryWithDuration = RecordingHistoryEntry & { durationMs?: number };
 
 const NOTE_CHIP_ICON = '<svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 
-/**
- * Writes `text` into `host`, wrapping each occurrence of the active query in a
- * gold `<b>` so a search says *where* it matched (f2). Falls back to plain text
- * when there is no query, and never interprets the query as markup.
- */
-function withHit(host: HTMLElement, text: string, query: string): HTMLElement {
-  if (!query) { host.textContent = text; return host; }
-  const lower = text.toLocaleLowerCase();
-  let from = 0;
-  let at = lower.indexOf(query);
-  if (at < 0) { host.textContent = text; return host; }
-  while (at >= 0) {
-    if (at > from) host.append(text.slice(from, at));
-    const hit = document.createElement('b');
-    hit.className = 'recording-row__hit';
-    hit.textContent = text.slice(at, at + query.length);
-    host.append(hit);
-    from = at + query.length;
-    at = lower.indexOf(query, from);
-  }
-  if (from < text.length) host.append(text.slice(from));
-  return host;
-}
 
 const $ = (tag: string, className?: string): HTMLElement => {
   const element = document.createElement(tag);
@@ -45,116 +35,20 @@ const $ = (tag: string, className?: string): HTMLElement => {
   return element;
 };
 
-function svg(viewBox: string, className: string, paths: Array<{ d: string; attrs?: Record<string, string> }>): SVGSVGElement {
-  const element = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  element.setAttribute('viewBox', viewBox);
-  element.setAttribute('fill', 'none');
-  element.setAttribute('aria-hidden', 'true');
-  if (className) element.setAttribute('class', className);
-  for (const { d, attrs = {} } of paths) {
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', d);
-    for (const [name, value] of Object.entries(attrs)) path.setAttribute(name, value);
-    element.appendChild(path);
-  }
-  return element;
-}
 
-function checkIcon(): SVGSVGElement {
-  return svg('0 0 16 16', '', [{
-    d: 'M3.5 8.5l3 3 6-7',
-    attrs: { stroke: 'currentColor', 'stroke-width': '2.4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-  }]);
-}
 
-function cloudIcon(): SVGSVGElement {
-  const icon = svg('0 0 16 16', 'destination-icon', [{
-    d: 'M4.5 13a3 3 0 01-.3-5.99A4 4 0 0112 6.5a2.75 2.75 0 01-.25 5.5H4.5z',
-    attrs: { fill: 'currentColor' },
-  }]);
-  return icon;
-}
 
-function diskIcon(): SVGSVGElement {
-  return svg('0 0 16 16', 'destination-icon destination-icon--local', [
-    { d: 'M2.5 3.5h11v9h-11z', attrs: { stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linejoin': 'round' } },
-    { d: 'M2.5 6.5h11', attrs: { stroke: 'currentColor', 'stroke-width': '1.4' } },
-  ]);
-}
 
-function editIcon(): SVGSVGElement {
-  return svg('0 0 16 16', 'detail-title__icon', [{
-    d: 'M11.5 2.1l2.4 2.4-8.8 8.8-3 .6.6-3 8.8-8.8z',
-    attrs: { stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-  }]);
-}
 
-function streamLabel(stream: RecordingHistoryFile['stream']): string {
-  return stream === 'self-video' ? 'CAM' : stream.toUpperCase();
-}
 
-function statusLabel(status: RecordingHistoryEntry['status']): string {
-  return status === 'partial' ? 'RECOVERED' : status.toUpperCase();
-}
 
-function sizeOf(entry: RecordingHistoryEntry): number {
-  return entry.files.reduce((total, file) => total + (file.bytes ?? 0), 0);
-}
 
-function formatSize(bytes: number): string {
-  if (!bytes) return '—';
-  const megabytes = bytes / (1024 * 1024);
-  if (megabytes >= 1024) return `${(megabytes / 1024).toFixed(1)}G`;
-  return `${Math.max(1, Math.round(megabytes))}M`;
-}
 
-function durationOf(entry: RecordingHistoryEntry): number | undefined {
-  return (entry as HistoryEntryWithDuration).durationMs;
-}
 
-/** The design's note timecodes are zero-padded to minutes: `02:34`, not `2:34`. */
-function formatDurationMs(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = String(totalSeconds % 60).padStart(2, '0');
-  return hours
-    ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`
-    : `${String(minutes).padStart(2, '0')}:${seconds}`;
-}
 
-function formatDuration(entry: RecordingHistoryEntry): string {
-  const durationMs = durationOf(entry);
-  if (durationMs == null || durationMs < 0) return '—';
-  const totalSeconds = Math.floor(durationMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}` : `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
 
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
 
-function dayLabel(timestamp: number): string {
-  const date = new Date(timestamp);
-  const today = new Date();
-  const sameDay = date.getFullYear() === today.getFullYear()
-    && date.getMonth() === today.getMonth()
-    && date.getDate() === today.getDate();
-  const weekdays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-  const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-  return `${sameDay ? 'TODAY · ' : ''}${weekdays[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()}`;
-}
 
-function fullDate(timestamp: number): string {
-  const date = new Date(timestamp);
-  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${weekdays[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()} ${date.getFullYear()} · ${formatTime(timestamp)}`;
-}
 
 /** DOM-only renderer for the standalone, paged recordings history. */
 export class RecordingsView {

@@ -1,9 +1,9 @@
 import { CaptionPoller } from '../CaptionPoller';
-import { queryActiveTab } from '../../platform/chrome/tabs';
-import { sendToContent } from '../../shared/messages';
+import { queryActiveTab } from '../../../platform/chrome/tabs';
+import { sendToContent } from '../../../shared/messages';
 
-jest.mock('../../platform/chrome/tabs', () => ({ queryActiveTab: jest.fn() }));
-jest.mock('../../shared/messages', () => ({ sendToContent: jest.fn() }));
+jest.mock('../../../platform/chrome/tabs', () => ({ queryActiveTab: jest.fn() }));
+jest.mock('../../../shared/messages', () => ({ sendToContent: jest.fn() }));
 
 const mockQueryActiveTab = queryActiveTab as jest.MockedFunction<typeof queryActiveTab>;
 const mockSendToContent = sendToContent as jest.MockedFunction<typeof sendToContent>;

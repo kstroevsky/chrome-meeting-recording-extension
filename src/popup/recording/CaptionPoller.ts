@@ -1,5 +1,5 @@
 /**
- * @file popup/CaptionPoller.ts
+ * @file popup/recording/CaptionPoller.ts
  *
  * Polls the active tab's content script for live-caption presence and reflects it
  * on the recording view's transcript chip. Best-effort: if the tab is unreachable
@@ -8,8 +8,8 @@
  * be unit-tested in isolation.
  */
 
-import { queryActiveTab } from '../platform/chrome/tabs';
-import { sendToContent } from '../shared/messages';
+import { queryActiveTab } from '../../platform/chrome/tabs';
+import { sendToContent } from '../../shared/messages';
 
 /** How often the recording view polls the content script for live caption presence. */
 const CAPTION_POLL_MS = 3000;

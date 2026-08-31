@@ -1,5 +1,5 @@
 /**
- * @file popup/PopupStatusView.ts
+ * @file popup/recording/PopupStatusView.ts
  *
  * Everything the popup says about the run *outside* the screen it is on: the
  * header's phase label and tone, the REC banner, the storage and tab-source
@@ -12,9 +12,9 @@
  * rather than a second label beside it.
  */
 
-import { detailPercent } from './historyChrome';
-import type { PopupElements } from './popupView';
-import type { RecordingPhase, RecordingStatusView } from '../shared/recording';
+import { detailPercent } from '../history/historyChrome';
+import type { PopupElements } from '../popupView';
+import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
 
 export type PopupStatusElements = Pick<
   PopupElements,

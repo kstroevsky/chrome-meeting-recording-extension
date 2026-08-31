@@ -1,5 +1,5 @@
 /**
- * @file popup/InterruptedView.ts
+ * @file popup/recording/InterruptedView.ts
  *
  * The notice for a run that ended without the user asking — the meeting tab
  * closed, the tab left the meeting, or the meeting ended (design n4).
@@ -10,12 +10,12 @@
  * That is why "NOTHING LOST" is the first thing it can honestly claim.
  */
 
-import { NotationRibbon } from './notationRibbon';
-import { notationRow } from './notationRow';
-import { formatDuration } from './popupStatus';
-import type { PopupElements } from './popupView';
-import type { RecordingNotation } from '../shared/notations';
-import type { RecordingStatusView } from '../shared/recording';
+import { NotationRibbon } from '../notes/notationRibbon';
+import { notationRow } from '../notes/notationRow';
+import { formatDuration } from '../popupStatus';
+import type { PopupElements } from '../popupView';
+import type { RecordingNotation } from '../../shared/notations';
+import type { RecordingStatusView } from '../../shared/recording';
 
 export type RecordingInterruption = NonNullable<RecordingStatusView['interruption']>;
 

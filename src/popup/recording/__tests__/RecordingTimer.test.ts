@@ -1,6 +1,6 @@
 import { RecordingTimer } from '../RecordingTimer';
-import { formatDuration } from '../popupStatus';
-import type { RecordingStatusView } from '../../shared/recording';
+import { formatDuration } from '../../popupStatus';
+import type { RecordingStatusView } from '../../../shared/recording';
 
 const session = (over: Partial<RecordingStatusView>): RecordingStatusView => over as RecordingStatusView;
 

@@ -1,5 +1,5 @@
 /**
- * @file popup/notationRow.ts
+ * @file popup/notes/notationRow.ts
  *
  * One line of a notes list: when the note starts, what it says, and how long it
  * ran. Two surfaces show it — a finished recording's detail view, where the row
@@ -12,8 +12,8 @@
  * the length into the label instead (`describeNotationForList`).
  */
 
-import { formatDuration } from './popupStatus';
-import type { RecordingNotation } from '../shared/notations';
+import { formatDuration } from '../popupStatus';
+import type { RecordingNotation } from '../../shared/notations';
 
 /** What the design puts in a note nobody named: an invitation, not a label. */
 const UNNAMED_NOTE = 'Name this one';

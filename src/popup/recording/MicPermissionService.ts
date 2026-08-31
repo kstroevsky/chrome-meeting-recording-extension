@@ -1,12 +1,12 @@
 /**
- * @file popup/MicPermissionService.ts
+ * @file popup/recording/MicPermissionService.ts
  *
  * Popup-side microphone permission helper. It handles state queries, inline
  * permission priming, and setup-page fallback when Chrome blocks inline prompts.
  */
 
-import type { MicMode } from '../shared/recording';
-import { createRuntimeTab } from '../platform/chrome/tabs';
+import type { MicMode } from '../../shared/recording';
+import { createRuntimeTab } from '../../platform/chrome/tabs';
 
 export class MicPermissionService {
   /** Opens the dedicated runtime page that can trigger Chrome's microphone permission UI. */

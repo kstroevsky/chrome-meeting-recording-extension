@@ -1,5 +1,5 @@
 /**
- * @file popup/DevicePickerView.ts
+ * @file popup/recording/DevicePickerView.ts
  *
  * The bottom sheet that switches the live microphone or camera track mid-run.
  *
@@ -10,9 +10,9 @@
  * view drives the live popup and the deterministic gallery preview.
  */
 
-import type { PopupElements } from './popupView';
-import type { PopupPreviewDeviceOption } from './popupPreviewState';
-import type { RecordingInputDevice, RecordingStatusView } from '../shared/recording';
+import type { PopupElements } from '../popupView';
+import type { PopupPreviewDeviceOption } from '../popupPreviewState';
+import type { RecordingInputDevice, RecordingStatusView } from '../../shared/recording';
 
 export type DevicePickerElements = Pick<
   PopupElements,

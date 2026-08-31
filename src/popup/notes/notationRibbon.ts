@@ -1,5 +1,5 @@
 /**
- * @file popup/notationRibbon.ts
+ * @file popup/notes/notationRibbon.ts
  *
  * Draws notation spans onto a track.
  *
@@ -14,8 +14,8 @@
  * smallest span the track will show, and whether spans are clickable.
  */
 
-import { formatDuration } from './popupStatus';
-import type { RecordingNotation } from '../shared/notations';
+import { formatDuration } from '../popupStatus';
+import type { RecordingNotation } from '../../shared/notations';
 
 export type NotationRibbonOptions = {
   /** Class on every span. The finished and live ribbons are styled apart. */

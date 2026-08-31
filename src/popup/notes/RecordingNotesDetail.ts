@@ -1,5 +1,5 @@
 /**
- * @file popup/RecordingNotesDetail.ts
+ * @file popup/notes/RecordingNotesDetail.ts
  *
  * The notes section of a finished recording's detail view (design `d1`): a
  * timeline of every span drawn against the recording's own duration, and the
@@ -12,10 +12,10 @@
  * reachable later.
  */
 
-import { formatDuration } from './popupStatus';
+import { formatDuration } from '../popupStatus';
 import { NotationRibbon } from './notationRibbon';
 import { notationRow } from './notationRow';
-import type { RecordingNotation } from '../shared/notations';
+import type { RecordingNotation } from '../../shared/notations';
 
 export type RecordingNotesDetailOptions = {
   /** Draw the span timeline above the list. Off where the surface has no room for it. */

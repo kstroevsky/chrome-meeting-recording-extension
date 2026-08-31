@@ -1,5 +1,5 @@
 /**
- * @file popup/RecordingControlsView.ts
+ * @file popup/recording/RecordingControlsView.ts
  *
  * The three live controls on the recording screen: mute the microphone, hide
  * the camera, pause the whole run.
@@ -14,9 +14,9 @@
  * session, never from a click.
  */
 
-import type { PopupElements } from './popupView';
-import type { CommandResult } from '../shared/protocol';
-import type { RecordingPhase, RecordingStatusView } from '../shared/recording';
+import type { PopupElements } from '../popupView';
+import type { CommandResult } from '../../shared/protocol';
+import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
 
 export type RecordingControlsElements = Pick<
   PopupElements,

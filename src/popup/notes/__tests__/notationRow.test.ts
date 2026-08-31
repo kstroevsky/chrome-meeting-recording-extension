@@ -1,5 +1,5 @@
 import { notationRow } from '../notationRow';
-import type { RecordingNotation } from '../../shared/notations';
+import type { RecordingNotation } from '../../../shared/notations';
 
 const note = (
   tStartMs: number,

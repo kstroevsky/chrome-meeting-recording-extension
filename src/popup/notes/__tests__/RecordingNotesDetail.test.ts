@@ -3,7 +3,7 @@ import {
   type RecordingNotesDetailActions,
   type RecordingNotesDetailOptions,
 } from '../RecordingNotesDetail';
-import type { RecordingNotation } from '../../shared/notations';
+import type { RecordingNotation } from '../../../shared/notations';
 
 const note = (id: string, tStartMs: number, tEndMs: number | undefined, text: string, endedBy?: 'user' | 'auto'): RecordingNotation =>
   ({ id, tStartMs, ...(tEndMs != null ? { tEndMs } : {}), ...(endedBy ? { endedBy } : {}), text });

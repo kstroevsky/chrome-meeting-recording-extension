@@ -1,5 +1,5 @@
 /**
- * @file popup/RecordingNotesView.ts
+ * @file popup/notes/RecordingNotesView.ts
  *
  * The live notes UI: the "Make a note" capture row, the span ribbon under the
  * timer, and the message editor (ADR-0005).
@@ -14,10 +14,10 @@
  * scaled to live elapsed time, which only grows while recording.
  */
 
-import { formatDuration } from './popupStatus';
+import { formatDuration } from '../popupStatus';
 import { NotationRibbon } from './notationRibbon';
-import type { RecordingNotation } from '../shared/notations';
-import type { RecordingPhase, RecordingStatusView } from '../shared/recording';
+import type { RecordingNotation } from '../../shared/notations';
+import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
 
 /** The open span's length re-renders once per second, like the timer. */
 const TICK_MS = 1000;

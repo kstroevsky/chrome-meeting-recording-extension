@@ -1,5 +1,5 @@
 /**
- * @file popup/PopupNotations.ts
+ * @file popup/notes/PopupNotations.ts
  *
  * Every notation read and write the popup makes, and the one place that knows
  * whether it is talking to the background or to a static preview fixture.
@@ -15,8 +15,8 @@
  */
 
 import type { RecordingNotesDetailActions } from './RecordingNotesDetail';
-import { sendToBackground } from '../shared/messages';
-import type { RecordingNotation } from '../shared/notations';
+import { sendToBackground } from '../../shared/messages';
+import type { RecordingNotation } from '../../shared/notations';
 import type {
   PopupEndNotation,
   PopupListRecordingNotations,
@@ -25,8 +25,8 @@ import type {
   PopupRemoveRecordingNotation,
   PopupUpdateActiveNotation,
   PopupUpdateRecordingNotation,
-} from '../shared/protocol';
-import type { RecordingHistoryEntry } from '../shared/recordingHistory';
+} from '../../shared/protocol';
+import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 
 type LiveCommand =
   | PopupMarkNotation

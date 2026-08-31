@@ -1,5 +1,5 @@
 /**
- * @file popup/RecordingsListView.ts
+ * @file popup/history/RecordingsListView.ts
  *
  * The compact Recordings screen inside the popup: the three most recent
  * recordings, any upload still in flight above them, and the note spoiler on
@@ -11,11 +11,11 @@
  */
 
 import { DETAIL_OPEN_ICON, detailPercent } from './historyChrome';
-import { formatDuration } from './popupStatus';
-import { sendToBackground } from '../shared/messages';
-import { describeNotationForList, type RecordingNotation } from '../shared/notations';
-import type { UploadJob } from '../shared/recording';
-import type { RecordingHistoryEntry } from '../shared/recordingHistory';
+import { formatDuration } from '../popupStatus';
+import { sendToBackground } from '../../shared/messages';
+import { describeNotationForList, type RecordingNotation } from '../../shared/notations';
+import type { UploadJob } from '../../shared/recording';
+import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 
 const NOTE_CHIP_ICON = '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 

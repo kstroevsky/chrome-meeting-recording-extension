@@ -1,6 +1,6 @@
 # Popup — the control panel (state-driven, non-authoritative UI)
 
-> The browser-action UI: start/stop/discard, live recording controls (mute/hide/pause), transcript download, permission priming, history navigation, detached-upload controls, and completed-upload naming. It is **created fresh every time the user opens it and destroyed on close** — so it owns *no* truth; it renders from the background's authoritative session. For symbol-level structure use codegraph (`codegraph_explore "PopupController SessionTabsView RecordingNameDialog"`). The entry `../popup.ts` is intentionally thin (boots the shared shell and controller), and `PopupController` is itself a **thin orchestrator** that delegates the recording timer, caption poll, dialogs, and session-tab/upload UI to focused collaborators.
+> The browser-action UI: start/stop/discard, live recording controls (mute/hide/pause), transcript download, permission priming, history navigation, detached-upload controls, and completed-upload naming. It is **created fresh every time the user opens it and destroyed on close** — so it owns *no* truth; it renders from the background's authoritative session. For symbol-level structure use codegraph (`codegraph_explore "PopupController SessionTabsView RecordingNameDialog"`). The entry `../popup.ts` is intentionally thin (boots the shared shell and controller), and `PopupController` is a **router**: it constructs the per-concern modules under `recording/`, `notes/` and `history/`, maps phase → view, and renders almost nothing itself.
 
 > **Archetype:** *Interactive Surface*. The defining constraint is that this UI is **ephemeral and not the source of truth** — it must render correctly from state it doesn't own, every time it reopens, with live controls that never interrupt the recording. So this README leads with the view-state model and the authority/reconciliation rules. If you read one section, read **The authority model**.
 
@@ -111,19 +111,58 @@ Separate from recording: the header **Save** button (`wireTranscriptDownload`) p
 
 ## Files
 
+The folder is split by **concern, not by kind**: everything a live run needs sits
+in `recording/`, everything about notes in `notes/`, everything about finished
+recordings and their uploads in `history/`. The root keeps only the shell (the
+element map, the view switch, the string builders), the two shared dialogs, and
+the orchestrator itself.
+
 | File | Role |
 | :--- | :--- |
-| `PopupController.ts` | thin orchestrator: DOM wiring, view population (`onPhaseChange`), the optimistic toggles (`runToggleCommand`), toasts — delegates the timer, caption poll, and session-tab/upload UI to the collaborators below |
-| `RecordingTimer.ts` | the pause-aware 1 s recording clock (extracted from the controller) |
-| `RecordingNotesView.ts` | the live notes UI (ADR-0005): the "Make a note" row, the span ribbon, and the message editor |
-| `RecordingNotesDetail.ts` | notes on a *finished* recording: the d1 detail build (timeline + always-open list, with the `f4` empty state that teaches ⌥M) and the n2a/n2c saved-screen build (no timeline, folded behind its heading, absent when empty), both with in-place rename and delete |
-| `CaptionPoller.ts` | the recording-view caption-state poll that drives the Transcript chip (extracted) |
-| `SessionTabsView.ts` | the session tab bar + per-job background-upload view (ADR-0004), including retry/cancel affordances and recovery-state messaging; owns its tab/selection state and talks back to the controller via a `{ rerender, applySession, toast }` callback bag |
-| `RecordingNameDialog.ts` | accessible reusable title-input modal for the one-time completed-upload prompt and later recording-detail rename |
-| `controllers/PopupStateController.ts` | maps the session → phase → view; `applySession`, `refreshInitialState`, persistent-status text |
+| `PopupController.ts` | the router: constructs the modules below, maps phase → view (`onPhaseChange`), holds the last phase/session, and paints gallery previews. It renders almost nothing itself |
 | `popupView.ts` | `setActiveView` + DOM helpers (the view switch) |
+| `popupBootstrap.ts`, `popupShell.ts` | the one shared element map, and the chrome the entry wires |
 | `popupRunConfig.ts`, `popupStatus.ts`, `popupMessages.ts` | config-view run-config reads, status/label text, message/toast string builders |
+| `popupPreviewState.ts` | the fixture seam the gallery renders through |
+| `ConfirmDialog.ts`, `RecordingNameDialog.ts` | the two dialogs shared across concerns |
+| `transcriptDownload.ts` | saves the tab's captions — the one popup action that never touches the background |
+| `controllers/PopupStateController.ts` | maps the session → phase → view; `applySession`, `refreshInitialState`, persistent-status text |
+
+### `recording/` — a run in progress
+
+| File | Role |
+| :--- | :--- |
+| `RecordingCommands.ts` | start / stop / discard and the permission gate; one in-flight lock guards all three, so Discard waits for a start rather than racing it |
+| `RecordingControlsView.ts` | mic mute, camera hide, pause — all three repaint from the session in the *response*, so a rejected toggle reverts |
+| `PermissionView.ts` | the mic/camera interstitial, in its *ask* and *blocked* shapes |
+| `DevicePickerView.ts` | the bottom sheet that switches the live track, with request fencing over `enumerateDevices` |
+| `PopupStatusView.ts` | header phase/tone, REC banner, chips, finalizing checklist, upload-return control |
+| `InterruptedView.ts` | the notice for a run that ended without being asked to (n4) |
+| `RecordingTimer.ts` | the pause-aware 1 s recording clock |
+| `CaptionPoller.ts` | the recording-view caption-state poll behind the Transcript chip |
 | `MicPermissionService.ts`, `CameraPermissionService.ts` | permission query + inline-prime + setup-tab ladder |
+
+### `notes/` — timecoded annotations (ADR-0005)
+
+| File | Role |
+| :--- | :--- |
+| `PopupNotations.ts` | every notation read and write, and the single switch between the background and a preview fixture |
+| `notationRibbon.ts` | places spans on a track — one placement rule for the live, finished and interrupted ribbons |
+| `notationRow.ts` | one line of a notes list; owns the `.detail-notes-row` structure the stylesheet depends on |
+| `RecordingNotesView.ts` | the live notes UI: the "Make a note" row, the ribbon, and the message editor |
+| `RecordingNotesDetail.ts` | notes on a *finished* recording: the d1 detail build (timeline + always-open list, with the `f4` empty state that teaches ⌥M) and the n2a/n2c saved-screen build (no timeline, folded behind its heading, absent when empty), both with in-place rename and delete |
+
+### `history/` — finished recordings and their uploads
+
+| File | Role |
+| :--- | :--- |
+| `RecordingsListView.ts` | the compact Recordings screen: recent rows, in-flight uploads above them, note spoilers |
+| `RecordingDetailView.ts` | the pushed detail screen and which recording is on it, including the swap from a finishing upload to its durable history row |
+| `uploadDetailPanel.ts` | the detail body for an upload still in flight |
+| `SessionTabsView.ts` | the session tab bar (ADR-0004); owns tab/selection state and its terminal fade timers |
+| `uploadJobPanel.ts` | the pure paint of one job's saved/uploading panel, including the notes line (d4) |
+| `CompletedNamingPrompt.ts` | asks for a name once an upload finishes, one recording at a time |
+| `historyChrome.ts` | the icons and date/percent formatting both history surfaces share |
 
 Entry: `../popup.ts` (DOM wiring only). The Settings *page* is a separate surface — a thin `../settings.ts` shell over [`settings/SettingsController.ts`](../settings/SettingsController.ts) (same shell→controller pattern as here), reached via the settings link; its schema lives in [`shared/settings`](../shared/settings/README.md).
 
@@ -131,7 +170,7 @@ Entry: `../popup.ts` (DOM wiring only). The Settings *page* is a separate surfac
 
 - `__tests__/PopupController.test.ts` and `PopupStateController.test.ts` drive the controller against a fake element set + mocked `chrome.runtime`, asserting view switches, stop/discard reconciliation, session-tab/upload flows, naming prompt ordering, skip persistence, and rename response reconciliation.
 - `__tests__/RecordingNameDialog.test.ts` covers validation, focus trapping, busy/error state, Save, Skip, and disposal. `tests/e2e/recording-rename.spec.ts` proves a completed mocked-Drive upload can rename the real remote folder/file projections through the built extension.
-- The extracted collaborators are unit-tested in isolation: `RecordingTimer.test.ts` (tick / pause / stop-idempotence), `CaptionPoller.test.ts` (on / off / unreachable tab / idempotent start), and `SessionTabsView.test.ts` (tab render/select, retry/cancel, and recovery states).
+- The extracted modules are unit-tested in isolation next to their own source: `recording/__tests__/RecordingTimer.test.ts` (tick / pause / stop-idempotence), `recording/__tests__/CaptionPoller.test.ts` (on / off / unreachable tab / idempotent start), `history/__tests__/SessionTabsView.test.ts` (tab render/select, retry/cancel, recovery states), and `notes/__tests__/` for the ribbon, the row and both notes views.
 - `MicPermissionService`/`CameraPermissionService` are tested against a mocked `navigator.permissions`/`mediaDevices` — the ladder (granted / denied / prompt→prime→fallback) is the unit under test.
 - `popupMessages.test.ts` pins the user-facing strings.
 

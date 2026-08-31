@@ -1,11 +1,11 @@
-import { CameraPermissionService } from '../CameraPermissionService';
-import { MicPermissionService } from '../MicPermissionService';
+import { CameraPermissionService } from '../recording/CameraPermissionService';
+import { MicPermissionService } from '../recording/MicPermissionService';
 import { PopupController } from '../PopupController';
 import { DEFAULT_EXTENSION_SETTINGS } from '../../shared/settings';
 import type { RecordingRunConfig } from '../../shared/recording';
 
-jest.mock('../../popup/MicPermissionService');
-jest.mock('../../popup/CameraPermissionService');
+jest.mock('../recording/MicPermissionService');
+jest.mock('../recording/CameraPermissionService');
 
 const flush = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve();

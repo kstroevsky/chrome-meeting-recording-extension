@@ -1,10 +1,10 @@
 /**
- * @file popup/CameraPermissionService.ts
+ * @file popup/recording/CameraPermissionService.ts
  *
  * Popup-side camera permission helper used when self-video capture is enabled.
  */
 
-import { createRuntimeTab } from '../platform/chrome/tabs';
+import { createRuntimeTab } from '../../platform/chrome/tabs';
 
 export class CameraPermissionService {
   /** Opens the dedicated runtime page that can trigger Chrome's camera permission UI. */

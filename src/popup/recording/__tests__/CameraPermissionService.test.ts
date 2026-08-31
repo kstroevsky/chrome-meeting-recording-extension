@@ -1,7 +1,7 @@
 import { CameraPermissionService } from '../CameraPermissionService';
-import { createRuntimeTab } from '../../platform/chrome/tabs';
+import { createRuntimeTab } from '../../../platform/chrome/tabs';
 
-jest.mock('../../platform/chrome/tabs', () => ({
+jest.mock('../../../platform/chrome/tabs', () => ({
   createRuntimeTab: jest.fn().mockResolvedValue(undefined),
 }));
 

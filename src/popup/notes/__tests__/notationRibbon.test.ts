@@ -1,5 +1,5 @@
 import { NotationRibbon, describeNotation } from '../notationRibbon';
-import type { RecordingNotation } from '../../shared/notations';
+import type { RecordingNotation } from '../../../shared/notations';
 
 const note = (
   id: string,

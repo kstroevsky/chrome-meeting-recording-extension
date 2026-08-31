@@ -1,5 +1,5 @@
 /**
- * @file popup/PermissionView.ts
+ * @file popup/recording/PermissionView.ts
  *
  * The interstitial shown when a run needs microphone or camera access that the
  * browser has not granted yet.
@@ -13,8 +13,8 @@
  * its two exits the user chose.
  */
 
-import type { PopupPreviewPermissionState as PermissionQueryState } from './popupPreviewState';
-import type { PopupElements } from './popupView';
+import type { PopupPreviewPermissionState as PermissionQueryState } from '../popupPreviewState';
+import type { PopupElements } from '../popupView';
 
 export type PermissionElements = Pick<
   PopupElements,

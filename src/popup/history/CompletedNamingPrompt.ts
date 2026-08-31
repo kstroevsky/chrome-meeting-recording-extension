@@ -1,5 +1,5 @@
 /**
- * @file popup/CompletedNamingPrompt.ts
+ * @file popup/history/CompletedNamingPrompt.ts
  *
  * Asks for a name once an upload has finished, one recording at a time.
  *
@@ -13,9 +13,9 @@
  * recording is never asked about twice.
  */
 
-import type { RecordingNameDialog } from './RecordingNameDialog';
-import { sendToBackground } from '../shared/messages';
-import type { RecordingPhase, RecordingStatusView, UploadJob } from '../shared/recording';
+import type { RecordingNameDialog } from '../RecordingNameDialog';
+import { sendToBackground } from '../../shared/messages';
+import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
 
 export type CompletedNamingActions = {
   notify: (message: string) => void;
