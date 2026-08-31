@@ -25,6 +25,18 @@ export type DesiredState = 'idle' | 'recording';
 export type ObservedState = 'none' | 'starting' | 'recording' | 'stopping' | 'idle';
 
 export type RecordingStream = 'tab' | 'mic' | 'self-video';
+
+/**
+ * An ending the user did not ask for. The capture is sealed and saved either
+ * way — this is a notification of a completed save, not a decision point.
+ */
+export type RecordingInterruption = {
+  reason: 'tab-closed' | 'navigated-away' | 'meeting-ended';
+  /** Recorded position the capture actually reached. */
+  atMs: number;
+  /** History identity of the saved recording, so its notes can be listed. */
+  historyId: string;
+};
 export type StorageMode = 'local' | 'drive';
 export type MicMode = 'off' | 'mixed' | 'separate';
 /** Immutable ownership carried with sealed artifacts after capture has ended. */
@@ -187,6 +199,13 @@ export type RecordingSessionSnapshot = {
    * popup. See ADR-0003.
    */
   epoch?: number;
+  /**
+   * Why the last run ended, when it was not the user's doing. Phase-independent
+   * — it outlives the run so the popup can report the interruption after the
+   * capture has already been saved (ADR-0005, design n4). Cleared on the next
+   * `start()` and when the user dismisses the notice.
+   */
+  interruption?: RecordingInterruption;
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];
@@ -253,6 +272,8 @@ export type RecordingStatusView = {
   cameraMuted?: boolean;
   /** Live whole-recording pause state; see {@link RecordingSessionSnapshot.paused}. */
   paused?: boolean;
+  /** Set when the last run ended without the user asking (design n4). */
+  interruption?: RecordingInterruption;
   /** Pause-aware recording timer state; see {@link RecordingSessionSnapshot.recordedMs}. */
   recordedMs?: number;
   runningSince?: number;

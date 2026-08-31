@@ -130,6 +130,13 @@ function detailPercent(value: number): number {
   return Math.round(Math.min(1, Math.max(0, value)) * 100);
 }
 
+/** What actually happened, in the user's terms. */
+const INTERRUPTION_TITLE: Record<'tab-closed' | 'navigated-away' | 'meeting-ended', string> = {
+  'tab-closed': 'The meeting tab closed',
+  'navigated-away': 'The tab left the meeting',
+  'meeting-ended': 'The meeting ended',
+};
+
 const NOTE_CHIP_ICON = '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 const DETAIL_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4h6v6M11.5 4.5L5 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const DETAIL_RENAME_ICON = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.5 2.8l2.7 2.7M3 11.4l7.6-7.6 2.7 2.7L5.6 14l-3 .4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -217,6 +224,7 @@ export class PopupController {
     setActiveView(this.el, readCachedPhase());
     this.wireRecordingStateListener();
     this.wireTranscriptDownload();
+    this.wireInterrupted();
     this.wireStartStop();
     this.wireDiscard();
     this.wirePermissionInterstitial();
@@ -355,8 +363,16 @@ export class PopupController {
     }
 
     if (this.el.viewUpload) this.el.viewUpload.hidden = true;
-    const view = setActiveView(this.el, phase);
+    const view = setActiveView(this.el, phase, session?.interruption != null);
     this.setHeaderCompact(view !== 'config');
+
+    if (view === 'interrupted') {
+      this.timer.stop();
+      this.notes.stop();
+      this.captionPoller.stop();
+      void this.renderInterrupted(session?.interruption);
+      return;
+    }
 
     if (view === 'recording') {
       this.updateRecordingBanner(phase, session);
@@ -495,6 +511,108 @@ export class PopupController {
     if (response.ok) return response.notations;
     this.toast(response.error || 'Could not read the notes for this recording');
     throw new Error(response.error);
+  }
+
+  /** Wires the interrupted-run notice's two actions. */
+  private wireInterrupted(): void {
+    this.el.interruptedDone?.addEventListener('click', () => void this.dismissInterruption());
+    this.el.interruptedDiscard?.addEventListener('click', () => void this.discardInterrupted());
+  }
+
+  private async dismissInterruption(): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'DISMISS_INTERRUPTION' });
+      this.state.applySession(response.session);
+    } catch (error) {
+      console.warn('[popup] DISMISS_INTERRUPTION failed', error);
+    }
+  }
+
+  /**
+   * Removes the recording the interruption produced. It was already saved, so
+   * this is an ordinary delete rather than abandoning anything in flight.
+   */
+  private async discardInterrupted(): Promise<void> {
+    const historyId = this.lastSession?.interruption?.historyId;
+    if (!historyId) return;
+    try {
+      await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id: historyId });
+    } catch (error) {
+      console.warn('[popup] REMOVE_RECORDING_HISTORY failed', error);
+    }
+    await this.dismissInterruption();
+  }
+
+  /**
+   * Reports a run that ended without the user asking (n4). The capture is
+   * already sealed and saved — this says what happened and what was kept, so
+   * "NOTHING LOST" is the first thing it can honestly claim.
+   */
+  private async renderInterrupted(interruption?: RecordingStatusView['interruption']): Promise<void> {
+    if (!interruption) return;
+    const { el } = this;
+    if (el.interruptedTitle) el.interruptedTitle.textContent = INTERRUPTION_TITLE[interruption.reason];
+    if (el.interruptedSub) {
+      el.interruptedSub.textContent = `STOPPED AT ${formatDuration(interruption.atMs)} · NOTHING LOST`;
+    }
+
+    let notations: RecordingNotation[] = [];
+    try {
+      notations = await this.loadNotations(interruption.historyId);
+    } catch { /* the report stands without them */ }
+
+    if (el.interruptedNotes) el.interruptedNotes.hidden = notations.length === 0;
+    if (el.interruptedRibbon) el.interruptedRibbon.hidden = notations.length === 0;
+    if (el.interruptedCount) {
+      el.interruptedCount.textContent = `${notations.length} ${notations.length === 1 ? 'NOTE' : 'NOTES'}`;
+    }
+    this.renderInterruptedSpans(notations, interruption.atMs);
+    this.renderInterruptedList(notations, interruption.atMs);
+  }
+
+  /** Spans on a finished timeline; the one the run sealed keeps its dashed edge. */
+  private renderInterruptedSpans(notations: RecordingNotation[], atMs: number): void {
+    const track = this.el.interruptedTrack;
+    if (!track) return;
+    for (const stale of Array.from(track.querySelectorAll('.note-span'))) stale.remove();
+    const scale = Math.max(atMs, 1);
+    for (const notation of notations) {
+      const span = document.createElement('span');
+      span.className = `note-span${notation.endedBy === 'auto' ? ' auto-ended' : ''}`;
+      const left = Math.min(100, (notation.tStartMs / scale) * 100);
+      const width = Math.max(1, (((notation.tEndMs ?? atMs) - notation.tStartMs) / scale) * 100);
+      span.style.left = `${left}%`;
+      span.style.width = `${Math.min(100 - left, width)}%`;
+      track.appendChild(span);
+    }
+  }
+
+  private renderInterruptedList(notations: RecordingNotation[], atMs: number): void {
+    const list = this.el.interruptedList;
+    if (!list) return;
+    list.replaceChildren();
+    for (const notation of notations) {
+      const row = document.createElement('div');
+      row.className = 'detail-notes-row';
+      const main = document.createElement('span');
+      main.className = 'detail-notes-row-main';
+      const start = document.createElement('span');
+      start.className = 'detail-notes-start';
+      start.textContent = formatDuration(notation.tStartMs);
+      const text = document.createElement('span');
+      text.className = 'detail-notes-text';
+      if (!notation.text) text.classList.add('untitled');
+      text.textContent = describeNotationForList(notation, formatDuration);
+      main.append(start, text);
+      const length = document.createElement('span');
+      length.className = 'detail-notes-length';
+      // The note the run sealed says where it ended rather than how long it ran.
+      length.textContent = notation.endedBy === 'auto'
+        ? `ENDED AT ${formatDuration(atMs)}`
+        : formatDuration((notation.tEndMs ?? notation.tStartMs) - notation.tStartMs);
+      row.append(main, length);
+      list.appendChild(row);
+    }
   }
 
   private toast(msg: string) {

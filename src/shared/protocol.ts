@@ -83,6 +83,8 @@ export type PopupRetryUploadJob = { type: 'RETRY_UPLOAD_JOB'; jobId: string };
 export type PopupCancelUploadJob = { type: 'CANCEL_UPLOAD_JOB'; jobId: string };
 /** Marks the one-time completed-upload naming prompt handled without renaming. */
 export type PopupSkipRecordingNaming = { type: 'SKIP_RECORDING_NAMING'; jobId: string };
+/** Clears the interrupted-run notice once the user has seen it (design n4). */
+export type PopupDismissInterruption = { type: 'DISMISS_INTERRUPTION' };
 /** Reads one bounded, newest-first page of recording history. */
 export type PopupListRecordingHistory = { type: 'LIST_RECORDING_HISTORY'; cursor?: RecordingHistoryCursor };
 export type PopupRenameRecordingHistory = { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string };
@@ -131,6 +133,7 @@ export type PopupToBg =
   | PopupRetryUploadJob
   | PopupCancelUploadJob
   | PopupSkipRecordingNaming
+  | PopupDismissInterruption
   | PopupListRecordingHistory
   | PopupRenameRecordingHistory
   | PopupSetRecordingHistoryNote
@@ -163,6 +166,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupListRecordingHistory ? { ok: true; entries: RecordingHistoryEntry[]; nextCursor?: RecordingHistoryCursor } | { ok: false; error: string } :
   T extends PopupRenameRecordingHistory ? { ok: true; entry?: RecordingHistoryEntry; session?: RecordingStatusView } | { ok: false; error: string } :
   T extends PopupSkipRecordingNaming ? CommandResult :
+  T extends PopupDismissInterruption ? { session: RecordingStatusView } :
   T extends PopupSetRecordingHistoryNote ? { ok: true; entry?: RecordingHistoryEntry } | { ok: false; error: string } :
   T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean } | { ok: false; error: string } :
   T extends PopupOpenRecordingHistoryFile ? { ok: true } | { ok: false; error: string } :

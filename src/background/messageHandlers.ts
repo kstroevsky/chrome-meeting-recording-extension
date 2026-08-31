@@ -260,6 +260,9 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
       if (msg.type === 'SET_CAMERA_MUTED')   { send(await controller.setCameraMuted(msg.muted)); return; }
       if (msg.type === 'SET_INPUT_DEVICE')   { send(await controller.setInputDevice(msg.device, msg.deviceId)); return; }
       if (msg.type === 'SET_PAUSED')         { send(await controller.setPaused(msg.paused)); return; }
+      if (msg.type === 'DISMISS_INTERRUPTION') {
+        sendResponse({ session: toStatusView(session.dismissInterruption()) }); return;
+      }
       if (msg.type === 'GET_RECORDING_STATUS') { sendResponse({ session: toStatusView(session.getSnapshot()) }); return; }
       if (msg.type === 'DISMISS_UPLOAD_JOB')   { sendResponse({ session: toStatusView(session.removeUploadJob(msg.jobId)) }); return; }
       if (msg.type === 'RETRY_UPLOAD_JOB')     { send(await controller.retryUpload(msg.jobId)); return; }

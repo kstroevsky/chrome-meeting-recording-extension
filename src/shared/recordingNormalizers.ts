@@ -371,6 +371,9 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     historyId,
     // Phase-independent: the epoch is preserved across idle so it stays monotonic.
     epoch: normalizeEpoch(candidate.epoch),
+    // Phase-independent (design n4): an interruption outlives its run, because
+    // the capture is already saved and the user still has to be told.
+    interruption: normalizeInterruption(candidate.interruption),
     // Phase-independent (ADR-0004): background upload jobs outlive the recording
     // session, so they survive across idle and a new run.
     uploadJobs: normalizeUploadJobs(candidate.uploadJobs),
@@ -396,6 +399,17 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     capturedDevices: phase === 'idle' ? undefined : normalizeCapturedDevices(candidate.capturedDevices),
     updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
   };
+}
+
+const VALID_INTERRUPTIONS: readonly string[] = ['tab-closed', 'navigated-away', 'meeting-ended'];
+
+function normalizeInterruption(value: unknown): RecordingSessionSnapshot['interruption'] {
+  if (!isRecord(value)) return undefined;
+  const { reason, atMs, historyId } = value;
+  if (typeof reason !== 'string' || !VALID_INTERRUPTIONS.includes(reason)) return undefined;
+  if (typeof historyId !== 'string' || !historyId) return undefined;
+  const position = typeof atMs === 'number' && Number.isFinite(atMs) && atMs >= 0 ? atMs : 0;
+  return { reason: reason as NonNullable<RecordingSessionSnapshot['interruption']>['reason'], atMs: position, historyId };
 }
 
 /** Returns true when the phase should disable popup controls and keep background alive. */

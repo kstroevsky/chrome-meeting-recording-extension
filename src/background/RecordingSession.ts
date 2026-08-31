@@ -13,6 +13,7 @@ import {
   type ObservedState,
   type RecordingRunConfig,
   type RecordingInputDevice,
+  type RecordingInterruption,
   type RecordingSessionSnapshot,
   type UploadJob,
   type UploadSummary,
@@ -69,6 +70,8 @@ export class RecordingSession {
    * duration, exactly what the field is fixing.
    */
   private lastRun?: { historyId: string; durationMs: number };
+  /** Set at an interrupted stop; carried onto the snapshot until dismissed. */
+  private pendingInterruption?: RecordingInterruption;
 
   private snapshot: RecordingSessionSnapshot = createIdleSession();
   private persistenceTail: Promise<void> = Promise.resolve();
@@ -90,6 +93,13 @@ export class RecordingSession {
     return this.commit();
   }
 
+  /** Clears the interruption notice once the user has seen it. */
+  dismissInterruption(): RecordingSessionSnapshot {
+    this.pendingInterruption = undefined;
+    this.snapshot = { ...this.snapshot, interruption: undefined, updatedAt: Date.now() };
+    return this.commit();
+  }
+
   /** Returns a defensive clone of the current session snapshot. */
   getSnapshot(): RecordingSessionSnapshot {
     return structuredClone(this.snapshot);
@@ -97,6 +107,7 @@ export class RecordingSession {
 
   /** Starts a new session with the chosen run configuration and target tab (desired=recording). */
   start(runConfig: RecordingRunConfig, target?: RecordingTarget): RecordingSessionSnapshot {
+    this.pendingInterruption = undefined;
     const desired: DesiredState = 'recording';
     const observed: ObservedState = 'starting';
     const carriedUploads = this.snapshot.uploadJobs?.filter((j) => j.status === 'uploading');
@@ -109,6 +120,7 @@ export class RecordingSession {
       targetTabId: target?.targetTabId,
       meetingSlug: target?.meetingSlug,
       historyId: createRecordingHistoryId(),
+      interruption: undefined,
       warnings: undefined,
       // Fencing token (ADR-0003): a fresh, strictly-increasing epoch per run.
       epoch: (this.snapshot.epoch ?? 0) + 1,
@@ -122,9 +134,16 @@ export class RecordingSession {
   }
 
   /** Signals intent to stop (desired=idle); the phase derives to `stopping` while capture drains. */
-  markStopping(): RecordingSessionSnapshot {
+  markStopping(interruption?: RecordingInterruption['reason']): RecordingSessionSnapshot {
     const now = Date.now();
+    const { historyId } = this.snapshot;
+    // Captured before the timer is banked so the reported position is the one
+    // the capture actually reached.
+    const atMs = this.elapsedRecordedMs(now);
     this.rememberFinishedRun(now);
+    if (interruption && historyId) {
+      this.pendingInterruption = { reason: interruption, atMs, historyId };
+    }
     const desired: DesiredState = 'idle';
     const observed = this.snapshot.observed ?? 'starting';
     const failed = this.snapshot.failed ?? false;
@@ -147,6 +166,7 @@ export class RecordingSession {
       ...this.nextTimer(phase, now),
       epoch: this.snapshot.epoch,
       uploadJobs: this.snapshot.uploadJobs,
+      interruption: this.pendingInterruption ?? this.snapshot.interruption,
       updatedAt: now,
     };
     return this.commit();
@@ -168,6 +188,9 @@ export class RecordingSession {
       // Background upload jobs are phase-independent (ADR-0004): an idle session
       // can still have uploads draining from the recording that just ended.
       uploadJobs: this.snapshot.uploadJobs,
+      // An interruption outlives its run: the capture is saved, and the popup
+      // still has to report what happened (design n4).
+      interruption: this.pendingInterruption ?? this.snapshot.interruption,
       updatedAt: Date.now(),
     };
     return this.commit();

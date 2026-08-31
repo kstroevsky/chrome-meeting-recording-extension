@@ -415,6 +415,42 @@
       <ul id="finalizing-files" class="meta-list"></ul>
     </section>
 
+    <!-- ════════ INTERRUPTED VIEW (n4) ════════
+         The capture is already sealed and saved by the time this shows; it
+         reports a completed save, it is not a decision point. -->
+    <section id="view-interrupted" class="view" hidden>
+      <div class="interrupted-head">
+        <span class="interrupted-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none">
+            <path d="M10 3.4l7 12.2H3l7-12.2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            <path d="M10 8v3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <circle cx="10" cy="13.2" r="0.85" fill="currentColor" />
+          </svg>
+        </span>
+        <div>
+          <h2 id="interrupted-title" class="interrupted-title">The meeting tab closed</h2>
+          <p id="interrupted-sub" class="interrupted-sub"></p>
+        </div>
+      </div>
+
+      <div id="interrupted-ribbon" class="note-ribbon interrupted-ribbon" hidden>
+        <div id="interrupted-track" class="note-track">
+          <span class="note-track-base" aria-hidden="true"></span>
+          <span class="note-track-elapsed" style="width:100%" aria-hidden="true"></span>
+        </div>
+      </div>
+
+      <div id="interrupted-notes" hidden>
+        <div class="detail-notes-head"><span>KEPT</span><span id="interrupted-count" class="detail-notes-count"></span></div>
+        <div id="interrupted-list" class="detail-notes-list"></div>
+      </div>
+
+      <div class="controls interrupted-actions">
+        <button id="interrupted-discard" class="btn btn-secondary" type="button">Discard</button>
+        <button id="interrupted-done" class="btn btn-primary" type="button">Done</button>
+      </div>
+    </section>
+
     <!-- ════════ UPLOAD VIEW (a selected background upload job, ADR-0004) ════════ -->
     <section id="view-upload" class="view" hidden>
       <!-- In-progress: linear progress bar (design). -->

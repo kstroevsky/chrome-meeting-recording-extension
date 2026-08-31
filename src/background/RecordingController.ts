@@ -23,7 +23,7 @@ import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { getPerfSettingsSnapshot } from '../shared/perf';
 import { type CommandResult, type NotationResult } from '../shared/protocol';
-import { isStoppablePhase, parseRunConfig, toStatusView, type RecordingInputDevice } from '../shared/recording';
+import { isStoppablePhase, parseRunConfig, toStatusView, type RecordingInputDevice, type RecordingInterruption } from '../shared/recording';
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
 import type { RecordingNotationService } from './RecordingNotationService';
@@ -176,7 +176,7 @@ export class RecordingController {
    * stopping, and fires the OFFSCREEN_STOP RPC. Shared by the popup stop button,
    * the auto-stop tab listeners, and the meeting-ended signal.
    */
-  async stop(reason = 'user requested stop'): Promise<CommandResult> {
+  async stop(reason = 'user requested stop', interruption?: RecordingInterruption['reason']): Promise<CommandResult> {
     if (!isStoppablePhase(this.session.getSnapshot().phase)) {
       return this.fail('Stop requested but no recording session is active');
     }
@@ -190,7 +190,7 @@ export class RecordingController {
     const { historyId } = this.session.getSnapshot();
     // markStopping seals any note the run left open, so the export below is
     // complete by the time it rides the stop RPC (ADR-0005).
-    this.session.markStopping();
+    this.session.markStopping(interruption);
     this.L.log('Stopping recording:', reason);
     const notesSidecar = await this.buildNotesSidecar(historyId);
 

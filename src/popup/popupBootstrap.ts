@@ -30,6 +30,16 @@ export function createPopupController(doc: Document = document): PopupController
     viewPermission: byId(doc, 'view-permission'),
     viewRecording: byId(doc, 'view-recording'),
     viewFinalizing: byId(doc, 'view-finalizing'),
+    viewInterrupted: byId(doc, 'view-interrupted'),
+    interruptedTitle: byId(doc, 'interrupted-title'),
+    interruptedSub: byId(doc, 'interrupted-sub'),
+    interruptedRibbon: byId(doc, 'interrupted-ribbon'),
+    interruptedTrack: byId(doc, 'interrupted-track'),
+    interruptedNotes: byId(doc, 'interrupted-notes'),
+    interruptedCount: byId(doc, 'interrupted-count'),
+    interruptedList: byId(doc, 'interrupted-list'),
+    interruptedDiscard: byId<HTMLButtonElement>(doc, 'interrupted-discard'),
+    interruptedDone: byId<HTMLButtonElement>(doc, 'interrupted-done'),
 
     // Permission interstitial
     permMicState: byId(doc, 'perm-mic-state'),

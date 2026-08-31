@@ -181,3 +181,13 @@
 /* Only once it is actually up does the line claim it. */
 .upload-notes--saved .upload-notes-state { color: var(--ready); }
 .upload-notes:not(.upload-notes--saved) .upload-notes-state svg { opacity: .35; }
+
+/* An interrupted run, reported after the fact (n4). The capture is already
+   saved, so this is a notice, not a prompt. */
+.interrupted-head { display: flex; align-items: center; gap: 11px; margin: 0 0 14px; }
+.interrupted-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; background: var(--accent-soft); color: var(--danger-ink); }
+.interrupted-icon svg { width: 18px; height: 18px; }
+.interrupted-title { margin: 0; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.interrupted-sub { margin: 2px 0 0; color: var(--ink-3); font: 10.5px 'IBM Plex Mono', monospace; }
+.interrupted-ribbon { margin-bottom: 14px; }
+.interrupted-actions { margin-top: 16px; }

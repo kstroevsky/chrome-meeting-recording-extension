@@ -65,7 +65,7 @@ async function stopIfTargetMatches(
     return { ok: true, stopped: false, reason: 'meeting-mismatch' };
   }
 
-  const result = await deps.controller.stop(reason);
+  const result = await deps.controller.stop(reason, 'meeting-ended');
   if (result.ok) return { ok: true, stopped: true, reason };
   return { ok: false, stopped: false, error: result.error };
 }
@@ -91,7 +91,7 @@ export function registerRecordingAutoStop(deps: AutoStopDeps): void {
   addTabRemovedListener((tabId) => {
     const snapshot = deps.session.getSnapshot();
     if (!isSameRecordingTab(snapshot, tabId)) return;
-    void deps.controller.stop('recorded tab closed');
+    void deps.controller.stop('recorded tab closed', 'tab-closed');
   });
 
   addTabUpdatedListener((tabId, changeInfo) => {
@@ -106,6 +106,6 @@ export function registerRecordingAutoStop(deps: AutoStopDeps): void {
 
     const nextSlug = getMeetSlug(changeInfo.url);
     if (nextSlug === snapshot.meetingSlug) return;
-    void deps.controller.stop('recorded tab navigated away from meeting');
+    void deps.controller.stop('recorded tab navigated away from meeting', 'navigated-away');
   });
 }
