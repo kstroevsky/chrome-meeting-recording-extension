@@ -114,7 +114,7 @@ Separate from recording: the header **Save** button (`wireTranscriptDownload`) p
 | `PopupController.ts` | thin orchestrator: DOM wiring, view population (`onPhaseChange`), the optimistic toggles (`runToggleCommand`), toasts — delegates the timer, caption poll, and session-tab/upload UI to the collaborators below |
 | `RecordingTimer.ts` | the pause-aware 1 s recording clock (extracted from the controller) |
 | `RecordingNotesView.ts` | the live notes UI (ADR-0005): the "Make a note" row, the span ribbon, and the message editor |
-| `RecordingNotesDetail.ts` | notes on a *finished* recording (d1): the timeline scaled to its duration, plus the YOUR NOTES list with in-place rename and delete |
+| `RecordingNotesDetail.ts` | notes on a *finished* recording: the d1 detail build (timeline + always-open list) and the n2a/n2c saved-screen build (no timeline, folded behind its heading), both with in-place rename and delete |
 | `CaptionPoller.ts` | the recording-view caption-state poll that drives the Transcript chip (extracted) |
 | `SessionTabsView.ts` | the session tab bar + per-job background-upload view (ADR-0004), including retry/cancel affordances and recovery-state messaging; owns its tab/selection state and talks back to the controller via a `{ rerender, applySession, toast }` callback bag |
 | `RecordingNameDialog.ts` | accessible reusable title-input modal for the one-time completed-upload prompt and later recording-detail rename |

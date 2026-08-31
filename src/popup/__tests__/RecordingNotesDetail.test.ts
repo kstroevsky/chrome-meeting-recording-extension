@@ -1,4 +1,8 @@
-import { RecordingNotesDetail, type RecordingNotesDetailActions } from '../RecordingNotesDetail';
+import {
+  RecordingNotesDetail,
+  type RecordingNotesDetailActions,
+  type RecordingNotesDetailOptions,
+} from '../RecordingNotesDetail';
 import type { RecordingNotation } from '../../shared/notations';
 
 const note = (id: string, tStartMs: number, tEndMs: number | undefined, text: string, endedBy?: 'user' | 'auto'): RecordingNotation =>
@@ -6,7 +10,11 @@ const note = (id: string, tStartMs: number, tEndMs: number | undefined, text: st
 
 const NO_DURATION = Symbol('no duration');
 
-function harness(notations: RecordingNotation[], durationMs: number | typeof NO_DURATION = 1_360_000) {
+function harness(
+  notations: RecordingNotation[],
+  durationMs: number | typeof NO_DURATION = 1_360_000,
+  options?: RecordingNotesDetailOptions,
+) {
   let current = [...notations];
   const actions: RecordingNotesDetailActions & { calls: string[] } = {
     calls: [],
@@ -22,7 +30,7 @@ function harness(notations: RecordingNotation[], durationMs: number | typeof NO_
       return current;
     },
   };
-  const view = new RecordingNotesDetail('recording:1', durationMs === NO_DURATION ? undefined : durationMs, actions);
+  const view = new RecordingNotesDetail('recording:1', durationMs === NO_DURATION ? undefined : durationMs, actions, options ?? { timeline: true });
   document.body.replaceChildren(view.element);
   return { view, actions, el: view.element };
 }
@@ -158,5 +166,47 @@ describe('RecordingNotesDetail', () => {
     const view = new RecordingNotesDetail('recording:1', 1_000, failing);
     await expect(view.load()).resolves.toBeUndefined();
     expect(view.element.hidden).toBe(true);
+  });
+
+  describe('folded variant (n2a → n2c)', () => {
+    const collapsible = (notes: RecordingNotation[]) =>
+      harness(notes, 1_360_000, { timeline: false, collapsible: true });
+
+    it('hides the timeline and folds the list behind its heading', async () => {
+      const { view, el } = collapsible([note('n1', 48_000, 85_000, 'Q3 target changed', 'user')]);
+      await view.load();
+
+      expect((el.querySelector('.detail-notes-timeline') as HTMLElement).hidden).toBe(true);
+      expect((el.querySelector('.detail-notes-list') as HTMLElement).hidden).toBe(true);
+      expect(el.querySelector('.detail-notes-toggle')!.getAttribute('aria-expanded')).toBe('false');
+      // The count is legible while folded — that is the point of the fold.
+      expect(el.querySelector('.detail-notes-count')!.textContent).toBe('1');
+    });
+
+    it('opens and closes on the heading', async () => {
+      const { view, el } = collapsible([note('n1', 48_000, 85_000, 'first', 'user')]);
+      await view.load();
+      const toggle = el.querySelector('.detail-notes-toggle') as HTMLButtonElement;
+
+      toggle.click();
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect((el.querySelector('.detail-notes-list') as HTMLElement).hidden).toBe(false);
+
+      toggle.click();
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect((el.querySelector('.detail-notes-list') as HTMLElement).hidden).toBe(true);
+    });
+
+    it('still lists the same rows as the always-open variant', async () => {
+      const { view, el } = collapsible([
+        note('n1', 48_000, 85_000, 'Q3 target changed', 'user'),
+        note('n2', 312_000, 376_000, '', 'auto'),
+      ]);
+      await view.load();
+      (el.querySelector('.detail-notes-toggle') as HTMLButtonElement).click();
+
+      expect(rows(el)).toHaveLength(2);
+      expect(rows(el)[1].querySelector('.detail-notes-text')!.textContent).toBe('Untitled note');
+    });
   });
 });

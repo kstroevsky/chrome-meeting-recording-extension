@@ -38,8 +38,7 @@
     "mark-notation": {
       "description": "Start or end a note on the current recording",
       "suggested_key": {
-        "default": "Alt+M",
-        "mac": "Alt+M"
+        "default": "Alt+M"
       }
     }
   },
