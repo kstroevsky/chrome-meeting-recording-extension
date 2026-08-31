@@ -238,6 +238,23 @@ export const POPUP_STORIES: PopupStory[] = [
     preview: { screen: 'recording-detail', target: { kind: 'recording', entry: savedRecording } },
   },
   {
+    id: 'recording-detail-notes', title: 'Saved recording · notes', group: 'Library',
+    description: 'd1 — every note on the finished recording\u2019s own timeline, with the list beneath it.',
+    preview: {
+      screen: 'recording-detail',
+      target: { kind: 'recording', entry: { ...savedRecording, name: 'Weekly sync', durationMs: 1_360_000 } },
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n3', tStartMs: 312_000, tEndMs: 376_000, endedBy: 'user', text: 'Migration owner' },
+        { id: 'n4', tStartMs: 500_000, tEndMs: 541_000, endedBy: 'user', text: 'Security review date' },
+        { id: 'n5', tStartMs: 666_000, tEndMs: 738_000, endedBy: 'user', text: 'Headcount ask' },
+        { id: 'n6', tStartMs: 877_000, tEndMs: 906_000, endedBy: 'user', text: 'Renewal date' },
+        { id: 'n7', tStartMs: 1_074_000, tEndMs: 1_119_000, endedBy: 'auto', text: '' },
+      ],
+    },
+  },
+  {
     id: 'upload-detail', title: 'Upload detail', group: 'Library',
     description: 'Pushed detail view for an upload that is still running.',
     preview: { screen: 'recording-detail', target: { kind: 'upload', job: uploadJob() } },

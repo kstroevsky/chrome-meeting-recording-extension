@@ -59,6 +59,8 @@ export type PopupPreviewState =
     }
   | {
       screen: 'recording-detail';
+      /** Notes for the previewed recording, which the background would supply. */
+      notations?: RecordingNotation[];
       target: { kind: 'recording'; entry: RecordingHistoryEntry } | { kind: 'upload'; job: UploadJob };
     };
 

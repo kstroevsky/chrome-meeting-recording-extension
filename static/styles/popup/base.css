@@ -34,6 +34,8 @@
   --note-band-border: #e0d6c2;
   /* A span while the recording is paused: held, not running. */
   --note-span-held: #c9b895;
+  /* Row-level note actions: present but quiet until hovered. */
+  --note-icon: #c4b79c;
   --control-bg-strong: #e9e2d5;
   --control-bg: #f1ece2;
   --secondary-hover: #f1ece2;
@@ -67,6 +69,7 @@
   --note-band: #221d16;
   --note-band-border: #3d3527;
   --note-span-held: #8a7345;
+  --note-icon: #5e564a;
   --control-bg-strong: #2e281f;
   --control-bg: #2a251e;
   --secondary-hover: #262119;
@@ -101,6 +104,7 @@
     --note-band: #221d16;
     --note-band-border: #3d3527;
     --note-span-held: #8a7345;
+    --note-icon: #5e564a;
     --control-bg-strong: #2e281f;
     --secondary-hover: #262119;
     --danger-soft: #2e1c18;

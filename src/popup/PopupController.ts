@@ -12,6 +12,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { MicPermissionService } from './MicPermissionService';
 import { RecordingTimer } from './RecordingTimer';
 import { RecordingNotesView } from './RecordingNotesView';
+import { RecordingNotesDetail } from './RecordingNotesDetail';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import { SessionTabsView } from './SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
@@ -38,9 +39,13 @@ import { setActiveView, type PopupElements } from './popupView';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createExternalTab, createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
+import type { RecordingNotation } from '../shared/notations';
 import type {
   BgToPopup,
   CommandResult,
+  PopupListRecordingNotations,
+  PopupRemoveRecordingNotation,
+  PopupUpdateRecordingNotation,
   PopupEndNotation,
   PopupMarkNotation,
   PopupRemoveActiveNotation,
@@ -148,6 +153,8 @@ export class PopupController {
   private readonly state: PopupStateController;
   private readonly timer: RecordingTimer;
   private readonly notes: RecordingNotesView;
+  /** Static notations for gallery previews; null in the real popup. */
+  private previewNotations: RecordingNotation[] | null = null;
   private readonly captionPoller: CaptionPoller;
   private readonly sessionTabs: SessionTabsView;
   private readonly confirmDialog = new ConfirmDialog();
@@ -243,6 +250,7 @@ export class PopupController {
     if (preview.screen === 'recording-detail') {
       this.showingRecordings = false;
       this.detailTarget = null;
+      this.previewNotations = preview.notations ?? [];
       this.showRecordingDetail(preview.target);
       return;
     }
@@ -434,6 +442,45 @@ export class PopupController {
 
   private removeNote(id: string): Promise<void> {
     return this.runNoteCommand({ type: 'REMOVE_ACTIVE_NOTATION', id }, 'Could not delete the note');
+  }
+
+  /**
+   * Keyed notation reads/writes for a finished recording. In preview the list
+   * is supplied statically so the gallery never talks to the background.
+   */
+  private notesDetailActions() {
+    const preview = this.previewNotations;
+    if (preview) {
+      let current = [...preview];
+      return {
+        load: async () => current,
+        rename: async (_id: string, id: string, text: string) => {
+          current = current.map((n) => (n.id === id ? { ...n, text: text.trim() } : n));
+          return current;
+        },
+        remove: async (_id: string, id: string) => {
+          current = current.filter((n) => n.id !== id);
+          return current;
+        },
+      };
+    }
+    return {
+      load: async (recordingId: string) => await this.readNotations({ type: 'LIST_RECORDING_NOTATIONS', recordingId }),
+      rename: async (recordingId: string, id: string, text: string) =>
+        await this.readNotations({ type: 'UPDATE_RECORDING_NOTATION', recordingId, id, text }),
+      remove: async (recordingId: string, id: string) =>
+        await this.readNotations({ type: 'REMOVE_RECORDING_NOTATION', recordingId, id }),
+    };
+  }
+
+  /** Sends a keyed notation message and returns the resulting list, toasting failures. */
+  private async readNotations(
+    message: PopupListRecordingNotations | PopupUpdateRecordingNotation | PopupRemoveRecordingNotation,
+  ): Promise<RecordingNotation[]> {
+    const response = await sendToBackground(message);
+    if (response.ok) return response.notations;
+    this.toast(response.error || 'Could not read the notes for this recording');
+    throw new Error(response.error);
   }
 
   private toast(msg: string) {
@@ -1137,6 +1184,12 @@ export class PopupController {
     files.className = 'recording-detail-files';
     for (const file of entry.files) files.appendChild(this.renderDetailFile(entry, file));
     content.append(titleRow, meta, destination, files);
+
+    // Notes for this recording (d1). Loads on its own and stays hidden if the
+    // recording has none, so an unnoted recording looks exactly as before.
+    const notes = new RecordingNotesDetail(entry.id, entry.durationMs, this.notesDetailActions());
+    content.appendChild(notes.element);
+    void notes.load();
 
     const transcript = entry.files.find((file) => /\.(vtt|txt)$/i.test(file.filename));
     const transcriptButton = document.createElement('button');

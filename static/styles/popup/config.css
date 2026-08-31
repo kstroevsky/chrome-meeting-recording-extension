@@ -173,3 +173,37 @@
 #view-permission.permission-blocked .permission-copy { display: block; margin: 16px 0 0; padding: 12px; border-radius: 6px; background: var(--tile); color: var(--ink-3); font: 500 10px/1.5 'IBM Plex Mono', monospace; }
 #view-permission.permission-blocked #grant-permission { margin-top: 28px; }
 #view-permission.permission-blocked #permission-continue { height: 44px; border: 1px solid var(--border); }
+
+/* ══════════ Notes on a finished recording (d1, ADR-0005) ══════════ */
+.detail-notes { margin: 0 0 16px; }
+
+/* Every span, drawn against the recording's own duration. */
+.detail-notes-timeline { position: relative; height: 12px; margin: 0 0 16px; }
+.detail-notes-track { position: absolute; top: 5px; right: 0; left: 0; height: 2px; background: var(--divider); }
+.detail-notes-span { position: absolute; top: 0; height: 12px; padding: 0; border: 0; border-radius: 2px; background: var(--warn-label); cursor: pointer; }
+.detail-notes-span.auto-ended { background: var(--note-span-held); }
+.detail-notes-span.selected { box-shadow: 0 0 0 2px var(--warn-label), 0 0 0 4px var(--tile); }
+.detail-notes-span:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.detail-notes-marker { position: absolute; top: -3px; width: 2px; height: 18px; background: var(--ink); }
+
+.detail-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
+.detail-notes-count { color: var(--ink-4); font: 9.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+
+.detail-notes-list { overflow-y: auto; max-height: 164px; margin-top: 7px; border-bottom: 1px solid var(--divider); }
+.detail-notes-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 40px; border-top: 1px solid var(--divider); }
+.detail-notes-row-main { display: inline-flex; overflow: hidden; align-items: baseline; flex: 1; gap: 9px; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.detail-notes-start { flex: 0 0 auto; color: var(--warn-label); font: 10.5px 'IBM Plex Mono', monospace; }
+.detail-notes-text { overflow: hidden; flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+.detail-notes-text.untitled { color: var(--ink-4); font-style: italic; }
+.detail-notes-input { flex: 1; min-width: 0; padding: 3px 6px; border: 1px solid var(--warn-label); border-radius: 4px; background: var(--surface); color: var(--ink); font: 12.5px 'Space Grotesk', sans-serif; }
+.detail-notes-input:focus-visible { outline: none; }
+.detail-notes-actions { display: inline-flex; align-items: center; flex-shrink: 0; gap: 9px; padding-right: 2px; }
+.detail-notes-length { color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; }
+.detail-notes-edit,
+.detail-notes-delete { display: inline-flex; align-items: center; justify-content: center; width: 10px; height: 10px; padding: 0; border: 0; background: transparent; color: var(--note-icon); cursor: pointer; }
+.detail-notes-edit svg { width: 10px; height: 10px; }
+.detail-notes-delete svg { width: 9px; height: 9px; }
+.detail-notes-edit:hover { color: var(--warn-label); }
+.detail-notes-delete:hover { color: var(--accent); }
+.detail-notes-edit:focus-visible,
+.detail-notes-delete:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
