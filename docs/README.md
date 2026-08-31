@@ -4,7 +4,7 @@ Project documentation. (Architecture lives in the repo-root `README.md` and the 
 
 | Path | What |
 | :--- | :--- |
-| `adr/` | **Architecture Decision Records** — `0001` single-context docs layout, `0002` supported-Chromium/browser-capability strategy, `0003` recording-phase ownership (the desired/observed split + epoch fence + watchdog), `0004` detached post-stop Drive uploads |
+| `adr/` | **Architecture Decision Records** — `0001` single-context docs layout, `0002` supported-Chromium/browser-capability strategy, `0003` recording-phase ownership (the desired/observed split + epoch fence + watchdog), `0004` detached post-stop Drive uploads, `0005` notations as a separate timecoded aggregate (media-relative time base; sidecar over container metadata) |
 | `agents/` | **Agent/skill guides** — `domain.md` (CONTEXT/glossary convention), `module-readmes.md` (the per-module README conventions), `issue-tracker.md`, `triage-labels.md` |
 | `plans/` | **Living plans** — `perf-optimization-roadmap.md`, `storage-and-instrumentation-architecture.md` |
 | `testing-scenario-a.md`, `testing-scenario-b.md` | real-hardware manual test protocols |

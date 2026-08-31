@@ -3,6 +3,8 @@ import type { RecordingStream, StorageMode } from './recording';
 export type RecordingHistoryFile = {
   id: string;
   stream: RecordingStream;
+  /** Absent for media; `notes` marks the WebVTT sidecar (ADR-0005). */
+  kind?: 'notes';
   filename: string;
   destination: StorageMode;
   status: 'pending' | 'available' | 'unavailable';
@@ -122,6 +124,7 @@ function normalizeRecordingHistoryFile(value: unknown): RecordingHistoryFile | u
   return {
     id,
     stream,
+    ...(candidate.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename,
     destination,
     status,

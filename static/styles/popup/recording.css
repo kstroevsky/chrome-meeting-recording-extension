@@ -84,3 +84,110 @@
 .paused-meta svg { width: 12px; height: 12px; }
 #view-recording:has(.controls.paused) .chips { display: none; }
 #view-recording:has(.controls.paused) .rec-timer { margin-bottom: 10px; color: var(--warn); font-size: 44px; }
+
+/* ══════════ Notes (ADR-0005) ══════════
+   The gold accent is --warn-label (#8a6a3f light / #c99a55 dark), which the
+   design specifies for spans in both themes. */
+
+/* Ribbon (marks-2a): a hairline track under the timer, spans drawn to scale.
+   It never interrupts — ending a note opens nothing. */
+.note-ribbon { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; }
+#view-recording:has(#note-ribbon:not([hidden])) .rec-timer { margin-bottom: 9px; }
+.note-track { position: relative; flex: 1; height: 26px; }
+.note-track-base { position: absolute; top: 12px; right: 0; left: 0; height: 2px; background: var(--divider); }
+.note-track-elapsed { position: absolute; top: 12px; left: 0; width: 0; height: 2px; background: var(--note-track); }
+.note-track-playhead { position: absolute; top: 2px; left: 0; width: 2px; height: 22px; background: var(--rec); }
+
+.note-span { position: absolute; top: 6px; height: 14px; min-width: 3px; padding: 0; border: 0; border-radius: 2px; background: var(--warn-label); cursor: pointer; transition: height .12s ease, top .12s ease; }
+.note-span:hover { top: 5px; height: 16px; }
+.note-span:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The clicked span lifts and rings gold so you can tell which one you are editing. */
+.note-span.editing { top: 3px; height: 20px; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--warn-label); }
+/* An open span has no end yet: translucent, with a solid leading edge at "now". */
+.note-span.open { border-right: 2px solid var(--warn-label); border-radius: 2px 0 0 2px; background: color-mix(in srgb, var(--warn-label) 40%, transparent); cursor: default; }
+/* A span the run sealed on the way out (endedBy: auto). The dashed edge is in
+   the stopped colour, not the surface: it says the note ended because the
+   recording did, and it has to be visible to say it (n4). */
+.note-span.auto-ended { border-right: 2px dashed var(--rec-label); }
+
+.note-open-timer { flex: 0 0 auto; color: var(--warn-label); font: 600 11px 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+.note-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--warn-label); border-radius: 6px; background: var(--warn-label); color: var(--surface); cursor: pointer; transition: background .15s, border-color .15s; }
+.note-toggle:hover { border-color: var(--warn-label-hover); background: var(--warn-label-hover); }
+.note-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note-toggle-glyph { width: 9px; height: 9px; border-radius: 1.5px; background: currentcolor; }
+/* Not yet noting: the glyph reads as "start" rather than "stop". */
+.note-toggle[aria-pressed='false'] { background: transparent; color: var(--warn-label); }
+.note-toggle[aria-pressed='false']:hover { background: var(--control-bg); }
+.note-toggle[aria-pressed='false'] .note-toggle-glyph { border-radius: 50%; }
+
+/* Notes row (marks-e5): a third capture row, worded like the two above it. */
+.srow-note { gap: 8px; }
+.note-start { display: inline-flex; align-items: center; gap: 10px; min-width: 0; height: 34px; margin-left: -8px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--warn-label); font: 600 13.5px 'Space Grotesk', system-ui, sans-serif; cursor: pointer; }
+.note-start:hover { background: var(--control-bg); }
+.note-start:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note-start .srow-ico { width: 15px; height: 15px; color: inherit; }
+#note-count { flex: 0 0 auto; margin-left: auto; }
+
+/* Shortcut tip (marks-e5): guidance, not a warning — hence the tinted band. */
+/* The key chip sits inline in the sentence, not as a block beside it. */
+.note-hint { margin: 0 -18px; padding: 9px 14px 10px 18px; border-top: 1px solid var(--divider); background: var(--note-band); color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
+.note-hint kbd { display: inline-block; padding: 1px 5px; border-radius: 4px; background: var(--control-bg-strong); color: var(--warn-label); font: 10.5px/1.35 'IBM Plex Mono', monospace; vertical-align: baseline; }
+
+/* Message editor. Reuses the device-picker sheet geometry — same overlay idiom. */
+.note-editor-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 7px 6px; }
+.note-editor-title { display: inline-flex; align-items: center; gap: 7px; color: var(--warn-label); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .1em; }
+.note-editor-sep { color: var(--ink-4); }
+.note-editor-range { color: var(--ink-2); }
+.note-editor-length { color: var(--ink-4); }
+.note-editor-text { width: calc(100% - 8px); margin: 0 4px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font: 12px 'IBM Plex Mono', monospace; line-height: 1.45; }
+.note-editor-text:focus-visible { border-color: var(--warn-label); outline: none; }
+.note-editor-text::placeholder { color: var(--ink-4); }
+.note-editor-actions { display: flex; align-items: center; gap: 6px; padding: 8px 4px 4px; }
+.note-editor-delete { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--ink-4); cursor: pointer; }
+.note-editor-delete:hover { border-color: var(--danger-border); color: var(--danger-ink); }
+.note-editor-delete svg { width: 13px; height: 13px; }
+.note-editor-save { flex: 1; height: 34px; border: 0; border-radius: 4px; background: var(--ink); color: var(--surface); font: 600 12.5px 'Space Grotesk', system-ui, sans-serif; cursor: pointer; }
+.note-editor-save:hover { background: var(--ink-2); }
+.note-editor-delete:focus-visible,
+.note-editor-save:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Paused (d3): the ribbon holds still — spans mute, and the toggle disappears
+   because there is nothing to start or end until the recording resumes. */
+#view-recording:has(.controls.paused) .note-ribbon { gap: 0; }
+#view-recording:has(.controls.paused) .note-track { height: 22px; }
+#view-recording:has(.controls.paused) .note-track-base { top: 10px; background: var(--note-track); }
+#view-recording:has(.controls.paused) .note-track-elapsed { display: none; }
+#view-recording:has(.controls.paused) .note-track-playhead { top: 1px; height: 20px; background: var(--warn); }
+#view-recording:has(.controls.paused) .note-span { top: 5px; height: 12px; background: var(--note-span-held); cursor: default; }
+#view-recording:has(.controls.paused) .note-span.open { border-right: 0; background: color-mix(in srgb, var(--warn) 32%, transparent); }
+#view-recording:has(.controls.paused) .note-open-timer,
+#view-recording:has(.controls.paused) .note-toggle,
+#view-recording:has(.controls.paused) .srow-note,
+#view-recording:has(.controls.paused) .note-hint { display: none; }
+
+/* The held note reads as one line: when it started, what it says, and that it is waiting. */
+.note-held { display: flex; align-items: center; gap: 8px; height: 26px; margin: 0 0 16px; padding: 0 10px; border: 1px solid var(--note-band-border); border-radius: 6px; background: var(--note-band); }
+.note-held-start { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; }
+.note-held-text { overflow: hidden; flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+.note-held-state { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+
+/* The notes sidecar's own line on the saving screen (d4). It sits apart from
+   the media file list because it is not one of them — and it is already up. */
+.upload-notes { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 40px; margin: 0 -18px; padding: 0 18px; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); background: var(--note-band); }
+.upload-notes-label { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12.5px; }
+.upload-notes-label svg { width: 13px; height: 13px; color: var(--warn-label); }
+.upload-notes-state { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+.upload-notes-state svg { width: 11px; height: 11px; }
+/* Only once it is actually up does the line claim it. */
+.upload-notes--saved .upload-notes-state { color: var(--ready); }
+.upload-notes:not(.upload-notes--saved) .upload-notes-state svg { opacity: .35; }
+
+/* An interrupted run, reported after the fact (n4). The capture is already
+   saved, so this is a notice, not a prompt. */
+.interrupted-head { display: flex; align-items: center; gap: 11px; margin: 0 0 14px; }
+.interrupted-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; background: var(--accent-soft); color: var(--danger-ink); }
+.interrupted-icon svg { width: 18px; height: 18px; }
+.interrupted-title { margin: 0; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.interrupted-sub { margin: 2px 0 0; color: var(--ink-3); font: 10.5px 'IBM Plex Mono', monospace; }
+.interrupted-ribbon { margin-bottom: 14px; }
+.interrupted-actions { margin-top: 16px; }

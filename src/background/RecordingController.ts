@@ -22,18 +22,21 @@ import { isE2ERealCaptureTabBuild } from '../shared/build';
 import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { getPerfSettingsSnapshot } from '../shared/perf';
-import { type CommandResult } from '../shared/protocol';
-import { isStoppablePhase, parseRunConfig, toStatusView, type RecordingInputDevice } from '../shared/recording';
+import { type CommandResult, type NotationResult } from '../shared/protocol';
+import { isStoppablePhase, parseRunConfig, toStatusView, type RecordingInputDevice, type RecordingInterruption } from '../shared/recording';
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
+import type { RecordingNotationService } from './RecordingNotationService';
 import type { TelemetryRuntime } from './TelemetryRuntime';
 import { createTelemetryId } from '../shared/telemetry';
+import { hasExportableNotations, toWebVtt } from '../shared/notationExport';
 
 export type RecordingControllerDeps = {
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
   offscreen: OffscreenManager;
   session: RecordingSession;
   telemetry?: TelemetryRuntime;
+  notations?: RecordingNotationService;
 };
 
 export type StartRecordingMessage = {
@@ -58,12 +61,14 @@ export class RecordingController {
   private readonly offscreen: OffscreenManager;
   private readonly session: RecordingSession;
   private readonly telemetry?: TelemetryRuntime;
+  private readonly notations?: RecordingNotationService;
 
-  constructor({ L, offscreen, session, telemetry }: RecordingControllerDeps) {
+  constructor({ L, offscreen, session, telemetry, notations }: RecordingControllerDeps) {
     this.L = L;
     this.offscreen = offscreen;
     this.session = session;
     this.telemetry = telemetry;
+    this.notations = notations;
   }
 
   /**
@@ -171,7 +176,7 @@ export class RecordingController {
    * stopping, and fires the OFFSCREEN_STOP RPC. Shared by the popup stop button,
    * the auto-stop tab listeners, and the meeting-ended signal.
    */
-  async stop(reason = 'user requested stop'): Promise<CommandResult> {
+  async stop(reason = 'user requested stop', interruption?: RecordingInterruption['reason']): Promise<CommandResult> {
     if (!isStoppablePhase(this.session.getSnapshot().phase)) {
       return this.fail('Stop requested but no recording session is active');
     }
@@ -182,12 +187,19 @@ export class RecordingController {
         if (response?.snapshot) await this.telemetry?.receive(response.snapshot, true);
       } catch {}
     }
-    this.session.markStopping();
+    const { historyId } = this.session.getSnapshot();
+    // markStopping seals any note the run left open, so the export below is
+    // complete by the time it rides the stop RPC (ADR-0005).
+    this.session.markStopping(interruption);
     this.L.log('Stopping recording:', reason);
+    const notesSidecar = await this.buildNotesSidecar(historyId);
 
     try {
       await this.offscreen.ensureReady();
-      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_STOP' });
+      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
+        type: 'OFFSCREEN_STOP',
+        ...(notesSidecar ? { notesSidecar } : {}),
+      });
       if (!r?.ok) {
         this.session.fail(r?.error || 'Stop failed in offscreen');
         return this.fail(r?.error || 'Stop failed in offscreen');
@@ -209,8 +221,16 @@ export class RecordingController {
     if (!isStoppablePhase(this.session.getSnapshot().phase)) {
       return this.fail('Discard requested but no recording session is active');
     }
+    const { historyId } = this.session.getSnapshot();
     this.session.markStopping();
     this.L.log('Discarding recording:', reason);
+
+    // A discarded run leaves no recording behind, so its marks must not outlive
+    // it as rows keyed to a history entry that will never be created.
+    if (historyId) {
+      await this.notations?.removeAll(historyId)
+        .catch((error) => this.L.warn('Discarding recording notations failed:', error));
+    }
 
     try {
       await this.offscreen.ensureReady();
@@ -373,6 +393,100 @@ export class RecordingController {
       return this.ok();
     } catch (e: any) {
       return this.fail(`SET_PAUSED failed: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * Renders the run's notes to WebVTT for the offscreen to deliver ahead of the
+   * media. The background does the rendering because it owns the notations; the
+   * offscreen owns delivery and names the file. Best-effort — a recording must
+   * still stop and save when its notes cannot be read.
+   */
+  private async buildNotesSidecar(historyId: string | undefined): Promise<{ vtt: string } | undefined> {
+    if (!historyId || !this.notations) return undefined;
+    try {
+      const notations = await this.notations.list(historyId);
+      if (!hasExportableNotations(notations)) return undefined;
+      return { vtt: toWebVtt(notations, { durationMs: this.session.runDurationMs(historyId) }) };
+    } catch (error) {
+      this.L.warn('Could not export notes for this recording:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Stamps a notation at the live recording position (ADR-0005).
+   *
+   * Guarded on `recording` specifically, not the broader `isStoppablePhase` the
+   * other live commands use: during `starting` the clock still reads 0 and the
+   * offscreen has not confirmed capture, and during `stopping` it is already
+   * banked while the media seals — a mark taken in either window would point at
+   * an offset the file does not have.
+   */
+  async markNotation(text?: string): Promise<NotationResult> {
+    const snapshot = this.session.getSnapshot();
+    if (snapshot.phase !== 'recording') {
+      return { ok: false, error: 'Mark requested but no recording is active' };
+    }
+    if (!snapshot.historyId) {
+      return { ok: false, error: 'The active recording has no history identity' };
+    }
+    if (!this.notations) return { ok: false, error: 'Recording notations are unavailable' };
+
+    try {
+      const notation = await this.notations.add(snapshot.historyId, {
+        tStartMs: this.session.currentRecordedMs(),
+        text,
+      });
+      this.L.log('Marked notation', notation.id, 'at', notation.tStartMs, 'ms');
+      return { ok: true, notation };
+    } catch (e: any) {
+      const error = `MARK_NOTATION failed: ${e?.message || e}`;
+      this.L.warn(error);
+      return { ok: false, error };
+    }
+  }
+
+  /**
+   * One gesture starts a note and the same gesture ends it (⌥M), so a note owns
+   * a span rather than an instant. The decision is made here because the
+   * keyboard path has no popup state to consult.
+   */
+  async toggleNotation(): Promise<NotationResult> {
+    const { historyId, phase } = this.session.getSnapshot();
+    if (phase !== 'recording' || !historyId) {
+      return { ok: false, error: 'Mark requested but no recording is active' };
+    }
+    if (!this.notations) return { ok: false, error: 'Recording notations are unavailable' };
+
+    try {
+      const open = (await this.notations.list(historyId)).find((notation) => notation.tEndMs == null);
+      return open ? await this.endNotation(open.id) : await this.markNotation();
+    } catch (e: any) {
+      const error = `TOGGLE_NOTATION failed: ${e?.message || e}`;
+      this.L.warn(error);
+      return { ok: false, error };
+    }
+  }
+
+  /** Closes an open notation at the live recording position. */
+  async endNotation(id: string): Promise<NotationResult> {
+    const snapshot = this.session.getSnapshot();
+    if (snapshot.phase !== 'recording') {
+      return { ok: false, error: 'Mark end requested but no recording is active' };
+    }
+    if (!snapshot.historyId) {
+      return { ok: false, error: 'The active recording has no history identity' };
+    }
+    if (!this.notations) return { ok: false, error: 'Recording notations are unavailable' };
+
+    try {
+      const notation = await this.notations.endOpen(snapshot.historyId, id, this.session.currentRecordedMs());
+      return { ok: true, notation };
+    } catch (e: any) {
+      const error = `END_NOTATION failed: ${e?.message || e}`;
+      this.L.warn(error);
+      return { ok: false, error };
     }
   }
 

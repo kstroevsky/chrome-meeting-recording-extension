@@ -133,6 +133,67 @@ export const POPUP_STORIES: PopupStory[] = [
     preview: { screen: 'session', session: activeRecording, transcriptActive: true },
   },
   {
+    id: 'recording-interrupted', title: 'Interrupted mid-note', group: 'Saving',
+    description: 'n4 — the tab closed. The capture is already saved; this reports what happened and what was kept.',
+    preview: {
+      screen: 'session',
+      session: session({
+        phase: 'idle',
+        interruption: { reason: 'tab-closed', atMs: 401_000, historyId: 'gallery-history-alex' },
+      }),
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n3', tStartMs: 372_000, tEndMs: 401_000, endedBy: 'auto', text: 'Renewal date' },
+      ],
+    },
+  },
+  {
+    id: 'recording-notes-empty', title: 'Notes · nothing yet', group: 'Recording',
+    description: 'marks-e5 — the "Make a note" capture row and the ⌥M shortcut tip, before any note exists.',
+    preview: { screen: 'session', session: activeRecording, transcriptActive: true, notations: [] },
+  },
+  {
+    id: 'recording-notes-span', title: 'Notes · span growing', group: 'Recording',
+    description: 'marks-2a — spans drawn to scale on the ribbon, the newest still open and counting up.',
+    preview: {
+      screen: 'session',
+      session: session({ ...activeRecording, recordedMs: 380_000, runningSince: undefined }),
+      transcriptActive: true,
+      notations: [
+        { id: 'notation:1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'notation:2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'notation:3', tStartMs: 315_000, text: '' },
+      ],
+    },
+  },
+  {
+    id: 'recording-notes-paused', title: 'Notes · pause holds the note', group: 'Recording',
+    description: 'd3 — the ribbon stops growing and the open note says HELD rather than running across a gap.',
+    preview: {
+      screen: 'session',
+      session: session({ ...activeRecording, paused: true, recordedMs: 432_000, runningSince: undefined }),
+      notations: [
+        { id: 'notation:1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'notation:2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'notation:3', tStartMs: 334_000, text: 'Migration owner' },
+      ],
+    },
+  },
+  {
+    id: 'recording-notes-sealed', title: 'Notes · sealed by the run', group: 'Recording',
+    description: 'A note the run outlived: closed at the last recorded frame and marked, never discarded.',
+    preview: {
+      screen: 'session',
+      session: session({ ...activeRecording, recordedMs: 401_000, runningSince: undefined }),
+      transcriptActive: true,
+      notations: [
+        { id: 'notation:1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'notation:2', tStartMs: 372_000, tEndMs: 401_000, endedBy: 'auto', text: 'Renewal date' },
+      ],
+    },
+  },
+  {
     id: 'recording-paused', title: 'Paused', group: 'Recording',
     description: 'Pause-aware timer, summary metadata, and resume/finish actions.',
     preview: { screen: 'session', session: session({ ...activeRecording, paused: true }), transcriptActive: true },
@@ -156,6 +217,20 @@ export const POPUP_STORIES: PopupStory[] = [
     id: 'finalizing', title: 'Finalizing', group: 'Saving',
     description: 'Indeterminate sealing/muxing state before local delivery or upload handoff.',
     preview: { screen: 'session', session: session({ phase: 'stopping', recordedMs: 754_000 }) },
+  },
+  {
+    id: 'upload-completed-notes', title: 'Upload complete · notes', group: 'Saving',
+    description: 'n2a \u2192 n2c — the saved screen folds its notes behind YOUR NOTES; the heading opens them.',
+    preview: {
+      screen: 'session',
+      session: session({ uploadJobs: [{ ...uploadJob('completed', 1), historyId: 'gallery-history-alex' }] }),
+      selectedUploadJobId: uploadJob('completed', 1).id,
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n3', tStartMs: 312_000, tEndMs: 376_000, endedBy: 'auto', text: '' },
+      ],
+    },
   },
   ...(['uploading', 'completed', 'failed'] as const).map((status): PopupStory => {
     const job = uploadJob(status, status === 'completed' ? 1 : 0.68);
@@ -183,6 +258,20 @@ export const POPUP_STORIES: PopupStory[] = [
     preview: { screen: 'recordings', session: session({ uploadJobs: [uploadJob()] }), entries: [savedRecording, designSync] },
   },
   {
+    id: 'recordings-notes', title: 'Recordings · notes', group: 'Library',
+    description: 'n1 — a gold count chip on each row; tapping it threads that recording\u2019s notes underneath.',
+    preview: {
+      screen: 'recordings',
+      session: session({}),
+      entries: [{ ...savedRecording, name: 'Weekly sync', durationMs: 1_360_000 }, designSync],
+      notations: [
+        { id: 'n1', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n2', tStartMs: 312_000, tEndMs: 376_000, endedBy: 'user', text: 'Migration owner' },
+        { id: 'n3', tStartMs: 1_082_000, tEndMs: 1_130_000, endedBy: 'auto', text: '' },
+      ],
+    },
+  },
+  {
     id: 'recordings-empty', title: 'Empty recordings', group: 'Library',
     description: 'First-run empty state and navigation actions.',
     preview: { screen: 'recordings', entries: [] },
@@ -191,6 +280,23 @@ export const POPUP_STORIES: PopupStory[] = [
     id: 'recording-detail', title: 'Saved recording detail', group: 'Library',
     description: 'Drive files, transcript metadata, rename, and open/copy actions.',
     preview: { screen: 'recording-detail', target: { kind: 'recording', entry: savedRecording } },
+  },
+  {
+    id: 'recording-detail-notes', title: 'Saved recording · notes', group: 'Library',
+    description: 'd1 — every note on the finished recording\u2019s own timeline, with the list beneath it.',
+    preview: {
+      screen: 'recording-detail',
+      target: { kind: 'recording', entry: { ...savedRecording, name: 'Weekly sync', durationMs: 1_360_000 } },
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n3', tStartMs: 312_000, tEndMs: 376_000, endedBy: 'user', text: 'Migration owner' },
+        { id: 'n4', tStartMs: 500_000, tEndMs: 541_000, endedBy: 'user', text: 'Security review date' },
+        { id: 'n5', tStartMs: 666_000, tEndMs: 738_000, endedBy: 'user', text: 'Headcount ask' },
+        { id: 'n6', tStartMs: 877_000, tEndMs: 906_000, endedBy: 'user', text: 'Renewal date' },
+        { id: 'n7', tStartMs: 1_074_000, tEndMs: 1_119_000, endedBy: 'auto', text: '' },
+      ],
+    },
   },
   {
     id: 'upload-detail', title: 'Upload detail', group: 'Library',

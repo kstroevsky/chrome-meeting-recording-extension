@@ -35,7 +35,9 @@ export function stopKeepAlive() {
 export function registerSaveHandler(
   offscreen: OffscreenManager,
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void },
-  history?: Pick<RecordingHistoryService, 'createPending' | 'localSaveSettled'>,
+  history?: Pick<RecordingHistoryService, 'createPending' | 'localSaveSettled' | 'setDuration'>,
+  /** Recorded duration of the run that produced this artifact, for the history row. */
+  runDurationMs?: (historyId: string) => number | undefined,
 ) {
   offscreen.onSaveRequested = ({ historyId, stream, filename, blobUrl, opfsFilename }) => {
     const resolvedFilename =
@@ -56,6 +58,10 @@ export function registerSaveHandler(
         // no row exists yet, then leave a newly-created row stuck at `pending`.
         try {
           await history?.createPending(historyId, [{ id: `${historyId}:${stream}`, stream, filename: resolvedFilename }], 'local');
+          // Once the row exists, stamp the run's duration onto it. The session
+          // still holds it here: OFFSCREEN_SAVE is dispatched from the finalize
+          // path before the offscreen reports `idle`.
+          await history?.setDuration(historyId, runDurationMs?.(historyId));
         } catch (error) {
           L.warn('Recording history initialization failed:', error);
         }

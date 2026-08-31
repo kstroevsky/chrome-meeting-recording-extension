@@ -11,6 +11,10 @@ import { CaptionPoller } from './CaptionPoller';
 import { ConfirmDialog } from './ConfirmDialog';
 import { MicPermissionService } from './MicPermissionService';
 import { RecordingTimer } from './RecordingTimer';
+import { RecordingNotesView } from './RecordingNotesView';
+import { RecordingNotesDetail } from './RecordingNotesDetail';
+import { NotationRibbon } from './notationRibbon';
+import { notationRow } from './notationRow';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import { SessionTabsView } from './SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
@@ -37,7 +41,19 @@ import { setActiveView, type PopupElements } from './popupView';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createExternalTab, createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
-import type { BgToPopup, CommandResult } from '../shared/protocol';
+import { describeNotationForList } from '../shared/notations';
+import type { RecordingNotation } from '../shared/notations';
+import type {
+  BgToPopup,
+  CommandResult,
+  PopupListRecordingNotations,
+  PopupRemoveRecordingNotation,
+  PopupUpdateRecordingNotation,
+  PopupEndNotation,
+  PopupMarkNotation,
+  PopupRemoveActiveNotation,
+  PopupUpdateActiveNotation,
+} from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
 import { formatBytes } from '../shared/format';
 import type {
@@ -116,6 +132,14 @@ function detailPercent(value: number): number {
   return Math.round(Math.min(1, Math.max(0, value)) * 100);
 }
 
+/** What actually happened, in the user's terms. */
+const INTERRUPTION_TITLE: Record<'tab-closed' | 'navigated-away' | 'meeting-ended', string> = {
+  'tab-closed': 'The meeting tab closed',
+  'navigated-away': 'The tab left the meeting',
+  'meeting-ended': 'The meeting ended',
+};
+
+const NOTE_CHIP_ICON = '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 const DETAIL_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4h6v6M11.5 4.5L5 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const DETAIL_RENAME_ICON = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.5 2.8l2.7 2.7M3 11.4l7.6-7.6 2.7 2.7L5.6 14l-3 .4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const DETAIL_DRIVE_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 13a3 3 0 01-.3-5.99A4 4 0 0112 6.5a2.75 2.75 0 01-.25 5.5H4.5z"/></svg>';
@@ -139,6 +163,15 @@ export class PopupController {
   private readonly camera = new CameraPermissionService();
   private readonly state: PopupStateController;
   private readonly timer: RecordingTimer;
+  private readonly notes: RecordingNotesView;
+  /** The recording whose saved-screen notes are already mounted. */
+  private mountedSavedNotesFor: string | null = null;
+  /** The active run's notes, mirrored so the discard prompt can name them. */
+  private activeNotations: RecordingNotation[] = [];
+  /** Static notations for gallery previews; null in the real popup. */
+  private previewNotations: RecordingNotation[] | null = null;
+  /** The interrupted notice's ribbon; built on first use, then reconciled. */
+  private interruptedRibbon: NotationRibbon | null = null;
   private readonly captionPoller: CaptionPoller;
   private readonly sessionTabs: SessionTabsView;
   private readonly confirmDialog = new ConfirmDialog();
@@ -165,6 +198,12 @@ export class PopupController {
   constructor(el: PopupElements) {
     this.el = el;
     this.timer = new RecordingTimer(el.recTimer);
+    this.notes = new RecordingNotesView(el.notes, {
+      mark: () => this.markNote(),
+      end: (id) => this.endNote(id),
+      save: (id, text) => this.saveNoteMessage(id, text),
+      remove: (id) => this.removeNote(id),
+    });
     this.captionPoller = new CaptionPoller(el.chipTranscriptLabel, el.chipTranscript);
     this.state = new PopupStateController(el, {
       onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
@@ -175,6 +214,7 @@ export class PopupController {
       rerender: () => this.onPhaseChange(this.lastPhase, this.lastSession),
       applySession: (session) => this.state.applySession(session),
       toast: (msg) => this.toast(msg),
+      onJobRendered: (job) => this.mountSavedNotes(job),
     });
   }
 
@@ -188,6 +228,7 @@ export class PopupController {
     setActiveView(this.el, readCachedPhase());
     this.wireRecordingStateListener();
     this.wireTranscriptDownload();
+    this.wireInterrupted();
     this.wireStartStop();
     this.wireDiscard();
     this.wirePermissionInterstitial();
@@ -228,11 +269,13 @@ export class PopupController {
     if (preview.screen === 'recording-detail') {
       this.showingRecordings = false;
       this.detailTarget = null;
+      this.previewNotations = preview.notations ?? [];
       this.showRecordingDetail(preview.target);
       return;
     }
 
     if (preview.screen === 'recordings') {
+      this.previewNotations = preview.notations ?? [];
       this.showingRecordings = false;
       this.detailTarget = null;
       const session = preview.session ?? { phase: 'idle' as const, runConfig: null, updatedAt: 0 };
@@ -243,9 +286,13 @@ export class PopupController {
 
     this.showingRecordings = false;
     this.detailTarget = null;
+    // Set before applying the session: painting it mounts the saved-screen notes,
+    // which read this fixture rather than the background.
+    this.previewNotations = preview.notations ?? [];
     this.state.applyPreviewSession(preview.session);
     if (preview.selectedUploadJobId) this.sessionTabs.select(preview.selectedUploadJobId);
     this.renderPreviewTranscript(preview.transcriptActive === true);
+    this.notes.setNotations(this.previewNotations);
     this.renderPreviewSetup(preview.setup);
     if (preview.devicePicker) this.renderPreviewDevicePicker(preview.devicePicker.device, preview.devicePicker.options);
   }
@@ -305,6 +352,7 @@ export class PopupController {
     if (job) {
       this.closeDevicePicker(false);
       this.timer.stop();
+      this.notes.stop();
       this.captionPoller.stop();
       if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
       if (this.el.viewConfig) this.el.viewConfig.hidden = true;
@@ -319,8 +367,16 @@ export class PopupController {
     }
 
     if (this.el.viewUpload) this.el.viewUpload.hidden = true;
-    const view = setActiveView(this.el, phase);
+    const view = setActiveView(this.el, phase, session?.interruption != null);
     this.setHeaderCompact(view !== 'config');
+
+    if (view === 'interrupted') {
+      this.timer.stop();
+      this.notes.stop();
+      this.captionPoller.stop();
+      void this.renderInterrupted(session?.interruption);
+      return;
+    }
 
     if (view === 'recording') {
       this.updateRecordingBanner(phase, session);
@@ -331,6 +387,8 @@ export class PopupController {
       this.updatePauseControl(phase, session);
       if (this.el.stopBtn) this.el.stopBtn.disabled = false;
       this.timer.sync(phase, session);
+      this.notes.sync(phase, session);
+      if (!this.previewing) void this.refreshNotes();
       if (this.previewing) this.captionPoller.stop();
       else this.captionPoller.start();
     } else {
@@ -365,6 +423,170 @@ export class PopupController {
       if (this.el.cameraWarning) this.el.cameraWarning.hidden = false;
       if (this.el.cameraWarningText) this.el.cameraWarningText.textContent = setup.cameraWarningText;
     }
+  }
+
+  /**
+   * Re-reads the active run's notations. Live commands in this protocol name no
+   * run — `SET_PAUSED` and `STOP_RECORDING` mean "the one happening now" — so
+   * `toStatusView` has never needed to carry the live `historyId`, and the
+   * notation commands follow the same shape.
+   */
+  private async refreshNotes(): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'LIST_ACTIVE_NOTATIONS' });
+      if (response.ok) {
+        this.activeNotations = response.notations;
+        this.notes.setNotations(response.notations);
+      }
+    } catch (error) {
+      console.warn('[popup] LIST_ACTIVE_NOTATIONS failed', error);
+    }
+  }
+
+  /**
+   * Runs one note command and re-reads the list. Deliberately quiet on success:
+   * starting and ending a note must not interrupt the meeting, so only a failure
+   * is worth a toast.
+   */
+  private async runNoteCommand(
+    message: PopupMarkNotation | PopupEndNotation | PopupUpdateActiveNotation | PopupRemoveActiveNotation,
+    fallbackError: string,
+  ): Promise<void> {
+    try {
+      const response = await sendToBackground(message);
+      if (!response.ok) this.toast(response.error || fallbackError);
+    } catch (error) {
+      console.warn(`[popup] ${message.type} failed`, error);
+      this.toast(fallbackError);
+    }
+    await this.refreshNotes();
+  }
+
+  private markNote(): Promise<void> {
+    return this.runNoteCommand({ type: 'MARK_NOTATION' }, 'Could not start a note');
+  }
+
+  private endNote(id: string): Promise<void> {
+    return this.runNoteCommand({ type: 'END_NOTATION', id }, 'Could not end the note');
+  }
+
+  private saveNoteMessage(id: string, text: string): Promise<void> {
+    return this.runNoteCommand({ type: 'UPDATE_ACTIVE_NOTATION', id, text }, 'Could not save the note');
+  }
+
+  private removeNote(id: string): Promise<void> {
+    return this.runNoteCommand({ type: 'REMOVE_ACTIVE_NOTATION', id }, 'Could not delete the note');
+  }
+
+  /**
+   * Keyed notation reads/writes for a finished recording. In preview the list
+   * is supplied statically so the gallery never talks to the background.
+   */
+  private notesDetailActions() {
+    const preview = this.previewNotations;
+    if (preview) {
+      let current = [...preview];
+      return {
+        load: async () => current,
+        rename: async (_id: string, id: string, text: string) => {
+          current = current.map((n) => (n.id === id ? { ...n, text: text.trim() } : n));
+          return current;
+        },
+        remove: async (_id: string, id: string) => {
+          current = current.filter((n) => n.id !== id);
+          return current;
+        },
+      };
+    }
+    return {
+      load: async (recordingId: string) => await this.readNotations({ type: 'LIST_RECORDING_NOTATIONS', recordingId }),
+      rename: async (recordingId: string, id: string, text: string) =>
+        await this.readNotations({ type: 'UPDATE_RECORDING_NOTATION', recordingId, id, text }),
+      remove: async (recordingId: string, id: string) =>
+        await this.readNotations({ type: 'REMOVE_RECORDING_NOTATION', recordingId, id }),
+    };
+  }
+
+  /** Sends a keyed notation message and returns the resulting list, toasting failures. */
+  private async readNotations(
+    message: PopupListRecordingNotations | PopupUpdateRecordingNotation | PopupRemoveRecordingNotation,
+  ): Promise<RecordingNotation[]> {
+    const response = await sendToBackground(message);
+    if (response.ok) return response.notations;
+    this.toast(response.error || 'Could not read the notes for this recording');
+    throw new Error(response.error);
+  }
+
+  /** Wires the interrupted-run notice's two actions. */
+  private wireInterrupted(): void {
+    this.el.interruptedDone?.addEventListener('click', () => void this.dismissInterruption());
+    this.el.interruptedDiscard?.addEventListener('click', () => void this.discardInterrupted());
+  }
+
+  private async dismissInterruption(): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'DISMISS_INTERRUPTION' });
+      this.state.applySession(response.session);
+    } catch (error) {
+      console.warn('[popup] DISMISS_INTERRUPTION failed', error);
+    }
+  }
+
+  /**
+   * Removes the recording the interruption produced. It was already saved, so
+   * this is an ordinary delete rather than abandoning anything in flight.
+   */
+  private async discardInterrupted(): Promise<void> {
+    const historyId = this.lastSession?.interruption?.historyId;
+    if (!historyId) return;
+    try {
+      await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id: historyId });
+    } catch (error) {
+      console.warn('[popup] REMOVE_RECORDING_HISTORY failed', error);
+    }
+    await this.dismissInterruption();
+  }
+
+  /**
+   * Reports a run that ended without the user asking (n4). The capture is
+   * already sealed and saved — this says what happened and what was kept, so
+   * "NOTHING LOST" is the first thing it can honestly claim.
+   */
+  private async renderInterrupted(interruption?: RecordingStatusView['interruption']): Promise<void> {
+    if (!interruption) return;
+    const { el } = this;
+    if (el.interruptedTitle) el.interruptedTitle.textContent = INTERRUPTION_TITLE[interruption.reason];
+    if (el.interruptedSub) {
+      el.interruptedSub.textContent = `STOPPED AT ${formatDuration(interruption.atMs)} · NOTHING LOST`;
+    }
+
+    let notations: RecordingNotation[] = [];
+    try {
+      notations = await this.loadNotations(interruption.historyId);
+    } catch { /* the report stands without them */ }
+
+    if (el.interruptedNotes) el.interruptedNotes.hidden = notations.length === 0;
+    if (el.interruptedRibbon) el.interruptedRibbon.hidden = notations.length === 0;
+    if (el.interruptedCount) {
+      el.interruptedCount.textContent = `${notations.length} ${notations.length === 1 ? 'NOTE' : 'NOTES'}`;
+    }
+    this.renderInterruptedSpans(notations, interruption.atMs);
+    this.renderInterruptedList(notations, interruption.atMs);
+  }
+
+  /** Spans on a finished timeline; the one the run sealed keeps its dashed edge. */
+  private renderInterruptedSpans(notations: RecordingNotation[], atMs: number): void {
+    const track = this.el.interruptedTrack;
+    if (!track) return;
+    // Inert spans: this screen reports what was kept, it does not edit it.
+    this.interruptedRibbon ??= new NotationRibbon(track, { spanClass: 'note-span', minWidthPct: 1 });
+    this.interruptedRibbon.draw(notations, { scaleMs: atMs, openEndsAtMs: atMs });
+  }
+
+  private renderInterruptedList(notations: RecordingNotation[], atMs: number): void {
+    const list = this.el.interruptedList;
+    if (!list) return;
+    list.replaceChildren(...notations.map((notation) => notationRow(notation, { sealedAtMs: atMs })));
   }
 
   private toast(msg: string) {
@@ -975,6 +1197,7 @@ export class PopupController {
     const visibleEntries = entries.slice(0, Math.max(0, 3 - uploads.length));
     empty.hidden = uploads.length > 0 || visibleEntries.length > 0;
     for (const entry of visibleEntries) list.appendChild(this.renderPopupRecording(entry));
+    if (visibleEntries.length) void this.paintNoteCounts(visibleEntries);
   }
 
   private async refreshRecordingsCount(): Promise<void> {
@@ -1068,6 +1291,12 @@ export class PopupController {
     files.className = 'recording-detail-files';
     for (const file of entry.files) files.appendChild(this.renderDetailFile(entry, file));
     content.append(titleRow, meta, destination, files);
+
+    // Notes for this recording (d1). Loads on its own and stays hidden if the
+    // recording has none, so an unnoted recording looks exactly as before.
+    const notes = new RecordingNotesDetail(entry.id, entry.durationMs, this.notesDetailActions());
+    content.appendChild(notes.element);
+    void notes.load();
 
     const transcript = entry.files.find((file) => /\.(vtt|txt)$/i.test(file.filename));
     const transcriptButton = document.createElement('button');
@@ -1398,8 +1627,137 @@ export class PopupController {
     // than the word “Open”, so popup history rows retain their compact 52px rhythm.
     open.innerHTML = DETAIL_OPEN_ICON;
     open.addEventListener('click', (event) => { event.stopPropagation(); openDetail(); });
-    row.append(copy, open);
+
+    // Notes live under a spoiler on the row: the chip says how many, tapping it
+    // reveals them, and each line opens the recording (n1). The chip stays
+    // hidden until the count arrives, so an unnoted row looks untouched.
+    const notes = document.createElement('div');
+    notes.className = 'popup-recording-notes';
+    notes.hidden = true;
+
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'popup-recording-note-chip';
+    chip.hidden = true;
+    chip.setAttribute('aria-expanded', 'false');
+    chip.innerHTML = `${NOTE_CHIP_ICON}<span></span>`;
+    chip.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void this.toggleRowNotes(entry, chip, notes);
+    });
+
+    const actions = document.createElement('span');
+    actions.className = 'popup-recording-actions';
+    actions.append(chip, open);
+
+    const head = document.createElement('div');
+    head.className = 'popup-recording-head';
+    head.append(copy, actions);
+    row.append(head, notes);
+    row.dataset.recordingId = entry.id;
     return row;
+  }
+
+  /** Expands or collapses a row's notes, reading them the first time it opens. */
+  private async toggleRowNotes(
+    entry: RecordingHistoryEntry,
+    chip: HTMLButtonElement,
+    notes: HTMLElement,
+  ): Promise<void> {
+    const expanded = chip.getAttribute('aria-expanded') === 'true';
+    chip.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    notes.hidden = expanded;
+    if (expanded || notes.childElementCount) return;
+
+    let notations: RecordingNotation[];
+    try {
+      notations = await this.loadNotations(entry.id);
+    } catch {
+      notes.hidden = true;
+      chip.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    for (const notation of notations) {
+      const line = document.createElement('button');
+      line.type = 'button';
+      line.className = 'popup-recording-note';
+      const at = document.createElement('span');
+      at.className = 'popup-recording-note-at';
+      at.textContent = formatDuration(notation.tStartMs);
+      const text = document.createElement('span');
+      text.className = 'popup-recording-note-text';
+      if (!notation.text) text.classList.add('unnamed');
+      text.textContent = describeNotationForList(notation, formatDuration);
+      line.append(at, text);
+      line.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.showRecordingDetail({ kind: 'recording', entry });
+      });
+      notes.appendChild(line);
+    }
+  }
+
+  /**
+   * Mounts the notes disclosure under the saved screen's file list (n2a → n2c),
+   * once per recording so a re-render does not stack duplicates.
+   */
+  private mountSavedNotes(job: import('../shared/recording').UploadJob): void {
+    const host = this.el.uploadJobNotes;
+    if (!host || !job.historyId) return;
+    if (this.mountedSavedNotesFor === job.historyId) return;
+    this.mountedSavedNotesFor = job.historyId;
+    host.replaceChildren();
+
+    const notes = new RecordingNotesDetail(
+      job.historyId,
+      undefined,
+      this.notesDetailActions(),
+      { timeline: false, collapsible: true },
+    );
+    host.appendChild(notes.element);
+    void notes.load().then(() => {
+      // The subline is painted before the notes load, so extend it once they
+      // arrive rather than re-rendering the whole panel.
+      const count = Number(notes.element.querySelector('.detail-notes-count')?.textContent ?? 0);
+      const sub = this.el.uploadJobSub;
+      if (!count || !sub || sub.textContent?.includes('NOTE')) return;
+      sub.textContent = `${sub.textContent} · ${count} ${count === 1 ? 'NOTE' : 'NOTES'}`;
+    });
+  }
+
+  /** Reads one recording's notations, or the preview fixture when previewing. */
+  private async loadNotations(recordingId: string): Promise<RecordingNotation[]> {
+    if (this.previewNotations) return this.previewNotations;
+    return await this.readNotations({ type: 'LIST_RECORDING_NOTATIONS', recordingId });
+  }
+
+  /** Fills in the note-count chips for the rendered rows in one read. */
+  private async paintNoteCounts(entries: RecordingHistoryEntry[]): Promise<void> {
+    const counts = this.previewNotations
+      ? (entries[0] ? { [entries[0].id]: this.previewNotations.length } : {})
+      : await (async () => {
+        try {
+          const response = await sendToBackground({
+            type: 'LIST_RECORDING_NOTATION_SUMMARIES',
+            recordingIds: entries.map((entry) => entry.id),
+          });
+          return response.ok
+            ? Object.fromEntries(Object.entries(response.summaries).map(([id, s]) => [id, s.count]))
+            : {};
+        } catch { return {}; }
+      })();
+
+    // Matched in JS rather than through a selector: a recording id is not a
+    // valid CSS identifier, and CSS.escape does not exist outside a browser.
+    for (const row of Array.from(document.querySelectorAll<HTMLElement>('.popup-recording-row'))) {
+      const count = counts[row.dataset.recordingId ?? ''] ?? 0;
+      const chip = row.querySelector<HTMLButtonElement>('.popup-recording-note-chip');
+      if (!chip || !count) continue;
+      chip.hidden = false;
+      chip.title = count === 1 ? '1 note' : `${count} notes`;
+      const label = chip.querySelector('span');
+      if (label) label.textContent = String(count);
+    }
   }
 
   /** Active uploads are first-class entries in the compact Recordings list. */
@@ -1500,13 +1858,19 @@ export class PopupController {
       const menuButton = document.getElementById('open-menu');
       if (menu) menu.hidden = true;
       menuButton?.setAttribute('aria-expanded', 'false');
-      const message = () => buildDiscardConfirmMessage(this.el.recTimer?.textContent ?? undefined);
+      const notes = this.activeNotations;
+      const message = () =>
+        buildDiscardConfirmMessage(this.el.recTimer?.textContent ?? undefined, notes.length);
       const confirmation = this.confirmDialog.ask({
         title: DISCARD_CONFIRM_TEXT.title,
         message: message(),
         confirmLabel: DISCARD_CONFIRM_TEXT.confirmLabel,
         cancelLabel: DISCARD_CONFIRM_TEXT.cancelLabel,
         tone: 'danger',
+        details: notes.map((notation) => ({
+          at: formatDuration(notation.tStartMs),
+          text: describeNotationForList(notation, formatDuration),
+        })),
       });
       // Recording continues behind the prompt; keep the amount to be discarded
       // truthful as the popup's live timer advances.

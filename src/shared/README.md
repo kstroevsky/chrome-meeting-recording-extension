@@ -6,14 +6,15 @@
 
 ## Purpose & mental model
 
-`shared/` is the lingua franca. Four pillars:
+`shared/` is the lingua franca. Five pillars:
 
 1. **The recording state model** (`recording*.ts`) — the canonical `RecordingSessionSnapshot`, its capture phase, detached upload jobs, and the pure functions that derive and normalize them. This is where ADR-0003 and ADR-0004 meet in code.
 2. **The recording-history domain** (`recordingHistory.ts`) — normalized entries, files, cursors, and the message guard shared by the background persistence service and history page.
-3. **The messaging substrate** (`protocol.ts`, `protocolMessageTypes.ts`, `messages.ts`, `rpc.ts`) — the typed envelopes and the request/response framework the contexts talk over.
-4. **The recording-format policy** (`recordingFormats.ts`) — the shared WebM/MP4/M4A profile resolver and `MediaRecorder` capability probe used by Settings and the offscreen recorder. It keeps the selected recorder MIME, delivery content type, and filename extension in one contract, with no transcoding or silent fallback.
+3. **The notation domain** (`notations.ts`) — timecoded, user-authored annotations on a recording. `tStartMs`/`tEndMs` are *media-relative* offsets stamped from the background's pause-aware clock, so they map onto playback position without pause-gap correction (ADR-0005). Decode is tolerant (a bad end degrades to a point mark); the background service is strict on write.
+4. **The messaging substrate** (`protocol.ts`, `protocolMessageTypes.ts`, `messages.ts`, `rpc.ts`) — the typed envelopes and the request/response framework the contexts talk over.
+5. **The recording-format policy** (`recordingFormats.ts`) — the shared WebM/MP4/M4A profile resolver and `MediaRecorder` capability probe used by Settings and the offscreen recorder. It keeps the selected recorder MIME, delivery content type, and filename extension in one contract, with no transcoding or silent fallback.
 
-Everything else (`timeouts.ts`, `logger.ts`, `perf.ts`, `async.ts`, `typeGuards.ts`, `build.ts`) is cross-cutting infrastructure those two pillars and their callers share. The mental model: **the background owns the truth, persists it, and every other context derives its view from a snapshot of it** — so the snapshot's shape and the rules for reading it are load-bearing.
+Everything else (`timeouts.ts`, `logger.ts`, `perf.ts`, `async.ts`, `typeGuards.ts`, `build.ts`) is cross-cutting infrastructure those pillars and their callers share. The mental model: **the background owns the truth, persists it, and every other context derives its view from a snapshot of it** — so the snapshot's shape and the rules for reading it are load-bearing.
 
 ## The recording state model
 

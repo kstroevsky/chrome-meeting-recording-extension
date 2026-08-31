@@ -70,6 +70,7 @@ export class RecordingsController {
     this.nextCursor = response.nextCursor;
     this.view.showError();
     this.render();
+    void this.refreshNoteSummaries();
   }
 
   async loadMore() {
@@ -83,6 +84,7 @@ export class RecordingsController {
       this.nextCursor = response.nextCursor;
       this.view.showError();
       this.render();
+      void this.refreshNoteSummaries();
     } catch (error) {
       this.view.showError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -92,5 +94,23 @@ export class RecordingsController {
 
   private render() {
     this.view.render(this.entries, this.nextCursor != null);
+  }
+
+  /**
+   * Reads the notes digest for the loaded page in one message and repaints.
+   * Fire-and-forget: the table is useful without it, so a failure leaves the
+   * NOTES column empty rather than blocking the list.
+   */
+  private async refreshNoteSummaries(): Promise<void> {
+    const recordingIds = this.entries.map((entry) => entry.id);
+    if (!recordingIds.length) return;
+    try {
+      const response = await sendToBackground({ type: 'LIST_RECORDING_NOTATION_SUMMARIES', recordingIds });
+      if (!response.ok) return;
+      this.view.setNoteSummaries(response.summaries);
+      this.render();
+    } catch {
+      // Leave the column empty; the recordings themselves still list.
+    }
   }
 }

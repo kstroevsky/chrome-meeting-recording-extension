@@ -22,6 +22,9 @@
   --success: #3f9e6b;
   --warning: #c9812e;
   --detail: #8a6a3f;
+  /* NOTES column (f1): the count chip, and the dash for a recording with none. */
+  --note-chip: #efe9df;
+  --note-dash: #cabfa8;
   --drive-icon: #5f8b6e;
   --local-icon: #9c8f78;
   --selection: #f3ede1;
@@ -46,6 +49,8 @@
   --success: #4fae7d;
   --warning: #d99a45;
   --detail: #c99a55;
+  --note-chip: #2e281f;
+  --note-dash: #544c3f;
   --drive-icon: #6ba885;
   --local-icon: #8a7f68;
   --selection: #241f18;
@@ -71,6 +76,8 @@
     --success: #4fae7d;
     --warning: #d99a45;
     --detail: #c99a55;
+  --note-chip: #2e281f;
+  --note-dash: #544c3f;
     --selection: #241f18;
     --overlay: rgba(0, 0, 0, .55);
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 26px -12px rgba(0, 0, 0, .7);
@@ -113,7 +120,7 @@ button { -webkit-font-smoothing: antialiased; }
 .bulk-clear:hover { color: var(--surface); }
 
 .recording-table { overflow: hidden; }
-.recording-table__header, .recording-row { display: grid; grid-template-columns: 18px 8px minmax(0, 1fr) 50px 44px 30px 44px 20px; align-items: center; column-gap: 10px; }
+.recording-table__header, .recording-row { display: grid; grid-template-columns: 18px 8px minmax(0, 1fr) 170px 50px 44px 30px 44px 20px; align-items: center; column-gap: 10px; }
 .recording-table__header { min-height: 34px; padding: 8px 28px; border-bottom: 1px solid var(--border); background: var(--raised); }
 .table-header-button { display: inline-flex; align-items: center; gap: 3px; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--faint); cursor: pointer; font: 600 9px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; padding: 0; text-align: left; }
 .table-header-button--right { justify-content: flex-end; text-align: right; }
@@ -186,9 +193,24 @@ button { -webkit-font-smoothing: antialiased; }
   .recordings-page { width: 100%; border-inline: 0; }
   .recordings-header, .recordings-toolbar, .bulk-toolbar, .recording-table__header { padding-inline: 18px; }
   .recording-table__scroll { padding-inline: 18px; }
-  .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(120px, 1fr) 36px 30px 24px 40px 20px; column-gap: 7px; }
+  .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(90px, 1fr) 96px 36px 30px 24px 40px 20px; column-gap: 7px; }
   .recording-row__meta:nth-of-type(4), .recording-table__header > :nth-child(5) { display: none; }
   .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(120px, 1fr) 42px 28px 40px 20px; }
   .recording-table__header > :nth-child(5), .recording-row > :nth-child(5) { display: none; }
   .load-more { width: calc(100% - 36px); margin-inline: 18px; }
 }
+
+/* NOTES column (f1): the count chip plus the first note, which is what makes a
+   row worth opening. A recording with none shows a dash so the column never
+   pads itself. */
+.recording-row__notes { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.recording-row__notes-chip { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; height: 18px; padding: 0 5px; border-radius: 4px; background: var(--note-chip); color: var(--detail); font: 600 10px 'IBM Plex Mono', monospace; }
+.recording-row__notes-preview { overflow: hidden; min-width: 0; color: var(--faint); font: 10px 'IBM Plex Mono', monospace; white-space: nowrap; text-overflow: ellipsis; }
+.recording-row__notes--none { color: var(--note-dash); font: 10px 'IBM Plex Mono', monospace; }
+/* The new column reads as the accent one in both themes. */
+.table-header-button--notes { color: var(--detail); }
+
+/* Search results say where the hit landed (f2): plain muted group headers, and
+   the matched substring in gold. */
+.recording-day--match .recording-day__label { color: var(--muted); letter-spacing: .12em; }
+.recording-row__hit { color: var(--detail); font-weight: 600; }

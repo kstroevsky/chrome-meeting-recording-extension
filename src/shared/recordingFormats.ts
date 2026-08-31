@@ -122,6 +122,8 @@ export function contentTypeForRecordingFilename(filename: string): string {
   const extension = filename.toLowerCase().split('.').pop();
   if (extension === 'mp4') return 'video/mp4';
   if (extension === 'm4a') return 'audio/mp4';
+  // The notes sidecar is the one non-media artifact delivered with a recording.
+  if (extension === 'vtt') return 'text/vtt';
   return 'video/webm';
 }
 

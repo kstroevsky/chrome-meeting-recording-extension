@@ -25,6 +25,8 @@ import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
+import { RecordingNotationRepository } from './background/RecordingNotationRepository';
+import { RecordingNotationService } from './background/RecordingNotationService';
 import { RecordingHistoryService } from './background/RecordingHistoryService';
 import { openDownloadedFile } from './platform/chrome/downloads';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
@@ -48,6 +50,9 @@ import { TelemetryRuntime } from './background/TelemetryRuntime';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
+// Notations are their own aggregate in the same database (ADR-0005), so they
+// are constructed first: history delegates its dependent cleanup to them.
+const notations = new RecordingNotationService(new RecordingNotationRepository());
 const history = new RecordingHistoryService(
   new RecordingHistoryRepository(),
   openDownloadedFile,
@@ -56,6 +61,7 @@ const history = new RecordingHistoryService(
     await offscreen.ensureReady();
     return await offscreen.rpc({ type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES', resources });
   },
+  (id) => notations.removeAll(id),
 );
 const telemetry = new TelemetryRuntime();
 
@@ -118,6 +124,13 @@ const session = new RecordingSession(
     void import('./shared/messages').then(({ broadcastToPopup }) =>
       broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) })
     );
+  },
+  // A note left open when the run ends is sealed at the last recorded position
+  // rather than discarded, and marked so a screen can show it ended that way
+  // (ADR-0005). Best-effort: failing to seal must not disturb the transition.
+  (historyId, durationMs) => {
+    void notations.closeOpenSpans(historyId, durationMs)
+      .catch((error) => L.warn('Could not close open notations for the finished run:', error));
   }
 );
 
@@ -186,6 +199,10 @@ async function persistUploadState(job: import('./shared/recording').UploadJob): 
       session.upsertUploadJob(job);
       await session.flush();
     }
+    // applyUploadJob creates the row if it is absent, so the duration is stamped
+    // after it. `runDurationMs` answers whether or not the session has already
+    // returned to idle, so this does not depend on message ordering.
+    if (job.historyId) await history.setDuration(job.historyId, session.runDurationMs(job.historyId));
     if (job.status !== 'uploading') await offscreen.acknowledgeUploadState?.(job.id);
   } catch (error) {
     // Do not acknowledge a terminal outbox item unless both persisted views are
@@ -221,13 +238,13 @@ const phaseWatchdog = createPhaseWatchdog({
   },
 });
 
-registerSaveHandler(offscreen, L, history);
+registerSaveHandler(offscreen, L, history, (historyId) => session.runDurationMs(historyId));
 
 // The recording control plane: every start/stop trigger drives this one seam.
-const controller = new RecordingController({ L, offscreen, session, telemetry });
+const controller = new RecordingController({ L, offscreen, session, telemetry, notations });
 
 // Register all popup message handlers.
-registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, telemetry });
+registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 

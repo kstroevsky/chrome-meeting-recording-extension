@@ -6,6 +6,7 @@
  */
 
 import type { MeetingProviderInfo } from './provider';
+import type { RecordingNotation, RecordingNotationSummary } from './notations';
 import type { RecorderRuntimeSettingsSnapshot } from './settings';
 import type { PerfSettings } from './perf';
 import type {
@@ -38,6 +39,19 @@ export type CommandResult =
   | { ok: true; session: RecordingStatusView }
   | { ok: false; error: string; session: RecordingStatusView };
 
+/**
+ * Notation command results. Deliberately *not* a {@link CommandResult}: a
+ * failed notation write is a data-plane error, not a capture failure, so it must
+ * never carry (or fail) the recording session.
+ */
+export type NotationResult =
+  | { ok: true; notation: RecordingNotation }
+  | { ok: false; error: string };
+
+export type NotationListResult =
+  | { ok: true; notations: RecordingNotation[] }
+  | { ok: false; error: string };
+
 export type DriveTokenResponse =
   | { ok: true; token: string }
   | { ok: false; error: string };
@@ -69,12 +83,41 @@ export type PopupRetryUploadJob = { type: 'RETRY_UPLOAD_JOB'; jobId: string };
 export type PopupCancelUploadJob = { type: 'CANCEL_UPLOAD_JOB'; jobId: string };
 /** Marks the one-time completed-upload naming prompt handled without renaming. */
 export type PopupSkipRecordingNaming = { type: 'SKIP_RECORDING_NAMING'; jobId: string };
+/** Clears the interrupted-run notice once the user has seen it (design n4). */
+export type PopupDismissInterruption = { type: 'DISMISS_INTERRUPTION' };
 /** Reads one bounded, newest-first page of recording history. */
 export type PopupListRecordingHistory = { type: 'LIST_RECORDING_HISTORY'; cursor?: RecordingHistoryCursor };
 export type PopupRenameRecordingHistory = { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string };
 export type PopupSetRecordingHistoryNote = { type: 'SET_RECORDING_HISTORY_NOTE'; id: string; note: string };
 export type PopupRemoveRecordingHistory = { type: 'REMOVE_RECORDING_HISTORY'; id: string };
 export type PopupOpenRecordingHistoryFile = { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
+
+/** Stamps a notation at the live recording position (ADR-0005). Targets the active run. */
+export type PopupMarkNotation = { type: 'MARK_NOTATION'; text?: string };
+/** Closes an open notation at the live recording position. Targets the active run. */
+export type PopupEndNotation = { type: 'END_NOTATION'; id: string };
+export type PopupListActiveNotations = { type: 'LIST_ACTIVE_NOTATIONS' };
+export type PopupUpdateActiveNotation = { type: 'UPDATE_ACTIVE_NOTATION'; id: string; text: string };
+export type PopupRemoveActiveNotation = { type: 'REMOVE_ACTIVE_NOTATION'; id: string };
+export type PopupListRecordingNotations = { type: 'LIST_RECORDING_NOTATIONS'; recordingId: string };
+/** Adds a notation to a finished recording at an explicit media offset. */
+export type PopupAddRecordingNotation = {
+  type: 'ADD_RECORDING_NOTATION';
+  recordingId: string;
+  tStartMs: number;
+  tEndMs?: number;
+  text: string;
+};
+export type PopupListRecordingNotationSummaries = { type: 'LIST_RECORDING_NOTATION_SUMMARIES'; recordingIds: string[] };
+export type PopupUpdateRecordingNotation = {
+  type: 'UPDATE_RECORDING_NOTATION';
+  recordingId: string;
+  id: string;
+  tStartMs?: number;
+  tEndMs?: number;
+  text?: string;
+};
+export type PopupRemoveRecordingNotation = { type: 'REMOVE_RECORDING_NOTATION'; recordingId: string; id: string };
 
 export type PopupToBg =
   | PopupStartRecording
@@ -90,11 +133,22 @@ export type PopupToBg =
   | PopupRetryUploadJob
   | PopupCancelUploadJob
   | PopupSkipRecordingNaming
+  | PopupDismissInterruption
   | PopupListRecordingHistory
   | PopupRenameRecordingHistory
   | PopupSetRecordingHistoryNote
   | PopupRemoveRecordingHistory
-  | PopupOpenRecordingHistoryFile;
+  | PopupOpenRecordingHistoryFile
+  | PopupMarkNotation
+  | PopupEndNotation
+  | PopupListActiveNotations
+  | PopupUpdateActiveNotation
+  | PopupRemoveActiveNotation
+  | PopupListRecordingNotations
+  | PopupListRecordingNotationSummaries
+  | PopupAddRecordingNotation
+  | PopupUpdateRecordingNotation
+  | PopupRemoveRecordingNotation;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -112,9 +166,21 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupListRecordingHistory ? { ok: true; entries: RecordingHistoryEntry[]; nextCursor?: RecordingHistoryCursor } | { ok: false; error: string } :
   T extends PopupRenameRecordingHistory ? { ok: true; entry?: RecordingHistoryEntry; session?: RecordingStatusView } | { ok: false; error: string } :
   T extends PopupSkipRecordingNaming ? CommandResult :
+  T extends PopupDismissInterruption ? { session: RecordingStatusView } :
   T extends PopupSetRecordingHistoryNote ? { ok: true; entry?: RecordingHistoryEntry } | { ok: false; error: string } :
   T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean } | { ok: false; error: string } :
   T extends PopupOpenRecordingHistoryFile ? { ok: true } | { ok: false; error: string } :
+  T extends PopupMarkNotation ? NotationResult :
+  T extends PopupEndNotation ? NotationResult :
+  T extends PopupListActiveNotations ? NotationListResult :
+  T extends PopupUpdateActiveNotation ? NotationListResult :
+  T extends PopupRemoveActiveNotation ? NotationListResult :
+  T extends PopupListRecordingNotations ? NotationListResult :
+  T extends PopupListRecordingNotationSummaries ?
+    { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
+  T extends PopupAddRecordingNotation ? NotationResult :
+  T extends PopupUpdateRecordingNotation ? NotationListResult :
+  T extends PopupRemoveRecordingNotation ? NotationListResult :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -181,7 +247,15 @@ export type BgToOffscreenRpc =
       /** Monotonic run epoch the offscreen must echo in OFFSCREEN_STATE; see ADR-0003. */
       epoch: number;
     }>
-  | RpcRequest<{ type: 'OFFSCREEN_STOP' }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_STOP';
+      /**
+       * The run's notes, already rendered to WebVTT by the background (which
+       * owns them) for the offscreen to deliver ahead of the media (ADR-0005).
+       * Absent when the recording has no notes.
+       */
+      notesSidecar?: { vtt: string };
+    }>
   | RpcRequest<{ type: 'OFFSCREEN_DISCARD' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_CAMERA_MUTED'; muted: boolean }>

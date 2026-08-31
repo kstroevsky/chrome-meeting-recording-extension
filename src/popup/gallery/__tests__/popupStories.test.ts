@@ -11,6 +11,7 @@ const POPUP_VIEW_IDS = [
   'view-permission',
   'view-recording',
   'view-finalizing',
+  'view-interrupted',
   'view-upload',
   'view-recordings',
   'view-recording-detail',

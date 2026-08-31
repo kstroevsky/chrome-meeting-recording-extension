@@ -22,3 +22,10 @@ body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: a
 .recording-name-error { min-height: 17px; margin-top: 6px; color: var(--danger, #c43d3d); font-size: 11px; line-height: 1.4; }
 .recording-name-error[hidden] { display: block; visibility: hidden; }
 .recording-name-card .modal-actions { margin-top: 10px; }
+
+/* What a discard actually destroys, named rather than implied (n3). */
+.modal-details { display: flex; flex-direction: column; gap: 3px; margin-top: 11px; padding: 9px 10px; border: 1px solid var(--note-band-border); border-radius: 6px; background: var(--note-band); text-align: left; }
+.modal-detail { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.modal-detail-at { flex-shrink: 0; color: var(--warn-label); font: 10px 'IBM Plex Mono', monospace; }
+.modal-detail-text { overflow: hidden; color: var(--ink-2); font-size: 11.5px; white-space: nowrap; text-overflow: ellipsis; }
+.modal-detail-more { color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }

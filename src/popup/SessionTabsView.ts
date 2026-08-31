@@ -116,6 +116,8 @@ export interface SessionTabsCallbacks {
   applySession: (session: RecordingStatusView) => void;
   /** Show a transient status message on the popup status line. */
   toast: (message: string) => void;
+  /** Fired after a job's panel is painted, so its notes can be mounted (n2). */
+  onJobRendered?: (job: UploadJob) => void;
 }
 
 export class SessionTabsView {
@@ -329,7 +331,12 @@ export class SessionTabsView {
   renderJobView(job: UploadJob): void {
     const percent = Math.round(Math.min(1, Math.max(0, job.progress)) * 100);
     const completed = job.status === 'completed';
-    const totalBytes = job.files.reduce((sum, f) => sum + (typeof f.bytes === 'number' ? f.bytes : 0), 0);
+    // The notes sidecar is delivered with the recording but is not one of its
+    // media files: it gets its own line (d4) and is left out of the counts and
+    // the size, which describe what is being uploaded.
+    const notesFile = job.files.find((file) => file.kind === 'notes');
+    const mediaFiles = job.files.filter((file) => file.kind !== 'notes');
+    const totalBytes = mediaFiles.reduce((sum, f) => sum + (typeof f.bytes === 'number' ? f.bytes : 0), 0);
     const sizeSuffix = totalBytes > 0 ? ` · ${formatBytes(totalBytes)}` : '';
 
     // Toggle the in-progress bar vs. the saved-confirmation block.
@@ -345,16 +352,18 @@ export class SessionTabsView {
     if (this.el.uploadJobPct) this.el.uploadJobPct.textContent = `${percent}%`;
     if (this.el.uploadBarFill) this.el.uploadBarFill.style.width = `${percent}%`;
     if (this.el.uploadJobMeta) {
-      this.el.uploadJobMeta.textContent = fileCountText(job.files.length);
+      this.el.uploadJobMeta.textContent = fileCountText(mediaFiles.length);
     }
 
     // Saved-confirmation subline (shown in the done block).
     if (this.el.uploadJobSub) {
-      this.el.uploadJobSub.textContent = `${fileCountText(job.files.length)}${sizeSuffix} · Google Drive`;
+      this.el.uploadJobSub.textContent = `${fileCountText(mediaFiles.length)}${sizeSuffix} · Google Drive`;
     }
+    this.renderNotesLine(notesFile);
+    this.callbacks.onJobRendered?.(job);
     if (this.el.uploadJobFiles) {
       const frag = document.createDocumentFragment();
-      for (const file of job.files) {
+      for (const file of mediaFiles) {
         const li = document.createElement('li');
         li.classList.add(`file-status-${file.status}`);
         li.appendChild(buildStreamIcon(file.stream));
@@ -423,6 +432,22 @@ export class SessionTabsView {
     if (newRecording) newRecording.hidden = false;
     const transcript = document.getElementById('upload-job-transcript') as HTMLButtonElement | null;
     if (transcript) transcript.hidden = !completed;
+  }
+
+  /**
+   * The notes line (d4): says the sidecar went up, and that it went first.
+   * Hidden entirely for a recording with no notes.
+   */
+  private renderNotesLine(notesFile: UploadJobFile | undefined): void {
+    const row = this.el.uploadJobNotesLine;
+    if (!row) return;
+    row.hidden = !notesFile;
+    if (!notesFile) return;
+    const uploaded = notesFile.status === 'uploaded';
+    if (this.el.uploadJobNotesState) {
+      this.el.uploadJobNotesState.textContent = uploaded ? 'SAVED FIRST' : 'SAVING FIRST';
+    }
+    row.classList.toggle('upload-notes--saved', uploaded);
   }
 
   private async openUploadJobFolder(): Promise<void> {

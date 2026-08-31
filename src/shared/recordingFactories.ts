@@ -37,6 +37,7 @@ export function toStatusView(snapshot: RecordingSessionSnapshot): RecordingStatu
     micMuted: snapshot.micMuted,
     cameraMuted: snapshot.cameraMuted,
     paused: snapshot.paused,
+    interruption: snapshot.interruption,
     recordedMs: snapshot.recordedMs,
     runningSince: snapshot.runningSince,
     tabResolution: snapshot.tabResolution,

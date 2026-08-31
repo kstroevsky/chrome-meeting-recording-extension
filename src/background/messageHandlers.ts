@@ -24,6 +24,20 @@ import type { CpuSampler } from './perf/CpuSampler';
 import type { RecordingHistoryService } from './RecordingHistoryService';
 import type { TelemetryRuntime } from './TelemetryRuntime';
 import { isRecordingHistoryMessage } from '../shared/recordingHistory';
+import { isRecordingNotationMessage } from '../shared/notations';
+import {
+  NON_SESSION_RESPONSE_MESSAGE_TYPES,
+  RECORDING_HISTORY_MESSAGE_TYPES,
+  RECORDING_NOTATION_MESSAGE_TYPES,
+} from '../shared/protocolMessageTypes';
+import type { RecordingNotationService } from './RecordingNotationService';
+
+const includes = (types: readonly string[], type: string) => types.includes(type);
+
+/** True when a failure must answer `{ ok: false, error }` instead of failing the session. */
+function isNonSessionResponse(type: string): boolean {
+  return includes(NON_SESSION_RESPONSE_MESSAGE_TYPES, type);
+}
 
 export type MessageHandlersDeps = {
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
@@ -33,6 +47,7 @@ export type MessageHandlersDeps = {
   /** Dev-only system CPU sampler; null in production (no `system.cpu` permission). */
   cpuSampler?: CpuSampler | null;
   history?: RecordingHistoryService;
+  notations?: RecordingNotationService;
   telemetry?: TelemetryRuntime;
 };
 
@@ -41,7 +56,7 @@ export type MessageHandlersDeps = {
  * commands to PERF_EVENT, GET_DRIVE_TOKEN, START_RECORDING, STOP_RECORDING,
  * and GET_RECORDING_STATUS handlers.
  */
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -141,11 +156,11 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
     const send = sendResponse as (r: CommandResult) => void;
 
     (async () => {
-      if (
-        ['LIST_RECORDING_HISTORY', 'RENAME_RECORDING_HISTORY', 'SET_RECORDING_HISTORY_NOTE', 'REMOVE_RECORDING_HISTORY', 'OPEN_RECORDING_HISTORY_FILE'].includes(msg.type)
-        && !isRecordingHistoryMessage(msg)
-      ) {
+      if (includes(RECORDING_HISTORY_MESSAGE_TYPES, msg.type) && !isRecordingHistoryMessage(msg)) {
         throw new Error('Malformed recording history request');
+      }
+      if (includes(RECORDING_NOTATION_MESSAGE_TYPES, msg.type) && !isRecordingNotationMessage(msg)) {
+        throw new Error('Malformed recording notation request');
       }
       if (msg.type === 'LIST_RECORDING_HISTORY') {
         if (!history) throw new Error('Recording history is unavailable');
@@ -186,6 +201,58 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
         await history.openLocalFile(msg.recordingId, msg.fileId);
         sendResponse({ ok: true }); return;
       }
+
+      // Notation commands (ADR-0005). The two live ones go through the
+      // controller, which owns the recording clock; the rest are plain CRUD on
+      // a finished recording.
+      if (msg.type === 'MARK_NOTATION') {
+        sendResponse(await controller.markNotation(msg.text)); return;
+      }
+      if (msg.type === 'END_NOTATION') {
+        sendResponse(await controller.endNotation(msg.id)); return;
+      }
+      if (msg.type === 'LIST_ACTIVE_NOTATIONS') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        const { historyId } = session.getSnapshot();
+        sendResponse({ ok: true, notations: historyId ? await notations.list(historyId) : [] }); return;
+      }
+      if (msg.type === 'LIST_RECORDING_NOTATION_SUMMARIES') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, summaries: await notations.summaries(msg.recordingIds) }); return;
+      }
+      if (msg.type === 'UPDATE_ACTIVE_NOTATION' || msg.type === 'REMOVE_ACTIVE_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        const { historyId } = session.getSnapshot();
+        if (!historyId) throw new Error('No recording is active');
+        sendResponse({
+          ok: true,
+          notations: msg.type === 'UPDATE_ACTIVE_NOTATION'
+            ? await notations.update(historyId, msg.id, { text: msg.text })
+            : await notations.remove(historyId, msg.id),
+        });
+        return;
+      }
+      if (msg.type === 'LIST_RECORDING_NOTATIONS') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, notations: await notations.list(msg.recordingId) }); return;
+      }
+      if (msg.type === 'ADD_RECORDING_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        const notation = await notations.add(msg.recordingId, {
+          tStartMs: msg.tStartMs,
+          ...(msg.tEndMs != null ? { tEndMs: msg.tEndMs } : {}),
+          text: msg.text,
+        });
+        sendResponse({ ok: true, notation }); return;
+      }
+      if (msg.type === 'UPDATE_RECORDING_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, notations: await notations.update(msg.recordingId, msg.id, msg) }); return;
+      }
+      if (msg.type === 'REMOVE_RECORDING_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, notations: await notations.remove(msg.recordingId, msg.id) }); return;
+      }
       if (msg.type === 'START_RECORDING')    { send(await controller.start(msg)); return; }
       if (msg.type === 'STOP_RECORDING')     { send(await controller.stop('popup stop button')); return; }
       if (msg.type === 'DISCARD_RECORDING')  { send(await controller.discard('popup discard button')); return; }
@@ -193,6 +260,9 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
       if (msg.type === 'SET_CAMERA_MUTED')   { send(await controller.setCameraMuted(msg.muted)); return; }
       if (msg.type === 'SET_INPUT_DEVICE')   { send(await controller.setInputDevice(msg.device, msg.deviceId)); return; }
       if (msg.type === 'SET_PAUSED')         { send(await controller.setPaused(msg.paused)); return; }
+      if (msg.type === 'DISMISS_INTERRUPTION') {
+        sendResponse({ session: toStatusView(session.dismissInterruption()) }); return;
+      }
       if (msg.type === 'GET_RECORDING_STATUS') { sendResponse({ session: toStatusView(session.getSnapshot()) }); return; }
       if (msg.type === 'DISMISS_UPLOAD_JOB')   { sendResponse({ session: toStatusView(session.removeUploadJob(msg.jobId)) }); return; }
       if (msg.type === 'RETRY_UPLOAD_JOB')     { send(await controller.retryUpload(msg.jobId)); return; }
@@ -207,7 +277,7 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
     })().catch((err) => {
       console.error('[background] top-level error', err);
       const error = String(err);
-      if (isPopupToBgMessage(msg) && ['LIST_RECORDING_HISTORY', 'RENAME_RECORDING_HISTORY', 'SET_RECORDING_HISTORY_NOTE', 'REMOVE_RECORDING_HISTORY', 'OPEN_RECORDING_HISTORY_FILE'].includes(msg.type)) {
+      if (isPopupToBgMessage(msg) && isNonSessionResponse(msg.type)) {
         sendResponse({ ok: false, error });
       } else {
         session.fail(error);

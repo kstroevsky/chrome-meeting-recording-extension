@@ -29,7 +29,7 @@ export type RpcHandlerDeps = {
   currentPhase: () => RecordingPhase;
   isFinalizing: () => boolean;
   onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number, historyId: string, telemetryRunId?: string) => void;
-  onStopRequested: () => void;
+  onStopRequested: (notesSidecar?: { vtt: string }) => void;
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
   retryUpload: (jobId: string) => boolean;
@@ -85,13 +85,14 @@ async function handleOffscreenStart(
 }
 
 async function handleOffscreenStop(
+  msg: { notesSidecar?: { vtt: string } },
   deps: RpcHandlerDeps
 ): Promise<{ ok: boolean; error?: string }> {
   if (!deps.engine.isRecording()) {
     return { ok: false, error: 'Stop requested but recorder is not active' };
   }
   deps.pushState('stopping');
-  void deps.onStopRequested();
+  void deps.onStopRequested(msg.notesSidecar);
   return { ok: true };
 }
 
@@ -223,7 +224,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
     port,
     {
       OFFSCREEN_START:   (msg) => handleOffscreenStart(msg, deps),
-      OFFSCREEN_STOP:    ()    => handleOffscreenStop(deps),
+      OFFSCREEN_STOP:    (msg) => handleOffscreenStop(msg, deps),
       OFFSCREEN_DISCARD: ()    => handleOffscreenDiscard(deps),
       OFFSCREEN_SET_MIC_MUTED: (msg) => handleOffscreenSetMicMuted(msg, deps),
       OFFSCREEN_SET_CAMERA_MUTED: (msg) => handleOffscreenSetCameraMuted(msg, deps),

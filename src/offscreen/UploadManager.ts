@@ -109,8 +109,9 @@ export class UploadManager {
       label: inferDriveRecordingFolderName(artifacts[0]?.artifact.filename ?? id),
       status: 'uploading',
       progress: 0,
-      files: artifacts.map(({ stream, artifact }) => ({
+      files: artifacts.map(({ stream, kind, artifact }) => ({
         stream,
+        ...(kind ? { kind } : {}),
         filename: artifact.filename,
         status: 'uploading',
         bytes: artifact.file.size,

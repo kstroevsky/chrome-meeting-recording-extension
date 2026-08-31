@@ -1,4 +1,5 @@
 import {
+  buildDiscardConfirmMessage,
   buildLocalSaveFailedAlert,
   buildLocalSaveFailedToast,
   buildMicPermissionError,
@@ -70,5 +71,22 @@ describe('popupMessages', () => {
     it('falls back to a generic suffix without a meeting id', () => {
       expect(buildTranscriptFilename(undefined, 1700)).toBe('google-meet-transcript-google-meet-1700.txt');
     });
+  });
+});
+
+describe('buildDiscardConfirmMessage', () => {
+  it('names the elapsed time so the stakes are concrete', () => {
+    expect(buildDiscardConfirmMessage('00:22:40'))
+      .toBe("You'll lose 22:40 of video, audio, and the live transcript. This can't be undone.");
+  });
+
+  it('adds notes to the list only when the run has some', () => {
+    expect(buildDiscardConfirmMessage('05:00', 0)).toContain('video, audio, and the live transcript.');
+    expect(buildDiscardConfirmMessage('05:00', 3))
+      .toContain('video, audio, the live transcript, and your notes.');
+  });
+
+  it('falls back to zero when the timer has produced nothing yet', () => {
+    expect(buildDiscardConfirmMessage(undefined)).toContain("lose 0:00 of");
   });
 });

@@ -34,6 +34,12 @@
         "default": "Ctrl+Shift+9",
         "mac": "MacCtrl+Shift+9"
       }
+    },
+    "mark-notation": {
+      "description": "Start or end a note on the current recording",
+      "suggested_key": {
+        "default": "Alt+M"
+      }
     }
   },
   "background": {

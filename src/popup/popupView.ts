@@ -4,10 +4,11 @@
  * Pure DOM-focused helpers for syncing popup controls with recording state.
  */
 
+import type { RecordingNotesElements } from './RecordingNotesView';
 import type { RecordingPhase } from '../shared/recording';
 
 /** Which top-level popup layout a phase maps to. */
-export type PopupView = 'config' | 'recording' | 'finalizing';
+export type PopupView = 'config' | 'recording' | 'finalizing' | 'interrupted';
 
 export type PopupElements = {
   // Header + config view
@@ -30,6 +31,16 @@ export type PopupElements = {
   viewPermission: HTMLElement | null;
   viewRecording: HTMLElement | null;
   viewFinalizing: HTMLElement | null;
+  viewInterrupted: HTMLElement | null;
+  interruptedTitle: HTMLElement | null;
+  interruptedSub: HTMLElement | null;
+  interruptedRibbon: HTMLElement | null;
+  interruptedTrack: HTMLElement | null;
+  interruptedNotes: HTMLElement | null;
+  interruptedCount: HTMLElement | null;
+  interruptedList: HTMLElement | null;
+  interruptedDiscard: HTMLButtonElement | null;
+  interruptedDone: HTMLButtonElement | null;
 
   // Permission interstitial
   permMicState: HTMLElement | null;
@@ -42,6 +53,8 @@ export type PopupElements = {
   recBanner: HTMLElement | null;
   recLabel: HTMLElement | null;
   recTimer: HTMLElement | null;
+  /** Live notes UI (ADR-0005); grouped so RecordingNotesView owns its own surface. */
+  notes: RecordingNotesElements;
   chipTranscript: HTMLElement | null;
   chipTranscriptLabel: HTMLElement | null;
   chipStorage: HTMLElement | null;
@@ -98,6 +111,9 @@ export type PopupElements = {
   uploadJobMeta: HTMLElement | null;
   uploadJobSub: HTMLElement | null;
   uploadJobFiles: HTMLElement | null;
+  uploadJobNotes: HTMLElement | null;
+  uploadJobNotesLine: HTMLElement | null;
+  uploadJobNotesState: HTMLElement | null;
   /** Opens the completed job's Google Drive folder when Drive returned one. */
   uploadJobOpenDrive: HTMLButtonElement | null;
   /** "Retry upload" CTA, shown only for a failed/partial job. */
@@ -111,18 +127,21 @@ export type PopupElements = {
 };
 
 /** Maps a recording phase to the top-level view it should display. */
-export function viewForPhase(phase: RecordingPhase): PopupView {
+export function viewForPhase(phase: RecordingPhase, interrupted = false): PopupView {
   if (phase === 'starting' || phase === 'recording') return 'recording';
   if (phase === 'stopping') return 'finalizing';
+  // The capture is saved by now; this reports what happened to it (n4).
+  if (interrupted) return 'interrupted';
   return 'config'; // idle, failed
 }
 
 /** Shows the single view that matches the current phase and hides the others. */
-export function setActiveView(elements: PopupElements, phase: RecordingPhase): PopupView {
-  const view = viewForPhase(phase);
+export function setActiveView(elements: PopupElements, phase: RecordingPhase, interrupted = false): PopupView {
+  const view = viewForPhase(phase, interrupted);
   if (elements.viewConfig) elements.viewConfig.hidden = view !== 'config';
   if (elements.viewPermission) elements.viewPermission.hidden = true;
   if (elements.viewRecording) elements.viewRecording.hidden = view !== 'recording';
   if (elements.viewFinalizing) elements.viewFinalizing.hidden = view !== 'finalizing';
+  if (elements.viewInterrupted) elements.viewInterrupted.hidden = view !== 'interrupted';
   return view;
 }

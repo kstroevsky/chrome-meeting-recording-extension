@@ -27,6 +27,15 @@
   --rec-label: #c0503c;
   --warn: #c99a55;
   --warn-label: #8a6a3f;
+  /* Notes (ADR-0005): the gold accent is --warn-label; these three complete it. */
+  --warn-label-hover: #7a5c35;
+  --note-track: #ddd4c2;
+  --note-band: #faf6ee;
+  --note-band-border: #e0d6c2;
+  /* A span while the recording is paused: held, not running. */
+  --note-span-held: #c9b895;
+  /* Row-level note actions: present but quiet until hovered. */
+  --note-icon: #c4b79c;
   --control-bg-strong: #e9e2d5;
   --control-bg: #f1ece2;
   --secondary-hover: #f1ece2;
@@ -55,6 +64,12 @@
   --rec-label: #dd7565;
   --warn: #c99a55;
   --warn-label: #c99a55;
+  --warn-label-hover: #d9ab68;
+  --note-track: #3a352d;
+  --note-band: #221d16;
+  --note-band-border: #3d3527;
+  --note-span-held: #8a7345;
+  --note-icon: #5e564a;
   --control-bg-strong: #2e281f;
   --control-bg: #2a251e;
   --secondary-hover: #262119;
@@ -84,6 +99,12 @@
     --rec-label: #dd7565;
     --warn: #c99a55;
     --warn-label: #c99a55;
+    --warn-label-hover: #d9ab68;
+    --note-track: #3a352d;
+    --note-band: #221d16;
+    --note-band-border: #3d3527;
+    --note-span-held: #8a7345;
+    --note-icon: #5e564a;
     --control-bg-strong: #2e281f;
     --secondary-hover: #262119;
     --danger-soft: #2e1c18;

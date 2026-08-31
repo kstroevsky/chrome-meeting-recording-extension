@@ -12,6 +12,7 @@ import { sendTabMessage } from '../platform/chrome/tabs';
 import type { RecordingController } from './RecordingController';
 
 export const START_RECORDING_COMMAND = 'start-recording';
+export const MARK_NOTATION_COMMAND = 'mark-notation';
 
 type RecordingCommandDeps = {
   controller: RecordingController;
@@ -24,11 +25,19 @@ type RecordingCommandDeps = {
 
 export async function handleRecordingCommand(
   command: string,
-  tab: chrome.tabs.Tab,
+  tab: chrome.tabs.Tab | undefined,
   { controller, L }: RecordingCommandDeps
 ): Promise<void> {
+  // Marking targets the run, not a tab, so it needs neither an active tab nor
+  // the activeTab grant that gates starting a recording.
+  if (command === MARK_NOTATION_COMMAND) {
+    const result = await controller.toggleNotation();
+    if (!result.ok) L.warn('Mark note shortcut failed:', result.error);
+    else L.log('Mark note shortcut', result.notation.tEndMs == null ? 'started' : 'ended', result.notation.id);
+    return;
+  }
   if (command !== START_RECORDING_COMMAND) return;
-  if (typeof tab.id !== 'number') {
+  if (!tab || typeof tab.id !== 'number') {
     L.warn('Start recording shortcut did not receive an active tab');
     return;
   }
@@ -51,13 +60,9 @@ export async function handleRecordingCommand(
 
 export function registerRecordingCommands(deps: RecordingCommandDeps): void {
   chrome.commands.onCommand.addListener((command, tab) => {
-    if (!tab) {
-      deps.L.warn('Start recording shortcut did not receive an active tab');
-      return;
-    }
     void handleRecordingCommand(command, tab, deps).catch((error) => {
       deps.L.error(
-        'Start recording shortcut failed unexpectedly:',
+        `${command} shortcut failed unexpectedly:`,
         error instanceof Error ? error.message : String(error)
       );
     });

@@ -25,6 +25,18 @@ export type DesiredState = 'idle' | 'recording';
 export type ObservedState = 'none' | 'starting' | 'recording' | 'stopping' | 'idle';
 
 export type RecordingStream = 'tab' | 'mic' | 'self-video';
+
+/**
+ * An ending the user did not ask for. The capture is sealed and saved either
+ * way — this is a notification of a completed save, not a decision point.
+ */
+export type RecordingInterruption = {
+  reason: 'tab-closed' | 'navigated-away' | 'meeting-ended';
+  /** Recorded position the capture actually reached. */
+  atMs: number;
+  /** History identity of the saved recording, so its notes can be listed. */
+  historyId: string;
+};
 export type StorageMode = 'local' | 'drive';
 export type MicMode = 'off' | 'mixed' | 'separate';
 /** Immutable ownership carried with sealed artifacts after capture has ended. */
@@ -90,8 +102,17 @@ export type UploadJobStatus = 'uploading' | 'completed' | 'failed' | 'partial' |
 export type RecordingNamingStatus = 'pending' | 'named' | 'skipped';
 
 /** Per-stream file outcome shown in an upload job's detail view. */
+/**
+ * What an uploaded artifact *is*, orthogonal to which stream produced it. Absent
+ * means media; `notes` is the WebVTT sidecar, which is delivered before the
+ * media so a reader has the notes even while the video is still uploading
+ * (ADR-0005).
+ */
+export type RecordingArtifactKind = 'notes';
+
 export type UploadJobFile = {
   stream: RecordingStream;
+  kind?: RecordingArtifactKind;
   filename: string;
   status: 'uploading' | 'uploaded' | 'fallback' | 'retry-pending' | 'unavailable';
   bytes?: number;
@@ -178,6 +199,13 @@ export type RecordingSessionSnapshot = {
    * popup. See ADR-0003.
    */
   epoch?: number;
+  /**
+   * Why the last run ended, when it was not the user's doing. Phase-independent
+   * — it outlives the run so the popup can report the interruption after the
+   * capture has already been saved (ADR-0005, design n4). Cleared on the next
+   * `start()` and when the user dismisses the notice.
+   */
+  interruption?: RecordingInterruption;
   uploadSummary?: UploadSummary;
   error?: string;
   warnings?: string[];
@@ -244,6 +272,8 @@ export type RecordingStatusView = {
   cameraMuted?: boolean;
   /** Live whole-recording pause state; see {@link RecordingSessionSnapshot.paused}. */
   paused?: boolean;
+  /** Set when the last run ended without the user asking (design n4). */
+  interruption?: RecordingInterruption;
   /** Pause-aware recording timer state; see {@link RecordingSessionSnapshot.recordedMs}. */
   recordedMs?: number;
   runningSince?: number;

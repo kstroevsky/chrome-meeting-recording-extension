@@ -225,6 +225,29 @@
         <span id="rec-timer" class="rec-timer">0:00</span>
       </div>
 
+      <!-- Note ribbon (marks-2a): spans drawn to scale over the recorded timeline.
+           Hidden until the run has at least one note. -->
+      <div id="note-ribbon" class="note-ribbon" hidden>
+        <div id="note-track" class="note-track" role="group" aria-label="Notes on this recording">
+          <span class="note-track-base" aria-hidden="true"></span>
+          <span id="note-track-elapsed" class="note-track-elapsed" aria-hidden="true"></span>
+          <span id="note-track-playhead" class="note-track-playhead" aria-hidden="true"></span>
+        </div>
+        <span id="note-open-timer" class="note-open-timer" hidden>0:00</span>
+        <button id="note-toggle" class="note-toggle" type="button"
+          title="Start a note (⌥M)" aria-pressed="false">
+          <span class="note-toggle-glyph" aria-hidden="true"></span>
+          <span data-note-toggle-label class="sr-only">Start a note</span>
+        </button>
+      </div>
+
+      <!-- A note that was open when the recording paused: held, not running (d3). -->
+      <div id="note-held" class="note-held" hidden>
+        <span id="note-held-start" class="note-held-start">0:00</span>
+        <span id="note-held-text" class="note-held-text"></span>
+        <span class="note-held-state">HELD</span>
+      </div>
+
       <!-- Legacy status chips (hidden): valid targets for the caption poll and the
            storage-chip update; their info now lives in the source rows below. -->
       <div class="chips">
@@ -289,7 +312,22 @@
             <span data-camera-label class="sr-only">on</span>
           </button>
         </div>
+
+        <!-- Notes row (marks-e5): a third capture row, worded like the two above it,
+             so the feature is described rather than implied. -->
+        <div id="row-note" class="srow srow-note">
+          <button id="note-start" class="note-start" type="button" title="Start a note (⌥M)">
+            <span class="srow-ico" aria-hidden="true"><svg viewBox="0 0 16 16" fill="currentColor">
+                <path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z" />
+              </svg></span>
+            <span id="note-start-label">Make a note</span>
+          </button>
+          <span id="note-count" class="srow-mode">NONE YET</span>
+        </div>
       </div>
+
+      <!-- Shortcut tip (marks-e5). Shown only while the run has no notes yet. -->
+      <p id="note-hint" class="note-hint"><kbd>⌥M</kbd> starts and ends a note without opening this popup.</p>
 
       <div class="controls">
         <button id="pause-recording" class="btn btn-secondary" type="button" aria-pressed="false"
@@ -310,6 +348,36 @@
           title="Discard this recording and permanently delete its captured media">
           Discard
         </button>
+      </div>
+
+      <!-- Note message editor. Opened by clicking a span on the ribbon — never on its
+           own, so ending a note stays silent and nothing interrupts the meeting. -->
+      <div id="note-editor" class="device-picker note-editor" role="dialog" aria-modal="true"
+        aria-labelledby="note-editor-title" hidden>
+        <div class="device-picker-scrim" data-note-editor-dismiss></div>
+        <div class="device-picker-sheet">
+          <div class="note-editor-head">
+            <span id="note-editor-title" class="note-editor-title">
+              <span id="note-editor-index">NOTE 1</span>
+              <span class="note-editor-sep" aria-hidden="true">·</span>
+              <span id="note-editor-range" class="note-editor-range">00:00 → 00:00</span>
+              <span id="note-editor-length" class="note-editor-length">0:00</span>
+            </span>
+            <button id="note-editor-close" class="device-picker-close" type="button"
+              aria-label="Close note editor">✕</button>
+          </div>
+          <input id="note-editor-text" class="note-editor-text" type="text" autocomplete="off"
+            maxlength="500" placeholder="What happened here?" aria-labelledby="note-editor-title">
+          <div class="note-editor-actions">
+            <button id="note-editor-delete" class="note-editor-delete" type="button" title="Delete note"
+              aria-label="Delete note">
+              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M6 2h4l.5 1H13v1.5H3V3h2.5L6 2zM4 5.5h8L11.4 14H4.6L4 5.5z" />
+              </svg>
+            </button>
+            <button id="note-editor-save" class="note-editor-save" type="button">Save message</button>
+          </div>
+        </div>
       </div>
 
       <div id="device-picker" class="device-picker" role="dialog" aria-modal="true"
@@ -347,6 +415,42 @@
       <ul id="finalizing-files" class="meta-list"></ul>
     </section>
 
+    <!-- ════════ INTERRUPTED VIEW (n4) ════════
+         The capture is already sealed and saved by the time this shows; it
+         reports a completed save, it is not a decision point. -->
+    <section id="view-interrupted" class="view" hidden>
+      <div class="interrupted-head">
+        <span class="interrupted-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none">
+            <path d="M10 3.4l7 12.2H3l7-12.2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            <path d="M10 8v3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <circle cx="10" cy="13.2" r="0.85" fill="currentColor" />
+          </svg>
+        </span>
+        <div>
+          <h2 id="interrupted-title" class="interrupted-title">The meeting tab closed</h2>
+          <p id="interrupted-sub" class="interrupted-sub"></p>
+        </div>
+      </div>
+
+      <div id="interrupted-ribbon" class="note-ribbon interrupted-ribbon" hidden>
+        <div id="interrupted-track" class="note-track">
+          <span class="note-track-base" aria-hidden="true"></span>
+          <span class="note-track-elapsed" style="width:100%" aria-hidden="true"></span>
+        </div>
+      </div>
+
+      <div id="interrupted-notes" hidden>
+        <div class="detail-notes-head"><span>KEPT</span><span id="interrupted-count" class="detail-notes-count"></span></div>
+        <div id="interrupted-list" class="detail-notes-list"></div>
+      </div>
+
+      <div class="controls interrupted-actions">
+        <button id="interrupted-discard" class="btn btn-secondary" type="button">Discard</button>
+        <button id="interrupted-done" class="btn btn-primary" type="button">Done</button>
+      </div>
+    </section>
+
     <!-- ════════ UPLOAD VIEW (a selected background upload job, ADR-0004) ════════ -->
     <section id="view-upload" class="view" hidden>
       <!-- In-progress: linear progress bar (design). -->
@@ -373,6 +477,19 @@
         <div id="upload-job-sub" class="upload-job-sub"></div>
       </div>
       <ul id="upload-job-files" class="meta-list file-list"></ul>
+      <!-- The notes sidecar goes up ahead of the media, and says so (d4). -->
+      <div id="upload-job-notes-line" class="upload-notes" hidden>
+        <span class="upload-notes-label">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z" /></svg>
+          Notes
+        </span>
+        <span class="upload-notes-state">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.2l3 3L12.5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <span id="upload-job-notes-state"></span>
+        </span>
+      </div>
+      <!-- Notes on the recording that was just saved (n2a folded → n2c open). -->
+      <div id="upload-job-notes"></div>
       <button id="upload-job-transcript" class="upload-transcript" type="button" hidden><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v7m0 0 2.5-2.5M8 9 5.5 6.5M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></svg><strong>Transcript</strong><span>VTT</span></button>
       <div class="upload-actions">
         <button id="upload-job-cancel" class="btn btn-secondary btn-full" type="button" hidden>

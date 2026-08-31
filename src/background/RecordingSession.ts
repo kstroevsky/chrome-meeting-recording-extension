@@ -13,6 +13,7 @@ import {
   type ObservedState,
   type RecordingRunConfig,
   type RecordingInputDevice,
+  type RecordingInterruption,
   type RecordingSessionSnapshot,
   type UploadJob,
   type UploadSummary,
@@ -54,18 +55,48 @@ export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<v
  *   fail()               → failed=true                           ⇒ failed (preserves run context)
  */
 export class RecordingSession {
+  /**
+   * Recorded duration of the run that just ended, keyed by its history id.
+   *
+   * History rows are created asynchronously by the finalize path, sometimes
+   * after the session has already returned to idle and dropped both
+   * `historyId` and `recordedMs`. Holding the finished run's duration here lets
+   * `runDurationMs` answer correctly whichever order those land in.
+   *
+   * Deliberately *not* on the snapshot: it would have to be threaded through
+   * every snapshot rebuild, and it does not need to survive a service-worker
+   * restart — keep-alive is active for the whole stop-to-row window (the phase
+   * is `stopping` and uploads are in flight), and the worst case is a missing
+   * duration, exactly what the field is fixing.
+   */
+  private lastRun?: { historyId: string; durationMs: number };
+  /** Set at an interrupted stop; carried onto the snapshot until dismissed. */
+  private pendingInterruption?: RecordingInterruption;
+
   private snapshot: RecordingSessionSnapshot = createIdleSession();
   private persistenceTail: Promise<void> = Promise.resolve();
 
   /** Builds the canonical session state machine around persistence and change notifications. */
   constructor(
     private readonly persist: SessionPersistor,
-    private readonly onChanged?: SessionChangeListener
+    private readonly onChanged?: SessionChangeListener,
+    /**
+     * Fired once when a run ends, with its final recorded duration — the seam
+     * downstream data uses to seal anything the run left open (ADR-0005).
+     */
+    private readonly onRunFinished?: (historyId: string, durationMs: number) => void
   ) {}
 
   /** Hydrates the in-memory session from previously persisted snapshot data. */
   hydrate(value: unknown): RecordingSessionSnapshot {
     this.snapshot = normalizeSessionSnapshot(value);
+    return this.commit();
+  }
+
+  /** Clears the interruption notice once the user has seen it. */
+  dismissInterruption(): RecordingSessionSnapshot {
+    this.pendingInterruption = undefined;
+    this.snapshot = { ...this.snapshot, interruption: undefined, updatedAt: Date.now() };
     return this.commit();
   }
 
@@ -76,6 +107,7 @@ export class RecordingSession {
 
   /** Starts a new session with the chosen run configuration and target tab (desired=recording). */
   start(runConfig: RecordingRunConfig, target?: RecordingTarget): RecordingSessionSnapshot {
+    this.pendingInterruption = undefined;
     const desired: DesiredState = 'recording';
     const observed: ObservedState = 'starting';
     const carriedUploads = this.snapshot.uploadJobs?.filter((j) => j.status === 'uploading');
@@ -88,6 +120,7 @@ export class RecordingSession {
       targetTabId: target?.targetTabId,
       meetingSlug: target?.meetingSlug,
       historyId: createRecordingHistoryId(),
+      interruption: undefined,
       warnings: undefined,
       // Fencing token (ADR-0003): a fresh, strictly-increasing epoch per run.
       epoch: (this.snapshot.epoch ?? 0) + 1,
@@ -101,8 +134,16 @@ export class RecordingSession {
   }
 
   /** Signals intent to stop (desired=idle); the phase derives to `stopping` while capture drains. */
-  markStopping(): RecordingSessionSnapshot {
+  markStopping(interruption?: RecordingInterruption['reason']): RecordingSessionSnapshot {
     const now = Date.now();
+    const { historyId } = this.snapshot;
+    // Captured before the timer is banked so the reported position is the one
+    // the capture actually reached.
+    const atMs = this.elapsedRecordedMs(now);
+    this.rememberFinishedRun(now);
+    if (interruption && historyId) {
+      this.pendingInterruption = { reason: interruption, atMs, historyId };
+    }
     const desired: DesiredState = 'idle';
     const observed = this.snapshot.observed ?? 'starting';
     const failed = this.snapshot.failed ?? false;
@@ -125,6 +166,7 @@ export class RecordingSession {
       ...this.nextTimer(phase, now),
       epoch: this.snapshot.epoch,
       uploadJobs: this.snapshot.uploadJobs,
+      interruption: this.pendingInterruption ?? this.snapshot.interruption,
       updatedAt: now,
     };
     return this.commit();
@@ -132,6 +174,7 @@ export class RecordingSession {
 
   /** Clears run state and moves the session back to idle (desired=idle, observed=idle). */
   markIdle(uploadSummary?: UploadSummary, warnings?: string[]): RecordingSessionSnapshot {
+    this.rememberFinishedRun(Date.now());
     this.snapshot = {
       phase: projectPhase('idle', 'idle', false),
       desired: 'idle',
@@ -145,6 +188,9 @@ export class RecordingSession {
       // Background upload jobs are phase-independent (ADR-0004): an idle session
       // can still have uploads draining from the recording that just ended.
       uploadJobs: this.snapshot.uploadJobs,
+      // An interruption outlives its run: the capture is saved, and the popup
+      // still has to report what happened (design n4).
+      interruption: this.pendingInterruption ?? this.snapshot.interruption,
       updatedAt: Date.now(),
     };
     return this.commit();
@@ -153,6 +199,7 @@ export class RecordingSession {
   /** Records a terminal failure (failed=true) while preserving the last active run configuration. */
   fail(error: string): RecordingSessionSnapshot {
     const now = Date.now();
+    this.rememberFinishedRun(now);
     const desired = this.snapshot.desired ?? 'idle';
     const observed = this.snapshot.observed ?? 'starting';
     this.snapshot = {
@@ -234,6 +281,45 @@ export class RecordingSession {
       updatedAt: now,
     };
     return this.commit();
+  }
+
+  /**
+   * Live media-relative position in ms — the offset a mark made *now* maps to
+   * in the produced file. Identical to playback position because a paused span
+   * is never written into the media (`RecorderEngine.setPaused` pauses every
+   * `MediaRecorder`), so no pause-gap correction is needed. See ADR-0005.
+   */
+  currentRecordedMs(now: number = Date.now()): number {
+    return this.elapsedRecordedMs(now);
+  }
+
+  /**
+   * Recorded duration of a run, whether it is still capturing or already
+   * finished — the value a history row should store as its `durationMs`.
+   * Returns `undefined` for a run this session knows nothing about.
+   */
+  runDurationMs(historyId: string | undefined): number | undefined {
+    if (!historyId) return undefined;
+    if (this.snapshot.historyId === historyId) return this.currentRecordedMs();
+    return this.lastRun?.historyId === historyId ? this.lastRun.durationMs : undefined;
+  }
+
+  /**
+   * Banks the ending run's duration so it outlives the snapshot's timer fields,
+   * and announces the end once so open notations can be sealed at that position.
+   * Guarded on `historyId`, which is dropped at idle — so a repeated idle report
+   * cannot re-announce a run that already finished.
+   */
+  private rememberFinishedRun(now: number): void {
+    const { historyId } = this.snapshot;
+    if (!historyId) return;
+    // A run ends once. `markStopping` announces it — capture has stopped there,
+    // so the duration is final and open notes can be sealed before the stop RPC
+    // carries their export — and the later `markIdle` must not repeat it.
+    const alreadyAnnounced = this.lastRun?.historyId === historyId;
+    const durationMs = alreadyAnnounced ? this.lastRun!.durationMs : this.elapsedRecordedMs(now);
+    this.lastRun = { historyId, durationMs };
+    if (!alreadyAnnounced) this.onRunFinished?.(historyId, durationMs);
   }
 
   /** Live recorded duration in ms: banked time plus the current running span. */
