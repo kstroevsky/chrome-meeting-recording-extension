@@ -9,10 +9,12 @@
   <body>
     <main class="recordings-page">
       <header class="recordings-header">
-        <a class="recordings-brand" href="popup.html" aria-label="Back to Meet Recorder">
+        <!-- Not a link: popup.html is the browser-action surface and renders
+             wrong as a full page, and this page has nowhere to navigate back to. -->
+        <div class="recordings-brand">
           <span class="recordings-brand__indicator" aria-hidden="true"></span>
           <span>Meet Recorder</span>
-        </a>
+        </div>
         <p class="recordings-header__label">RECORDINGS</p>
       </header>
       <p id="recordings-error" class="recordings-error" role="alert" hidden></p>

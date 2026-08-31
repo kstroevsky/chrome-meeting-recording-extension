@@ -124,7 +124,10 @@ select { font: inherit; }
 [hidden] { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
-.pp-header { display: flex; align-items: center; justify-content: space-between; margin: -18px -18px 15px; padding: 15px 18px 14px; border-bottom: 1px solid var(--divider); }
+/* Sticky so the wordmark, the menu and the upload-return control stay reachable
+   on the screens that outgrow the popup (the recording detail runs past 700px).
+   Needs its own background: content scrolls underneath it, not behind the body. */
+.pp-header { position: sticky; z-index: 30; top: 0; display: flex; align-items: center; justify-content: space-between; margin: -18px -18px 15px; padding: 15px 18px 14px; border-bottom: 1px solid var(--divider); background: var(--surface); }
 .brand { display: flex; align-items: center; gap: 9px; }
 .brand-mark { display: block; width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--ready); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ready) 16%, transparent); }
 .brand-name { color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }

@@ -1,5 +1,7 @@
 /* Recording-discard confirmation. */
-.modal-overlay { position: absolute; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; min-height: 509px; padding: 14px; background: var(--scrim); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+/* Fixed, not absolute: anchored to the body it would centre against the whole
+   document, so on a screen taller than the popup the card lands below the fold. */
+.modal-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; min-height: 509px; padding: 14px; background: var(--scrim); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
 body:has(.modal-overlay:not([hidden])) { min-height: 509px; }
 body:has(.modal-overlay:not([hidden])) #view-recording { display: flex; flex-direction: column; box-sizing: border-box; min-height: 420px; }
 body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: auto; }
