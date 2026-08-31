@@ -105,8 +105,10 @@
 .note-span.editing { top: 3px; height: 20px; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--warn-label); }
 /* An open span has no end yet: translucent, with a solid leading edge at "now". */
 .note-span.open { border-right: 2px solid var(--warn-label); border-radius: 2px 0 0 2px; background: color-mix(in srgb, var(--warn-label) 40%, transparent); cursor: default; }
-/* A span the run sealed on the way out (endedBy: auto) — the design's dashed edge. */
-.note-span.auto-ended { border-right: 2px dashed var(--surface); }
+/* A span the run sealed on the way out (endedBy: auto). The dashed edge is in
+   the stopped colour, not the surface: it says the note ended because the
+   recording did, and it has to be visible to say it (n4). */
+.note-span.auto-ended { border-right: 2px dashed var(--rec-label); }
 
 .note-open-timer { flex: 0 0 auto; color: var(--warn-label); font: 600 11px 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
 .note-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--warn-label); border-radius: 6px; background: var(--warn-label); color: var(--surface); cursor: pointer; transition: background .15s, border-color .15s; }

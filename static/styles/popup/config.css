@@ -225,3 +225,11 @@
 .popup-recording-note-at { flex-shrink: 0; color: var(--warn-label); font: 10px 'IBM Plex Mono', monospace; }
 .popup-recording-note-text { overflow: hidden; color: var(--ink-2); font-size: 11.5px; white-space: nowrap; text-overflow: ellipsis; }
 .popup-recording-note-text.unnamed { color: var(--ink-4); }
+
+/* Folded/open notes on the saved screen (n2a → n2c). */
+.detail-notes-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 10px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
+.detail-notes-toggle:hover { color: var(--warn-label); }
+.detail-notes-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.detail-notes-head-right { display: inline-flex; align-items: center; flex-shrink: 0; gap: 7px; }
+.detail-notes-chevron { width: 9px; height: 9px; transition: transform .15s ease; }
+.detail-notes-toggle[aria-expanded='true'] .detail-notes-chevron { transform: rotate(90deg); }
