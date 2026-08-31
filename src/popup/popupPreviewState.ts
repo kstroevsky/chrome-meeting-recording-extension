@@ -7,6 +7,7 @@
  * values; PopupController owns all markup and layout decisions.
  */
 
+import type { RecordingNotation } from '../shared/notations';
 import type {
   RecordingInputDevice,
   RecordingStatusView,
@@ -33,6 +34,8 @@ export type PopupPreviewState =
       session: RecordingStatusView;
       /** The live-caption poll would normally provide this asynchronously. */
       transcriptActive?: boolean;
+      /** Notes on the live run, which the background would normally supply. */
+      notations?: RecordingNotation[];
       /** Selects a detached upload tab after the session has been rendered. */
       selectedUploadJobId?: string;
       /** A focused setup-only condition owned by the real setup controls. */

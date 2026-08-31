@@ -11,6 +11,7 @@ import { CaptionPoller } from './CaptionPoller';
 import { ConfirmDialog } from './ConfirmDialog';
 import { MicPermissionService } from './MicPermissionService';
 import { RecordingTimer } from './RecordingTimer';
+import { RecordingNotesView } from './RecordingNotesView';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import { SessionTabsView } from './SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
@@ -37,7 +38,14 @@ import { setActiveView, type PopupElements } from './popupView';
 import { downloadFile } from '../platform/chrome/downloads';
 import { createExternalTab, createRuntimeTab, queryActiveTab } from '../platform/chrome/tabs';
 import { sendToBackground, sendToContent } from '../shared/messages';
-import type { BgToPopup, CommandResult } from '../shared/protocol';
+import type {
+  BgToPopup,
+  CommandResult,
+  PopupEndNotation,
+  PopupMarkNotation,
+  PopupRemoveActiveNotation,
+  PopupUpdateActiveNotation,
+} from '../shared/protocol';
 import { isDevBuild, isTestRuntime } from '../shared/build';
 import { formatBytes } from '../shared/format';
 import type {
@@ -139,6 +147,7 @@ export class PopupController {
   private readonly camera = new CameraPermissionService();
   private readonly state: PopupStateController;
   private readonly timer: RecordingTimer;
+  private readonly notes: RecordingNotesView;
   private readonly captionPoller: CaptionPoller;
   private readonly sessionTabs: SessionTabsView;
   private readonly confirmDialog = new ConfirmDialog();
@@ -165,6 +174,12 @@ export class PopupController {
   constructor(el: PopupElements) {
     this.el = el;
     this.timer = new RecordingTimer(el.recTimer);
+    this.notes = new RecordingNotesView(el.notes, {
+      mark: () => this.markNote(),
+      end: (id) => this.endNote(id),
+      save: (id, text) => this.saveNoteMessage(id, text),
+      remove: (id) => this.removeNote(id),
+    });
     this.captionPoller = new CaptionPoller(el.chipTranscriptLabel, el.chipTranscript);
     this.state = new PopupStateController(el, {
       onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
@@ -246,6 +261,7 @@ export class PopupController {
     this.state.applyPreviewSession(preview.session);
     if (preview.selectedUploadJobId) this.sessionTabs.select(preview.selectedUploadJobId);
     this.renderPreviewTranscript(preview.transcriptActive === true);
+    this.notes.setNotations(preview.notations ?? []);
     this.renderPreviewSetup(preview.setup);
     if (preview.devicePicker) this.renderPreviewDevicePicker(preview.devicePicker.device, preview.devicePicker.options);
   }
@@ -305,6 +321,7 @@ export class PopupController {
     if (job) {
       this.closeDevicePicker(false);
       this.timer.stop();
+      this.notes.stop();
       this.captionPoller.stop();
       if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
       if (this.el.viewConfig) this.el.viewConfig.hidden = true;
@@ -331,6 +348,8 @@ export class PopupController {
       this.updatePauseControl(phase, session);
       if (this.el.stopBtn) this.el.stopBtn.disabled = false;
       this.timer.sync(phase, session);
+      this.notes.sync(phase, session);
+      if (!this.previewing) void this.refreshNotes();
       if (this.previewing) this.captionPoller.stop();
       else this.captionPoller.start();
     } else {
@@ -365,6 +384,56 @@ export class PopupController {
       if (this.el.cameraWarning) this.el.cameraWarning.hidden = false;
       if (this.el.cameraWarningText) this.el.cameraWarningText.textContent = setup.cameraWarningText;
     }
+  }
+
+  /**
+   * Re-reads the active run's notations. Live commands in this protocol name no
+   * run — `SET_PAUSED` and `STOP_RECORDING` mean "the one happening now" — so
+   * `toStatusView` has never needed to carry the live `historyId`, and the
+   * notation commands follow the same shape.
+   */
+  private async refreshNotes(): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'LIST_ACTIVE_NOTATIONS' });
+      if (response.ok) this.notes.setNotations(response.notations);
+    } catch (error) {
+      console.warn('[popup] LIST_ACTIVE_NOTATIONS failed', error);
+    }
+  }
+
+  /**
+   * Runs one note command and re-reads the list. Deliberately quiet on success:
+   * starting and ending a note must not interrupt the meeting, so only a failure
+   * is worth a toast.
+   */
+  private async runNoteCommand(
+    message: PopupMarkNotation | PopupEndNotation | PopupUpdateActiveNotation | PopupRemoveActiveNotation,
+    fallbackError: string,
+  ): Promise<void> {
+    try {
+      const response = await sendToBackground(message);
+      if (!response.ok) this.toast(response.error || fallbackError);
+    } catch (error) {
+      console.warn(`[popup] ${message.type} failed`, error);
+      this.toast(fallbackError);
+    }
+    await this.refreshNotes();
+  }
+
+  private markNote(): Promise<void> {
+    return this.runNoteCommand({ type: 'MARK_NOTATION' }, 'Could not start a note');
+  }
+
+  private endNote(id: string): Promise<void> {
+    return this.runNoteCommand({ type: 'END_NOTATION', id }, 'Could not end the note');
+  }
+
+  private saveNoteMessage(id: string, text: string): Promise<void> {
+    return this.runNoteCommand({ type: 'UPDATE_ACTIVE_NOTATION', id, text }, 'Could not save the note');
+  }
+
+  private removeNote(id: string): Promise<void> {
+    return this.runNoteCommand({ type: 'REMOVE_ACTIVE_NOTATION', id }, 'Could not delete the note');
   }
 
   private toast(msg: string) {

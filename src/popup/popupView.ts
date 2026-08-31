@@ -4,6 +4,7 @@
  * Pure DOM-focused helpers for syncing popup controls with recording state.
  */
 
+import type { RecordingNotesElements } from './RecordingNotesView';
 import type { RecordingPhase } from '../shared/recording';
 
 /** Which top-level popup layout a phase maps to. */
@@ -42,6 +43,8 @@ export type PopupElements = {
   recBanner: HTMLElement | null;
   recLabel: HTMLElement | null;
   recTimer: HTMLElement | null;
+  /** Live notes UI (ADR-0005); grouped so RecordingNotesView owns its own surface. */
+  notes: RecordingNotesElements;
   chipTranscript: HTMLElement | null;
   chipTranscriptLabel: HTMLElement | null;
   chipStorage: HTMLElement | null;

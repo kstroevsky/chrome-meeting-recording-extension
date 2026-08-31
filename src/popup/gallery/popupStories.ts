@@ -133,6 +133,38 @@ export const POPUP_STORIES: PopupStory[] = [
     preview: { screen: 'session', session: activeRecording, transcriptActive: true },
   },
   {
+    id: 'recording-notes-empty', title: 'Notes · nothing yet', group: 'Recording',
+    description: 'marks-e5 — the "Make a note" capture row and the ⌥M shortcut tip, before any note exists.',
+    preview: { screen: 'session', session: activeRecording, transcriptActive: true, notations: [] },
+  },
+  {
+    id: 'recording-notes-span', title: 'Notes · span growing', group: 'Recording',
+    description: 'marks-2a — spans drawn to scale on the ribbon, the newest still open and counting up.',
+    preview: {
+      screen: 'session',
+      session: session({ ...activeRecording, recordedMs: 380_000, runningSince: undefined }),
+      transcriptActive: true,
+      notations: [
+        { id: 'notation:1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'notation:2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'notation:3', tStartMs: 315_000, text: '' },
+      ],
+    },
+  },
+  {
+    id: 'recording-notes-sealed', title: 'Notes · sealed by the run', group: 'Recording',
+    description: 'A note the run outlived: closed at the last recorded frame and marked, never discarded.',
+    preview: {
+      screen: 'session',
+      session: session({ ...activeRecording, recordedMs: 401_000, runningSince: undefined }),
+      transcriptActive: true,
+      notations: [
+        { id: 'notation:1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'notation:2', tStartMs: 372_000, tEndMs: 401_000, endedBy: 'auto', text: 'Renewal date' },
+      ],
+    },
+  },
+  {
     id: 'recording-paused', title: 'Paused', group: 'Recording',
     description: 'Pause-aware timer, summary metadata, and resume/finish actions.',
     preview: { screen: 'session', session: session({ ...activeRecording, paused: true }), transcriptActive: true },
