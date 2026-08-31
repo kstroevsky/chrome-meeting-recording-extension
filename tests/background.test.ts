@@ -402,8 +402,7 @@ describe('background runtime messages', () => {
 
     const removedListener = (chrome.tabs.onRemoved.addListener as jest.Mock).mock.calls[0][0];
     removedListener(42, { windowId: 1, isWindowClosing: false });
-    await Promise.resolve();
-    await Promise.resolve();
+    await untilCalled(offscreenInstance.rpc);
 
     expect(offscreenInstance.ensureReady).toHaveBeenCalled();
     expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
@@ -442,8 +441,7 @@ describe('background runtime messages', () => {
 
     const updatedListener = (chrome.tabs.onUpdated.addListener as jest.Mock).mock.calls[0][0];
     updatedListener(42, { url: 'https://example.com/' }, { id: 42 });
-    await Promise.resolve();
-    await Promise.resolve();
+    await untilCalled(offscreenInstance.rpc);
 
     expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
   });
@@ -527,6 +525,13 @@ describe('background runtime messages', () => {
     expect(response).toEqual({ ok: true, stopped: true, reason: 'meeting ended: post-call state detected' });
     expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
   });
+
+  /** Waits for a mock to be called, letting queued microtasks and IDB reads settle. */
+  async function untilCalled(mock: jest.Mock, attempts = 40): Promise<void> {
+    for (let i = 0; i < attempts && mock.mock.calls.length === 0; i++) {
+      await new Promise(process.nextTick);
+    }
+  }
 
   function makeOffscreenInstance() {
     return {

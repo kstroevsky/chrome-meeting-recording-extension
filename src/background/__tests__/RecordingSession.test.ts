@@ -499,6 +499,25 @@ describe('RecordingSession state machine', () => {
         expect(onRunFinished).toHaveBeenCalledWith(historyId, 3_000);
       });
 
+      it('announces at markStopping, where capture has already ended', () => {
+        const { onRunFinished, hooked } = withHook();
+        hooked.start(RUN_CONFIG, { targetTabId: 42 });
+        const historyId = hooked.getSnapshot().historyId!;
+        hooked.applyOffscreenPhase({ phase: 'recording' });
+
+        t += 9_000;
+        hooked.markStopping();
+
+        // Early enough that the stop RPC can still carry the notes export.
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 9_000);
+
+        // And the later idle must not repeat it, nor change the duration.
+        t += 4_000;
+        hooked.applyOffscreenPhase({ phase: 'idle' });
+        expect(onRunFinished).toHaveBeenCalledTimes(1);
+        expect(hooked.runDurationMs(historyId)).toBe(9_000);
+      });
+
       it('does not re-announce a run that already finished', () => {
         const { onRunFinished, hooked } = withHook();
         hooked.start(RUN_CONFIG, { targetTabId: 42 });

@@ -52,6 +52,25 @@ describe('RecordingFinalizer', () => {
     expect(deps.requestSave).toHaveBeenNthCalledWith(2, expect.objectContaining({ stream: 'mic', filename: 'mic.webm', blobUrl: 'blob:4', opfsFilename: 'mic.webm' }));
   });
 
+  it('delivers the notes sidecar before the media (ADR-0005)', async () => {
+    const notes = makeArtifact('meeting-20260830T1000-notes.vtt');
+    const mic = makeArtifact('mic.webm');
+    const tab = makeArtifact('tab.webm');
+
+    await finalizer.finalize({
+      storageMode: 'local',
+      artifacts: [
+        { stream: 'mic', artifact: mic },
+        { stream: 'tab', artifact: tab },
+        { stream: 'tab', kind: 'notes', artifact: notes },
+      ],
+    });
+
+    // Notes lead, then the media in its usual stream order.
+    expect(deps.requestSave.mock.calls.map(([call]: any[]) => call.filename))
+      .toEqual(['meeting-20260830T1000-notes.vtt', 'tab.webm', 'mic.webm']);
+  });
+
   it('keeps the recording identity with a local fallback after another recording starts', async () => {
     const tab = makeArtifact('tab.webm');
 

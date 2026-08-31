@@ -245,6 +245,41 @@ test.describe('recording notations (integration)', () => {
     }
   });
 
+  /**
+   * ADR-0005: the notes sidecar is delivered ahead of the media, so a reader has
+   * them while the video is still uploading.
+   */
+  test('uploads the notes sidecar to Drive before the media', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const drive = await installDriveSimulator(harness.context, 'fast');
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'drive',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+
+      await meetPage.waitForTimeout(1_500);
+      const marked = await mark(harness.controlPage, 'Intro / agenda');
+      await sendRuntimeMessage(harness.controlPage, { type: 'END_NOTATION', id: marked.id });
+      await stopRecording(harness.controlPage);
+
+      // Resources are keyed in the order their upload sessions were created.
+      // resources maps id -> filename, keyed in upload-session creation order.
+      const uploaded = () => Object.values(drive.resources).filter((name) => name.includes('.'));
+      await expect.poll(() => uploaded().length, { timeout: 45_000 }).toBeGreaterThanOrEqual(2);
+
+      const names = uploaded();
+      expect(names[0]).toMatch(/-notes\.vtt$/);
+      expect(names.slice(1).every((name) => /\.(webm|mp4|m4a)$/.test(name))).toBe(true);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
   test('drops the run’s marks when the recording is discarded', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
     try {

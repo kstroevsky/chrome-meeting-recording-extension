@@ -383,6 +383,39 @@ describe('RecordingController', () => {
       expect(notations.add).not.toHaveBeenCalled();
     });
 
+    it('exports the run\u2019s notes with the stop, ahead of the media (ADR-0005)', async () => {
+      const historyId = record();
+      notations.list.mockResolvedValueOnce([
+        { id: 'n1', tStartMs: 12_500, tEndMs: 41_000, endedBy: 'user', text: 'Intro / agenda' },
+      ]);
+
+      await controller.stop('popup stop button');
+
+      expect(notations.list).toHaveBeenCalledWith(historyId);
+      const stopCall = offscreen.rpc.mock.calls.find(([msg]) => msg.type === 'OFFSCREEN_STOP')?.[0];
+      expect(stopCall.notesSidecar.vtt).toContain('WEBVTT');
+      expect(stopCall.notesSidecar.vtt).toContain('00:00:12.500 --> 00:00:41.000');
+      expect(stopCall.notesSidecar.vtt).toContain('Intro / agenda');
+    });
+
+    it('stops without a sidecar when the run has no notes', async () => {
+      record();
+      notations.list.mockResolvedValueOnce([]);
+
+      await controller.stop('popup stop button');
+
+      const stopCall = offscreen.rpc.mock.calls.find(([msg]) => msg.type === 'OFFSCREEN_STOP')?.[0];
+      expect(stopCall).toEqual({ type: 'OFFSCREEN_STOP' });
+    });
+
+    it('still stops when the notes cannot be read', async () => {
+      record();
+      notations.list.mockRejectedValueOnce(new Error('store closed'));
+
+      await expect(controller.stop('popup stop button')).resolves.toMatchObject({ ok: true });
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+    });
+
     it('toggle refuses when nothing is recording', async () => {
       await expect(controller.toggleNotation()).resolves.toEqual({
         ok: false, error: 'Mark requested but no recording is active',
