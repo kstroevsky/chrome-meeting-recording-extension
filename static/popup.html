@@ -241,6 +241,13 @@
         </button>
       </div>
 
+      <!-- A note that was open when the recording paused: held, not running (d3). -->
+      <div id="note-held" class="note-held" hidden>
+        <span id="note-held-start" class="note-held-start">0:00</span>
+        <span id="note-held-text" class="note-held-text"></span>
+        <span class="note-held-state">HELD</span>
+      </div>
+
       <!-- Legacy status chips (hidden): valid targets for the caption poll and the
            storage-chip update; their info now lives in the source rows below. -->
       <div class="chips">

@@ -148,3 +148,23 @@
 .note-editor-save:hover { background: var(--ink-2); }
 .note-editor-delete:focus-visible,
 .note-editor-save:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Paused (d3): the ribbon holds still — spans mute, and the toggle disappears
+   because there is nothing to start or end until the recording resumes. */
+#view-recording:has(.controls.paused) .note-ribbon { gap: 0; }
+#view-recording:has(.controls.paused) .note-track { height: 22px; }
+#view-recording:has(.controls.paused) .note-track-base { top: 10px; background: var(--note-track); }
+#view-recording:has(.controls.paused) .note-track-elapsed { display: none; }
+#view-recording:has(.controls.paused) .note-track-playhead { top: 1px; height: 20px; background: var(--warn); }
+#view-recording:has(.controls.paused) .note-span { top: 5px; height: 12px; background: var(--note-span-held); cursor: default; }
+#view-recording:has(.controls.paused) .note-span.open { border-right: 0; background: color-mix(in srgb, var(--warn) 32%, transparent); }
+#view-recording:has(.controls.paused) .note-open-timer,
+#view-recording:has(.controls.paused) .note-toggle,
+#view-recording:has(.controls.paused) .srow-note,
+#view-recording:has(.controls.paused) .note-hint { display: none; }
+
+/* The held note reads as one line: when it started, what it says, and that it is waiting. */
+.note-held { display: flex; align-items: center; gap: 8px; height: 26px; margin: 0 0 16px; padding: 0 10px; border: 1px solid var(--note-band-border); border-radius: 6px; background: var(--note-band); }
+.note-held-start { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; }
+.note-held-text { overflow: hidden; flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+.note-held-state { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }

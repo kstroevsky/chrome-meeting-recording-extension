@@ -152,6 +152,19 @@ export const POPUP_STORIES: PopupStory[] = [
     },
   },
   {
+    id: 'recording-notes-paused', title: 'Notes · pause holds the note', group: 'Recording',
+    description: 'd3 — the ribbon stops growing and the open note says HELD rather than running across a gap.',
+    preview: {
+      screen: 'session',
+      session: session({ ...activeRecording, paused: true, recordedMs: 432_000, runningSince: undefined }),
+      notations: [
+        { id: 'notation:1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'notation:2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'notation:3', tStartMs: 334_000, text: 'Migration owner' },
+      ],
+    },
+  },
+  {
     id: 'recording-notes-sealed', title: 'Notes · sealed by the run', group: 'Recording',
     description: 'A note the run outlived: closed at the last recorded frame and marked, never discarded.',
     preview: {

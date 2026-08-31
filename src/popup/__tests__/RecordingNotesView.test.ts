@@ -7,6 +7,7 @@ function build(): { el: RecordingNotesElements; root: HTMLElement } {
   root.innerHTML = `
     <div id="ribbon"><div id="track"></div><span id="elapsed"></span><span id="playhead"></span></div>
     <span id="openTimer"></span>
+    <div id="held" hidden><span id="heldStart"></span><span id="heldText"></span></div>
     <button id="toggle"><span data-note-toggle-label></span></button>
     <div id="row"><button id="startButton"><span id="startLabel"></span></button><span id="count"></span></div>
     <p id="hint"></p>
@@ -20,7 +21,8 @@ function build(): { el: RecordingNotesElements; root: HTMLElement } {
     root,
     el: {
       ribbon: q('ribbon'), track: q('track'), elapsed: q('elapsed'), playhead: q('playhead'),
-      openTimer: q('openTimer'), toggle: q<HTMLButtonElement>('toggle'), row: q('row'),
+      openTimer: q('openTimer'), held: q('held'), heldStart: q('heldStart'), heldText: q('heldText'),
+      toggle: q<HTMLButtonElement>('toggle'), row: q('row'),
       startButton: q<HTMLButtonElement>('startButton'), startLabel: q('startLabel'),
       count: q('count'), hint: q('hint'), editor: q('editor'),
       editorIndex: q('editorIndex'), editorRange: q('editorRange'), editorLength: q('editorLength'),
@@ -40,6 +42,9 @@ const actions = () => ({
 /** A live session whose clock reads exactly `recordedMs`. */
 const recording = (recordedMs: number): RecordingStatusView =>
   ({ phase: 'recording', recordedMs, runConfig: null, updatedAt: 0 } as unknown as RecordingStatusView);
+
+const paused = (recordedMs: number): RecordingStatusView =>
+  ({ phase: 'recording', recordedMs, paused: true, runConfig: null, updatedAt: 0 } as unknown as RecordingStatusView);
 
 const spans = (root: HTMLElement) => Array.from(root.querySelectorAll('.note-span')) as HTMLElement[];
 
@@ -211,6 +216,59 @@ describe('RecordingNotesView', () => {
     view.setNotations([...notations]);
 
     expect(spans(root)[0]).toBe(first);
+  });
+
+  describe('pause holds an open note (d3)', () => {
+    it('names the held note by its start and its text', () => {
+      const { el } = build();
+      const view = new RecordingNotesView(el, actions());
+
+      view.sync('recording', paused(432_000));
+      view.setNotations([
+        { id: 'n1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 334_000, text: 'Migration owner' },
+      ]);
+
+      expect(el.held!.hidden).toBe(false);
+      expect(el.heldStart!.textContent).toBe('5:34');
+      expect(el.heldText!.textContent).toBe('Migration owner');
+    });
+
+    it('says nothing when the pause caught no open note', () => {
+      const { el } = build();
+      const view = new RecordingNotesView(el, actions());
+
+      view.sync('recording', paused(432_000));
+      view.setNotations([{ id: 'n1', tStartMs: 41_000, tEndMs: 78_000, endedBy: 'user', text: '' }]);
+
+      expect(el.held!.hidden).toBe(true);
+    });
+
+    it('is hidden again once the recording resumes', () => {
+      const { el } = build();
+      const view = new RecordingNotesView(el, actions());
+      view.setNotations([{ id: 'n1', tStartMs: 10_000, text: 'open' }]);
+
+      view.sync('recording', paused(60_000));
+      expect(el.held!.hidden).toBe(false);
+
+      view.sync('recording', recording(60_000));
+      expect(el.held!.hidden).toBe(true);
+    });
+
+    it('freezes the open span instead of growing it across the pause', () => {
+      const { el, root } = build();
+      const view = new RecordingNotesView(el, actions());
+      view.setNotations([{ id: 'n1', tStartMs: 41_000, text: 'held' }]);
+
+      view.sync('recording', paused(82_000));
+      const frozen = spans(root)[0].style.width;
+
+      // The clock does not advance while paused, so neither does the span.
+      view.sync('recording', paused(82_000));
+      expect(spans(root)[0].style.width).toBe(frozen);
+      expect(el.openTimer!.textContent).toBe('0:41');
+    });
   });
 
   it('hides the whole feature outside a live recording', () => {

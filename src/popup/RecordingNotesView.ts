@@ -39,6 +39,9 @@ export type RecordingNotesElements = {
   elapsed: HTMLElement | null;
   playhead: HTMLElement | null;
   openTimer: HTMLElement | null;
+  held: HTMLElement | null;
+  heldStart: HTMLElement | null;
+  heldText: HTMLElement | null;
   toggle: HTMLButtonElement | null;
   row: HTMLElement | null;
   startButton: HTMLButtonElement | null;
@@ -65,6 +68,7 @@ export type RecordingNotesActions = {
 export class RecordingNotesView {
   private notations: RecordingNotation[] = [];
   private phase: RecordingPhase = 'idle';
+  private paused = false;
   private recordedMs = 0;
   private runningSince: number | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -96,6 +100,7 @@ export class RecordingNotesView {
   /** Syncs the clock fields the ribbon scales against, mirroring RecordingTimer. */
   sync(phase: RecordingPhase, session?: RecordingStatusView): void {
     this.phase = phase;
+    this.paused = session?.paused === true;
     this.recordedMs = session?.recordedMs ?? 0;
     this.runningSince =
       phase === 'recording' && session?.paused !== true ? (session?.runningSince ?? null) : null;
@@ -193,6 +198,15 @@ export class RecordingNotesView {
     if (this.el.openTimer) {
       this.el.openTimer.hidden = !open;
       if (open) this.el.openTimer.textContent = formatDuration(this.elapsedMs() - open.tStartMs);
+    }
+
+    // Pausing holds an open note rather than ending it: the span stops growing
+    // and says so, instead of silently continuing across a gap the media
+    // never recorded.
+    if (this.el.held) this.el.held.hidden = !(this.paused && open);
+    if (this.paused && open) {
+      if (this.el.heldStart) this.el.heldStart.textContent = formatDuration(open.tStartMs);
+      if (this.el.heldText) this.el.heldText.textContent = open.text;
     }
     if (this.el.toggle) {
       this.el.toggle.setAttribute('aria-pressed', open ? 'true' : 'false');
