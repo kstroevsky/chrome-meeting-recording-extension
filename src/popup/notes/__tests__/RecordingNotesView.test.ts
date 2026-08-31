@@ -5,7 +5,7 @@ import type { RecordingStatusView } from '../../../shared/recording';
 function build(): { el: RecordingNotesElements; root: HTMLElement } {
   const root = document.createElement('div');
   root.innerHTML = `
-    <div id="ribbon"><div id="track"></div><span id="elapsed"></span><span id="playhead"></span></div>
+    <div id="ribbon"><div id="track"></div></div>
     <span id="openTimer"></span>
     <div id="held" hidden><span id="heldStart"></span><span id="heldText"></span></div>
     <button id="toggle"><span data-note-toggle-label></span></button>
@@ -20,7 +20,7 @@ function build(): { el: RecordingNotesElements; root: HTMLElement } {
   return {
     root,
     el: {
-      ribbon: q('ribbon'), track: q('track'), elapsed: q('elapsed'), playhead: q('playhead'),
+      ribbon: q('ribbon'), track: q('track'),
       openTimer: q('openTimer'), held: q('held'), heldStart: q('heldStart'), heldText: q('heldText'),
       toggle: q<HTMLButtonElement>('toggle'), row: q('row'),
       startButton: q<HTMLButtonElement>('startButton'), startLabel: q('startLabel'),
@@ -80,36 +80,33 @@ describe('RecordingNotesView', () => {
     expect(el.count!.textContent).toBe('2 NOTES');
   });
 
-  it('draws spans to scale, with the playhead short of the right edge', () => {
+  it('scales the whole track to the recording so far', () => {
     const { el, root } = build();
     const view = new RecordingNotesView(el, actions());
 
-    // 82s elapsed scales the track to 100s, so the numbers read directly.
-    view.sync('recording', recording(82_000));
+    // The track *is* the elapsed time, so 100s elapsed makes 1s = 1%.
+    view.sync('recording', recording(100_000));
     view.setNotations([{ id: 'n1', tStartMs: 25_000, tEndMs: 50_000, text: 'quarter in' }]);
 
     const [span] = spans(root);
     expect(span.style.left).toBe('25%');
     expect(span.style.width).toBe('25%');
-    // A live recording has no known end, so "now" keeps headroom to its right.
-    expect(el.elapsed!.style.width).toBe('82%');
-    expect(el.playhead!.style.left).toBe('82%');
   });
 
   it('draws an open span up to now, and shows its running length', () => {
     const { el, root } = build();
     const view = new RecordingNotesView(el, actions());
 
-    view.sync('recording', recording(82_000));
+    view.sync('recording', recording(100_000));
     view.setNotations([{ id: 'n1', tStartMs: 40_000, text: 'still going' }]);
 
     const [span] = spans(root);
     expect(span.classList.contains('open')).toBe(true);
     expect(span.style.left).toBe('40%');
-    // The open span runs up to "now" — its leading edge is the playhead.
-    expect(span.style.width).toBe('42%');
+    // The open span runs up to "now", which is the right-hand edge of the track.
+    expect(span.style.width).toBe('60%');
     expect(el.openTimer!.hidden).toBe(false);
-    expect(el.openTimer!.textContent).toBe('0:42');
+    expect(el.openTimer!.textContent).toBe('1:00');
   });
 
   it('marks a span the run sealed on the way out', () => {

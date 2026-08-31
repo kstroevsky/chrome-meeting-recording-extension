@@ -94,9 +94,11 @@
 .note-ribbon { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; }
 #view-recording:has(#note-ribbon:not([hidden])) .rec-timer { margin-bottom: 9px; }
 .note-track { position: relative; flex: 1; height: 26px; }
-.note-track-base { position: absolute; top: 12px; right: 0; left: 0; height: 2px; background: var(--divider); }
-.note-track-elapsed { position: absolute; top: 12px; left: 0; width: 0; height: 2px; background: var(--note-track); }
-.note-track-playhead { position: absolute; top: 2px; left: 0; width: 2px; height: 22px; background: var(--rec); }
+/* One track, not a base plus an elapsed fill: the whole width *is* the recording
+   so far, so there is never empty track ahead of the playhead. */
+.note-track-base { position: absolute; top: 12px; right: 0; left: 0; height: 2px; background: var(--note-track); }
+/* "Now" is the right-hand edge, so the playhead is pinned rather than positioned. */
+.note-track-playhead { position: absolute; top: 2px; right: 0; width: 2px; height: 22px; background: var(--rec); }
 
 .note-span { position: absolute; top: 6px; height: 14px; min-width: 3px; padding: 0; border: 0; border-radius: 2px; background: var(--warn-label); cursor: pointer; transition: height .12s ease, top .12s ease; }
 .note-span:hover { top: 5px; height: 16px; }

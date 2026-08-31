@@ -11,7 +11,9 @@
  *
  * Positions are media-relative ms from the background's pause-aware clock, so a
  * span's place on the ribbon is its place in the produced file. The ribbon is
- * scaled to live elapsed time, which only grows while recording.
+ * scaled to live elapsed time, so "now" is always the right-hand edge of the
+ * track and the spans slide left as the meeting gets longer. Elapsed time only
+ * grows while recording, so a paused ribbon holds still rather than rescaling.
  */
 
 import { formatDuration } from '../popupStatus';
@@ -25,20 +27,9 @@ const TICK_MS = 1000;
 /** Keeps a just-started span visible before elapsed time has caught up to it. */
 const MIN_SCALE_MS = 1000;
 
-/**
- * Where "now" sits on the track. A live recording has no known end, so the
- * ribbon is scaled to leave headroom rather than pinning the playhead to the
- * right edge — which is what makes the unfilled part of the track mean
- * something. Taken from the design, where every span position resolves against
- * a playhead at exactly this fraction.
- */
-const PLAYHEAD_FRACTION = 0.82;
-
 export type RecordingNotesElements = {
   ribbon: HTMLElement | null;
   track: HTMLElement | null;
-  elapsed: HTMLElement | null;
-  playhead: HTMLElement | null;
   openTimer: HTMLElement | null;
   held: HTMLElement | null;
   heldStart: HTMLElement | null;
@@ -198,12 +189,8 @@ export class RecordingNotesView {
     if (this.el.ribbon) this.el.ribbon.hidden = count === 0 || !live;
     if (count === 0 || !live) { this.ribbon?.clear(); return; }
 
-    const scale = Math.max(this.elapsedMs(), MIN_SCALE_MS) / PLAYHEAD_FRACTION;
-    const pct = (ms: number) => `${Math.min(100, Math.max(0, (ms / scale) * 100))}%`;
-
-    if (this.el.elapsed) this.el.elapsed.style.width = pct(this.elapsedMs());
-    if (this.el.playhead) this.el.playhead.style.left = pct(this.elapsedMs());
-
+    // The whole track is the recording so far; the playhead is its right edge.
+    const scale = Math.max(this.elapsedMs(), MIN_SCALE_MS);
     this.ribbon?.draw(this.notations, {
       scaleMs: scale,
       openEndsAtMs: this.elapsedMs(),

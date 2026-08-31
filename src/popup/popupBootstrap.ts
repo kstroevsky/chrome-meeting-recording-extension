@@ -55,8 +55,6 @@ export function createPopupController(doc: Document = document): PopupController
     notes: {
       ribbon: byId(doc, 'note-ribbon'),
       track: byId(doc, 'note-track'),
-      elapsed: byId(doc, 'note-track-elapsed'),
-      playhead: byId(doc, 'note-track-playhead'),
       openTimer: byId(doc, 'note-open-timer'),
       held: byId(doc, 'note-held'),
       heldStart: byId(doc, 'note-held-start'),
