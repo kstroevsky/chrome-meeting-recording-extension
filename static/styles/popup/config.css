@@ -181,7 +181,7 @@
 .detail-notes-timeline { position: relative; height: 12px; margin: 0 0 16px; }
 .detail-notes-track { position: absolute; top: 5px; right: 0; left: 0; height: 2px; background: var(--divider); }
 .detail-notes-span { position: absolute; top: 0; height: 12px; padding: 0; border: 0; border-radius: 2px; background: var(--warn-label); cursor: pointer; }
-.detail-notes-span.auto-ended { background: var(--note-span-held); }
+.detail-notes-span.auto-ended { background: var(--note-span-held); border-right: 2px dashed var(--rec-label); }
 .detail-notes-span.selected { box-shadow: 0 0 0 2px var(--warn-label), 0 0 0 4px var(--tile); }
 .detail-notes-span:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .detail-notes-marker { position: absolute; top: -3px; width: 2px; height: 18px; background: var(--ink); }

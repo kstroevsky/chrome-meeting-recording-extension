@@ -116,6 +116,8 @@ export interface SessionTabsCallbacks {
   applySession: (session: RecordingStatusView) => void;
   /** Show a transient status message on the popup status line. */
   toast: (message: string) => void;
+  /** Fired after a job's panel is painted, so its notes can be mounted (n2). */
+  onJobRendered?: (job: UploadJob) => void;
 }
 
 export class SessionTabsView {
@@ -352,6 +354,7 @@ export class SessionTabsView {
     if (this.el.uploadJobSub) {
       this.el.uploadJobSub.textContent = `${fileCountText(job.files.length)}${sizeSuffix} · Google Drive`;
     }
+    this.callbacks.onJobRendered?.(job);
     if (this.el.uploadJobFiles) {
       const frag = document.createDocumentFragment();
       for (const file of job.files) {

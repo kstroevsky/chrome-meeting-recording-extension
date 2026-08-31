@@ -202,6 +202,20 @@ export const POPUP_STORIES: PopupStory[] = [
     description: 'Indeterminate sealing/muxing state before local delivery or upload handoff.',
     preview: { screen: 'session', session: session({ phase: 'stopping', recordedMs: 754_000 }) },
   },
+  {
+    id: 'upload-completed-notes', title: 'Upload complete · notes', group: 'Saving',
+    description: 'n2a \u2192 n2c — the saved screen folds its notes behind YOUR NOTES; the heading opens them.',
+    preview: {
+      screen: 'session',
+      session: session({ uploadJobs: [{ ...uploadJob('completed', 1), historyId: 'gallery-history-alex' }] }),
+      selectedUploadJobId: uploadJob('completed', 1).id,
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n3', tStartMs: 312_000, tEndMs: 376_000, endedBy: 'auto', text: '' },
+      ],
+    },
+  },
   ...(['uploading', 'completed', 'failed'] as const).map((status): PopupStory => {
     const job = uploadJob(status, status === 'completed' ? 1 : 0.68);
     const title = status === 'uploading' ? 'Upload in progress' : status === 'completed' ? 'Upload complete' : 'Upload incomplete';

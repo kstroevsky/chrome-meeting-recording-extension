@@ -18,6 +18,13 @@ import type { RecordingNotation } from '../shared/notations';
 const PENCIL = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 const CROSS = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M1.6 1.6l6.8 6.8M8.4 1.6l-6.8 6.8"/></svg>';
 
+export type RecordingNotesDetailOptions = {
+  /** Draw the span timeline above the list. Off where the surface has no room for it. */
+  timeline?: boolean;
+  /** Fold the list behind its heading, which then acts as a disclosure button. */
+  collapsible?: boolean;
+};
+
 export type RecordingNotesDetailActions = {
   load: (recordingId: string) => Promise<RecordingNotation[]>;
   rename: (recordingId: string, id: string, text: string) => Promise<RecordingNotation[]>;
@@ -38,19 +45,45 @@ export class RecordingNotesDetail {
     /** The recording's own length; spans are drawn against it. */
     private readonly durationMs: number | undefined,
     private readonly actions: RecordingNotesDetailActions,
+    options: RecordingNotesDetailOptions = { timeline: true },
   ) {
     this.root.className = 'detail-notes';
     this.root.hidden = true;
     this.timeline.className = 'detail-notes-timeline';
+    this.timeline.hidden = options.timeline !== true;
 
-    this.header.className = 'detail-notes-head';
     const label = document.createElement('span');
     label.textContent = 'YOUR NOTES';
     this.count.className = 'detail-notes-count';
-    this.header.append(label, this.count);
+
+    if (options.collapsible) {
+      // The heading itself is the disclosure, so the section costs one line
+      // until someone wants the notes (n2a → n2c).
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'detail-notes-head detail-notes-toggle';
+      button.setAttribute('aria-expanded', 'false');
+      const right = document.createElement('span');
+      right.className = 'detail-notes-head-right';
+      right.append(this.count, chevron());
+      button.append(label, right);
+      button.addEventListener('click', () => this.toggle());
+      this.header.appendChild(button);
+      this.list.hidden = true;
+    } else {
+      this.header.className = 'detail-notes-head';
+      this.header.append(label, this.count);
+    }
 
     this.list.className = 'detail-notes-list';
     this.root.append(this.timeline, this.header, this.list);
+  }
+
+  private toggle(): void {
+    const button = this.header.querySelector('.detail-notes-toggle');
+    const open = button?.getAttribute('aria-expanded') === 'true';
+    button?.setAttribute('aria-expanded', open ? 'false' : 'true');
+    this.list.hidden = open;
   }
 
   /** The element to place in the detail view; it fills itself in once loaded. */
@@ -231,6 +264,20 @@ export class RecordingNotesDetail {
     } catch { /* as above */ }
     this.render();
   }
+}
+
+function chevron(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 10 10');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('detail-notes-chevron');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M3.5 2l3 3-3 3');
+  svg.appendChild(path);
+  return svg;
 }
 
 function describe(notation: RecordingNotation): string {

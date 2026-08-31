@@ -155,6 +155,8 @@ export class PopupController {
   private readonly state: PopupStateController;
   private readonly timer: RecordingTimer;
   private readonly notes: RecordingNotesView;
+  /** The recording whose saved-screen notes are already mounted. */
+  private mountedSavedNotesFor: string | null = null;
   /** Static notations for gallery previews; null in the real popup. */
   private previewNotations: RecordingNotation[] | null = null;
   private readonly captionPoller: CaptionPoller;
@@ -199,6 +201,7 @@ export class PopupController {
       rerender: () => this.onPhaseChange(this.lastPhase, this.lastSession),
       applySession: (session) => this.state.applySession(session),
       toast: (msg) => this.toast(msg),
+      onJobRendered: (job) => this.mountSavedNotes(job),
     });
   }
 
@@ -269,10 +272,13 @@ export class PopupController {
 
     this.showingRecordings = false;
     this.detailTarget = null;
+    // Set before applying the session: painting it mounts the saved-screen notes,
+    // which read this fixture rather than the background.
+    this.previewNotations = preview.notations ?? [];
     this.state.applyPreviewSession(preview.session);
     if (preview.selectedUploadJobId) this.sessionTabs.select(preview.selectedUploadJobId);
     this.renderPreviewTranscript(preview.transcriptActive === true);
-    this.notes.setNotations(preview.notations ?? []);
+    this.notes.setNotations(this.previewNotations);
     this.renderPreviewSetup(preview.setup);
     if (preview.devicePicker) this.renderPreviewDevicePicker(preview.devicePicker.device, preview.devicePicker.options);
   }
@@ -1592,6 +1598,34 @@ export class PopupController {
       });
       notes.appendChild(line);
     }
+  }
+
+  /**
+   * Mounts the notes disclosure under the saved screen's file list (n2a → n2c),
+   * once per recording so a re-render does not stack duplicates.
+   */
+  private mountSavedNotes(job: import('../shared/recording').UploadJob): void {
+    const host = this.el.uploadJobNotes;
+    if (!host || !job.historyId) return;
+    if (this.mountedSavedNotesFor === job.historyId) return;
+    this.mountedSavedNotesFor = job.historyId;
+    host.replaceChildren();
+
+    const notes = new RecordingNotesDetail(
+      job.historyId,
+      undefined,
+      this.notesDetailActions(),
+      { timeline: false, collapsible: true },
+    );
+    host.appendChild(notes.element);
+    void notes.load().then(() => {
+      // The subline is painted before the notes load, so extend it once they
+      // arrive rather than re-rendering the whole panel.
+      const count = Number(notes.element.querySelector('.detail-notes-count')?.textContent ?? 0);
+      const sub = this.el.uploadJobSub;
+      if (!count || !sub || sub.textContent?.includes('NOTE')) return;
+      sub.textContent = `${sub.textContent} · ${count} ${count === 1 ? 'NOTE' : 'NOTES'}`;
+    });
   }
 
   /** Reads one recording's notations, or the preview fixture when previewing. */
