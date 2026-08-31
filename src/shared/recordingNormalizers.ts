@@ -169,6 +169,8 @@ function parseUploadJobFile(value: unknown): UploadJobFile | null {
     : undefined;
   return {
     stream: stream as RecordingStream,
+    // Absent for media; `notes` marks the WebVTT sidecar (ADR-0005).
+    ...(value.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename,
     status: status as UploadJobFile['status'],
     bytes,
