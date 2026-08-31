@@ -13,10 +13,9 @@
  */
 
 import { formatDuration } from './popupStatus';
+import { NotationRibbon } from './notationRibbon';
+import { notationRow } from './notationRow';
 import type { RecordingNotation } from '../shared/notations';
-
-const PENCIL = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
-const CROSS = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M1.6 1.6l6.8 6.8M8.4 1.6l-6.8 6.8"/></svg>';
 
 export type RecordingNotesDetailOptions = {
   /** Draw the span timeline above the list. Off where the surface has no room for it. */
@@ -37,6 +36,10 @@ export class RecordingNotesDetail {
 
   private readonly root = document.createElement('section');
   private readonly timeline = document.createElement('div');
+  /** The line the spans sit on. Built once; the ribbon reconciles around it. */
+  private readonly track = document.createElement('span');
+  private readonly ribbon: NotationRibbon;
+  private marker: HTMLElement | null = null;
   private readonly header = document.createElement('div');
   private readonly count = document.createElement('span');
   private readonly list = document.createElement('div');
@@ -54,6 +57,16 @@ export class RecordingNotesDetail {
     this.root.className = 'detail-notes';
     this.root.hidden = true;
     this.timeline.className = 'detail-notes-timeline';
+    this.track.className = 'detail-notes-track';
+    this.timeline.appendChild(this.track);
+    // A finished ribbon floors its spans so a point mark stays visible; the
+    // live one does not, because there a span is still growing.
+    this.ribbon = new NotationRibbon(this.timeline, {
+      spanClass: 'detail-notes-span',
+      minWidthPct: 1,
+      activeClass: 'selected',
+      onSelect: (id) => this.select(id),
+    });
     this.timeline.hidden = options.timeline !== true;
     this.showsEmptyState = options.timeline === true;
 
@@ -128,7 +141,8 @@ export class RecordingNotesDetail {
     this.list.hidden = empty || this.list.hidden;
     if (empty) {
       // The track stays, so the screen keeps its shape.
-      this.timeline.replaceChildren(track());
+      this.ribbon.clear();
+      this.clearMarker();
       return;
     }
 
@@ -152,37 +166,27 @@ export class RecordingNotesDetail {
 
   private renderTimeline(): void {
     const scale = this.scaleMs();
-    this.timeline.replaceChildren();
+    this.ribbon.draw(this.notations, { scaleMs: scale, activeId: this.selectedId });
 
-    this.timeline.appendChild(track());
-
-    for (const notation of this.notations) {
-      const span = document.createElement('button');
-      span.type = 'button';
-      span.className = 'detail-notes-span';
-      // A note the run sealed on the way out reads as muted: it ended because
-      // the recording did, not because the user closed it.
-      span.classList.toggle('auto-ended', notation.endedBy === 'auto');
-      span.classList.toggle('selected', notation.id === this.selectedId);
-      const left = (notation.tStartMs / scale) * 100;
-      const width = (((notation.tEndMs ?? notation.tStartMs) - notation.tStartMs) / scale) * 100;
-      span.style.left = `${Math.min(100, Math.max(0, left))}%`;
-      span.style.width = `${Math.max(1, Math.min(100 - left, width))}%`;
-      span.title = describe(notation);
-      span.setAttribute('aria-label', describe(notation));
-      span.addEventListener('click', () => this.select(notation.id));
-      this.timeline.appendChild(span);
+    const selected = this.selectedId
+      ? this.notations.find((notation) => notation.id === this.selectedId)
+      : undefined;
+    if (!selected) {
+      this.clearMarker();
+      return;
     }
-
-    if (this.selectedId) {
-      const selected = this.notations.find((notation) => notation.id === this.selectedId);
-      if (selected) {
-        const marker = document.createElement('span');
-        marker.className = 'detail-notes-marker';
-        marker.style.left = `${Math.min(100, (selected.tStartMs / scale) * 100)}%`;
-        this.timeline.appendChild(marker);
-      }
+    if (!this.marker) {
+      this.marker = document.createElement('span');
+      this.marker.className = 'detail-notes-marker';
     }
+    this.marker.style.left = `${Math.min(100, (selected.tStartMs / scale) * 100)}%`;
+    // Re-appended so it stays above any span the ribbon has just created.
+    this.timeline.appendChild(this.marker);
+  }
+
+  private clearMarker(): void {
+    this.marker?.remove();
+    this.marker = null;
   }
 
   private renderList(): void {
@@ -191,51 +195,14 @@ export class RecordingNotesDetail {
   }
 
   private renderRow(notation: RecordingNotation): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'detail-notes-row';
-    row.classList.toggle('selected', notation.id === this.selectedId);
-
-    const main = document.createElement('button');
-    main.type = 'button';
-    main.className = 'detail-notes-row-main';
-    main.addEventListener('click', () => this.select(notation.id));
-
-    const start = document.createElement('span');
-    start.className = 'detail-notes-start';
-    start.textContent = formatDuration(notation.tStartMs);
-
-    const text = document.createElement('span');
-    text.className = 'detail-notes-text';
-    // A note can be marked without a message; say so rather than showing a gap.
-    if (notation.text) text.textContent = notation.text;
-    else { text.textContent = 'Untitled note'; text.classList.add('untitled'); }
-    main.append(start, text);
-
-    const actions = document.createElement('span');
-    actions.className = 'detail-notes-actions';
-    const length = document.createElement('span');
-    length.className = 'detail-notes-length';
-    length.textContent = notation.tEndMs == null ? '—' : formatDuration(notation.tEndMs - notation.tStartMs);
-
-    const rename = document.createElement('button');
-    rename.type = 'button';
-    rename.className = 'detail-notes-edit';
-    rename.title = 'Rename this note';
-    rename.setAttribute('aria-label', `Rename note at ${formatDuration(notation.tStartMs)}`);
-    rename.innerHTML = PENCIL;
-    rename.addEventListener('click', () => this.startRename(row, notation));
-
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'detail-notes-delete';
-    remove.title = 'Delete this note';
-    remove.setAttribute('aria-label', `Delete note at ${formatDuration(notation.tStartMs)}`);
-    remove.innerHTML = CROSS;
-    remove.addEventListener('click', () => void this.remove(notation.id));
-
-    actions.append(length, rename, remove);
-    row.append(main, actions);
-    return row;
+    return notationRow(notation, {
+      selected: notation.id === this.selectedId,
+      actions: {
+        select: (id) => this.select(id),
+        rename: (row, target) => this.startRename(row, target),
+        remove: (id) => void this.remove(id),
+      },
+    });
   }
 
   /** Swaps the row's label for an input, in place, so the list does not reflow. */
@@ -289,12 +256,6 @@ export class RecordingNotesDetail {
   }
 }
 
-function track(): HTMLElement {
-  const base = document.createElement('span');
-  base.className = 'detail-notes-track';
-  return base;
-}
-
 function chevron(): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 10 10');
@@ -307,11 +268,4 @@ function chevron(): SVGSVGElement {
   path.setAttribute('d', 'M3.5 2l3 3-3 3');
   svg.appendChild(path);
   return svg;
-}
-
-function describe(notation: RecordingNotation): string {
-  const range = notation.tEndMs == null
-    ? formatDuration(notation.tStartMs)
-    : `${formatDuration(notation.tStartMs)} → ${formatDuration(notation.tEndMs)}`;
-  return notation.text ? `${range} · ${notation.text}` : range;
 }

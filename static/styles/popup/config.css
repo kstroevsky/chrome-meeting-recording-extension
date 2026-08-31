@@ -194,7 +194,8 @@
 .detail-notes-row-main { display: inline-flex; overflow: hidden; align-items: baseline; flex: 1; gap: 9px; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .detail-notes-start { flex: 0 0 auto; color: var(--warn-label); font: 10.5px 'IBM Plex Mono', monospace; }
 .detail-notes-text { overflow: hidden; flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
-.detail-notes-text.untitled { color: var(--ink-4); font-style: italic; }
+.detail-notes-row.untitled { background: var(--note-band); }
+.detail-notes-text.untitled { color: var(--ink-4); }
 .detail-notes-input { flex: 1; min-width: 0; padding: 3px 6px; border: 1px solid var(--warn-label); border-radius: 4px; background: var(--surface); color: var(--ink); font: 12.5px 'Space Grotesk', sans-serif; }
 .detail-notes-input:focus-visible { outline: none; }
 .detail-notes-actions { display: inline-flex; align-items: center; flex-shrink: 0; gap: 9px; padding-right: 2px; }

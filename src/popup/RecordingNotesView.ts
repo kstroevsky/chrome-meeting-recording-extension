@@ -15,6 +15,7 @@
  */
 
 import { formatDuration } from './popupStatus';
+import { NotationRibbon } from './notationRibbon';
 import type { RecordingNotation } from '../shared/notations';
 import type { RecordingPhase, RecordingStatusView } from '../shared/recording';
 
@@ -73,7 +74,7 @@ export class RecordingNotesView {
   private runningSince: number | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private editingId: string | null = null;
-  private spans = new Map<string, HTMLButtonElement>();
+  private readonly ribbon: NotationRibbon | null;
 
   private readonly el: Partial<RecordingNotesElements>;
 
@@ -84,6 +85,16 @@ export class RecordingNotesView {
     // Every element in this popup is nullable; an absent group behaves the same
     // way, so a missing id degrades to an inert ribbon rather than a crash.
     this.el = el ?? {};
+    this.ribbon = this.el.track
+      // The live ribbon lets CSS `min-width` keep a new span visible, so a span
+      // that has just been marked grows from nothing instead of snapping open.
+      ? new NotationRibbon(this.el.track, {
+        spanClass: 'note-span',
+        minWidthPct: 0,
+        activeClass: 'editing',
+        onSelect: (id) => this.openEditor(id),
+      })
+      : null;
     this.el.startButton?.addEventListener('click', () => void this.onToggle());
     this.el.toggle?.addEventListener('click', () => void this.onToggle());
     this.el.editorClose?.addEventListener('click', () => this.closeEditor());
@@ -185,7 +196,7 @@ export class RecordingNotesView {
     if (this.el.row) this.el.row.hidden = !live;
 
     if (this.el.ribbon) this.el.ribbon.hidden = count === 0 || !live;
-    if (count === 0 || !live) { this.spans.clear(); return; }
+    if (count === 0 || !live) { this.ribbon?.clear(); return; }
 
     const scale = Math.max(this.elapsedMs(), MIN_SCALE_MS) / PLAYHEAD_FRACTION;
     const pct = (ms: number) => `${Math.min(100, Math.max(0, (ms / scale) * 100))}%`;
@@ -193,7 +204,11 @@ export class RecordingNotesView {
     if (this.el.elapsed) this.el.elapsed.style.width = pct(this.elapsedMs());
     if (this.el.playhead) this.el.playhead.style.left = pct(this.elapsedMs());
 
-    this.renderSpans(scale);
+    this.ribbon?.draw(this.notations, {
+      scaleMs: scale,
+      openEndsAtMs: this.elapsedMs(),
+      activeId: this.editingId,
+    });
 
     if (this.el.openTimer) {
       this.el.openTimer.hidden = !open;
@@ -213,42 +228,6 @@ export class RecordingNotesView {
       this.el.toggle.title = open ? 'End this note (⌥M)' : 'Start a note (⌥M)';
       const label = this.el.toggle.querySelector('[data-note-toggle-label]');
       if (label) label.textContent = open ? 'End note' : 'Start a note';
-    }
-  }
-
-  /** Reconciles span elements in place so a click target survives the 1s tick. */
-  private renderSpans(scale: number): void {
-    const track = this.el.track;
-    if (!track) return;
-    const seen = new Set<string>();
-
-    for (const notation of this.notations) {
-      seen.add(notation.id);
-      let span = this.spans.get(notation.id);
-      if (!span) {
-        span = document.createElement('button');
-        span.type = 'button';
-        span.className = 'note-span';
-        span.addEventListener('click', () => this.openEditor(notation.id));
-        track.appendChild(span);
-        this.spans.set(notation.id, span);
-      }
-      const end = notation.tEndMs ?? this.elapsedMs();
-      const left = (notation.tStartMs / scale) * 100;
-      const width = Math.max(0, ((end - notation.tStartMs) / scale) * 100);
-      span.style.left = `${Math.min(100, Math.max(0, left))}%`;
-      span.style.width = `${Math.min(100 - left, width)}%`;
-      span.classList.toggle('open', notation.tEndMs == null);
-      span.classList.toggle('auto-ended', notation.endedBy === 'auto');
-      span.classList.toggle('editing', this.editingId === notation.id);
-      span.title = describeSpan(notation);
-      span.setAttribute('aria-label', describeSpan(notation));
-    }
-
-    for (const [id, span] of this.spans) {
-      if (seen.has(id)) continue;
-      span.remove();
-      this.spans.delete(id);
     }
   }
 
@@ -279,12 +258,4 @@ export class RecordingNotesView {
     if (this.el.editor) this.el.editor.hidden = true;
     this.render();
   }
-}
-
-/** "00:41 → 01:18 · Q3 target changed" — the ribbon's only label. */
-function describeSpan(notation: RecordingNotation): string {
-  const range = notation.tEndMs == null
-    ? `${formatDuration(notation.tStartMs)} → …`
-    : `${formatDuration(notation.tStartMs)} → ${formatDuration(notation.tEndMs)}`;
-  return notation.text ? `${range} · ${notation.text}` : range;
 }

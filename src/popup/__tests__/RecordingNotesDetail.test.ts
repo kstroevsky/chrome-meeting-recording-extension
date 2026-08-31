@@ -94,13 +94,15 @@ describe('RecordingNotesDetail', () => {
     expect(row.querySelector('.detail-notes-length')!.textContent).toBe('0:37');
   });
 
-  it('names a note that was marked but never written', async () => {
+  it('invites a name for a note that was marked but never written', async () => {
     const { view, el } = harness([note('n1', 1_000, 2_000, '', 'auto')]);
     await view.load();
 
     const text = el.querySelector('.detail-notes-text')!;
-    expect(text.textContent).toBe('Untitled note');
+    expect(text.textContent).toBe('Name this one');
     expect(text.classList.contains('untitled')).toBe(true);
+    // The row is banded, so it reads as the one item still open.
+    expect(rows(el)[0].classList.contains('untitled')).toBe(true);
   });
 
   it('selecting a span marks its row and drops the marker on it', async () => {
@@ -220,7 +222,7 @@ describe('RecordingNotesDetail', () => {
       (el.querySelector('.detail-notes-toggle') as HTMLButtonElement).click();
 
       expect(rows(el)).toHaveLength(2);
-      expect(rows(el)[1].querySelector('.detail-notes-text')!.textContent).toBe('Untitled note');
+      expect(rows(el)[1].querySelector('.detail-notes-text')!.textContent).toBe('Name this one');
     });
   });
 });

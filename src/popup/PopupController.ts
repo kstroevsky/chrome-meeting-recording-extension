@@ -13,6 +13,8 @@ import { MicPermissionService } from './MicPermissionService';
 import { RecordingTimer } from './RecordingTimer';
 import { RecordingNotesView } from './RecordingNotesView';
 import { RecordingNotesDetail } from './RecordingNotesDetail';
+import { NotationRibbon } from './notationRibbon';
+import { notationRow } from './notationRow';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import { SessionTabsView } from './SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
@@ -168,6 +170,8 @@ export class PopupController {
   private activeNotations: RecordingNotation[] = [];
   /** Static notations for gallery previews; null in the real popup. */
   private previewNotations: RecordingNotation[] | null = null;
+  /** The interrupted notice's ribbon; built on first use, then reconciled. */
+  private interruptedRibbon: NotationRibbon | null = null;
   private readonly captionPoller: CaptionPoller;
   private readonly sessionTabs: SessionTabsView;
   private readonly confirmDialog = new ConfirmDialog();
@@ -574,45 +578,15 @@ export class PopupController {
   private renderInterruptedSpans(notations: RecordingNotation[], atMs: number): void {
     const track = this.el.interruptedTrack;
     if (!track) return;
-    for (const stale of Array.from(track.querySelectorAll('.note-span'))) stale.remove();
-    const scale = Math.max(atMs, 1);
-    for (const notation of notations) {
-      const span = document.createElement('span');
-      span.className = `note-span${notation.endedBy === 'auto' ? ' auto-ended' : ''}`;
-      const left = Math.min(100, (notation.tStartMs / scale) * 100);
-      const width = Math.max(1, (((notation.tEndMs ?? atMs) - notation.tStartMs) / scale) * 100);
-      span.style.left = `${left}%`;
-      span.style.width = `${Math.min(100 - left, width)}%`;
-      track.appendChild(span);
-    }
+    // Inert spans: this screen reports what was kept, it does not edit it.
+    this.interruptedRibbon ??= new NotationRibbon(track, { spanClass: 'note-span', minWidthPct: 1 });
+    this.interruptedRibbon.draw(notations, { scaleMs: atMs, openEndsAtMs: atMs });
   }
 
   private renderInterruptedList(notations: RecordingNotation[], atMs: number): void {
     const list = this.el.interruptedList;
     if (!list) return;
-    list.replaceChildren();
-    for (const notation of notations) {
-      const row = document.createElement('div');
-      row.className = 'detail-notes-row';
-      const main = document.createElement('span');
-      main.className = 'detail-notes-row-main';
-      const start = document.createElement('span');
-      start.className = 'detail-notes-start';
-      start.textContent = formatDuration(notation.tStartMs);
-      const text = document.createElement('span');
-      text.className = 'detail-notes-text';
-      if (!notation.text) text.classList.add('untitled');
-      text.textContent = describeNotationForList(notation, formatDuration);
-      main.append(start, text);
-      const length = document.createElement('span');
-      length.className = 'detail-notes-length';
-      // The note the run sealed says where it ended rather than how long it ran.
-      length.textContent = notation.endedBy === 'auto'
-        ? `ENDED AT ${formatDuration(atMs)}`
-        : formatDuration((notation.tEndMs ?? notation.tStartMs) - notation.tStartMs);
-      row.append(main, length);
-      list.appendChild(row);
-    }
+    list.replaceChildren(...notations.map((notation) => notationRow(notation, { sealedAtMs: atMs })));
   }
 
   private toast(msg: string) {
