@@ -157,6 +157,8 @@ export class PopupController {
   private readonly notes: RecordingNotesView;
   /** The recording whose saved-screen notes are already mounted. */
   private mountedSavedNotesFor: string | null = null;
+  /** The active run's notes, mirrored so the discard prompt can name them. */
+  private activeNotations: RecordingNotation[] = [];
   /** Static notations for gallery previews; null in the real popup. */
   private previewNotations: RecordingNotation[] | null = null;
   private readonly captionPoller: CaptionPoller;
@@ -412,7 +414,10 @@ export class PopupController {
   private async refreshNotes(): Promise<void> {
     try {
       const response = await sendToBackground({ type: 'LIST_ACTIVE_NOTATIONS' });
-      if (response.ok) this.notes.setNotations(response.notations);
+      if (response.ok) {
+        this.activeNotations = response.notations;
+        this.notes.setNotations(response.notations);
+      }
     } catch (error) {
       console.warn('[popup] LIST_ACTIVE_NOTATIONS failed', error);
     }
@@ -1759,13 +1764,19 @@ export class PopupController {
       const menuButton = document.getElementById('open-menu');
       if (menu) menu.hidden = true;
       menuButton?.setAttribute('aria-expanded', 'false');
-      const message = () => buildDiscardConfirmMessage(this.el.recTimer?.textContent ?? undefined);
+      const notes = this.activeNotations;
+      const message = () =>
+        buildDiscardConfirmMessage(this.el.recTimer?.textContent ?? undefined, notes.length);
       const confirmation = this.confirmDialog.ask({
         title: DISCARD_CONFIRM_TEXT.title,
         message: message(),
         confirmLabel: DISCARD_CONFIRM_TEXT.confirmLabel,
         cancelLabel: DISCARD_CONFIRM_TEXT.cancelLabel,
         tone: 'danger',
+        details: notes.map((notation) => ({
+          at: formatDuration(notation.tStartMs),
+          text: describeNotationForList(notation, formatDuration),
+        })),
       });
       // Recording continues behind the prompt; keep the amount to be discarded
       // truthful as the popup's live timer advances.

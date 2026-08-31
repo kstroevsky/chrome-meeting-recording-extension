@@ -11,6 +11,9 @@
  * testable and reusable by any popup action that needs a yes/no answer.
  */
 
+/** One line in the dialog's "what you are about to lose" list. */
+export type ConfirmDialogDetail = { at: string; text: string };
+
 export type ConfirmDialogOptions = {
   title: string;
   message: string;
@@ -18,13 +21,22 @@ export type ConfirmDialogOptions = {
   cancelLabel: string;
   /** `danger` paints the confirm button with the destructive accent. */
   tone?: 'danger' | 'default';
+  /**
+   * Named things the action destroys, listed under the message so the stakes
+   * are concrete rather than abstract (design n3). Omitted when there are none.
+   */
+  details?: ConfirmDialogDetail[];
 };
+
+/** The preview stays short; a long list would push the buttons off a 300px popup. */
+const MAX_DETAILS = 3;
 
 type DialogParts = {
   overlay: HTMLElement;
   card: HTMLElement;
   title: HTMLElement;
   message: HTMLElement;
+  details: HTMLElement;
   confirmBtn: HTMLButtonElement;
   cancelBtn: HTMLButtonElement;
 };
@@ -55,6 +67,7 @@ export class ConfirmDialog {
     parts.confirmBtn.textContent = options.confirmLabel;
     parts.cancelBtn.textContent = options.cancelLabel;
     parts.confirmBtn.className = `btn ${options.tone === 'danger' ? 'btn-danger' : 'btn-primary'}`;
+    this.renderDetails(parts, options.details ?? []);
 
     const active = this.doc.activeElement;
     this.previousFocus = active instanceof HTMLElement ? active : null;
@@ -116,6 +129,10 @@ export class ConfirmDialog {
     message.className = 'modal-message';
     message.id = 'modal-message';
 
+    const details = this.doc.createElement('div');
+    details.className = 'modal-details';
+    details.hidden = true;
+
     const icon = this.doc.createElement('span');
     icon.className = 'modal-icon';
     icon.setAttribute('aria-hidden', 'true');
@@ -151,11 +168,39 @@ export class ConfirmDialog {
 
     // The destructive action comes first visually; focus still opens on Keep.
     actions.append(confirmBtn, cancelBtn);
-    card.append(icon, title, message, actions);
+    card.append(icon, title, message, details, actions);
     overlay.append(card);
     this.doc.body.appendChild(overlay);
 
-    return { overlay, card, title, message, confirmBtn, cancelBtn };
+    return { overlay, card, title, message, details, confirmBtn, cancelBtn };
+  }
+
+  /** Paints the destroyed-things preview, capped so the dialog stays on screen. */
+  private renderDetails(parts: DialogParts, details: ConfirmDialogDetail[]): void {
+    parts.details.replaceChildren();
+    parts.details.hidden = details.length === 0;
+    if (!details.length) return;
+
+    for (const detail of details.slice(0, MAX_DETAILS)) {
+      const row = this.doc.createElement('div');
+      row.className = 'modal-detail';
+      const at = this.doc.createElement('span');
+      at.className = 'modal-detail-at';
+      at.textContent = detail.at;
+      const text = this.doc.createElement('span');
+      text.className = 'modal-detail-text';
+      text.textContent = detail.text;
+      row.append(at, text);
+      parts.details.appendChild(row);
+    }
+
+    const hidden = details.length - MAX_DETAILS;
+    if (hidden > 0) {
+      const more = this.doc.createElement('div');
+      more.className = 'modal-detail-more';
+      more.textContent = `+${hidden} more`;
+      parts.details.appendChild(more);
+    }
   }
 
   /** Keeps Tab cycling between the dialog's only two focusable controls. */
