@@ -23,6 +23,48 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'SET_RECORDING_HISTORY_NOTE',
   'REMOVE_RECORDING_HISTORY',
   'OPEN_RECORDING_HISTORY_FILE',
+  'MARK_NOTATION',
+  'END_NOTATION',
+  'LIST_ACTIVE_NOTATIONS',
+  'UPDATE_ACTIVE_NOTATION',
+  'REMOVE_ACTIVE_NOTATION',
+  'LIST_RECORDING_NOTATIONS',
+  'ADD_RECORDING_NOTATION',
+  'UPDATE_RECORDING_NOTATION',
+  'REMOVE_RECORDING_NOTATION',
+] as const;
+
+/** The subset of popup commands validated by `isRecordingHistoryMessage`. */
+export const RECORDING_HISTORY_MESSAGE_TYPES = [
+  'LIST_RECORDING_HISTORY',
+  'RENAME_RECORDING_HISTORY',
+  'SET_RECORDING_HISTORY_NOTE',
+  'REMOVE_RECORDING_HISTORY',
+  'OPEN_RECORDING_HISTORY_FILE',
+] as const;
+
+/** The subset of popup commands validated by `isRecordingNotationMessage`. */
+export const RECORDING_NOTATION_MESSAGE_TYPES = [
+  'MARK_NOTATION',
+  'END_NOTATION',
+  'LIST_ACTIVE_NOTATIONS',
+  'UPDATE_ACTIVE_NOTATION',
+  'REMOVE_ACTIVE_NOTATION',
+  'LIST_RECORDING_NOTATIONS',
+  'ADD_RECORDING_NOTATION',
+  'UPDATE_RECORDING_NOTATION',
+  'REMOVE_RECORDING_NOTATION',
+] as const;
+
+/**
+ * Popup commands whose failures answer `{ ok: false, error }` and must **not**
+ * fail the recording session. Everything else is a capture command whose
+ * failure *is* a session failure, so a data-plane message that is missing here
+ * would take a live recording down with it.
+ */
+export const NON_SESSION_RESPONSE_MESSAGE_TYPES = [
+  ...RECORDING_HISTORY_MESSAGE_TYPES,
+  ...RECORDING_NOTATION_MESSAGE_TYPES,
 ] as const;
 
 export const POPUP_TO_CONTENT_MESSAGE_TYPES = [

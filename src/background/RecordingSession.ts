@@ -76,7 +76,12 @@ export class RecordingSession {
   /** Builds the canonical session state machine around persistence and change notifications. */
   constructor(
     private readonly persist: SessionPersistor,
-    private readonly onChanged?: SessionChangeListener
+    private readonly onChanged?: SessionChangeListener,
+    /**
+     * Fired once when a run ends, with its final recorded duration — the seam
+     * downstream data uses to seal anything the run left open (ADR-0005).
+     */
+    private readonly onRunFinished?: (historyId: string, durationMs: number) => void
   ) {}
 
   /** Hydrates the in-memory session from previously persisted snapshot data. */
@@ -286,6 +291,7 @@ export class RecordingSession {
     if (!historyId) return;
     const durationMs = this.elapsedRecordedMs(now);
     this.lastRun = { historyId, durationMs };
+    this.onRunFinished?.(historyId, durationMs);
   }
 
   /** Live recorded duration in ms: banked time plus the current running span. */
