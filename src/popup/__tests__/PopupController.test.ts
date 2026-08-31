@@ -261,9 +261,12 @@ describe('PopupController', () => {
     mockSendMessage.mockImplementation(async (message: any) => message.type === 'RENAME_RECORDING_HISTORY'
       ? { ok: true, entry: { ...entry, name: message.name, userNamed: true } }
       : { session: { phase: 'idle', runConfig: null, updatedAt: 1 } });
-    (controller as any).detailTarget = { kind: 'recording', entry };
+    // The detail screen owns the recording on view; this test is about the name
+    // dialog it reuses, so it drives that view directly rather than the DOM.
+    const detail = (controller as any).detail;
+    detail.current = { kind: 'recording', entry };
 
-    const rename = (controller as any).startDetailRename();
+    const rename = detail.startRename();
     await flush();
     const input = document.querySelector<HTMLInputElement>('.recording-name-input')!;
     expect(input.value).toBe('Original title');
@@ -276,7 +279,7 @@ describe('PopupController', () => {
     expect(mockSendMessage).toHaveBeenCalledWith({
       type: 'RENAME_RECORDING_HISTORY', id: 'recording:local', name: 'New display title',
     });
-    expect((controller as any).detailTarget.entry.files[0].filename).toBe('original-recording.webm');
+    expect(detail.target.entry.files[0].filename).toBe('original-recording.webm');
   });
 
   it('defers completed-upload naming during an active recording and opens it once idle', async () => {
