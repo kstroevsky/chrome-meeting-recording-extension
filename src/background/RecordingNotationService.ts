@@ -27,6 +27,17 @@ export class RecordingNotationService {
     return await this.repository.list(recordingId);
   }
 
+  /**
+   * How many notations each of these recordings has. Lets a list render its
+   * count chips from one message rather than one per row.
+   */
+  async counts(recordingIds: string[]): Promise<Record<string, number>> {
+    const entries = await Promise.all(
+      recordingIds.map(async (id) => [id, (await this.repository.list(id)).length] as const),
+    );
+    return Object.fromEntries(entries.filter(([, count]) => count > 0));
+  }
+
   /** Appends a notation. Returns the stored record, including its assigned id. */
   async add(recordingId: string, notation: NewRecordingNotation): Promise<RecordingNotation> {
     const created: RecordingNotation = {

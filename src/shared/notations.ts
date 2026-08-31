@@ -64,6 +64,8 @@ export type RecordingNotationMessage =
   | { type: 'UPDATE_ACTIVE_NOTATION'; id: string; text: string }
   | { type: 'REMOVE_ACTIVE_NOTATION'; id: string }
   | { type: 'LIST_RECORDING_NOTATIONS'; recordingId: string }
+  /** Note counts for a page of recordings, so a list needs one read, not one per row. */
+  | { type: 'LIST_RECORDING_NOTATION_COUNTS'; recordingIds: string[] }
   | { type: 'ADD_RECORDING_NOTATION'; recordingId: string; tStartMs: number; tEndMs?: number; text: string }
   | { type: 'UPDATE_RECORDING_NOTATION'; recordingId: string; id: string; tStartMs?: number; tEndMs?: number; text?: string }
   | { type: 'REMOVE_RECORDING_NOTATION'; recordingId: string; id: string };
@@ -120,6 +122,18 @@ export function sortRecordingNotations(notations: RecordingNotation[]): Recordin
   return [...notations].sort((a, b) => a.tStartMs - b.tStartMs || a.id.localeCompare(b.id));
 }
 
+/**
+ * How a note reads in a list. A note can be marked and never named, and it must
+ * still keep its place — labelled by length so what is missing is obvious
+ * rather than showing an empty row (design n1).
+ */
+export function describeNotationForList(notation: RecordingNotation, formatMs: (ms: number) => string): string {
+  if (notation.text) return notation.text;
+  return notation.tEndMs == null
+    ? 'Unnamed'
+    : `Unnamed · ${formatMs(notation.tEndMs - notation.tStartMs)}`;
+}
+
 export function isRecordingNotationMessage(value: unknown): value is RecordingNotationMessage {
   if (!value || typeof value !== 'object') return false;
   const message = value as Record<string, unknown>;
@@ -143,6 +157,10 @@ export function isRecordingNotationMessage(value: unknown): value is RecordingNo
   }
   if (message.type === 'LIST_RECORDING_NOTATIONS') {
     return hasRecordingId;
+  }
+  if (message.type === 'LIST_RECORDING_NOTATION_COUNTS') {
+    return Array.isArray(message.recordingIds)
+      && message.recordingIds.every((id) => typeof id === 'string' && id.length > 0);
   }
   if (message.type === 'ADD_RECORDING_NOTATION') {
     return hasRecordingId

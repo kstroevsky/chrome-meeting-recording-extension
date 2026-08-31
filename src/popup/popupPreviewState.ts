@@ -53,6 +53,8 @@ export type PopupPreviewState =
     }
   | {
       screen: 'recordings';
+      /** Notes attached to the previewed rows, which the background would supply. */
+      notations?: RecordingNotation[];
       entries: RecordingHistoryEntry[];
       /** An active upload can appear above durable recording history. */
       session?: RecordingStatusView;

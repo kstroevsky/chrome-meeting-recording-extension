@@ -228,6 +228,20 @@ export const POPUP_STORIES: PopupStory[] = [
     preview: { screen: 'recordings', session: session({ uploadJobs: [uploadJob()] }), entries: [savedRecording, designSync] },
   },
   {
+    id: 'recordings-notes', title: 'Recordings · notes', group: 'Library',
+    description: 'n1 — a gold count chip on each row; tapping it threads that recording\u2019s notes underneath.',
+    preview: {
+      screen: 'recordings',
+      session: session({}),
+      entries: [{ ...savedRecording, name: 'Weekly sync', durationMs: 1_360_000 }, designSync],
+      notations: [
+        { id: 'n1', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n2', tStartMs: 312_000, tEndMs: 376_000, endedBy: 'user', text: 'Migration owner' },
+        { id: 'n3', tStartMs: 1_082_000, tEndMs: 1_130_000, endedBy: 'auto', text: '' },
+      ],
+    },
+  },
+  {
     id: 'recordings-empty', title: 'Empty recordings', group: 'Library',
     description: 'First-run empty state and navigation actions.',
     preview: { screen: 'recordings', entries: [] },

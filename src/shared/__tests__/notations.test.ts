@@ -1,4 +1,5 @@
 import {
+  describeNotationForList,
   MAX_NOTATIONS_PER_RECORDING,
   MAX_NOTATION_TEXT_LENGTH,
   createNotationId,
@@ -144,5 +145,23 @@ describe('isRecordingNotationMessage', () => {
     expect(isRecordingNotationMessage({ type: 'REMOVE_RECORDING_NOTATION', recordingId: 'recording:1' })).toBe(false);
     expect(isRecordingNotationMessage({ type: 'SET_RECORDING_HISTORY_NOTE', id: 'recording:1', note: '' })).toBe(false);
     expect(isRecordingNotationMessage(null)).toBe(false);
+  });
+});
+
+describe('describeNotationForList', () => {
+  const fmt = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
+
+  it('uses the note\u2019s own message when it has one', () => {
+    expect(describeNotationForList({ id: 'n', tStartMs: 0, tEndMs: 1_000, text: 'Pricing objection' }, fmt))
+      .toBe('Pricing objection');
+  });
+
+  it('keeps an unnamed note in place, labelled by its length', () => {
+    expect(describeNotationForList({ id: 'n', tStartMs: 1_082_000, tEndMs: 1_130_000, text: '' }, fmt))
+      .toBe('Unnamed \u00b7 0:48');
+  });
+
+  it('says only Unnamed when the span never closed', () => {
+    expect(describeNotationForList({ id: 'n', tStartMs: 1_000, text: '' }, fmt)).toBe('Unnamed');
   });
 });

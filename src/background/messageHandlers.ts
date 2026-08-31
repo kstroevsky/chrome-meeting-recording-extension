@@ -216,6 +216,10 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
         const { historyId } = session.getSnapshot();
         sendResponse({ ok: true, notations: historyId ? await notations.list(historyId) : [] }); return;
       }
+      if (msg.type === 'LIST_RECORDING_NOTATION_COUNTS') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, counts: await notations.counts(msg.recordingIds) }); return;
+      }
       if (msg.type === 'UPDATE_ACTIVE_NOTATION' || msg.type === 'REMOVE_ACTIVE_NOTATION') {
         if (!notations) throw new Error('Recording notations are unavailable');
         const { historyId } = session.getSnapshot();
