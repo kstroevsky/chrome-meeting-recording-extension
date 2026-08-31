@@ -16,6 +16,93 @@ class MemoryRepository {
 }
 
 describe('RecordingHistoryService', () => {
+  describe('setDuration', () => {
+    const seed = async (service: RecordingHistoryService) => {
+      await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+    };
+
+    it('stamps the recorded duration onto an existing row', async () => {
+      const repo = new MemoryRepository();
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+      await seed(service);
+
+      await expect(service.setDuration('r1', 63_000)).resolves.toMatchObject({ durationMs: 63_000 });
+      expect(repo.entries.get('r1')?.durationMs).toBe(63_000);
+    });
+
+    it('accepts a zero-length recording', async () => {
+      const repo = new MemoryRepository();
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+      await seed(service);
+
+      await service.setDuration('r1', 0);
+      expect(repo.entries.get('r1')?.durationMs).toBe(0);
+    });
+
+    it('ignores an unknown, negative, or absent duration rather than writing junk', async () => {
+      const repo = new MemoryRepository();
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+      await seed(service);
+
+      await expect(service.setDuration('r1', undefined)).resolves.toBeUndefined();
+      await expect(service.setDuration('r1', -1)).resolves.toBeUndefined();
+      await expect(service.setDuration('r1', Number.NaN)).resolves.toBeUndefined();
+      expect(repo.entries.get('r1')?.durationMs).toBeUndefined();
+    });
+
+    it('does not create or resurrect a row', async () => {
+      const repo = new MemoryRepository();
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+
+      await expect(service.setDuration('r-missing', 1_000)).resolves.toBeUndefined();
+      expect(repo.entries.has('r-missing')).toBe(false);
+
+      await seed(service);
+      await service.remove('r1');
+      await expect(service.setDuration('r1', 1_000)).resolves.toBeUndefined();
+      expect(repo.entries.get('r1')?.durationMs).toBeUndefined();
+    });
+  });
+
+  describe('remove side effects (ADR-0005)', () => {
+    const seed = async (repo: MemoryRepository, service: RecordingHistoryService) => {
+      await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+      return repo;
+    };
+
+    it('drops dependent data once the entry is tombstoned', async () => {
+      const repo = new MemoryRepository();
+      const onRemoved = jest.fn().mockResolvedValue(undefined);
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, onRemoved);
+      await seed(repo, service);
+
+      await expect(service.remove('r1')).resolves.toBe(true);
+      expect(onRemoved).toHaveBeenCalledWith('r1');
+    });
+
+    it('does not run dependent cleanup for an entry that was already deleted', async () => {
+      const repo = new MemoryRepository();
+      const onRemoved = jest.fn().mockResolvedValue(undefined);
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, onRemoved);
+      await seed(repo, service);
+      await service.remove('r1');
+      onRemoved.mockClear();
+
+      await expect(service.remove('r1')).resolves.toBe(false);
+      expect(onRemoved).not.toHaveBeenCalled();
+    });
+
+    it('still reports the removal when dependent cleanup fails', async () => {
+      const repo = new MemoryRepository();
+      const onRemoved = jest.fn().mockRejectedValue(new Error('store closed'));
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, onRemoved);
+      await seed(repo, service);
+
+      await expect(service.remove('r1')).resolves.toBe(true);
+      expect(repo.entries.get('r1')?.deletedAt).toBe(10);
+    });
+  });
+
   it('groups local artifacts and writes terminal statuses without touching files', async () => {
     const repo = new MemoryRepository();
     const open = jest.fn();

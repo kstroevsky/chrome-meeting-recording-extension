@@ -14,6 +14,7 @@ import {
 import { sendTabMessage } from '../../platform/chrome/tabs';
 import {
   handleRecordingCommand,
+  MARK_NOTATION_COMMAND,
   START_RECORDING_COMMAND,
 } from '../recordingCommands';
 
@@ -93,5 +94,56 @@ describe('recording keyboard command', () => {
     expect(L.warn).toHaveBeenCalledWith(
       'Start recording shortcut did not receive an active tab'
     );
+  });
+
+  describe('mark note shortcut (⌥M, ADR-0005)', () => {
+    const L = () => ({ log: jest.fn(), warn: jest.fn(), error: jest.fn() });
+
+    it('toggles a note without needing an active tab', async () => {
+      const controller = {
+        toggleNotation: jest.fn().mockResolvedValue({
+          ok: true,
+          notation: { id: 'notation:1', tStartMs: 5_000, text: '' },
+        }),
+      };
+      const log = L();
+
+      // Chrome hands commands a tab, but marking must not depend on one.
+      await handleRecordingCommand(MARK_NOTATION_COMMAND, undefined, { controller: controller as any, L: log });
+
+      expect(controller.toggleNotation).toHaveBeenCalledTimes(1);
+      expect(loadExtensionSettingsFromStorage).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(log.error).not.toHaveBeenCalled();
+    });
+
+    it('warns rather than throwing when there is no recording to mark', async () => {
+      const controller = {
+        toggleNotation: jest.fn().mockResolvedValue({
+          ok: false,
+          error: 'Mark requested but no recording is active',
+        }),
+      };
+      const log = L();
+
+      await handleRecordingCommand(MARK_NOTATION_COMMAND, undefined, { controller: controller as any, L: log });
+
+      expect(log.warn).toHaveBeenCalledWith(
+        'Mark note shortcut failed:',
+        'Mark requested but no recording is active',
+      );
+      expect(log.error).not.toHaveBeenCalled();
+    });
+
+    it('never starts a recording', async () => {
+      const controller = {
+        toggleNotation: jest.fn().mockResolvedValue({ ok: true, notation: { id: 'n', tStartMs: 0, text: '' } }),
+        start: jest.fn(),
+      };
+
+      await handleRecordingCommand(MARK_NOTATION_COMMAND, undefined, { controller: controller as any, L: L() });
+
+      expect(controller.start).not.toHaveBeenCalled();
+    });
   });
 });
