@@ -150,8 +150,15 @@ export class RecordingFinalizer {
     return undefined;
   }
 
+  /**
+   * Notes lead, then media in stream order. Uploading the sidecar first is the
+   * point of it: a reader has the notes while the video is still going up
+   * (ADR-0005), and it is bytes-cheap so it costs the media almost nothing.
+   */
   private sortArtifacts(artifacts: CompletedRecordingArtifact[]): CompletedRecordingArtifact[] {
-    return [...artifacts].sort((a, b) => STREAM_UPLOAD_ORDER.indexOf(a.stream) - STREAM_UPLOAD_ORDER.indexOf(b.stream));
+    const rank = (artifact: CompletedRecordingArtifact) =>
+      artifact.kind === 'notes' ? -1 : STREAM_UPLOAD_ORDER.indexOf(artifact.stream);
+    return [...artifacts].sort((a, b) => rank(a) - rank(b));
   }
 
   private saveArtifactLocally(

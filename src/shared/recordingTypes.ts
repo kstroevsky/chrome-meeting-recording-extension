@@ -90,8 +90,17 @@ export type UploadJobStatus = 'uploading' | 'completed' | 'failed' | 'partial' |
 export type RecordingNamingStatus = 'pending' | 'named' | 'skipped';
 
 /** Per-stream file outcome shown in an upload job's detail view. */
+/**
+ * What an uploaded artifact *is*, orthogonal to which stream produced it. Absent
+ * means media; `notes` is the WebVTT sidecar, which is delivered before the
+ * media so a reader has the notes even while the video is still uploading
+ * (ADR-0005).
+ */
+export type RecordingArtifactKind = 'notes';
+
 export type UploadJobFile = {
   stream: RecordingStream;
+  kind?: RecordingArtifactKind;
   filename: string;
   status: 'uploading' | 'uploaded' | 'fallback' | 'retry-pending' | 'unavailable';
   bytes?: number;

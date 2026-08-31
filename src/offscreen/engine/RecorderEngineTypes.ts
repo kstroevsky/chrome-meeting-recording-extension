@@ -27,6 +27,8 @@ export interface StorageTarget {
 
 export type CompletedRecordingArtifact = {
   stream: RecordingStream;
+  /** Absent for media; `notes` is the WebVTT sidecar, delivered first (ADR-0005). */
+  kind?: 'notes';
   artifact: SealedStorageFile;
 };
 

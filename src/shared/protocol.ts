@@ -243,7 +243,15 @@ export type BgToOffscreenRpc =
       /** Monotonic run epoch the offscreen must echo in OFFSCREEN_STATE; see ADR-0003. */
       epoch: number;
     }>
-  | RpcRequest<{ type: 'OFFSCREEN_STOP' }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_STOP';
+      /**
+       * The run's notes, already rendered to WebVTT by the background (which
+       * owns them) for the offscreen to deliver ahead of the media (ADR-0005).
+       * Absent when the recording has no notes.
+       */
+      notesSidecar?: { vtt: string };
+    }>
   | RpcRequest<{ type: 'OFFSCREEN_DISCARD' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_CAMERA_MUTED'; muted: boolean }>

@@ -21,6 +21,31 @@ import {
   type UploadSummary,
 } from '../shared/recording';
 import type { CompletedRecordingArtifact } from './engine/RecorderEngineTypes';
+
+/** The run's notes, rendered to WebVTT by the background, which owns them. */
+export type NotesSidecar = { vtt: string };
+
+/**
+ * Wraps the rendered VTT as an artifact the finalizer can deliver like any
+ * other. The name is derived from a media artifact rather than sent with the
+ * text, so filenames stay built in one place. It has no OPFS source — it was
+ * never captured — so `cleanup` is a no-op and crash recovery has nothing to
+ * reclaim.
+ */
+function notesArtifact(
+  { vtt }: NotesSidecar,
+  media: CompletedRecordingArtifact[],
+): CompletedRecordingArtifact | null {
+  const source = media[0]?.artifact.filename;
+  if (!source) return null;
+  const filename = `${source.replace(/-(recording|mic|self-video)\.[a-z0-9]+$/i, '')}-notes.vtt`;
+  const file = new File([vtt], filename, { type: 'text/vtt' });
+  return {
+    stream: media[0].stream,
+    kind: 'notes',
+    artifact: { filename, file, mimeType: 'text/vtt', cleanup: async () => {} },
+  };
+}
 import type { RuntimeSampler } from './RuntimeSampler';
 
 export type OffscreenStateMessage = { type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate;
@@ -105,7 +130,7 @@ export class OffscreenController {
     if (this.phase !== 'idle') this.pushState(this.phase);
   };
 
-  onStopRequested = (): void => { void this.finalize(); };
+  onStopRequested = (notesSidecar?: NotesSidecar): void => { void this.finalize(notesSidecar); };
   onDiscardRequested = (): Promise<void> => this.discard();
 
   /** Advances the broadcast phase, rebaselining the lag clock on a new active phase. */
@@ -141,7 +166,7 @@ export class OffscreenController {
    * Stops capture, uploads or saves the sealed artifacts, and returns the
    * session to idle. Concurrent calls share one in-flight run.
    */
-  finalize(): Promise<void> {
+  finalize(notesSidecar?: NotesSidecar): Promise<void> {
     if (this.finalizeRunPromise) return this.finalizeRunPromise;
     const engine = this.engine;
     const finalizer = this.finalizer;
@@ -151,6 +176,12 @@ export class OffscreenController {
 
     this.finalizeRunPromise = (async () => {
       const artifacts = await engine.stop();
+      // Notes lead the delivery: a reader has them while the video is still
+      // uploading, which is the whole point of sending them first (ADR-0005).
+      if (artifacts.length > 0 && notesSidecar) {
+        const notes = notesArtifact(notesSidecar, artifacts);
+        if (notes) artifacts.unshift(notes);
+      }
       if (artifacts.length > 0) {
         if (this.storageMode === 'drive') {
           // ADR-0004: capture is sealed — hand it to the background upload manager

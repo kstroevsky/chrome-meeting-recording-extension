@@ -29,6 +29,7 @@ import type { RecordingSession } from './RecordingSession';
 import type { RecordingNotationService } from './RecordingNotationService';
 import type { TelemetryRuntime } from './TelemetryRuntime';
 import { createTelemetryId } from '../shared/telemetry';
+import { hasExportableNotations, toWebVtt } from '../shared/notationExport';
 
 export type RecordingControllerDeps = {
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
@@ -186,12 +187,19 @@ export class RecordingController {
         if (response?.snapshot) await this.telemetry?.receive(response.snapshot, true);
       } catch {}
     }
+    const { historyId } = this.session.getSnapshot();
+    // markStopping seals any note the run left open, so the export below is
+    // complete by the time it rides the stop RPC (ADR-0005).
     this.session.markStopping();
     this.L.log('Stopping recording:', reason);
+    const notesSidecar = await this.buildNotesSidecar(historyId);
 
     try {
       await this.offscreen.ensureReady();
-      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({ type: 'OFFSCREEN_STOP' });
+      const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
+        type: 'OFFSCREEN_STOP',
+        ...(notesSidecar ? { notesSidecar } : {}),
+      });
       if (!r?.ok) {
         this.session.fail(r?.error || 'Stop failed in offscreen');
         return this.fail(r?.error || 'Stop failed in offscreen');
@@ -385,6 +393,24 @@ export class RecordingController {
       return this.ok();
     } catch (e: any) {
       return this.fail(`SET_PAUSED failed: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * Renders the run's notes to WebVTT for the offscreen to deliver ahead of the
+   * media. The background does the rendering because it owns the notations; the
+   * offscreen owns delivery and names the file. Best-effort — a recording must
+   * still stop and save when its notes cannot be read.
+   */
+  private async buildNotesSidecar(historyId: string | undefined): Promise<{ vtt: string } | undefined> {
+    if (!historyId || !this.notations) return undefined;
+    try {
+      const notations = await this.notations.list(historyId);
+      if (!hasExportableNotations(notations)) return undefined;
+      return { vtt: toWebVtt(notations, { durationMs: this.session.runDurationMs(historyId) }) };
+    } catch (error) {
+      this.L.warn('Could not export notes for this recording:', error);
+      return undefined;
     }
   }
 
