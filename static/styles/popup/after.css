@@ -34,7 +34,7 @@
 #view-upload .file-ico { display: none; }
 #view-upload .file-main { width: 100%; min-width: 0; }
 #view-upload .file-head { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 10px; }
-#view-upload .file-title { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+#view-upload .file-title { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 #view-upload .file-sub { flex: 0 0 auto; color: var(--ink-3); font: 500 10.5px 'IBM Plex Mono', monospace; white-space: nowrap; }
 #view-upload .file-status-uploaded .file-sub { color: var(--ready); }
 #view-upload .file-open { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: 0 0 14px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink-2); font-size: 14px; line-height: 1; cursor: pointer; }
@@ -48,7 +48,7 @@
 #upload-done { display: grid; grid-template-columns: 34px 1fr; align-items: center; column-gap: 11px; padding: 0 0 21px; text-align: left; }
 #upload-done .done-check { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; grid-row: span 2; margin: 0; border-radius: 50%; background: color-mix(in srgb, var(--ready) 16%, transparent); }
 #upload-done .done-check svg { width: 18px; height: 18px; }
-#upload-done .finalizing-label { margin: 0; font-size: 15px; text-align: left; }
+#upload-done .finalizing-label { margin: 0; font-size: 15px; font-weight: 700; text-align: left; }
 #upload-done .upload-job-sub { margin: 2px 0 0; color: var(--ink-3); font: 500 10.5px 'IBM Plex Mono', monospace; text-align: left; }
 #upload-job-open-drive,
 #upload-job-new-recording { width: 100%; height: 48px; margin: 0; }
@@ -57,6 +57,8 @@
 #upload-job-new-recording { height: 44px; }
 .upload-transcript { display: flex; align-items: center; width: 100%; gap: 8px; margin-top: 14px; padding: 11px 13px; border: 0; border-radius: 6px; background: var(--tile); color: var(--ink); font: 600 12.5px 'Space Grotesk', sans-serif; }
 .upload-transcript svg { width: 13px; height: 13px; }
+/* `bolder` against the button's 600 computes to 900; the design keeps it level. */
+.upload-transcript strong { font-weight: inherit; }
 .upload-transcript span { margin-left: auto; color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; }
 #view-upload:has(#upload-done:not([hidden])) .file-list { border-top: 0; }
 #view-upload:has(#upload-done:not([hidden])) .file-list::before { display: block; padding: 0 0 7px; border-bottom: 1px solid var(--divider); color: var(--ink-4); font: 600 9px 'IBM Plex Mono', monospace; letter-spacing: .13em; content: 'IN GOOGLE DRIVE'; }

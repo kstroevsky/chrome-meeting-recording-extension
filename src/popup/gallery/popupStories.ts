@@ -232,6 +232,28 @@ export const POPUP_STORIES: PopupStory[] = [
       ],
     },
   },
+  {
+    id: 'upload-progress-notes', title: 'Upload in progress · notes', group: 'Saving',
+    description: 'd4 — the notes sidecar goes up ahead of the media, above the folded notes list.',
+    preview: {
+      screen: 'session',
+      session: session({
+        uploadJobs: [{
+          ...uploadJob('uploading', 0.34),
+          historyId: 'gallery-history-alex',
+          // The sidecar is delivered first, so it is still uploading here.
+          files: [
+            { stream: 'tab', filename: 'notes.vtt', status: 'uploading', bytes: 4_100, kind: 'notes' },
+            ...uploadJob('uploading', 0.34).files,
+          ],
+        }],
+      }),
+      selectedUploadJobId: uploadJob('uploading', 0.34).id,
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+      ],
+    },
+  },
   ...(['uploading', 'completed', 'failed'] as const).map((status): PopupStory => {
     const job = uploadJob(status, status === 'completed' ? 1 : 0.68);
     const title = status === 'uploading' ? 'Upload in progress' : status === 'completed' ? 'Upload complete' : 'Upload incomplete';

@@ -64,6 +64,9 @@
 
 .controls { display: grid; grid-template-columns: 48px 1fr; gap: 8px; margin: 6px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
 .controls .btn { height: 48px; font-size: 14.5px; }
+/* A secondary in the control bar keeps the secondary size, as in the design:
+   it sits a step down from the primary beside it rather than matching it. */
+.controls .btn-secondary { height: 44px; font-size: 13px; }
 .controls:not(.paused) #pause-recording [data-pause-label] { display: none; }
 .controls .btn-danger { background: var(--ink); color: var(--surface); box-shadow: none; font-size: 14.5px; }
 .controls .btn-danger:hover:not(:disabled) { background: var(--ink-2); }
@@ -72,14 +75,15 @@
 
 .controls.paused { grid-template-columns: 1fr; gap: 8px; margin: 16px -18px -18px; }
 .controls.paused .btn { height: 48px; }
-.controls.paused .btn:first-child { border: 0; background: var(--accent); color: #fff; font-size: 13px; box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent); }
+.controls.paused .btn:first-child { border: 0; background: var(--accent); color: #fff; font-size: 14.5px; box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent); }
 .controls.paused #stop-rec,
 .controls.paused #stop-rec:hover,
 .controls.paused #stop-rec:focus-visible,
-.controls.paused #stop-rec:disabled { display: inline-flex; opacity: 1; border: 1px solid var(--border); background: transparent !important; color: var(--ink-2) !important; box-shadow: none; font-size: 13px; outline: 0; }
+.controls.paused #stop-rec:disabled { display: inline-flex; height: 44px; opacity: 1; border: 1px solid var(--border); background: transparent !important; color: var(--ink-2) !important; box-shadow: none; font: 600 13px 'Space Grotesk', sans-serif; outline: 0; }
 .controls.paused #stop-rec [data-stop-label] { display: inline; }
 .controls.paused .btn-danger svg { display: none; }
-.paused-meta { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 0 22px; color: var(--ink-3); font-size: 11.5px; }
+/* The meta row is quieter than body copy: --ink-meta, not --ink-3. */
+.paused-meta { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 0 22px; color: var(--ink-meta); font-size: 11.5px; }
 .paused-meta span:nth-child(odd) { display: inline-flex; align-items: center; gap: 5px; }
 .paused-meta svg { width: 12px; height: 12px; }
 #view-recording:has(.controls.paused) .chips { display: none; }
@@ -193,3 +197,5 @@
 .interrupted-sub { margin: 2px 0 0; color: var(--ink-3); font: 10.5px 'IBM Plex Mono', monospace; }
 .interrupted-ribbon { margin-bottom: 14px; }
 .interrupted-actions { margin-top: 16px; }
+.interrupted-actions .btn { height: 48px; font-size: 14px; }
+.interrupted-actions .btn-secondary { height: 44px; font-size: 13px; }

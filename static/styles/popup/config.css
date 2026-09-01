@@ -1,5 +1,5 @@
 /* Idle setup, permissions, and recordings-list views. */
-.section-eyebrow { margin-bottom: 7px; color: var(--ink-4); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .14em; }
+.section-eyebrow { margin-bottom: 7px; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
 .glist,
 .meta-list { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .setup-list { position: relative; overflow: visible; border-top: 1px solid var(--divider); }
@@ -60,7 +60,9 @@
 .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent); }
 .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
 .btn-danger { background: var(--accent); color: #fff; box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent); }
-.btn-secondary { border: 1px solid var(--border); background: transparent; color: var(--ink-2); }
+/* The design's secondary button is one step down from the primary it sits
+   beside, everywhere it appears: 13px/600 rather than 14px/700. */
+.btn-secondary { border: 1px solid var(--border); background: transparent; color: var(--ink-2); font-size: 13px; font-weight: 600; }
 .btn-secondary:hover:not(:disabled) { background: var(--tile); }
 .btn-full { width: 100%; }
 .setup-footer { margin: 16px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
@@ -105,7 +107,7 @@
 .recording-detail-popup .menu-row:disabled { opacity: .45; cursor: not-allowed; }
 #recording-detail-content { padding: 0 18px; }
 .recording-detail-title-row { display: flex; align-items: center; gap: 8px; margin: 16px 0 4px; }
-.recording-detail-title { min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font-size: 19px; font-weight: 700; letter-spacing: -.02em; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
+.recording-detail-title { min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.02em; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .recording-detail-title-input { width: 100%; height: 28px; min-width: 0; padding: 0 4px; border: 1px solid var(--warn); border-radius: 4px; background: var(--surface); color: var(--ink); font: 700 19px 'Space Grotesk', sans-serif; letter-spacing: -.02em; outline: 0; }
 .recording-detail-rename { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
 .recording-detail-rename:hover,
@@ -187,7 +189,7 @@
 .detail-notes-marker { position: absolute; top: -3px; width: 2px; height: 18px; background: var(--ink); }
 
 .detail-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
-.detail-notes-count { color: var(--ink-4); font: 9.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+.detail-notes-count { color: var(--ink-4); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
 
 .detail-notes-list { overflow-y: auto; max-height: 164px; margin-top: 7px; border-bottom: 1px solid var(--divider); }
 .detail-notes-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 40px; border-top: 1px solid var(--divider); }
@@ -228,7 +230,11 @@
 .popup-recording-note-text.unnamed { color: var(--ink-4); }
 
 /* Folded/open notes on the saved screen (n2a → n2c). */
-.detail-notes-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 10px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
+/* No `font`/`letter-spacing`/`color` resets here: this button also carries
+   `.detail-notes-head`, and setting them to `inherit` overrode it — the heading
+   fell back to body text. The shared class supplies all three; :hover below
+   still recolours it. */
+.detail-notes-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 10px; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .detail-notes-toggle:hover { color: var(--warn-label); }
 .detail-notes-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .detail-notes-head-right { display: inline-flex; align-items: center; flex-shrink: 0; gap: 7px; }

@@ -520,10 +520,15 @@ export class PopupController {
   /**
    * Mounts the notes disclosure under the saved screen's file list (n2a → n2c),
    * once per recording so a re-render does not stack duplicates.
+   *
+   * Saved screen only. While the upload is still running the sidecar row above
+   * already reports the notes (d4), and a second block under it left the two
+   * stacked against each other with nothing to separate them.
    */
   private mountSavedNotes(job: import('../shared/recording').UploadJob): void {
     const host = this.el.uploadJobNotes;
     if (!host || !job.historyId) return;
+    if (job.status !== 'completed') { host.replaceChildren(); this.mountedSavedNotesFor = null; return; }
     if (this.mountedSavedNotesFor === job.historyId) return;
     this.mountedSavedNotesFor = job.historyId;
     host.replaceChildren();
