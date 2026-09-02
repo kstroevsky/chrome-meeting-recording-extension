@@ -16,13 +16,16 @@
  * grows while recording, so a paused ribbon holds still rather than rescaling.
  */
 
-import { formatDuration } from '../popupStatus';
+import { formatDuration, formatPosition } from '../popupStatus';
 import { NotationRibbon } from './notationRibbon';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
 
 /** The open span's length re-renders once per second, like the timer. */
 const TICK_MS = 1000;
+
+/** How long typing settles before the name is written. Keystrokes are cheap; writes are not. */
+const NAME_COMMIT_MS = 400;
 
 /** Keeps a just-started span visible before elapsed time has caught up to it. */
 const MIN_SCALE_MS = 1000;
@@ -39,6 +42,11 @@ export type RecordingNotesElements = {
   startButton: HTMLButtonElement | null;
   startLabel: HTMLElement | null;
   count: HTMLElement | null;
+  /** Replaces the start button while a note runs: the name, typed as it happens. */
+  nameRow: HTMLElement | null;
+  nameInput: HTMLInputElement | null;
+  /** Replaces the count while a note runs: where that note started. */
+  from: HTMLElement | null;
   hint: HTMLElement | null;
   editor: HTMLElement | null;
   editorIndex: HTMLElement | null;
@@ -65,6 +73,8 @@ export class RecordingNotesView {
   private runningSince: number | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private editingId: string | null = null;
+  /** Pending debounce for the open note's name. */
+  private nameTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ribbon: NotationRibbon | null;
 
   private readonly el: Partial<RecordingNotesElements>;
@@ -93,6 +103,12 @@ export class RecordingNotesView {
       ?.addEventListener('click', () => this.closeEditor());
     this.el.editorSave?.addEventListener('click', () => void this.onSave());
     this.el.editorDelete?.addEventListener('click', () => void this.onDelete());
+    // Named while it runs, so nothing is asked of the user after the fact.
+    this.el.nameInput?.addEventListener('input', () => this.queueName());
+    this.el.nameInput?.addEventListener('blur', () => this.commitName());
+    this.el.nameInput?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); this.commitName(); }
+    });
     this.el.editorText?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); void this.onSave(); }
       if (event.key === 'Escape') { event.preventDefault(); this.closeEditor(); }
@@ -127,6 +143,20 @@ export class RecordingNotesView {
       clearInterval(this.interval);
       this.interval = null;
     }
+  }
+
+  /** Schedules the open note's name, so a burst of typing is one write. */
+  private queueName(): void {
+    if (this.nameTimer != null) clearTimeout(this.nameTimer);
+    this.nameTimer = setTimeout(() => this.commitName(), NAME_COMMIT_MS);
+  }
+
+  private commitName(): void {
+    if (this.nameTimer != null) { clearTimeout(this.nameTimer); this.nameTimer = null; }
+    const open = this.openSpan();
+    const value = this.el.nameInput?.value ?? '';
+    if (!open || value === open.text) return;
+    void this.actions.save(open.id, value);
   }
 
   /** True when the shortcut/toggle would end rather than start a note. */
@@ -177,6 +207,20 @@ export class RecordingNotesView {
     if (this.el.count) {
       this.el.count.textContent = count === 0 ? 'NONE YET' : count === 1 ? '1 NOTE' : `${count} NOTES`;
     }
+    // The row is one of two things: the affordance that starts a note, or the
+    // note that is running. Never both.
+    const naming = live && open != null;
+    if (this.el.nameRow) this.el.nameRow.hidden = !naming;
+    if (this.el.from) {
+      this.el.from.hidden = !naming;
+      if (open) this.el.from.textContent = `FROM ${formatPosition(open.tStartMs)}`;
+    }
+    if (this.el.startButton) this.el.startButton.hidden = naming;
+    if (this.el.count) this.el.count.hidden = naming;
+    // Never overwrite what is being typed; adopt the stored text otherwise.
+    if (this.el.nameInput && open && document.activeElement !== this.el.nameInput) {
+      this.el.nameInput.value = open.text;
+    }
     if (this.el.startLabel) this.el.startLabel.textContent = open ? 'End note' : 'Make a note';
     if (this.el.startButton) {
       this.el.startButton.disabled = !live;
@@ -207,7 +251,7 @@ export class RecordingNotesView {
     // never recorded.
     if (this.el.held) this.el.held.hidden = !(this.paused && open);
     if (this.paused && open) {
-      if (this.el.heldStart) this.el.heldStart.textContent = formatDuration(open.tStartMs);
+      if (this.el.heldStart) this.el.heldStart.textContent = formatPosition(open.tStartMs);
       if (this.el.heldText) this.el.heldText.textContent = open.text;
     }
     if (this.el.toggle) {
@@ -228,7 +272,7 @@ export class RecordingNotesView {
     if (this.el.editorIndex) this.el.editorIndex.textContent = `NOTE ${index}`;
     if (this.el.editorRange) {
       this.el.editorRange.textContent =
-        `${formatDuration(notation.tStartMs)} → ${formatDuration(notation.tEndMs)}`;
+        `${formatPosition(notation.tStartMs)} → ${formatPosition(notation.tEndMs)}`;
     }
     if (this.el.editorLength) {
       this.el.editorLength.textContent = formatDuration(notation.tEndMs - notation.tStartMs);

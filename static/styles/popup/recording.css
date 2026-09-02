@@ -22,15 +22,15 @@
 .srow-ico { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; flex: 0 0 auto; border-radius: 0; background: transparent; color: var(--ink-2); }
 .srow-ico svg { width: 15px; height: 15px; }
 .srow-main { min-width: 0; flex: 1; }
-.srow-title { display: flex; align-items: center; width: 100%; color: var(--ink-2); font-size: 13.5px; font-weight: 500; }
+.srow-title { display: flex; align-items: center; width: 100%; color: var(--ink-2); font-size: 13.5px; font-weight: 400; }
 .device-trigger { display: block; width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .device-trigger:disabled { cursor: default; }
-.device-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.device-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .srow-device { display: block; overflow: hidden; margin-top: 2px; color: var(--ink-3); font-size: 11px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; transition: color .15s ease; }
 .device-trigger:not(:disabled):hover .srow-device,
 .device-trigger:not(:disabled):focus-visible .srow-device { color: var(--ink-2); }
 .srow-mode,
-.srow-sub { margin-left: auto; color: var(--ink-4); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
+.srow-sub { margin-left: auto; color: var(--ink-4); font: 400 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
 .srow-recdot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--rec); }
 
 .switch { position: relative; width: 34px; height: 20px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 999px; background: var(--control-bg-strong); cursor: pointer; transition: background .15s; }
@@ -38,7 +38,7 @@
 .switch.on { background: var(--ready); }
 .switch.on .knob { transform: translateX(14px); }
 .switch:disabled { opacity: .5; cursor: not-allowed; }
-.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .device-picker { position: fixed; inset: 0; z-index: 50; }
 .device-picker-scrim { position: absolute; inset: 0; background: rgb(28 26 23 / 38%); }
@@ -46,7 +46,7 @@
 .device-picker-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px 7px; }
 .device-picker-title { color: var(--ink-4); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .12em; }
 .device-picker-close { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: var(--control-bg); color: var(--ink-3); font-size: 11px; line-height: 1; cursor: pointer; }
-.device-picker-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.device-picker-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .device-picker-list { max-height: 72px; overflow-y: auto; }
 .device-picker-option { display: flex; align-items: center; justify-content: space-between; width: 100%; min-width: 0; gap: 10px; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-2); font: 400 12.5px 'Space Grotesk', system-ui, sans-serif; text-align: left; cursor: pointer; }
 .device-picker-option:hover,
@@ -106,7 +106,7 @@
 
 .note-span { position: absolute; top: 6px; height: 14px; min-width: 3px; padding: 0; border: 0; border-radius: 2px; background: var(--warn-label); cursor: pointer; transition: height .12s ease, top .12s ease; }
 .note-span:hover { top: 5px; height: 16px; }
-.note-span:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note-span:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* The clicked span lifts and rings gold so you can tell which one you are editing. */
 .note-span.editing { top: 3px; height: 20px; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--warn-label); }
 /* An open span has no end yet: translucent, with a solid leading edge at "now". */
@@ -119,7 +119,7 @@
 .note-open-timer { flex: 0 0 auto; color: var(--warn-label); font: 600 11px 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
 .note-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--warn-label); border-radius: 6px; background: var(--warn-label); color: var(--surface); cursor: pointer; transition: background .15s, border-color .15s; }
 .note-toggle:hover { border-color: var(--warn-label-hover); background: var(--warn-label-hover); }
-.note-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .note-toggle-glyph { width: 9px; height: 9px; border-radius: 1.5px; background: currentcolor; }
 /* Not yet noting: the glyph reads as "start" rather than "stop". */
 .note-toggle[aria-pressed='false'] { background: transparent; color: var(--warn-label); }
@@ -130,9 +130,24 @@
 .srow-note { gap: 8px; }
 .note-start { display: inline-flex; align-items: center; gap: 10px; min-width: 0; height: 34px; margin-left: -8px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--warn-label); font: 600 13.5px 'Space Grotesk', system-ui, sans-serif; cursor: pointer; }
 .note-start:hover { background: var(--control-bg); }
-.note-start:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note-start:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .note-start .srow-ico { width: 15px; height: 15px; color: inherit; }
 #note-count { flex: 0 0 auto; margin-left: auto; }
+
+/* The open note is named in place, in the row that otherwise says "Make a note".
+   The row grows while naming: the field is taller than the label it replaces. */
+.srow-note:has(#note-name:not([hidden])) { min-height: 52px; }
+.note-name { display: inline-flex; align-items: center; flex: 1; gap: 10px; min-width: 0; }
+.note-name .srow-ico { color: var(--warn-label); }
+/* The same field the rename sheet uses: a bordered input on the page surface,
+   set in mono because what is typed here is read back beside timecodes. */
+.note-name-input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font: 12px 'IBM Plex Mono', monospace; }
+.note-name-input::placeholder { color: var(--ink-4); }
+/* :focus, not :focus-visible — a text field should indicate however it was reached. */
+.note-name-input:focus { outline: 0; border-color: var(--focus); }
+/* Where the open note started, carried in the same shape the Microphone and
+   Camera rows use for their values. */
+.note-from { flex: 0 0 auto; color: var(--ink-4); font: 400 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; white-space: nowrap; }
 
 /* Shortcut tip (marks-e5): guidance, not a warning — hence the tinted band. */
 /* The key chip sits inline in the sentence, not as a block beside it. */
@@ -155,7 +170,7 @@
 .note-editor-save { flex: 1; height: 34px; border: 0; border-radius: 4px; background: var(--ink); color: var(--surface); font: 600 12.5px 'Space Grotesk', system-ui, sans-serif; cursor: pointer; }
 .note-editor-save:hover { background: var(--ink-2); }
 .note-editor-delete:focus-visible,
-.note-editor-save:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note-editor-save:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* Paused (d3): the ribbon holds still — spans mute, and the toggle disappears
    because there is nothing to start or end until the recording resumes. */

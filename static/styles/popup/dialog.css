@@ -14,7 +14,7 @@ body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: a
 .modal-actions .btn { width: 100%; height: 46px; }
 .modal-actions .btn-secondary { height: 44px; }
 .modal-card:focus-visible,
-.modal-actions .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.modal-actions .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .recording-name-card { text-align: left; }
 .recording-name-card .modal-icon { display: flex; }
 .recording-name-icon { background: var(--secondary); color: var(--accent); }

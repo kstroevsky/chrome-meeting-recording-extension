@@ -27,6 +27,13 @@
   --rec-label: #c0503c;
   --warn: #c99a55;
   --warn-label: #8a6a3f;
+  /*
+   * Focus lives on its own token so it is never the record/danger red, which
+   * read as an error on every keyboard step. Declared once: `--warn-label` is
+   * redefined per theme and `var()` resolves at use, so this follows it.
+   * The gold is the design's own focus treatment — see the note-name pill.
+   */
+  --focus: var(--warn-label);
   /* Notes (ADR-0005): the gold accent is --warn-label; these three complete it. */
   --warn-label-hover: #7a5c35;
   --note-track: #ddd4c2;
@@ -149,7 +156,8 @@ select { font: inherit; }
 .upload-navigation:hover .upload-navigation-ring::after,
 .upload-navigation:focus-visible .upload-navigation-ring::after { background: var(--control-bg-strong); }
 :root[data-theme='dark'] .upload-navigation-ring { background: conic-gradient(var(--accent) calc(var(--upload-progress) * 1%), #3a342d 0); }
-.header-phase { position: absolute; top: 7px; right: 36px; color: var(--rec); font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: .11em; }
+/* The design sets this chip in the wordmark's face, not the mono one. */
+.header-phase { position: absolute; top: 7px; right: 36px; color: var(--rec); font: 700 10px 'Space Grotesk', system-ui, sans-serif; letter-spacing: .12em; }
 .header-phase[data-tone='paused'] { color: var(--warn); }
 .header-phase[data-tone='saved'] { color: var(--ready); }
 .header-phase[data-tone='uploading'] { color: var(--ink-3); }

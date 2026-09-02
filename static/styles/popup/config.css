@@ -43,13 +43,13 @@
 .cam-pill-text { min-width: 42px; padding: 4px 10px; border-radius: 4px; color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; text-align: center; }
 .cam-toggle input:checked ~ .cam-pill .cam-pill-text,
 .cam-toggle input:not(:checked) ~ .cam-pill .cam-pill-off { background: var(--ink); color: var(--surface); font-weight: 600; }
-.cam-toggle input:focus-visible ~ .cam-pill { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cam-toggle input:focus-visible ~ .cam-pill { outline: 2px solid var(--focus); outline-offset: 2px; }
 .segmented { display: flex; width: 136px; padding: 2px; border-radius: 6px; background: var(--tile); }
 .seg { position: relative; flex: 1; cursor: pointer; }
 .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
 .seg span { display: block; padding: 4px 0; border-radius: 6px; color: var(--ink-meta); font: 500 11px 'IBM Plex Mono', monospace; letter-spacing: .03em; text-align: center; }
 .seg input:checked + span { background: var(--ink); color: var(--surface); font-weight: 600; }
-.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
 .cam-warn { display: flex; align-items: center; gap: 6px; margin: 9px 0 0; }
 .cam-warn svg { width: 11px; height: 11px; flex: 0 0 auto; }
 .cam-warn-text { color: var(--warn-label); font-size: 10.5px; }
@@ -177,7 +177,9 @@
 #view-permission.permission-blocked #permission-continue { height: 44px; border: 1px solid var(--border); }
 
 /* ══════════ Notes on a finished recording (d1, ADR-0005) ══════════ */
-.detail-notes { margin: 0 0 16px; }
+/* The design separates the notes section from the list above it, not from
+   whatever follows: 16px over the heading, 2px under it. */
+.detail-notes { margin: 16px 0 2px; }
 
 /* Every span, drawn against the recording's own duration. */
 .detail-notes-timeline { position: relative; height: 12px; margin: 0 0 16px; }
@@ -185,7 +187,7 @@
 .detail-notes-span { position: absolute; top: 0; height: 12px; padding: 0; border: 0; border-radius: 2px; background: var(--warn-label); cursor: pointer; }
 .detail-notes-span.auto-ended { background: var(--note-span-held); border-right: 2px dashed var(--rec-label); }
 .detail-notes-span.selected { box-shadow: 0 0 0 2px var(--warn-label), 0 0 0 4px var(--tile); }
-.detail-notes-span:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.detail-notes-span:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .detail-notes-marker { position: absolute; top: -3px; width: 2px; height: 18px; background: var(--ink); }
 
 .detail-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
@@ -209,7 +211,7 @@
 .detail-notes-edit:hover { color: var(--warn-label); }
 .detail-notes-delete:hover { color: var(--accent); }
 .detail-notes-edit:focus-visible,
-.detail-notes-delete:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.detail-notes-delete:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 
 /* Notes under a recordings-list row (n1): the chip counts them, tapping it
    reveals them threaded under the row. */
@@ -219,12 +221,12 @@
 .popup-recording-actions { display: inline-flex; align-items: center; flex-shrink: 0; gap: 9px; }
 
 .popup-recording-note-chip { display: inline-flex; align-items: center; gap: 4px; height: 19px; padding: 0 6px; border: 0; border-radius: 4px; background: var(--control-bg-strong); color: var(--warn-label); font: 600 10px 'IBM Plex Mono', monospace; cursor: pointer; }
-.popup-recording-note-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.popup-recording-note-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .popup-recording-notes { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; padding-left: 9px; border-left: 2px solid var(--control-bg-strong); }
 .popup-recording-note { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .popup-recording-note:hover { opacity: .7; }
-.popup-recording-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.popup-recording-note:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .popup-recording-note-at { flex-shrink: 0; color: var(--warn-label); font: 10px 'IBM Plex Mono', monospace; }
 .popup-recording-note-text { overflow: hidden; color: var(--ink-2); font-size: 11.5px; white-space: nowrap; text-overflow: ellipsis; }
 .popup-recording-note-text.unnamed { color: var(--ink-4); }
@@ -236,7 +238,7 @@
    still recolours it. */
 .detail-notes-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 10px; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .detail-notes-toggle:hover { color: var(--warn-label); }
-.detail-notes-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.detail-notes-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .detail-notes-head-right { display: inline-flex; align-items: center; flex-shrink: 0; gap: 7px; }
 .detail-notes-chevron { width: 9px; height: 9px; transition: transform .15s ease; }
 .detail-notes-toggle[aria-expanded='true'] .detail-notes-chevron { transform: rotate(90deg); }
