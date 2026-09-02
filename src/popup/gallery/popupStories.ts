@@ -233,6 +233,18 @@ export const POPUP_STORIES: PopupStory[] = [
     },
   },
   {
+    id: 'notes-naming', title: 'Notes · naming the open note', group: 'Recording',
+    description: 'The open note is named where it happens — the capture row becomes the name and its start.',
+    preview: {
+      screen: 'session',
+      session: session({ phase: 'recording', recordedMs: 380_000, runningSince: FIXTURE_TIME }),
+      notations: [
+        { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
+        { id: 'n2', tStartMs: 334_000, text: 'Drive quota limit' },
+      ],
+    },
+  },
+  {
     id: 'upload-progress-notes', title: 'Upload in progress · notes', group: 'Saving',
     description: 'd4 — the notes sidecar goes up ahead of the media, above the folded notes list.',
     preview: {

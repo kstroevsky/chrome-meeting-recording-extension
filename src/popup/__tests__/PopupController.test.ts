@@ -401,7 +401,7 @@ describe('PopupController', () => {
     expect(elements.viewRecording.hidden).toBe(false);
     expect(elements.viewConfig.hidden).toBe(true);
     expect(elements.recLabel.textContent).toBe('Paused');
-    expect(elements.recTimer.textContent).toBe('12:34');
+    expect(elements.recTimer.textContent).toBe('00:12:34');
     expect(elements.chipStorageLabel.textContent).toBe('Google Drive');
     expect(elements.micDeviceLabel.textContent).toBe('MacBook Pro Microphone');
     expect(elements.cameraDeviceLabel.textContent).toBe('FaceTime HD Camera');
@@ -1487,7 +1487,7 @@ describe('PopupController', () => {
 
       expect(elements.recLabel.textContent).toBe('REC');
       expect(elements.recBanner.classList.contains('paused')).toBe(false);
-      expect(elements.recTimer.textContent).toBe('0:05');
+      expect(elements.recTimer.textContent).toBe('00:00:05');
 
       // Paused: timer frozen at the banked recordedMs (no running span).
       (controller as any).state.applySession(
@@ -1495,7 +1495,7 @@ describe('PopupController', () => {
       );
       expect(elements.recLabel.textContent).toBe('Paused');
       expect(elements.recBanner.classList.contains('paused')).toBe(true);
-      expect(elements.recTimer.textContent).toBe('1:05');
+      expect(elements.recTimer.textContent).toBe('00:01:05');
     });
 
     it('shows a Starting… banner during the starting phase', async () => {

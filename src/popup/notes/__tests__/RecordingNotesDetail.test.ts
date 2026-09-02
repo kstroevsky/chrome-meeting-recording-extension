@@ -89,7 +89,7 @@ describe('RecordingNotesDetail', () => {
     await view.load();
 
     const row = rows(el)[0];
-    expect(row.querySelector('.detail-notes-start')!.textContent).toBe('0:48');
+    expect(row.querySelector('.detail-notes-start')!.textContent).toBe('00:48');
     expect(row.querySelector('.detail-notes-text')!.textContent).toBe('Q3 target changed');
     expect(row.querySelector('.detail-notes-length')!.textContent).toBe('0:37');
   });

@@ -280,6 +280,86 @@ test.describe('recording notations (integration)', () => {
     }
   });
 
+  /**
+   * The open note is named in the popup while it runs (design: the capture row
+   * becomes the note). Driven through the real popup page, because the write
+   * goes out on a debounce from an input event — a unit test cannot prove it
+   * reaches the background.
+   */
+  test('names the open note from the popup while the recording runs', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'off', recordSelfVideo: false,
+      });
+      const historyId = await activeHistoryId(harness.controlPage);
+
+      await meetPage.waitForTimeout(1_500);
+      await mark(harness.controlPage, '');
+
+      const popup = await harness.context.newPage();
+      await popup.goto(`chrome-extension://${harness.extensionId}/popup.html`, { waitUntil: 'domcontentloaded' });
+
+      // The row stops offering "Make a note" and becomes the note itself.
+      await expect(popup.locator('#note-name')).toBeVisible();
+      await expect(popup.locator('#note-start')).toBeHidden();
+      await expect(popup.locator('#note-from')).toContainText('FROM');
+
+      await popup.fill('#note-name-input', 'Renewal date');
+      await popup.locator('#note-name-input').press('Enter');
+
+      await expect.poll(async () => {
+        const listed = await sendRuntimeMessage<ListResponse>(harness.controlPage, {
+          type: 'LIST_RECORDING_NOTATIONS', recordingId: historyId,
+        });
+        return listed.ok ? listed.notations[0]?.text : undefined;
+      }, { timeout: 10_000 }).toBe('Renewal date');
+
+      await popup.close();
+      await stopRecording(harness.controlPage);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  /**
+   * Renaming a Drive recording renamed the sidecar as if it were the media
+   * stream it rode along with, so it took that stream's name on Drive.
+   */
+  test('renaming a Drive recording keeps the notes sidecar named as notes', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const drive = await installDriveSimulator(harness.context, 'fast');
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'drive', micMode: 'off', recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(1_500);
+      const marked = await mark(harness.controlPage, 'Intro / agenda');
+      await sendRuntimeMessage(harness.controlPage, { type: 'END_NOTATION', id: marked.id });
+      await stopRecording(harness.controlPage);
+
+      const uploaded = () => Object.values(drive.resources).filter((name) => name.includes('.'));
+      await expect.poll(() => uploaded().length, { timeout: 45_000 }).toBeGreaterThanOrEqual(2);
+
+      const history = await sendRuntimeMessage<HistoryResponse>(harness.controlPage, { type: 'LIST_RECORDING_HISTORY' });
+      if (!history.ok || !history.entries[0]) throw new Error('No history entry to rename');
+      const renamed = await sendRuntimeMessage<{ ok: boolean; error?: string }>(harness.controlPage, {
+        type: 'RENAME_RECORDING_HISTORY', id: history.entries[0].id, name: 'Weekly sync',
+      });
+      expect(renamed.ok).toBe(true);
+
+      // Still named for itself — not for a media stream it rode along with.
+      expect(uploaded().join(' | ')).toMatch(/-notes\.vtt/);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
   test('drops the run’s marks when the recording is discarded', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
     try {

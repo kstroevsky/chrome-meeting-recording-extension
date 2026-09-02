@@ -20,7 +20,7 @@ describe('notationRow', () => {
   it('says when the note starts, what it says, and how long it ran', () => {
     const row = notationRow(note(48_000, 85_000, 'Q3 target changed', 'user'));
 
-    expect(at(row, '.detail-notes-start').textContent).toBe('0:48');
+    expect(at(row, '.detail-notes-start').textContent).toBe('00:48');
     expect(at(row, '.detail-notes-text').textContent).toBe('Q3 target changed');
     expect(at(row, '.detail-notes-length').textContent).toBe('0:37');
   });
@@ -47,7 +47,7 @@ describe('notationRow', () => {
   it('reports where a note ended, not how long it ran, when the run sealed it', () => {
     const row = notationRow(note(372_000, 401_000, 'Renewal date', 'auto'), { sealedAtMs: 401_000 });
 
-    expect(at(row, '.detail-notes-length').textContent).toBe('ENDED AT 6:41');
+    expect(at(row, '.detail-notes-length').textContent).toBe('ENDED AT 06:41');
   });
 
   it('still reports a length for a note the user closed on that same screen', () => {
@@ -93,7 +93,7 @@ describe('notationRow', () => {
       actions: { select: () => {}, rename: () => {}, remove: () => {} },
     });
 
-    expect(at(row, '.detail-notes-edit').getAttribute('aria-label')).toBe('Rename note at 0:48');
-    expect(at(row, '.detail-notes-delete').getAttribute('aria-label')).toBe('Delete note at 0:48');
+    expect(at(row, '.detail-notes-edit').getAttribute('aria-label')).toBe('Rename note at 00:48');
+    expect(at(row, '.detail-notes-delete').getAttribute('aria-label')).toBe('Delete note at 00:48');
   });
 });

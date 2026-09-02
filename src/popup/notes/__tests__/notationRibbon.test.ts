@@ -134,9 +134,9 @@ describe('NotationRibbon', () => {
   });
 
   it('labels a span by its range, and by its message when it has one', () => {
-    expect(describeNotation(note('n1', 41_000, 78_000))).toBe('0:41 → 1:18');
+    expect(describeNotation(note('n1', 41_000, 78_000))).toBe('00:41 → 01:18');
     expect(describeNotation(note('n1', 41_000, 78_000, 'Q3 target changed')))
-      .toBe('0:41 → 1:18 · Q3 target changed');
-    expect(describeNotation(note('n1', 41_000))).toBe('0:41 → …');
+      .toBe('00:41 → 01:18 · Q3 target changed');
+    expect(describeNotation(note('n1', 41_000))).toBe('00:41 → …');
   });
 });

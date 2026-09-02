@@ -9,7 +9,8 @@ function build(): { el: RecordingNotesElements; root: HTMLElement } {
     <span id="openTimer"></span>
     <div id="held" hidden><span id="heldStart"></span><span id="heldText"></span></div>
     <button id="toggle"><span data-note-toggle-label></span></button>
-    <div id="row"><button id="startButton"><span id="startLabel"></span></button><span id="count"></span></div>
+    <div id="row"><button id="startButton"><span id="startLabel"></span></button><span id="count"></span>
+      <label id="nameRow" hidden><input id="nameInput"></label><span id="from" hidden></span></div>
     <p id="hint"></p>
     <div id="editor" hidden><div data-note-editor-dismiss></div>
       <span id="editorIndex"></span><span id="editorRange"></span><span id="editorLength"></span>
@@ -25,6 +26,7 @@ function build(): { el: RecordingNotesElements; root: HTMLElement } {
       toggle: q<HTMLButtonElement>('toggle'), row: q('row'),
       startButton: q<HTMLButtonElement>('startButton'), startLabel: q('startLabel'),
       count: q('count'), hint: q('hint'), editor: q('editor'),
+      nameRow: q('nameRow'), nameInput: q<HTMLInputElement>('nameInput'), from: q('from'),
       editorIndex: q('editorIndex'), editorRange: q('editorRange'), editorLength: q('editorLength'),
       editorText: q<HTMLInputElement>('editorText'), editorSave: q<HTMLButtonElement>('editorSave'),
       editorDelete: q<HTMLButtonElement>('editorDelete'), editorClose: q<HTMLButtonElement>('editorClose'),
@@ -151,7 +153,7 @@ describe('RecordingNotesView', () => {
 
     expect(el.editor!.hidden).toBe(false);
     expect(el.editorIndex!.textContent).toBe('NOTE 2');
-    expect(el.editorRange!.textContent).toBe('2:34 → 3:29');
+    expect(el.editorRange!.textContent).toBe('02:34 → 03:29');
     expect(el.editorLength!.textContent).toBe('0:55');
     expect(el.editorText!.value).toBe('Pricing objection');
     expect(spans(root)[1].classList.contains('editing')).toBe(true);
@@ -227,7 +229,7 @@ describe('RecordingNotesView', () => {
       ]);
 
       expect(el.held!.hidden).toBe(false);
-      expect(el.heldStart!.textContent).toBe('5:34');
+      expect(el.heldStart!.textContent).toBe('05:34');
       expect(el.heldText!.textContent).toBe('Migration owner');
     });
 
@@ -284,6 +286,74 @@ describe('RecordingNotesView', () => {
     expect(() => new RecordingNotesView(undefined, actions()).sync('recording', recording(1_000)))
       .not.toThrow();
   });
+
+  describe('naming the open note in place', () => {
+    it('swaps the start affordance for the name and its start time', () => {
+      const { el, root } = build();
+      const view = new RecordingNotesView(el, actions());
+      void root;
+
+      view.sync('recording', recording(100_000));
+      view.setNotations([{ id: 'n1', tStartMs: 40_000, text: '' }]);
+
+      expect(el.nameRow!.hidden).toBe(false);
+      expect(el.from!.hidden).toBe(false);
+      expect(el.from!.textContent).toBe('FROM 00:40');
+      // The row is one of two things, never both.
+      expect(el.startButton!.hidden).toBe(true);
+      expect(el.count!.hidden).toBe(true);
+    });
+
+    it('returns the row to the start affordance once the note is closed', () => {
+      const { el } = build();
+      const view = new RecordingNotesView(el, actions());
+
+      view.sync('recording', recording(100_000));
+      view.setNotations([{ id: 'n1', tStartMs: 40_000, text: '' }]);
+      view.setNotations([{ id: 'n1', tStartMs: 40_000, tEndMs: 60_000, endedBy: 'user', text: 'done' }]);
+
+      expect(el.nameRow!.hidden).toBe(true);
+      expect(el.from!.hidden).toBe(true);
+      expect(el.startButton!.hidden).toBe(false);
+      expect(el.count!.hidden).toBe(false);
+    });
+
+    it('writes the name once typing settles, not on every keystroke', () => {
+      jest.useFakeTimers();
+      const { el } = build();
+      const acts = actions();
+      const view = new RecordingNotesView(el, acts);
+      view.sync('recording', recording(100_000));
+      view.setNotations([{ id: 'n1', tStartMs: 40_000, text: '' }]);
+
+      el.nameInput!.value = 'Drive quota';
+      el.nameInput!.dispatchEvent(new Event('input', { bubbles: true }));
+      el.nameInput!.value = 'Drive quota limit';
+      el.nameInput!.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(acts.save).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(400);
+      expect(acts.save).toHaveBeenCalledTimes(1);
+      expect(acts.save).toHaveBeenCalledWith('n1', 'Drive quota limit');
+      jest.useRealTimers();
+    });
+
+    it('never overwrites what is being typed', () => {
+      const { el } = build();
+      const view = new RecordingNotesView(el, actions());
+      view.sync('recording', recording(100_000));
+      view.setNotations([{ id: 'n1', tStartMs: 40_000, text: 'stored' }]);
+
+      document.body.appendChild(el.nameInput!);
+      el.nameInput!.focus();
+      el.nameInput!.value = 'half-typed';
+      // A background refresh lands mid-sentence.
+      view.setNotations([{ id: 'n1', tStartMs: 40_000, text: 'stored' }]);
+
+      expect(el.nameInput!.value).toBe('half-typed');
+    });
+  });
+
   it('keeps sliding the ribbon after a note is closed', () => {
     jest.useFakeTimers();
     const { el, root } = build();
