@@ -12,7 +12,7 @@
 
 import { NotationRibbon } from '../notes/notationRibbon';
 import { notationRow } from '../notes/notationRow';
-import { formatDuration } from '../popupStatus';
+import { formatPosition } from '../popupStatus';
 import type { PopupElements } from '../popupView';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingStatusView } from '../../shared/recording';
@@ -74,7 +74,7 @@ export class InterruptedView {
     const { el } = this;
     if (el.interruptedTitle) el.interruptedTitle.textContent = INTERRUPTION_TITLE[interruption.reason];
     if (el.interruptedSub) {
-      el.interruptedSub.textContent = `STOPPED AT ${formatDuration(interruption.atMs)} · NOTHING LOST`;
+      el.interruptedSub.textContent = `STOPPED AT ${formatPosition(interruption.atMs)} · NOTHING LOST`;
     }
 
     let notations: RecordingNotation[] = [];

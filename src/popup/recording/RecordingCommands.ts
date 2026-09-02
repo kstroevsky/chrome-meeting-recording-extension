@@ -18,7 +18,7 @@ import type { CameraPermissionService } from './CameraPermissionService';
 import type { ConfirmDialog } from '../ConfirmDialog';
 import type { MicPermissionService } from './MicPermissionService';
 import type { PermissionView } from './PermissionView';
-import { formatDuration } from '../popupStatus';
+import { formatDuration, formatPosition } from '../popupStatus';
 import {
   buildDiscardConfirmMessage,
   buildDiscardErrorAlert,
@@ -131,7 +131,7 @@ export class RecordingCommands {
         cancelLabel: DISCARD_CONFIRM_TEXT.cancelLabel,
         tone: 'danger',
         details: notes.map((notation) => ({
-          at: formatDuration(notation.tStartMs),
+          at: formatPosition(notation.tStartMs),
           text: describeNotationForList(notation, formatDuration),
         })),
       });

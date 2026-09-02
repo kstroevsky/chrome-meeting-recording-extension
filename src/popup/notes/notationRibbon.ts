@@ -14,7 +14,7 @@
  * smallest span the track will show, and whether spans are clickable.
  */
 
-import { formatDuration } from '../popupStatus';
+import { formatPosition } from '../popupStatus';
 import type { RecordingNotation } from '../../shared/notations';
 
 export type NotationRibbonOptions = {
@@ -45,8 +45,8 @@ export type NotationRibbonView = {
 /** "0:41 → 1:18 · Q3 target changed" — a span's only label. */
 export function describeNotation(notation: RecordingNotation): string {
   const range = notation.tEndMs == null
-    ? `${formatDuration(notation.tStartMs)} → …`
-    : `${formatDuration(notation.tStartMs)} → ${formatDuration(notation.tEndMs)}`;
+    ? `${formatPosition(notation.tStartMs)} → …`
+    : `${formatPosition(notation.tStartMs)} → ${formatPosition(notation.tEndMs)}`;
   return notation.text ? `${range} · ${notation.text}` : range;
 }
 

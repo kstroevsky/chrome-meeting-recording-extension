@@ -12,7 +12,7 @@
  * the length into the label instead (`describeNotationForList`).
  */
 
-import { formatDuration } from '../popupStatus';
+import { formatDuration, formatPosition } from '../popupStatus';
 import type { RecordingNotation } from '../../shared/notations';
 
 /** What the design puts in a note nobody named: an invitation, not a label. */
@@ -56,7 +56,7 @@ export function notationRow(notation: RecordingNotation, options: NotationRowOpt
 
   const start = document.createElement('span');
   start.className = 'detail-notes-start';
-  start.textContent = formatDuration(notation.tStartMs);
+  start.textContent = formatPosition(notation.tStartMs);
 
   const text = document.createElement('span');
   text.className = 'detail-notes-text';
@@ -84,9 +84,9 @@ export function notationRow(notation: RecordingNotation, options: NotationRowOpt
   actions.className = 'detail-notes-actions';
   actions.append(
     length,
-    iconButton('detail-notes-edit', PENCIL, 'Rename this note', `Rename note at ${formatDuration(notation.tStartMs)}`,
+    iconButton('detail-notes-edit', PENCIL, 'Rename this note', `Rename note at ${formatPosition(notation.tStartMs)}`,
       () => options.actions?.rename(row, notation)),
-    iconButton('detail-notes-delete', CROSS, 'Delete this note', `Delete note at ${formatDuration(notation.tStartMs)}`,
+    iconButton('detail-notes-delete', CROSS, 'Delete this note', `Delete note at ${formatPosition(notation.tStartMs)}`,
       () => options.actions?.remove(notation.id)),
   );
   row.append(main, actions);
@@ -94,7 +94,7 @@ export function notationRow(notation: RecordingNotation, options: NotationRowOpt
 }
 
 function lengthLabel(notation: RecordingNotation, sealedAtMs?: number): string {
-  if (sealedAtMs != null && notation.endedBy === 'auto') return `ENDED AT ${formatDuration(sealedAtMs)}`;
+  if (sealedAtMs != null && notation.endedBy === 'auto') return `ENDED AT ${formatPosition(sealedAtMs)}`;
   return notation.tEndMs == null ? '—' : formatDuration(notation.tEndMs - notation.tStartMs);
 }
 

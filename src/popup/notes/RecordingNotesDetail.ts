@@ -12,7 +12,7 @@
  * reachable later.
  */
 
-import { formatDuration } from '../popupStatus';
+import { formatPosition } from '../popupStatus';
 import { NotationRibbon } from './notationRibbon';
 import { notationRow } from './notationRow';
 import type { RecordingNotation } from '../../shared/notations';
@@ -217,7 +217,7 @@ export class RecordingNotesDetail {
     input.type = 'text';
     input.maxLength = 500;
     input.value = notation.text;
-    input.setAttribute('aria-label', `Note at ${formatDuration(notation.tStartMs)}`);
+    input.setAttribute('aria-label', `Note at ${formatPosition(notation.tStartMs)}`);
 
     const commit = async (save: boolean) => {
       if (input.parentElement !== main) return;

@@ -17,6 +17,29 @@ export function formatDuration(ms: number): string {
   return `${minutes}:${ss}`;
 }
 
+/**
+ * A *position* in the recording, as the design writes one: minutes are padded so
+ * a column of them lines up (`00:48`, `18:02`). Lengths are not padded — see
+ * {@link formatDuration} — because a length is read on its own, not scanned.
+ */
+export function formatPosition(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor((ms || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const ss = String(totalSeconds % 60).padStart(2, '0');
+  const mm = String(minutes).padStart(2, '0');
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/** The live recording clock, which the design keeps at a fixed width: `00:07:12`. */
+export function formatClock(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor((ms || 0) / 1000));
+  const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+  const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${hours}:${minutes}:${seconds}`;
+}
+
 /** Builds the post-upload alert when some files fell back to local downloads. */
 export function formatUploadFallbackMessage(summary: UploadSummary): string | null {
   if (!summary.localFallbacks.length) return null;

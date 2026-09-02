@@ -11,7 +11,7 @@
  */
 
 import { DETAIL_OPEN_ICON, detailPercent } from './historyChrome';
-import { formatDuration } from '../popupStatus';
+import { formatDuration, formatPosition } from '../popupStatus';
 import { sendToBackground } from '../../shared/messages';
 import { describeNotationForList, type RecordingNotation } from '../../shared/notations';
 import type { UploadJob } from '../../shared/recording';
@@ -171,7 +171,7 @@ export class RecordingsListView {
       line.className = 'popup-recording-note';
       const at = document.createElement('span');
       at.className = 'popup-recording-note-at';
-      at.textContent = formatDuration(notation.tStartMs);
+      at.textContent = formatPosition(notation.tStartMs);
       const text = document.createElement('span');
       text.className = 'popup-recording-note-text';
       // No length column on this line, so the label carries the length itself.

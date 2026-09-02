@@ -8,7 +8,7 @@
  * unit-tested in isolation.
  */
 
-import { formatDuration } from '../popupStatus';
+import { formatClock } from '../popupStatus';
 import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
 
 /** The recording clock re-renders once per second while a live span is running. */
@@ -42,7 +42,7 @@ export class RecordingTimer {
   private render(): void {
     const elapsed =
       this.recordedMs + (this.runningSince != null ? Date.now() - this.runningSince : 0);
-    if (this.el) this.el.textContent = formatDuration(elapsed);
+    if (this.el) this.el.textContent = formatClock(elapsed);
   }
 
   private start(): void {
