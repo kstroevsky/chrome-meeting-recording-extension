@@ -50,8 +50,18 @@ export function describeNotation(notation: RecordingNotation): string {
   return notation.text ? `${range} · ${notation.text}` : range;
 }
 
+/** What was last written to a span, so a redraw only touches what moved. */
+type Painted = { identity: string; left: string; width: string };
+
 export class NotationRibbon {
   private readonly spans = new Map<string, HTMLElement>();
+  /**
+   * The ribbon repaints every second for the whole run. Only the geometry
+   * changes on a tick — classes and labels follow the notation — so each is
+   * written only when its own input changed. At the 500-note cap that is two
+   * style writes per span instead of eight DOM operations.
+   */
+  private readonly painted = new WeakMap<HTMLElement, Painted>();
 
   constructor(
     private readonly track: HTMLElement,
@@ -108,21 +118,29 @@ export class NotationRibbon {
       this.options.minWidthPct ?? 0,
       Math.min(100 - left, ((end - notation.tStartMs) / scale) * 100),
     );
+    const leftPct = `${left}%`;
+    const widthPct = `${Math.max(0, width)}%`;
 
-    // Assigned rather than toggled, so the class set is exactly what this
-    // ribbon decides regardless of what a previous draw left behind.
-    span.className = this.options.spanClass;
-    span.classList.toggle('open', notation.tEndMs == null);
-    // A note the run sealed on the way out reads as muted: it ended because the
-    // recording did, not because the user closed it.
-    span.classList.toggle('auto-ended', notation.endedBy === 'auto');
-    if (this.options.activeClass) {
-      span.classList.toggle(this.options.activeClass, view.activeId === notation.id);
+    const active = this.options.activeClass != null && view.activeId === notation.id;
+    const identity = `${notation.tEndMs ?? ''}|${notation.endedBy ?? ''}|${active}|${notation.text}`;
+    const last = this.painted.get(span);
+
+    if (last?.identity !== identity) {
+      // Assigned rather than toggled, so the class set is exactly what this
+      // ribbon decides regardless of what a previous draw left behind.
+      span.className = this.options.spanClass;
+      span.classList.toggle('open', notation.tEndMs == null);
+      // A note the run sealed on the way out reads as muted: it ended because
+      // the recording did, not because the user closed it.
+      span.classList.toggle('auto-ended', notation.endedBy === 'auto');
+      if (this.options.activeClass) span.classList.toggle(this.options.activeClass, active);
+      const label = describeNotation(notation);
+      span.title = label;
+      span.setAttribute('aria-label', label);
     }
+    if (last?.left !== leftPct) span.style.left = leftPct;
+    if (last?.width !== widthPct) span.style.width = widthPct;
 
-    span.style.left = `${left}%`;
-    span.style.width = `${Math.max(0, width)}%`;
-    span.title = describeNotation(notation);
-    span.setAttribute('aria-label', describeNotation(notation));
+    this.painted.set(span, { identity, left: leftPct, width: widthPct });
   }
 }
