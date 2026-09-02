@@ -284,4 +284,35 @@ describe('RecordingNotesView', () => {
     expect(() => new RecordingNotesView(undefined, actions()).sync('recording', recording(1_000)))
       .not.toThrow();
   });
+  it('keeps sliding the ribbon after a note is closed', () => {
+    jest.useFakeTimers();
+    const { el, root } = build();
+    const view = new RecordingNotesView(el, actions());
+
+    // A live run whose clock is actually advancing, with nothing open. The track
+    // is scaled to elapsed time, so the closed span must still slide left.
+    const live = { phase: 'recording', recordedMs: 100_000, runningSince: Date.now(), runConfig: null, updatedAt: 0 } as any;
+    view.sync('recording', live);
+    view.setNotations([{ id: 'n1', tStartMs: 25_000, tEndMs: 50_000, endedBy: 'user', text: 'done' }]);
+    const before = spans(root)[0].style.left;
+
+    jest.advanceTimersByTime(2_000);
+    expect(spans(root)[0].style.left).not.toBe(before);
+    view.stop();
+    jest.useRealTimers();
+  });
+
+  it('shows the track button only while a note is open', () => {
+    const { el } = build();
+    const view = new RecordingNotesView(el, actions());
+    view.sync('recording', recording(100_000));
+
+    view.setNotations([{ id: 'n1', tStartMs: 25_000, tEndMs: 50_000, endedBy: 'user', text: 'done' }]);
+    // A closed note leaves nothing to end; an idle dot here reads as a record control.
+    expect(el.toggle!.hidden).toBe(true);
+
+    view.setNotations([{ id: 'n2', tStartMs: 60_000, text: '' }]);
+    expect(el.toggle!.hidden).toBe(false);
+    expect(el.toggle!.getAttribute('aria-pressed')).toBe('true');
+  });
 });

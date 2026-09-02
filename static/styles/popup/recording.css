@@ -120,11 +120,8 @@
 .note-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--warn-label); border-radius: 6px; background: var(--warn-label); color: var(--surface); cursor: pointer; transition: background .15s, border-color .15s; }
 .note-toggle:hover { border-color: var(--warn-label-hover); background: var(--warn-label-hover); }
 .note-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Only ever shown while a note is open, so the glyph is always "stop". */
 .note-toggle-glyph { width: 9px; height: 9px; border-radius: 1.5px; background: currentcolor; }
-/* Not yet noting: the glyph reads as "start" rather than "stop". */
-.note-toggle[aria-pressed='false'] { background: transparent; color: var(--warn-label); }
-.note-toggle[aria-pressed='false']:hover { background: var(--control-bg); }
-.note-toggle[aria-pressed='false'] .note-toggle-glyph { border-radius: 50%; }
 
 /* Notes row (marks-e5): a third capture row, worded like the two above it. */
 .srow-note { gap: 8px; }

@@ -21,7 +21,11 @@ import { NotationRibbon } from './notationRibbon';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
 
-/** The open span's length re-renders once per second, like the timer. */
+/**
+ * The ribbon re-renders once per second, like the timer. It has to: the track is
+ * scaled to elapsed time, so *every* span slides left as the recording grows —
+ * not just an open one, whose length is also counting up.
+ */
 const TICK_MS = 1000;
 
 /** How long typing settles before the name is written. Keystrokes are cheap; writes are not. */
@@ -123,7 +127,7 @@ export class RecordingNotesView {
     this.runningSince =
       phase === 'recording' && session?.paused !== true ? (session?.runningSince ?? null) : null;
     this.render();
-    if (this.runningSince != null && this.hasOpenSpan()) this.start();
+    if (this.shouldTick()) this.start();
     else this.stop();
   }
 
@@ -133,7 +137,7 @@ export class RecordingNotesView {
     // An edited span can disappear underneath the editor (deleted elsewhere).
     if (this.editingId && !notations.some((n) => n.id === this.editingId)) this.closeEditor();
     this.render();
-    if (this.runningSince != null && this.hasOpenSpan()) this.start();
+    if (this.shouldTick()) this.start();
     else this.stop();
   }
 
@@ -159,13 +163,14 @@ export class RecordingNotesView {
     void this.actions.save(open.id, value);
   }
 
+  /** The ribbon only moves while the run is live and there is something on it. */
+  private shouldTick(): boolean {
+    return this.runningSince != null && this.notations.length > 0;
+  }
+
   /** True when the shortcut/toggle would end rather than start a note. */
   private openSpan(): RecordingNotation | undefined {
     return this.notations.find((notation) => notation.tEndMs == null);
-  }
-
-  private hasOpenSpan(): boolean {
-    return this.openSpan() != null;
   }
 
   private elapsedMs(): number {
@@ -255,6 +260,10 @@ export class RecordingNotesView {
       if (this.el.heldText) this.el.heldText.textContent = open.text;
     }
     if (this.el.toggle) {
+      // Only ever ends a note: the design has no "start" state for this button,
+      // and an idle dot beside the track reads as a record control. Starting a
+      // note belongs to the row below and to ⌥M.
+      this.el.toggle.hidden = !open;
       this.el.toggle.setAttribute('aria-pressed', open ? 'true' : 'false');
       this.el.toggle.title = open ? 'End this note (⌥M)' : 'Start a note (⌥M)';
       const label = this.el.toggle.querySelector('[data-note-toggle-label]');
