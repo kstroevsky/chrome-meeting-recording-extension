@@ -68,7 +68,7 @@ export class RecordingHistoryService {
       if (!current || current.deletedAt) return current;
       const files = remoteTargets
         ? current.files.map((file) => file.driveFileId && renamedFileIds.has(file.driveFileId)
-          ? { ...file, filename: buildRenamedRecordingFilename(trimmed, file.stream, file.filename) }
+          ? { ...file, filename: buildRenamedRecordingFilename(trimmed, file.stream, file.filename, file.kind) }
           : file)
         : current.files;
       return {
@@ -94,7 +94,7 @@ export class RecordingHistoryService {
     return [
       ...remoteFiles.map((file) => ({
         id: file.driveFileId!,
-        name: buildRenamedRecordingFilename(title, file.stream, file.filename),
+        name: buildRenamedRecordingFilename(title, file.stream, file.filename, file.kind),
       })),
       { id: entry.driveFolderId, name: slug },
     ];
@@ -171,7 +171,11 @@ export class RecordingHistoryService {
       if (current?.deletedAt) return current;
       if (!current) return createEntryFromUploadJob(job);
       const files = current.files.map((file) => {
-        const update = job.files.find((candidate) => candidate.stream === file.stream);
+        // Matched on stream *and* kind: the notes sidecar rides a media stream,
+        // so matching on stream alone handed the media row the sidecar's Drive
+        // id — and the rename then renamed the sidecar as if it were the media.
+        const update = job.files.find((candidate) =>
+          candidate.stream === file.stream && (candidate.kind ?? null) === (file.kind ?? null));
         if (!update) return file;
         if (update.status === 'uploaded') {
           return {
@@ -206,11 +210,28 @@ export class RecordingHistoryService {
         if (file.destination === 'local' && file.status === 'available') return file;
         return { ...file, destination: 'local' as const, status: 'pending' as const };
       });
+      // A job file with no row yet — the sidecar, which is created during the
+      // run rather than at finalize — becomes its own row instead of vanishing.
+      const extra = job.files
+        .filter((candidate) => candidate.kind === 'notes'
+          && !files.some((file) => file.kind === 'notes'))
+        .map((candidate) => ({
+          id: `${historyId}:notes`,
+          stream: candidate.stream,
+          kind: 'notes' as const,
+          filename: candidate.filename,
+          destination: candidate.status === 'uploaded' ? 'drive' as const : 'local' as const,
+          status: candidate.status === 'uploaded' ? 'available' as const : 'pending' as const,
+          bytes: candidate.bytes,
+          driveFileId: candidate.driveFileId,
+          webViewLink: candidate.webViewLink,
+        }));
+
       return {
         ...current,
         storageMode: 'drive',
-        files,
-        status: summarize(files),
+        files: [...files, ...extra],
+        status: summarize([...files, ...extra]),
         ...(job.driveFolderId ? { driveFolderId: job.driveFolderId } : {}),
         ...(job.driveFolderName ? { driveFolderName: job.driveFolderName } : {}),
         ...(job.folderWebViewLink ? { folderWebViewLink: job.folderWebViewLink } : {}),
@@ -268,8 +289,12 @@ function createEntry(historyId: string, files: PendingFile[], storageMode: Stora
 function createEntryFromUploadJob(job: UploadJob): RecordingHistoryEntry {
   const historyId = job.historyId!;
   const files = job.files.map((file) => ({
-    id: `${historyId}:${file.stream}`,
+    // The sidecar rides a media stream so the upload can order it, so it cannot
+    // be keyed by that stream: it would collide with the real file of the same
+    // stream, and its own `kind` has to survive for the rename to name it.
+    id: file.kind === 'notes' ? `${historyId}:notes` : `${historyId}:${file.stream}`,
     stream: file.stream,
+    ...(file.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename: file.filename,
     destination: file.status === 'uploaded' || file.status === 'retry-pending' || job.status === 'uploading' ? 'drive' as const : 'local' as const,
     status: file.status === 'uploaded' ? 'available' as const : file.status === 'unavailable' ? 'unavailable' as const : 'pending' as const,
