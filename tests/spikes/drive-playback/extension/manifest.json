@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Drive playback spike (throwaway)",
+  "version": "0.0.1",
+  "description": "ADR-0006 spike: prove DNR-authorized <video> + Range seeking against real Drive.",
+  "permissions": ["declarativeNetRequestWithHostAccess"],
+  "host_permissions": ["https://www.googleapis.com/*", "http://127.0.0.1/*"],
+  "background": { "service_worker": "sw.js" }
+}
