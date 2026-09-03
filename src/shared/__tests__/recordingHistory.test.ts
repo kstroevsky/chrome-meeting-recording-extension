@@ -27,7 +27,17 @@ describe('recording history durable-data boundaries', () => {
       createdAt: 1,
       storageMode: 'drive',
       status: 'complete',
-      files: [{ id: 'recording:1:tab', stream: 'tab', filename: 'standup.webm', destination: 'drive', status: 'available', driveFileId: 'drive-1' }],
+      files: [{
+        id: 'recording:1:tab',
+        stream: 'tab',
+        filename: 'standup.webm',
+        mimeType: 'video/webm',
+        locations: [{ kind: 'drive', fileId: 'drive-1' }],
+        delivery: { requested: 'drive', status: 'uploaded' },
+        destination: 'drive',
+        status: 'available',
+        driveFileId: 'drive-1',
+      }],
     });
   });
 

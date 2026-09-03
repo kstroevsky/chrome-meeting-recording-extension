@@ -2,7 +2,10 @@ import type { DownloadSettledResult } from '../platform/chrome/downloads';
 import type { RecordingStream, StorageMode, UploadJob } from '../shared/recording';
 import { buildRenamedRecordingFilename, slugifyRecordingTitle } from '../shared/recording';
 import {
+  pendingArtifactFields,
   recordingLabelFromFilename,
+  upsertArtifactLocation,
+  type ArtifactDelivery,
   type RecordingHistoryCursor,
   type RecordingHistoryEntry,
   type RecordingHistoryFile,
@@ -158,7 +161,12 @@ export class RecordingHistoryService {
       if (!current) return createEntry(historyId, files, storageMode, this.now());
       const known = new Set(current.files.map((file) => file.id));
       const additions = files.filter((file) => !known.has(file.id))
-        .map((file) => ({ ...file, destination: storageMode, status: 'pending' as const }));
+        .map((file) => ({
+          ...file,
+          ...pendingArtifactFields(file.filename, storageMode),
+          destination: storageMode,
+          status: 'pending' as const,
+        }));
       return additions.length ? { ...current, files: [...current.files, ...additions], status: summarize([...current.files, ...additions]) } : current;
     });
   }
@@ -185,6 +193,16 @@ export class RecordingHistoryService {
             driveFileId: update.driveFileId,
             webViewLink: update.webViewLink,
             error: undefined,
+            // The Drive copy is a replica added alongside whatever already
+            // exists, not a reassignment of the file's one destination.
+            locations: update.driveFileId
+              ? upsertArtifactLocation(file.locations, {
+                  kind: 'drive',
+                  fileId: update.driveFileId,
+                  ...(update.webViewLink ? { webViewLink: update.webViewLink } : {}),
+                })
+              : file.locations,
+            delivery: { requested: file.delivery.requested, status: 'uploaded' as const },
           };
         }
         if (update.status === 'retry-pending') {
@@ -193,14 +211,21 @@ export class RecordingHistoryService {
             destination: 'drive' as const,
             status: 'pending' as const,
             error: update.error,
+            delivery: {
+              requested: file.delivery.requested,
+              status: 'pending' as const,
+              ...(update.error ? { error: update.error } : {}),
+            },
           };
         }
         if (update.status === 'unavailable') {
+          const unavailable = update.error ?? 'Recovery source is no longer available';
           return {
             ...file,
             destination: 'local' as const,
             status: 'unavailable' as const,
-            error: update.error ?? 'Recovery source is no longer available',
+            error: unavailable,
+            delivery: { requested: file.delivery.requested, status: 'failed' as const, error: unavailable },
           };
         }
         if (job.status === 'uploading') return file;
@@ -208,7 +233,14 @@ export class RecordingHistoryService {
         // previously confirmed local copy. First-attempt fallbacks wait for the
         // local-save lifecycle to settle their download id and availability.
         if (file.destination === 'local' && file.status === 'available') return file;
-        return { ...file, destination: 'local' as const, status: 'pending' as const };
+        // Drive failed; the local-save lifecycle decides whether this settles as
+        // `local-fallback` or `failed`, so delivery stays pending until then.
+        return {
+          ...file,
+          destination: 'local' as const,
+          status: 'pending' as const,
+          delivery: { ...file.delivery, status: 'pending' as const },
+        };
       });
       // A job file with no row yet — the sidecar, which is created during the
       // run rather than at finalize — becomes its own row instead of vanishing.
@@ -220,6 +252,17 @@ export class RecordingHistoryService {
           stream: candidate.stream,
           kind: 'notes' as const,
           filename: candidate.filename,
+          ...pendingArtifactFields(candidate.filename, 'drive'),
+          ...(candidate.status === 'uploaded' && candidate.driveFileId
+            ? {
+                locations: [{
+                  kind: 'drive' as const,
+                  fileId: candidate.driveFileId,
+                  ...(candidate.webViewLink ? { webViewLink: candidate.webViewLink } : {}),
+                }],
+                delivery: { requested: 'drive' as const, status: 'uploaded' as const },
+              }
+            : {}),
           destination: candidate.status === 'uploaded' ? 'drive' as const : 'local' as const,
           status: candidate.status === 'uploaded' ? 'available' as const : 'pending' as const,
           bytes: candidate.bytes,
@@ -253,15 +296,30 @@ export class RecordingHistoryService {
     await this.repository.update(historyId, (current) => {
       if (!current || current.deletedAt) return current;
       const status: RecordingHistoryFile['status'] = settled === 'complete' ? 'available' : 'unavailable';
-      const files = current.files.map((file) => file.stream === stream
-        ? {
-            ...file,
-            destination: 'local' as const,
-            status,
-            downloadId,
-            error: error ?? (status === 'unavailable' ? `Download ${settled}` : undefined),
-          }
-        : file);
+      const files = current.files.map((file) => {
+        if (file.stream !== stream) return file;
+        const failure = error ?? (status === 'unavailable' ? `Download ${settled}` : undefined);
+        // A Downloads copy is a replica. Whether it is the delivery the user
+        // asked for, or the fallback after Drive failed, is what `requested`
+        // decides — which is why `local-fallback` is not derivable from here alone.
+        const delivery: ArtifactDelivery = settled === 'complete'
+          ? {
+              requested: file.delivery.requested,
+              status: file.delivery.requested === 'drive' ? 'local-fallback' : 'downloaded',
+            }
+          : { requested: file.delivery.requested, status: 'failed', ...(failure ? { error: failure } : {}) };
+        return {
+          ...file,
+          destination: 'local' as const,
+          status,
+          downloadId,
+          error: failure,
+          locations: settled === 'complete' && downloadId != null
+            ? upsertArtifactLocation(file.locations, { kind: 'download', downloadId })
+            : file.locations,
+          delivery,
+        };
+      });
       return { ...current, files, status: summarize(files) };
     });
   }
@@ -275,7 +333,12 @@ export class RecordingHistoryService {
 }
 
 function createEntry(historyId: string, files: PendingFile[], storageMode: StorageMode, createdAt: number): RecordingHistoryEntry {
-  const nextFiles = files.map((file) => ({ ...file, destination: storageMode, status: 'pending' as const }));
+  const nextFiles = files.map((file) => ({
+    ...file,
+    ...pendingArtifactFields(file.filename, storageMode),
+    destination: storageMode,
+    status: 'pending' as const,
+  }));
   return {
     id: historyId,
     name: recordingLabelFromFilename(files[0]?.filename ?? 'Recording'),
@@ -296,6 +359,20 @@ function createEntryFromUploadJob(job: UploadJob): RecordingHistoryEntry {
     stream: file.stream,
     ...(file.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename: file.filename,
+    ...pendingArtifactFields(file.filename, 'drive'),
+    ...(file.status === 'uploaded' && file.driveFileId
+      ? {
+          locations: [{
+            kind: 'drive' as const,
+            fileId: file.driveFileId,
+            ...(file.webViewLink ? { webViewLink: file.webViewLink } : {}),
+          }],
+          delivery: { requested: 'drive' as const, status: 'uploaded' as const },
+        }
+      : {}),
+    ...(file.status === 'unavailable'
+      ? { delivery: { requested: 'drive' as const, status: 'failed' as const, ...(file.error ? { error: file.error } : {}) } }
+      : {}),
     destination: file.status === 'uploaded' || file.status === 'retry-pending' || job.status === 'uploading' ? 'drive' as const : 'local' as const,
     status: file.status === 'uploaded' ? 'available' as const : file.status === 'unavailable' ? 'unavailable' as const : 'pending' as const,
     bytes: file.bytes,

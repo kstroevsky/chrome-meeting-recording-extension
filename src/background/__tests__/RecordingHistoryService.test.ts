@@ -1,4 +1,5 @@
 import { RecordingHistoryService } from '../RecordingHistoryService';
+import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 
 class MemoryRepository {
@@ -271,8 +272,8 @@ describe('RecordingHistoryService', () => {
       id: 'r1', name: 'Default recording', createdAt: 1, storageMode: 'drive', status: 'partial',
       driveFolderId: 'folder-1', driveFolderName: 'default-recording',
       files: [
-        { id: 'r1:tab', stream: 'tab', filename: 'default-recording.webm', destination: 'drive', status: 'available', driveFileId: 'tab-1' },
-        { id: 'r1:mic', stream: 'mic', filename: 'default-mic.m4a', destination: 'local', status: 'available', downloadId: 7 },
+        historyFile({ id: 'r1:tab', stream: 'tab', filename: 'default-recording.webm', destination: 'drive', status: 'available', driveFileId: 'tab-1' }),
+        historyFile({ id: 'r1:mic', stream: 'mic', filename: 'default-mic.m4a', destination: 'local', status: 'available', downloadId: 7 }),
       ],
     });
 
@@ -294,7 +295,7 @@ describe('RecordingHistoryService', () => {
     const service = new RecordingHistoryService(repo, jest.fn(), () => 10, renameDrive);
     repo.entries.set('r1', {
       id: 'r1', name: 'Legacy recording', createdAt: 1, storageMode: 'drive', status: 'complete',
-      files: [{ id: 'r1:tab', stream: 'tab', filename: 'legacy-recording.webm', destination: 'drive', status: 'available', driveFileId: 'tab-1' }],
+      files: [historyFile({ id: 'r1:tab', stream: 'tab', filename: 'legacy-recording.webm', destination: 'drive', status: 'available', driveFileId: 'tab-1' })],
     });
 
     const renamed = await service.rename('r1', 'New display title');

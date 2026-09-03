@@ -1,4 +1,5 @@
 import { sendToBackground } from '../../shared/messages';
+import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 import { RecordingsController } from '../RecordingsController';
 import type { RecordingsView } from '../RecordingsView';
@@ -14,7 +15,7 @@ function entry(id: string, createdAt = 1): RecordingHistoryEntry {
     createdAt,
     storageMode: 'local',
     status: 'complete',
-    files: [{ id: `${id}:tab`, stream: 'tab', filename: `${id}.webm`, destination: 'local', status: 'available' }],
+    files: [historyFile({ id: `${id}:tab`, stream: 'tab', filename: `${id}.webm`, destination: 'local', status: 'available' })],
   };
 }
 

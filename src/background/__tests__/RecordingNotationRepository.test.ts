@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import { IDBFactory } from 'fake-indexeddb';
 
 import { RecordingNotationRepository } from '../RecordingNotationRepository';
@@ -14,7 +15,7 @@ const entry = (id: string, createdAt: number): RecordingHistoryEntry => ({
   createdAt,
   storageMode: 'local',
   status: 'complete',
-  files: [{ id: `${id}:tab`, stream: 'tab', filename: `${id}.webm`, destination: 'local', status: 'available' }],
+  files: [historyFile({ id: `${id}:tab`, stream: 'tab', filename: `${id}.webm`, destination: 'local', status: 'available' })],
 });
 
 describe('RecordingNotationRepository', () => {

@@ -4,8 +4,31 @@ import type {
   PopupPreviewShellState,
   PopupPreviewState,
 } from '../popupPreviewState';
-import type { RecordingStatusView, UploadJob } from '../../shared/recording';
-import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
+import type { RecordingStatusView, StorageMode, UploadJob } from '../../shared/recording';
+import { contentTypeForRecordingFilename } from '../../shared/recordingFormats';
+import {
+  deliveryFromLegacyFields,
+  locationsFromLegacyFields,
+  type RecordingHistoryEntry,
+  type RecordingHistoryFile,
+} from '../../shared/recordingHistory';
+
+/**
+ * Gallery fixtures are written in the pre-ADR-0006 single-destination shape.
+ * Filling the replica fields the same way a legacy row normalizes keeps the
+ * fixtures short and keeps them honest about what a migrated row looks like.
+ */
+function legacyFixtureFile(
+  file: Omit<RecordingHistoryFile, 'mimeType' | 'locations' | 'delivery'>,
+  requested: StorageMode,
+): RecordingHistoryFile {
+  return {
+    ...file,
+    mimeType: contentTypeForRecordingFilename(file.filename),
+    locations: locationsFromLegacyFields(file),
+    delivery: deliveryFromLegacyFields(file, requested),
+  };
+}
 
 export type PopupStoryGroup = 'Setup' | 'Permissions' | 'Recording' | 'Saving' | 'Library' | 'Overlays';
 
@@ -60,10 +83,10 @@ const savedRecording: RecordingHistoryEntry = {
   storageMode: 'drive',
   status: 'complete',
   files: [
-    { id: 'gallery-tab', stream: 'tab', filename: 'meeting-tab.webm', destination: 'drive', status: 'available', bytes: 181_000_000, webViewLink: 'https://drive.google.com/file/d/gallery-tab/view' },
-    { id: 'gallery-mic', stream: 'mic', filename: 'microphone.webm', destination: 'drive', status: 'available', bytes: 18_000_000, webViewLink: 'https://drive.google.com/file/d/gallery-mic/view' },
-    { id: 'gallery-camera', stream: 'self-video', filename: 'camera.webm', destination: 'drive', status: 'available', bytes: 49_000_000, webViewLink: 'https://drive.google.com/file/d/gallery-camera/view' },
-    { id: 'gallery-transcript', stream: 'tab', filename: 'transcript.vtt', destination: 'drive', status: 'available', bytes: 84_000, webViewLink: 'https://drive.google.com/file/d/gallery-transcript/view' },
+    legacyFixtureFile({ id: 'gallery-tab', stream: 'tab', filename: 'meeting-tab.webm', destination: 'drive', status: 'available', bytes: 181_000_000, webViewLink: 'https://drive.google.com/file/d/gallery-tab/view' }, 'drive'),
+    legacyFixtureFile({ id: 'gallery-mic', stream: 'mic', filename: 'microphone.webm', destination: 'drive', status: 'available', bytes: 18_000_000, webViewLink: 'https://drive.google.com/file/d/gallery-mic/view' }, 'drive'),
+    legacyFixtureFile({ id: 'gallery-camera', stream: 'self-video', filename: 'camera.webm', destination: 'drive', status: 'available', bytes: 49_000_000, webViewLink: 'https://drive.google.com/file/d/gallery-camera/view' }, 'drive'),
+    legacyFixtureFile({ id: 'gallery-transcript', stream: 'tab', filename: 'transcript.vtt', destination: 'drive', status: 'available', bytes: 84_000, webViewLink: 'https://drive.google.com/file/d/gallery-transcript/view' }, 'drive'),
   ],
 };
 
@@ -75,7 +98,7 @@ const designSync: RecordingHistoryEntry = {
   storageMode: 'local',
   status: 'complete',
   files: [
-    { id: 'gallery-design-tab', stream: 'tab', filename: 'design-sync.webm', destination: 'local', status: 'available', bytes: 122_000_000, downloadId: 1 },
+    legacyFixtureFile({ id: 'gallery-design-tab', stream: 'tab', filename: 'design-sync.webm', destination: 'local', status: 'available', bytes: 122_000_000, downloadId: 1 }, 'local'),
   ],
 };
 
