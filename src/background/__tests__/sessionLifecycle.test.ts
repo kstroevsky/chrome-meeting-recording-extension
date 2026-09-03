@@ -133,7 +133,58 @@ describe('registerSaveHandler', () => {
     await flushMicrotasks();
 
     expect(downloadFile).toHaveBeenCalledTimes(1);
-    expect(history.localSaveSettled).toHaveBeenCalledWith('recording:1', 'tab', 1, 'complete');
+    expect(history.localSaveSettled).toHaveBeenCalledWith('recording:1', 'tab', 1, 'complete', undefined, undefined);
+  });
+
+  /**
+   * ADR-0005: the notes sidecar rides a media stream, so `stream` alone cannot
+   * identify it. Dropping `kind` on this path made the sidecar collide with the
+   * media row — and `createPending` skips a known id, so the recording itself
+   * vanished from history.
+   */
+  it('gives the notes sidecar its own row instead of colliding with its media stream', async () => {
+    const history = {
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+    };
+    registerSaveHandler(offscreen, L, history);
+
+    // sortArtifacts delivers the sidecar first, then the media file.
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', kind: 'notes', filename: 'demo.vtt', blobUrl: 'blob:1' });
+    await flushMicrotasks();
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', filename: 'demo-recording.webm', blobUrl: 'blob:2' });
+    await flushMicrotasks();
+
+    expect(history.createPending).toHaveBeenNthCalledWith(
+      1,
+      'recording:1',
+      [{ id: 'recording:1:notes', stream: 'tab', kind: 'notes', filename: 'demo.vtt' }],
+      'local',
+    );
+    expect(history.createPending).toHaveBeenNthCalledWith(
+      2,
+      'recording:1',
+      [{ id: 'recording:1:tab', stream: 'tab', filename: 'demo-recording.webm' }],
+      'local',
+    );
+  });
+
+  it('settles each artifact against its own row, carrying kind through', async () => {
+    const history = {
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+    };
+    registerSaveHandler(offscreen, L, history);
+
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', kind: 'notes', filename: 'demo.vtt', blobUrl: 'blob:1' });
+    await flushMicrotasks();
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', filename: 'demo-recording.webm', blobUrl: 'blob:2' });
+    await flushMicrotasks();
+
+    expect(history.localSaveSettled).toHaveBeenNthCalledWith(1, 'recording:1', 'tab', 1, 'complete', undefined, 'notes');
+    expect(history.localSaveSettled).toHaveBeenNthCalledWith(2, 'recording:1', 'tab', 1, 'complete', undefined, undefined);
   });
 
   it('stamps the run duration onto the row it just created', async () => {

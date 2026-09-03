@@ -51,6 +51,8 @@ export type RecordingFinalizerDeps = {
 /** One local-download request with explicit artifact ownership. */
 export type LocalSaveRequest = RecordingArtifactContext & {
   stream: RecordingStream;
+  /** The notes sidecar rides a media stream, so `stream` alone cannot identify it. */
+  kind?: 'notes';
   filename: string;
   blobUrl: string;
   opfsFilename?: string;
@@ -140,7 +142,7 @@ export class RecordingFinalizer {
     }
 
     for (const entry of orderedArtifacts) {
-      this.saveArtifactLocally(entry.artifact, entry.stream, 'local', context);
+      this.saveArtifactLocally(entry.artifact, entry.stream, 'local', context, entry.kind);
     }
     logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
       durationMs: roundMs(nowMs() - startedAt),
@@ -166,6 +168,7 @@ export class RecordingFinalizer {
     stream: RecordingStream,
     reason: 'local' | 'fallback',
     context: RecordingArtifactContext,
+    kind?: 'notes',
   ) {
     const blobUrl = URL.createObjectURL(artifact.file);
     logPerf(this.deps.log, 'finalizer', 'local_save_requested', {
@@ -178,6 +181,7 @@ export class RecordingFinalizer {
       ...(context.historyId ? { historyId: context.historyId } : {}),
       ...(context.uploadJobId ? { uploadJobId: context.uploadJobId } : {}),
       stream,
+      ...(kind ? { kind } : {}),
       filename: artifact.filename,
       blobUrl,
       opfsFilename: artifact.opfsFilename,
@@ -247,11 +251,11 @@ export class RecordingFinalizer {
     const outcomes = await runWithConcurrency(
       artifacts,
       Math.min(PERF_FLAGS.parallelUploadConcurrency, 2),
-      async ({ artifact, stream }, index) => {
+      async ({ artifact, stream, kind }, index) => {
         const markFileDone = () => { loadedPerFile[index] = artifact.file.size; reportProgress(); };
         const startedAt = nowMs();
         if (sharedSetupError) {
-          if (!skipLocalFallback) this.saveArtifactLocally(artifact, stream, 'fallback', context);
+          if (!skipLocalFallback) this.saveArtifactLocally(artifact, stream, 'fallback', context, kind);
           markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, bytes: artifact.file.size, uploaded: false, error: sharedSetupError } satisfies UploadOutcome;
@@ -304,7 +308,7 @@ export class RecordingFinalizer {
             this.deps.warn('Retry upload failed; keeping the existing local copy', artifact.filename, error);
           } else {
             this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
-            this.saveArtifactLocally(artifact, stream, 'fallback', context);
+            this.saveArtifactLocally(artifact, stream, 'fallback', context, kind);
           }
           markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });

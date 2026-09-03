@@ -13,7 +13,7 @@ import {
 } from '../shared/recordingHistory';
 import type { RecordingHistoryRepositoryPort } from './RecordingHistoryRepository';
 
-type PendingFile = Pick<RecordingHistoryFile, 'id' | 'stream' | 'filename' | 'bytes'>;
+type PendingFile = Pick<RecordingHistoryFile, 'id' | 'stream' | 'kind' | 'filename' | 'bytes'>;
 type DriveRenameResource = { id: string; name: string };
 export type DriveRenameResult = {
   ok: boolean;
@@ -286,18 +286,25 @@ export class RecordingHistoryService {
     if (job.status !== 'uploading') await this.applyUploadJob(job);
   }
 
+  /**
+   * Settles one locally delivered artifact. `kind` is required to identify it:
+   * the notes sidecar rides a media stream (ADR-0005), so matching on `stream`
+   * alone hands the sidecar the media file's download — the same trap
+   * `applyUploadJob` already avoids by matching on stream *and* kind.
+   */
   async localSaveSettled(
     historyId: string,
     stream: RecordingStream,
     downloadId: number | undefined,
     settled: DownloadSettledResult,
     error?: string,
+    kind?: 'notes',
   ): Promise<void> {
     await this.repository.update(historyId, (current) => {
       if (!current || current.deletedAt) return current;
       const status: RecordingHistoryFile['status'] = settled === 'complete' ? 'available' : 'unavailable';
       const files = current.files.map((file) => {
-        if (file.stream !== stream) return file;
+        if (file.stream !== stream || (file.kind ?? null) !== (kind ?? null)) return file;
         const failure = error ?? (status === 'unavailable' ? `Download ${settled}` : undefined);
         // A Downloads copy is a replica. Whether it is the delivery the user
         // asked for, or the fallback after Drive failed, is what `requested`
