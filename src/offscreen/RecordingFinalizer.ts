@@ -53,7 +53,7 @@ export type RecordingFinalizerDeps = {
    * history row to retain against, such as legacy orphan recovery.
    */
   retainedMedia?: {
-    promote(stagingKey: string, recordingId: string, fileId: string, filename?: string): Promise<{ key: string }>;
+    promote(stagingKey: string, recordingId: string, fileId: string, filename?: string): Promise<{ key: string; file: File }>;
   };
 };
 
@@ -189,8 +189,11 @@ export class RecordingFinalizer {
     // Ownership transfers *before* delivery is attempted. That ordering is the
     // point: if the download then fails, the recording is still playable from
     // the library rather than being lost with the staging file.
-    const retainedKey = await this.promoteForRetention(artifact, stream, context, kind);
-    const blobUrl = URL.createObjectURL(artifact.file);
+    const retained = await this.promoteForRetention(artifact, stream, context, kind);
+    // From the *retained* File: promotion moved the bytes, which invalidates the
+    // File the sealed artifact is still holding.
+    const blobUrl = URL.createObjectURL(retained?.file ?? artifact.file);
+    const retainedKey = retained?.key;
     logPerf(this.deps.log, 'finalizer', 'local_save_requested', {
       filename: artifact.filename,
       artifactBytes: artifact.file.size,
@@ -220,7 +223,7 @@ export class RecordingFinalizer {
     stream: RecordingStream,
     context: RecordingArtifactContext,
     kind?: 'notes',
-  ): Promise<string | undefined> {
+  ): Promise<{ key: string; file: File } | undefined> {
     const stagingKey = artifact.opfsFilename;
     // No history row means nothing owns the bytes long-term (legacy orphan
     // recovery), and a memory-backed artifact has no staging file to promote.
@@ -229,7 +232,7 @@ export class RecordingFinalizer {
       const fileId = recordingHistoryFileId(context.historyId, stream, kind);
       const retained = await this.deps.retainedMedia.promote(stagingKey, context.historyId, fileId, artifact.filename);
       this.deps.log('Promoted to the retained library', retained.key);
-      return retained.key;
+      return retained;
     } catch (e) {
       this.deps.warn('Could not retain a playback copy; delivering without one', artifact.filename, describeRuntimeError(e));
       return undefined;

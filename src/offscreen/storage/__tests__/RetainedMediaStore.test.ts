@@ -28,7 +28,7 @@ describe('RetainedMediaStore.promote', () => {
     const { opfs, store } = make();
     opfs.seed(STAGING, 5_000);
 
-    await expect(promote(store)).resolves.toEqual({ kind: 'opfs', key: TARGET, retainedAt: 1_000 });
+    await expect(promote(store)).resolves.toMatchObject({ kind: 'opfs', key: TARGET, retainedAt: 1_000 });
     expect(opfs.snapshot()).toEqual({ [TARGET]: 5_000 });
   });
 
@@ -114,4 +114,22 @@ describe('RetainedMediaStore promotion fallback', () => {
     expect(opfs.snapshot()).toEqual({ [TARGET]: 5_000 });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('NotAllowedError'));
   });
+
+  /**
+   * The regression the unit suite missed and E2E caught: a `File` from a handle
+   * is tied to the underlying file, so `move()` invalidates the one the caller
+   * already had. Promotion must hand back a File read from the new location, or
+   * the object URL built from it yields a download that never completes.
+   */
+  it('returns a File read from the library, not the invalidated staging one', async () => {
+    const { opfs, store } = make();
+    opfs.seed(STAGING, 5_000);
+
+    const retained = await promote(store);
+
+    expect(retained.file.size).toBe(5_000);
+    expect(await opfs.read(TARGET)).toBeDefined();
+    expect(await opfs.read(STAGING)).toBeUndefined();
+  });
 });
+

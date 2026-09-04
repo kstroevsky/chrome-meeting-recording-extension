@@ -476,7 +476,8 @@ describe('RecordingFinalizer', () => {
    * playable recording.
    */
   describe('retention', () => {
-    const promoted = (key: string) => ({ promote: jest.fn().mockResolvedValue({ key }) });
+    const retainedFile = () => new File(['retained-bytes'], 'retained.webm', { type: 'video/webm' });
+    const promoted = (key: string) => ({ promote: jest.fn().mockResolvedValue({ key, file: retainedFile() }) });
 
     it('promotes before requesting the save, and reports where it landed', async () => {
       const retainedMedia = promoted('library/recording%3A1/recording%3A1%3Atab.webm');
@@ -497,6 +498,23 @@ describe('RecordingFinalizer', () => {
       }));
       expect(retainedMedia.promote.mock.invocationCallOrder[0])
         .toBeLessThan(deps.requestSave.mock.invocationCallOrder[0]);
+    });
+
+    it('builds the download URL from the retained File, not the moved-out staging one', async () => {
+      const file = retainedFile();
+      deps.retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/r/x.webm', file }) };
+      const stale = { ...makeArtifact('tab.webm'), opfsFilename: 'staging/tab.webm' };
+
+      await finalizer.finalize({
+        artifacts: [{ stream: 'tab', artifact: stale as any }],
+        storageMode: 'local',
+        historyId: 'recording:1',
+      } as any);
+
+      // Identity, not structural equality: two empty Files compare equal.
+      const passed = (URL.createObjectURL as jest.Mock).mock.calls[0][0];
+      expect(passed).toBe(file);
+      expect(passed).not.toBe(stale.file);
     });
 
     it('keys the notes sidecar separately from its media stream', async () => {
@@ -557,7 +575,7 @@ describe('RecordingFinalizer', () => {
 
     it('promotes the failed artifact before falling back to a local download', async () => {
       withFolder(); failUpload();
-      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Atab.webm' }) };
+      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Atab.webm', file: new File(['retained'], 'r.webm') }) };
       deps.retainedMedia = retainedMedia;
 
       await finalizer.finalize({
@@ -614,7 +632,7 @@ describe('RecordingFinalizer', () => {
 
     it('still falls back locally when the shared Drive setup dies before any upload', async () => {
       jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockRejectedValue(new Error('folder lookup failed'));
-      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Amic.webm' }) };
+      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Amic.webm', file: new File(['retained'], 'r.webm') }) };
       deps.retainedMedia = retainedMedia;
 
       await finalizer.finalize({

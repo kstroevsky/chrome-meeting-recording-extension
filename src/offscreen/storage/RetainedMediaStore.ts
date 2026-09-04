@@ -31,7 +31,13 @@ export class MissingArtifactError extends Error {
   }
 }
 
-export type RetainedMediaLocation = { kind: 'opfs'; key: OpfsKey; retainedAt: number };
+/**
+ * Includes the `File` deliberately. A `File` obtained from a handle is tied to
+ * the underlying file state, so `move()` invalidates the one the caller was
+ * holding — anything that reads the artifact after promotion must read it from
+ * its new home, not from the pre-move reference.
+ */
+export type RetainedMediaLocation = { kind: 'opfs'; key: OpfsKey; retainedAt: number; file: File };
 
 export type RetainedMediaStoreDeps = {
   getRoot: () => Promise<DirectoryHandleLike>;
@@ -66,11 +72,11 @@ export class RetainedMediaStore {
 
     // Already promoted: a previous run finished the move but may have died
     // before the metadata write. Report success so the caller can re-persist.
-    if (libraryFile && !stagingFile) return this.located(target);
+    if (libraryFile && !stagingFile) return this.located(target, libraryFile);
 
     if (!libraryFile && stagingFile) {
       await this.transfer(root, stagingKey, target);
-      return this.located(target);
+      return this.located(target, await this.requireFile(root, target));
     }
 
     if (libraryFile && stagingFile) {
@@ -79,14 +85,14 @@ export class RetainedMediaStore {
       // complete, and re-copy when it is short.
       if (libraryFile.size >= stagingFile.size) {
         await removeByKey(root, stagingKey);
-        return this.located(target);
+        return this.located(target, libraryFile);
       }
       this.deps.warn?.(
         `Retained copy of ${target} is short (${libraryFile.size} < ${stagingFile.size}); re-promoting from staging`,
       );
       await removeByKey(root, target);
       await this.transfer(root, stagingKey, target);
-      return this.located(target);
+      return this.located(target, await this.requireFile(root, target));
     }
 
     throw new MissingArtifactError(stagingKey, target);
@@ -97,8 +103,14 @@ export class RetainedMediaStore {
     await removeByKey(await this.deps.getRoot(), key);
   }
 
-  private located(key: OpfsKey): RetainedMediaLocation {
-    return { kind: 'opfs', key, retainedAt: this.now() };
+  private located(key: OpfsKey, file: File): RetainedMediaLocation {
+    return { kind: 'opfs', key, retainedAt: this.now(), file };
+  }
+
+  private async requireFile(root: DirectoryHandleLike, key: OpfsKey): Promise<File> {
+    const file = await readFileByKey(root, key);
+    if (!file) throw new Error(`Promoted ${key} but could not read it back`);
+    return file;
   }
 
   /**
