@@ -216,3 +216,48 @@ button { -webkit-font-smoothing: antialiased; }
    the matched substring in gold. */
 .recording-day--match .recording-day__label { color: var(--muted); letter-spacing: .12em; }
 .recording-row__hit { color: var(--detail); font-weight: 600; }
+
+/* ── Player (design card f12: picture controls, no transcript rail) ──────────
+   The rail is absent rather than hidden when a recording has no transcript, so
+   the picture takes the full width. Colours on the picture are fixed rather
+   than tokenised: they sit on video, not on the page surface. */
+.player-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 22px; background: var(--overlay); }
+.player { width: min(760px, calc(100vw - 44px)); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--modal-shadow); overflow: hidden; }
+
+.player__header { display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 12px 0 8px; }
+.player__title { flex: 1; min-width: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player__divider { width: 1px; height: 16px; background: var(--divider); flex-shrink: 0; }
+.player__date { flex-shrink: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; color: var(--muted); letter-spacing: .1em; }
+.player__icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--detail); cursor: pointer; flex-shrink: 0; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__icon:hover { background: var(--field); }
+.player__close { flex-shrink: 0; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; transition: color 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__close:hover { color: var(--body); }
+
+.player__stage { position: relative; height: 376px; border-top: 1px solid var(--divider); background: #1c1a17; overflow: hidden; }
+.player__video { width: 100%; height: 100%; object-fit: contain; background: #1c1a17; display: block; }
+.player__scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 148px; pointer-events: none; background: linear-gradient(rgba(10, 9, 8, 0) 0%, rgba(10, 9, 8, .56) 48%, rgba(10, 9, 8, .88) 100%); }
+.player__stage--quiet .player__scrub, .player__stage--quiet .player__controls { opacity: .35; pointer-events: none; }
+.player__status { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; padding: 0 40px; text-align: center; font-size: 12.5px; line-height: 1.5; color: #e6ded0; background: rgba(10, 9, 8, .72); }
+
+/* Scrubber: a 16px hit zone around a 5px rail, so a note mark is hittable. */
+.player__scrub { position: absolute; left: 12px; right: 12px; bottom: 38px; }
+.player__hit { position: relative; display: block; height: 16px; cursor: pointer; }
+.player__hit:focus-visible { outline: 2px solid #f2ede3; outline-offset: 2px; border-radius: 3px; }
+.player__track { position: absolute; left: 0; right: 0; top: 5.5px; height: 5px; border-radius: 2px; background: rgba(250, 248, 244, .26); }
+.player__played { position: absolute; left: 0; top: 0; height: 100%; border-radius: 2px; background: #faf8f4; }
+.player__marks { position: absolute; inset: 0; }
+.player__mark { position: absolute; top: 0; height: 100%; border-radius: 2px; background: var(--detail); cursor: pointer; }
+.player__mark--unnamed { background: rgba(250, 248, 244, .5); }
+.player__playhead { position: absolute; top: -4px; width: 4px; height: 13px; margin-left: -2px; border-radius: 2px; background: #faf8f4; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+
+.player__controls { position: absolute; left: 12px; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.player__play { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: #faf8f4; color: #1c1a17; cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__play:hover { background: #fff; }
+.player__clock { flex: 1; min-width: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: #e6ded0; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.player__icon--on-picture { background: rgba(250, 248, 244, .1); color: #f2ede3; }
+.player__icon--on-picture:hover { background: rgba(250, 248, 244, .18); }
+.player__play:focus-visible, .player__icon:focus-visible, .player__close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.player__icon--on-picture:focus-visible { outline-color: #f2ede3; }
+.recording-row__play { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1), color 160ms cubic-bezier(.32, .72, 0, 1); }
+.recording-row__play:hover { background: var(--field); color: var(--detail); }
+.recording-row__play:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

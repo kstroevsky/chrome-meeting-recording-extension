@@ -17,6 +17,7 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
     remove: (id) => void controller.remove(id),
     removeMany: (ids) => void controller.removeMany(ids),
     openLocal: (recordingId, fileId) => void controller.openLocal(recordingId, fileId),
+    play: (recordingId) => void controller.play(recordingId),
     loadMore: () => void controller.loadMore(),
   });
   controller = new RecordingsController(view);
