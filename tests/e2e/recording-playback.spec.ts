@@ -173,5 +173,57 @@ test.describe('recording playback (integration)', () => {
       await closeHarness(harness);
     }
   });
+
+  test('drives the player from the keyboard (design f19)', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'off', recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(2_500);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
+        timeout: 20_000,
+      }).toBeGreaterThanOrEqual(1);
+
+      // Space plays, space pauses.
+      await page.keyboard.press('Space');
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused), {
+        timeout: 10_000,
+      }).toBe(false);
+      await page.keyboard.press('Space');
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
+
+      // L steps the speed up the ladder; J steps back.
+      await page.keyboard.press('l');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.playbackRate)).toBe(1.25);
+      await page.keyboard.press('j');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.playbackRate)).toBe(1);
+
+      // M mutes and unmutes.
+      await page.keyboard.press('m');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.muted)).toBe(true);
+      await page.keyboard.press('m');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.muted)).toBe(false);
+
+      // Escape closes when not in fullscreen.
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.player')).toHaveCount(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
 });
 

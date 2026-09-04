@@ -13,6 +13,7 @@ import { isStreamableSource, masterTrack, type PlaybackManifest, type PlaybackTr
 import { resolveTrackSource, type SourceResolverDeps } from './playbackSource';
 import { PlayerView } from './PlayerView';
 import { PlaybackClock } from './PlaybackClock';
+import { adjacentNoteStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
@@ -29,6 +30,7 @@ export class PlayerController {
   private auxRevokes: Array<() => void> = [];
   private clock: PlaybackClock | null = null;
   private driftTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly onKeyDown = (event: KeyboardEvent) => this.handleKey(event);
   private manifest: PlaybackManifest | null = null;
   private track: PlaybackTrack | null = null;
   /** One recovery attempt per open — see `onMediaError`. */
@@ -37,11 +39,65 @@ export class PlayerController {
   constructor(private readonly deps: PlayerControllerDeps) {
     this.view = new PlayerView({
       close: () => this.close(),
-      seekTo: (ms) => { this.clock ? this.clock.seek(ms) : (this.view.video.currentTime = ms / 1000); },
+      seekTo: (ms) => this.seek(ms),
       togglePlay: () => { void this.togglePlay(); },
       toggleFullscreen: () => { void this.toggleFullscreen(); },
     });
     this.bindMedia();
+    // Bound on the document rather than the dialog: the shortcuts should work
+    // wherever focus happens to sit inside the modal.
+    document.addEventListener('keydown', this.onKeyDown);
+  }
+
+  private handleKey(event: KeyboardEvent): void {
+    const action = resolvePlayerAction(event, { inField: isFieldTarget(event.target) });
+    if (!action) return;
+    event.preventDefault();
+    void this.dispatch(action);
+  }
+
+  private async dispatch(action: PlayerAction): Promise<void> {
+    const video = this.view.video;
+    switch (action.kind) {
+      case 'play-pause': return void this.togglePlay();
+      case 'skip': return this.seek((video.currentTime + action.seconds) * 1000);
+      case 'speed': {
+        const rate = nextSpeed(video.playbackRate, action.direction);
+        this.clock ? this.clock.setPlaybackRate(rate) : (video.playbackRate = rate);
+        return;
+      }
+      case 'volume': {
+        // Volume rides on the master; auxiliaries keep their own levels, which
+        // is what the design's per-track faders adjust.
+        video.volume = Math.min(1, Math.max(0, video.volume + action.direction * 0.1));
+        return;
+      }
+      case 'mute': {
+        const muted = !video.muted;
+        video.muted = muted;
+        // The camera track is muted by construction and must stay that way.
+        this.view.micAudio.muted = muted;
+        return;
+      }
+      case 'note': {
+        const starts = (this.manifest?.notations ?? []).map((note) => note.tStartMs);
+        const target = adjacentNoteStart(starts, video.currentTime * 1000, action.direction);
+        if (target != null) this.seek(target);
+        return;
+      }
+      case 'fullscreen': return void this.toggleFullscreen();
+      case 'escape': {
+        // Escape leaves fullscreen first, and only closes once out of it.
+        if (document.fullscreenElement) { await document.exitFullscreen().catch(() => {}); return; }
+        this.close();
+        return;
+      }
+    }
+  }
+
+  private seek(ms: number): void {
+    if (this.clock) this.clock.seek(ms);
+    else this.view.video.currentTime = Math.max(0, ms / 1000);
   }
 
   get element(): HTMLElement { return this.view.overlay; }
@@ -189,6 +245,7 @@ export class PlayerController {
   }
 
   close(): void {
+    document.removeEventListener('keydown', this.onKeyDown);
     this.reset();
     this.element.remove();
   }
