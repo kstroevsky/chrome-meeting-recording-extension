@@ -557,5 +557,32 @@ describe('RecordingHistoryService artifact replicas', () => {
     });
     expect(byId.get('r1:tab')).toMatchObject({ locations: [], delivery: { status: 'pending' } });
   });
+
+  it('drops only the named retained replica, keeping the row and its other copies', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+    await service.recordArtifactLocation('r1', 'r1:tab', { kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 5 });
+    await service.applyUploadJob(uploadJob());
+
+    await service.dropArtifactLocation('r1', 'r1:tab', 'library/r1/tab.webm');
+
+    // The Drive replica still makes this recording reachable, so the row stays.
+    expect((await repo.get('r1'))!.files[0].locations).toEqual([{ kind: 'drive', fileId: 'd1' }]);
+  });
+
+  it('does not resurrect a tombstoned row when a replica is recorded or dropped', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+    await service.remove('r1');
+
+    await service.recordArtifactLocation('r1', 'r1:tab', { kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 5 });
+    await service.dropArtifactLocation('r1', 'r1:tab', 'library/r1/tab.webm');
+
+    const entry = (await repo.get('r1'))!;
+    expect(entry.deletedAt).toBe(10);
+    expect(entry.files[0].locations).toEqual([]);
+  });
 });
 

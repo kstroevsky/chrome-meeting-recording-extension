@@ -353,6 +353,21 @@ export class RecordingHistoryService {
     });
   }
 
+  /**
+   * Removes one replica claim. Used when a retained file turns out to be gone:
+   * the claim is dropped, never the row, because another replica (Drive, or a
+   * Downloads copy) may still make the recording reachable.
+   */
+  async dropArtifactLocation(historyId: string, fileId: string, key: string): Promise<void> {
+    await this.repository.update(historyId, (current) => {
+      if (!current || current.deletedAt) return current;
+      const files = current.files.map((file) => file.id === fileId
+        ? { ...file, locations: file.locations.filter((location) => !(location.kind === 'opfs' && location.key === key)) }
+        : file);
+      return { ...current, files };
+    });
+  }
+
   async openLocalFile(recordingId: string, fileId: string): Promise<void> {
     const entry = await this.repository.get(recordingId);
     const file = entry && !entry.deletedAt ? entry.files.find((candidate) => candidate.id === fileId) : undefined;

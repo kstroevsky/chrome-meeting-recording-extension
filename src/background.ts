@@ -53,8 +53,9 @@ const offscreen = new OffscreenManager();
 // Notations are their own aggregate in the same database (ADR-0005), so they
 // are constructed first: history delegates its dependent cleanup to them.
 const notations = new RecordingNotationService(new RecordingNotationRepository());
+const historyRepository = new RecordingHistoryRepository();
 const history = new RecordingHistoryService(
-  new RecordingHistoryRepository(),
+  historyRepository,
   openDownloadedFile,
   Date.now,
   async (resources) => {
@@ -62,6 +63,10 @@ const history = new RecordingHistoryService(
     return await offscreen.rpc({ type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES', resources });
   },
   (id) => notations.removeAll(id),
+  async (keys) => {
+    const root = await navigator.storage.getDirectory();
+    for (const key of keys) await removeByKey(root, key);
+  },
 );
 const telemetry = new TelemetryRuntime();
 

@@ -2,6 +2,7 @@
 import { createFakeOpfs } from '../../../../tests/helpers/fakeOpfs';
 import {
   existsByKey,
+  listLibraryFiles,
   filenameFromKey,
   isLegacyRootKey,
   libraryKey,
@@ -68,8 +69,8 @@ describe('listFiles', () => {
 
     const listed = await listFiles(opfs.root, 'staging');
     expect(listed).toEqual([
-      { key: 'staging/a.webm', name: 'a.webm', lastModifiedMs: 111 },
-      { key: 'staging/b.webm', name: 'b.webm', lastModifiedMs: 222 },
+      { key: 'staging/a.webm', name: 'a.webm', lastModifiedMs: 111, sizeBytes: 1 },
+      { key: 'staging/b.webm', name: 'b.webm', lastModifiedMs: 222, sizeBytes: 2 },
     ]);
   });
 
@@ -84,11 +85,33 @@ describe('listFiles', () => {
     opfs.seed('library/r/retained.webm', 2);
 
     expect(await listFiles(opfs.root, '')).toEqual([
-      { key: 'legacy-orphan.webm', name: 'legacy-orphan.webm', lastModifiedMs: 333 },
+      { key: 'legacy-orphan.webm', name: 'legacy-orphan.webm', lastModifiedMs: 333, sizeBytes: 9 },
     ]);
   });
 
   it('returns nothing for a directory that does not exist yet', async () => {
     expect(await listFiles(createFakeOpfs().root, 'staging')).toEqual([]);
+  });
+});
+
+describe('listLibraryFiles', () => {
+  it('lists every retained file across recordings', async () => {
+    const opfs = createFakeOpfs();
+    opfs.seed('library/recording%3A1/recording%3A1%3Atab.webm', 10, 111);
+    opfs.seed('library/recording%3A1/recording%3A1%3Amic.webm', 20, 222);
+    opfs.seed('library/recording%3A2/recording%3A2%3Atab.webm', 30, 333);
+    opfs.seed('staging/in-flight.webm', 1);
+    opfs.seed('legacy.webm', 2);
+
+    const listed = (await listLibraryFiles(opfs.root)).map((entry) => entry.key).sort();
+    expect(listed).toEqual([
+      'library/recording%3A1/recording%3A1%3Amic.webm',
+      'library/recording%3A1/recording%3A1%3Atab.webm',
+      'library/recording%3A2/recording%3A2%3Atab.webm',
+    ]);
+  });
+
+  it('returns nothing before anything has been retained', async () => {
+    expect(await listLibraryFiles(createFakeOpfs().root)).toEqual([]);
   });
 });

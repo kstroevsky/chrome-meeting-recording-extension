@@ -33,7 +33,7 @@ const withRetained = (locations: unknown[] = []) => {
 
 function makeDeps(over: Partial<RetainedMediaReconcilerDeps> = {}): RetainedMediaReconcilerDeps {
   return {
-    listRetained: jest.fn(async () => [{ key: KEY, name: 'x.webm', lastModifiedMs: NOW - 1000 }]),
+    listRetained: jest.fn(async () => [{ key: KEY, name: 'x.webm', lastModifiedMs: NOW - 1000, sizeBytes: 1 }]),
     getEntry: jest.fn(async () => entry()),
     listLiveEntries: jest.fn(async () => []),
     exists: jest.fn(async () => true),
@@ -73,7 +73,7 @@ describe('reconcileRetainedMedia', () => {
     it('waits out the grace period rather than deleting a promotion in flight', async () => {
       const deps = makeDeps({
         getEntry: jest.fn(async () => undefined),
-        listRetained: jest.fn(async () => [{ key: KEY, name: 'x.webm', lastModifiedMs: NOW - 1000 }]),
+        listRetained: jest.fn(async () => [{ key: KEY, name: 'x.webm', lastModifiedMs: NOW - 1000, sizeBytes: 1 }]),
       });
       await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ deferred: 1, collected: 0 });
       expect(deps.removeRetained).not.toHaveBeenCalled();
@@ -83,7 +83,7 @@ describe('reconcileRetainedMedia', () => {
       const deps = makeDeps({
         getEntry: jest.fn(async () => undefined),
         listRetained: jest.fn(async () => [
-          { key: KEY, name: 'x.webm', lastModifiedMs: NOW - DEFAULT_ORPHAN_GRACE_MS - 1 },
+          { key: KEY, name: 'x.webm', lastModifiedMs: NOW - DEFAULT_ORPHAN_GRACE_MS - 1, sizeBytes: 1 },
         ]),
       });
       await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ collected: 1 });
@@ -93,7 +93,7 @@ describe('reconcileRetainedMedia', () => {
       const deps = makeDeps({
         getEntry: jest.fn(async () => entry({ files: [] })),
         listRetained: jest.fn(async () => [
-          { key: KEY, name: 'x.webm', lastModifiedMs: NOW - DEFAULT_ORPHAN_GRACE_MS - 1 },
+          { key: KEY, name: 'x.webm', lastModifiedMs: NOW - DEFAULT_ORPHAN_GRACE_MS - 1, sizeBytes: 1 },
         ]),
       });
       await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ collected: 1 });
@@ -102,7 +102,7 @@ describe('reconcileRetainedMedia', () => {
     it('does not mistake a stray non-library path for owned media', async () => {
       const deps = makeDeps({
         listRetained: jest.fn(async () => [
-          { key: 'library/junk.webm', name: 'junk.webm', lastModifiedMs: NOW - DEFAULT_ORPHAN_GRACE_MS - 1 },
+          { key: 'library/junk.webm', name: 'junk.webm', lastModifiedMs: NOW - DEFAULT_ORPHAN_GRACE_MS - 1, sizeBytes: 1 },
         ]),
       });
       await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ collected: 1 });
@@ -137,8 +137,8 @@ describe('reconcileRetainedMedia', () => {
     const other = libraryKey('recording:2', 'recording:2:tab', 'b.webm');
     const deps = makeDeps({
       listRetained: jest.fn(async () => [
-        { key: KEY, name: 'a.webm', lastModifiedMs: NOW - 1 },
-        { key: other, name: 'b.webm', lastModifiedMs: NOW - 1 },
+        { key: KEY, name: 'a.webm', lastModifiedMs: NOW - 1, sizeBytes: 1 },
+        { key: other, name: 'b.webm', lastModifiedMs: NOW - 1, sizeBytes: 1 },
       ]),
       getEntry: jest.fn(async (id: string) => {
         if (id === HISTORY) throw new Error('IndexedDB unavailable');

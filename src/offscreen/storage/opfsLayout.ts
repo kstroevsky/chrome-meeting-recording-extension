@@ -136,7 +136,7 @@ export async function removeByKey(root: DirectoryHandleLike, key: OpfsKey): Prom
   }
 }
 
-export type OpfsEntry = { key: OpfsKey; name: string; lastModifiedMs: number };
+export type OpfsEntry = { key: OpfsKey; name: string; lastModifiedMs: number; sizeBytes: number };
 
 /**
  * Lists the files directly inside one directory. `prefix` is '' for the root.
@@ -158,13 +158,40 @@ export async function listFiles(root: DirectoryHandleLike, prefix: OpfsKey | '')
     for await (const name of names) {
       try {
         const file = await (await dir.getFileHandle(name)).getFile();
-        entries.push({ key: prefix ? `${prefix}/${name}` : name, name, lastModifiedMs: file.lastModified });
+        entries.push({
+          key: prefix ? `${prefix}/${name}` : name,
+          name,
+          lastModifiedMs: file.lastModified,
+          sizeBytes: file.size,
+        });
       } catch {
         // A directory entry, or a file locked by an active sync-access handle.
       }
     }
   } catch {
     /* OPFS unavailable */
+  }
+  return entries;
+}
+
+/**
+ * Every file in the retained library. Two levels deep by construction, because
+ * that is exactly what `libraryKey` produces — this deliberately does not walk
+ * arbitrary depth, so an unexpected nesting shows up as unowned rather than
+ * being silently adopted.
+ */
+export async function listLibraryFiles(root: DirectoryHandleLike): Promise<OpfsEntry[]> {
+  let library: DirectoryHandleLike;
+  try {
+    library = await root.getDirectoryHandle(LIBRARY_DIR);
+  } catch {
+    return []; // nothing has been retained yet
+  }
+  const names = (library as { keys?: () => AsyncIterable<string> }).keys?.();
+  if (!names) return [];
+  const entries: OpfsEntry[] = [];
+  for await (const child of names) {
+    for (const file of await listFiles(root, `${LIBRARY_DIR}/${child}`)) entries.push(file);
   }
   return entries;
 }
