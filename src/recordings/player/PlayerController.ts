@@ -14,6 +14,7 @@ import { resolveTrackSource, type SourceResolverDeps } from './playbackSource';
 import { PlayerView } from './PlayerView';
 import { PlaybackClock } from './PlaybackClock';
 import { adjacentNoteStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
+import { describeTracks, toggleShown } from './playerTracks';
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
@@ -31,6 +32,11 @@ export class PlayerController {
   private clock: PlaybackClock | null = null;
   private driftTimer: ReturnType<typeof setInterval> | null = null;
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKey(event);
+  /** Which files are switched on; the rest stay listed but silent and hidden. */
+  private shown = new Set<string>();
+  private readonly levels = new Map<string, number>();
+  private readonly muted = new Set<string>();
+  private readonly elements = new Map<string, HTMLMediaElement>();
   private manifest: PlaybackManifest | null = null;
   private track: PlaybackTrack | null = null;
   /** One recovery attempt per open — see `onMediaError`. */
@@ -42,6 +48,17 @@ export class PlayerController {
       seekTo: (ms) => this.seek(ms),
       togglePlay: () => { void this.togglePlay(); },
       toggleFullscreen: () => { void this.toggleFullscreen(); },
+      toggleFile: (fileId) => { this.shown = toggleShown(this.shown, fileId); this.applyTrackState(); },
+      setVolume: (fileId, level) => {
+        this.levels.set(fileId, level);
+        // Moving a muted fader is an unmute — otherwise nothing appears to happen.
+        if (level > 0) this.muted.delete(fileId);
+        this.applyTrackState();
+      },
+      toggleTrackMuted: (fileId) => {
+        if (!this.muted.delete(fileId)) this.muted.add(fileId);
+        this.applyTrackState();
+      },
     });
     this.bindMedia();
     // Bound on the document rather than the dialog: the shortcuts should work
@@ -67,16 +84,22 @@ export class PlayerController {
         return;
       }
       case 'volume': {
-        // Volume rides on the master; auxiliaries keep their own levels, which
-        // is what the design's per-track faders adjust.
-        video.volume = Math.min(1, Math.max(0, video.volume + action.direction * 0.1));
+        // Rides the master; per-track levels are what the faders are for.
+        if (!this.track) return;
+        const current = this.levels.get(this.track.fileId) ?? 1;
+        this.levels.set(this.track.fileId, Math.min(1, Math.max(0, current + action.direction * 0.1)));
+        this.muted.delete(this.track.fileId);
+        this.applyTrackState();
         return;
       }
       case 'mute': {
-        const muted = !video.muted;
-        video.muted = muted;
-        // The camera track is muted by construction and must stay that way.
-        this.view.micAudio.muted = muted;
+        // Mutes every audio track at once, through the same state the faders use.
+        const anyAudible = [...this.elements.keys()].some((id) => !this.muted.has(id));
+        for (const fileId of this.elements.keys()) {
+          if (anyAudible) this.muted.add(fileId);
+          else this.muted.delete(fileId);
+        }
+        this.applyTrackState();
         return;
       }
       case 'note': {
@@ -120,8 +143,30 @@ export class PlayerController {
       return;
     }
     this.track = track;
+    this.elements.set(track.fileId, this.view.video);
+    this.shown = new Set(manifest.tracks.map((candidate) => candidate.fileId));
     await this.attach(track);
     await this.attachAuxiliaries(manifest, track);
+    this.applyTrackState();
+  }
+
+  /**
+   * Pushes visibility, level and mute onto the elements, then re-renders the
+   * menus from the same state so the trigger count and the checkboxes cannot
+   * disagree with what is actually playing.
+   */
+  private applyTrackState(): void {
+    for (const [fileId, element] of this.elements) {
+      const on = this.shown.has(fileId);
+      element.volume = this.levels.get(fileId) ?? 1;
+      // The camera never carries audio, so it stays muted whatever the user does.
+      element.muted = !on || this.muted.has(fileId) || element === this.view.selfVideo;
+      if (element === this.view.selfVideo) this.view.showSelfCam(on);
+      if (element === this.view.video) this.view.video.classList.toggle('player__video--hidden', !on);
+    }
+    if (this.manifest) {
+      this.view.setTracks(describeTracks(this.manifest, this.shown), this.levels, this.muted);
+    }
   }
 
   private async togglePlay(): Promise<void> {
@@ -154,6 +199,7 @@ export class PlayerController {
       }
       if (resolved.revoke) this.auxRevokes.push(resolved.revoke);
       element.src = resolved.url;
+      this.elements.set(track.fileId, element);
       if (track.stream === 'self-video') this.view.showSelfCam(true);
       clock.add({ element, timelineOffsetMs: track.timelineOffsetMs });
     }
@@ -260,6 +306,11 @@ export class PlayerController {
       element.load();
     }
     this.view.showSelfCam(false);
+    this.view.closePopovers();
+    this.elements.clear();
+    this.levels.clear();
+    this.muted.clear();
+    this.shown = new Set();
     // Object URLs pin the underlying OPFS file; leaking them leaks the file.
     this.revoke?.();
     this.revoke = null;

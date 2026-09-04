@@ -10,6 +10,7 @@
 
 import type { PlaybackManifest } from '../../shared/playback';
 import { formatClock, seekFraction, toNoteMarks } from './playerFormat';
+import { audioTracks, shownCount, type TrackDescriptor } from './playerTracks';
 
 const $ = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) => {
   const el = document.createElement(tag);
@@ -22,6 +23,9 @@ export type PlayerViewCallbacks = {
   seekTo: (ms: number) => void;
   togglePlay: () => void;
   toggleFullscreen: () => void;
+  toggleFile: (fileId: string) => void;
+  setVolume: (fileId: string, level: number) => void;
+  toggleTrackMuted: (fileId: string) => void;
 };
 
 export class PlayerView {
@@ -42,6 +46,11 @@ export class PlayerView {
   private readonly marks = $('span', 'player__marks');
   private readonly clock = $('span', 'player__clock');
   private readonly playButton = document.createElement('button');
+  private readonly filesButton = document.createElement('button');
+  private readonly filesCount = $('span', 'player__files-count');
+  private readonly filesMenu = $('div', 'player__menu player__menu--files');
+  private readonly volumeButton = document.createElement('button');
+  private readonly volumeMenu = $('div', 'player__menu player__menu--volume');
   private durationMs = 0;
 
   constructor(private readonly callbacks: PlayerViewCallbacks) {
@@ -67,7 +76,19 @@ export class PlayerView {
     close.textContent = '×';
     close.addEventListener('click', () => this.callbacks.close());
 
-    header.append(back, this.title, $('span', 'player__divider'), this.date, close);
+    this.filesButton.className = 'player__files'; this.filesButton.type = 'button';
+    this.filesButton.title = 'Which files are shown';
+    this.filesButton.setAttribute('aria-haspopup', 'true');
+    const filesLabel = $('span', 'player__files-label'); filesLabel.textContent = 'FILES';
+    this.filesButton.append(filesLabel, this.filesCount);
+    this.filesButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.togglePopover(this.filesMenu);
+    });
+    const filesWrap = $('span', 'player__popover');
+    filesWrap.append(this.filesButton, this.filesMenu);
+
+    header.append(back, this.title, $('span', 'player__divider'), filesWrap, this.date, close);
 
     // Stage — the picture, with every control on it.
     this.video.className = 'player__video';
@@ -106,16 +127,99 @@ export class PlayerView {
     fullscreen.title = 'Fullscreen'; fullscreen.setAttribute('aria-label', 'Fullscreen');
     fullscreen.innerHTML = '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg>';
     fullscreen.addEventListener('click', () => this.callbacks.toggleFullscreen());
-    controls.append(this.playButton, this.clock, fullscreen);
+    this.volumeButton.className = 'player__icon player__icon--on-picture'; this.volumeButton.type = 'button';
+    this.volumeButton.title = 'Volume · tab audio and microphone';
+    this.volumeButton.setAttribute('aria-label', 'Volume');
+    this.volumeButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h2.5L9 3v10L5.5 10H3z"/><path d="M11.5 6.2a2.6 2.6 0 010 3.6"/></svg>';
+    this.volumeButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.togglePopover(this.volumeMenu);
+    });
+    const volumeWrap = $('span', 'player__popover player__popover--up');
+    volumeWrap.append(this.volumeButton, this.volumeMenu);
+
+    controls.append(this.playButton, this.clock, volumeWrap, fullscreen);
 
     this.stage.append(scrub, controls, this.status);
     this.dialog.append(header, this.stage);
     this.overlay.append(this.dialog);
-    // Clicking the scrim closes; clicking the dialog must not.
+    // Clicking the scrim closes; clicking the dialog must not. Any click inside
+    // the dialog also dismisses an open popover, which is what makes them feel
+    // like menus rather than panels.
     this.overlay.addEventListener('click', (event) => {
-      if (event.target === this.overlay) this.callbacks.close();
+      if (event.target === this.overlay) return this.callbacks.close();
+      this.closePopovers();
     });
+    this.filesMenu.hidden = true;
+    this.volumeMenu.hidden = true;
     this.setPlaying(false);
+  }
+
+  private togglePopover(menu: HTMLElement): void {
+    const opening = menu.hidden;
+    this.closePopovers();
+    menu.hidden = !opening;
+  }
+
+  closePopovers(): void {
+    this.filesMenu.hidden = true;
+    this.volumeMenu.hidden = true;
+  }
+
+  /**
+   * Renders the FILES list and the volume faders. Called on open and after each
+   * toggle, so the trigger's count and the checkboxes cannot drift apart.
+   */
+  setTracks(tracks: TrackDescriptor[], levels: ReadonlyMap<string, number>, muted: ReadonlySet<string>): void {
+    this.filesCount.textContent = String(shownCount(tracks));
+    // A recording with one file has nothing to choose between.
+    this.filesButton.hidden = tracks.length < 2;
+
+    this.filesMenu.replaceChildren();
+    for (const track of tracks) {
+      const row = document.createElement('button');
+      row.className = `player__file${track.shown ? ' player__file--on' : ''}`;
+      row.type = 'button';
+      row.setAttribute('role', 'menuitemcheckbox');
+      row.setAttribute('aria-checked', String(track.shown));
+      const check = $('span', 'player__file-check');
+      const label = $('span', 'player__file-label'); label.textContent = track.label;
+      const format = $('span', 'player__file-format'); format.textContent = track.format;
+      row.append(check, label, format);
+      row.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.callbacks.toggleFile(track.fileId);
+      });
+      this.filesMenu.append(row);
+    }
+
+    this.volumeMenu.replaceChildren();
+    const faders = audioTracks(tracks);
+    this.volumeButton.hidden = faders.length === 0;
+    for (const track of faders) {
+      const column = $('div', 'player__fader');
+      const level = levels.get(track.fileId) ?? 1;
+      const readout = $('span', 'player__fader-level');
+      readout.textContent = muted.has(track.fileId) ? 'MUTED' : `${Math.round(level * 100)}`;
+      const slider = document.createElement('input');
+      slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1';
+      slider.value = String(Math.round(level * 100));
+      slider.className = 'player__fader-input';
+      slider.setAttribute('aria-label', `${track.label} volume`);
+      slider.addEventListener('input', () => this.callbacks.setVolume(track.fileId, Number(slider.value) / 100));
+      slider.addEventListener('click', (event) => event.stopPropagation());
+      // Clicking the name mutes that track — the design's affordance, not a label.
+      const name = document.createElement('button');
+      name.type = 'button';
+      name.className = `player__fader-name${muted.has(track.fileId) ? ' player__fader-name--muted' : ''}`;
+      name.textContent = track.label;
+      name.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.callbacks.toggleTrackMuted(track.fileId);
+      });
+      column.append(readout, slider, name);
+      this.volumeMenu.append(column);
+    }
   }
 
   /** Renders everything the manifest determines; sources are attached separately. */

@@ -266,3 +266,28 @@ button { -webkit-font-smoothing: antialiased; }
 .recording-row__play:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .player__selfcam { position: absolute; top: 12px; right: 12px; width: 104px; height: 59px; border-radius: 6px; object-fit: cover; background: #241f19; border: 1px solid rgba(250, 248, 244, .16); }
 .player__selfcam[hidden] { display: none; }
+
+/* FILES dropdown and the volume popup (design: header control + fader popup). */
+.player__popover { position: relative; display: inline-flex; flex-shrink: 0; }
+.player__files { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__files:hover { background: var(--field); }
+.player__files[hidden] { display: none; }
+.player__files-label { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600; letter-spacing: .08em; color: var(--detail); }
+.player__files-count { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: var(--faint); }
+.player__menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 4; min-width: 180px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 14px 30px -10px rgba(28, 26, 23, .28); }
+.player__menu[hidden] { display: none; }
+.player__popover--up .player__menu { top: auto; bottom: calc(100% + 6px); }
+.player__file { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
+.player__file:hover { background: var(--field); }
+.player__file-check { width: 13px; height: 13px; flex-shrink: 0; border: 1.5px solid var(--border-strong, var(--border)); border-radius: 4px; }
+.player__file--on .player__file-check { border-color: var(--detail); background: var(--detail); }
+.player__file-label { flex: 1; font-size: 12.5px; color: var(--body); }
+.player__file-format { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .12em; color: var(--faint); }
+.player__menu--volume { display: flex; gap: 14px; padding: 10px 12px; min-width: 0; }
+.player__fader { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.player__fader-level { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .1em; color: var(--muted); }
+.player__fader-input { writing-mode: vertical-lr; direction: rtl; width: 18px; height: 78px; accent-color: var(--detail); cursor: pointer; }
+.player__fader-name { border: 0; background: transparent; padding: 0; font-size: 10px; color: var(--muted); cursor: pointer; }
+.player__fader-name:hover { color: var(--body); }
+.player__fader-name--muted { color: var(--faint); text-decoration: line-through; }
+.player__video--hidden { visibility: hidden; }

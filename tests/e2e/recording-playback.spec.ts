@@ -225,5 +225,62 @@ test.describe('recording playback (integration)', () => {
       await closeHarness(harness);
     }
   });
+
+  test('lists every file and lets one be switched off reversibly', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'separate', recordSelfVideo: true,
+      });
+      await meetPage.waitForTimeout(1_800);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      await expect.poll(async () => await page.locator('.player__video').getAttribute('src'), {
+        timeout: 20_000,
+      }).toMatch(/^blob:/);
+
+      // The trigger counts what is on.
+      await expect(page.locator('.player__files-count')).toHaveText('3');
+      await page.locator('.player__files').click();
+      const rows = page.locator('.player__file');
+      await expect(rows).toHaveCount(3);
+      await expect(rows.nth(0).locator('.player__file-label')).toHaveText('Tab video');
+      await expect(rows.nth(1).locator('.player__file-label')).toHaveText('Self camera');
+      await expect(rows.nth(2).locator('.player__file-label')).toHaveText('Microphone');
+
+      // Switching the camera off hides it — but the row stays, so it is reversible.
+      await rows.nth(1).click();
+      await expect(page.locator('.player__selfcam')).toBeHidden();
+      await expect(page.locator('.player__files-count')).toHaveText('2');
+      await expect(page.locator('.player__file')).toHaveCount(3);
+      await expect(page.locator('.player__file').nth(1)).toHaveAttribute('aria-checked', 'false');
+
+      await page.locator('.player__file').nth(1).click();
+      await expect(page.locator('.player__selfcam')).toBeVisible();
+      await expect(page.locator('.player__files-count')).toHaveText('3');
+
+      // One fader per audio track; the camera gets none.
+      await page.locator('.player__files').click();
+      await page.locator('.player__icon--on-picture').first().click();
+      await expect(page.locator('.player__fader')).toHaveCount(2);
+
+      // Clicking a track name mutes that track only.
+      await page.locator('.player__fader-name').nth(1).click();
+      await expect(page.locator('.player__fader-name').nth(1)).toHaveClass(/player__fader-name--muted/);
+      expect(await page.locator('.player audio').evaluate((el: HTMLAudioElement) => el.muted)).toBe(true);
+      expect(await page.locator('.player__video').evaluate((el: HTMLVideoElement) => el.muted)).toBe(false);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
 });
 
