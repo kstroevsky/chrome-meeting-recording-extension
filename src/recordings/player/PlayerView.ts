@@ -11,6 +11,7 @@
 import type { PlaybackManifest } from '../../shared/playback';
 import { formatClock, seekFraction, toNoteMarks } from './playerFormat';
 import { audioTracks, shownCount, type TrackDescriptor } from './playerTracks';
+import { KEYBOARD_HELP, SKIP_STEPS, SPEED_STEPS } from './playerKeymap';
 
 const $ = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) => {
   const el = document.createElement(tag);
@@ -26,6 +27,8 @@ export type PlayerViewCallbacks = {
   toggleFile: (fileId: string) => void;
   setVolume: (fileId: string, level: number) => void;
   toggleTrackMuted: (fileId: string) => void;
+  setSkipSeconds: (seconds: number) => void;
+  setSpeed: (rate: number) => void;
 };
 
 export class PlayerView {
@@ -51,6 +54,9 @@ export class PlayerView {
   private readonly filesMenu = $('div', 'player__menu player__menu--files');
   private readonly volumeButton = document.createElement('button');
   private readonly volumeMenu = $('div', 'player__menu player__menu--volume');
+  private readonly settingsButton = document.createElement('button');
+  private readonly settingsMenu = $('div', 'player__menu player__menu--settings');
+  private readonly help = $('div', 'player__help');
   private durationMs = 0;
 
   constructor(private readonly callbacks: PlayerViewCallbacks) {
@@ -138,9 +144,32 @@ export class PlayerView {
     const volumeWrap = $('span', 'player__popover player__popover--up');
     volumeWrap.append(this.volumeButton, this.volumeMenu);
 
-    controls.append(this.playButton, this.clock, volumeWrap, fullscreen);
+    this.settingsButton.className = 'player__icon player__icon--on-picture'; this.settingsButton.type = 'button';
+    this.settingsButton.title = 'Skip step and speed';
+    this.settingsButton.setAttribute('aria-label', 'Playback settings');
+    this.settingsButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.8M8 12.6v1.8M14.4 8h-1.8M3.4 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8L3.5 3.5"/></svg>';
+    this.settingsButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.togglePopover(this.settingsMenu);
+    });
+    const settingsWrap = $('span', 'player__popover player__popover--up');
+    settingsWrap.append(this.settingsButton, this.settingsMenu);
 
-    this.stage.append(scrub, controls, this.status);
+    controls.append(this.playButton, this.clock, volumeWrap, settingsWrap, fullscreen);
+
+    this.help.hidden = true;
+    this.help.setAttribute('role', 'dialog');
+    this.help.setAttribute('aria-label', 'Keyboard shortcuts');
+    const helpTitle = $('p', 'player__help-title'); helpTitle.textContent = 'KEYBOARD';
+    this.help.append(helpTitle);
+    for (const row of KEYBOARD_HELP) {
+      const line = $('div', 'player__help-row');
+      const keys = $('span', 'player__help-keys'); keys.textContent = row.keys;
+      const description = $('span', 'player__help-text'); description.textContent = row.description;
+      line.append(keys, description);
+      this.help.append(line);
+    }
+    this.stage.append(scrub, controls, this.help, this.status);
     this.dialog.append(header, this.stage);
     this.overlay.append(this.dialog);
     // Clicking the scrim closes; clicking the dialog must not. Any click inside
@@ -164,6 +193,49 @@ export class PlayerView {
   closePopovers(): void {
     this.filesMenu.hidden = true;
     this.volumeMenu.hidden = true;
+    this.settingsMenu.hidden = true;
+  }
+
+  /** Returns whether the map ended up open, so Escape can close it first. */
+  toggleHelp(force?: boolean): boolean {
+    this.help.hidden = force === undefined ? !this.help.hidden : !force;
+    return !this.help.hidden;
+  }
+
+  get helpOpen(): boolean { return !this.help.hidden; }
+
+  /**
+   * Renders the settings rows. Subtitles and quality are absent by design —
+   * "rows that do not apply are not rendered", and this player has one
+   * rendition and no subtitle track.
+   */
+  setSettings(skipSeconds: number, speed: number): void {
+    this.settingsMenu.replaceChildren();
+    this.settingsMenu.append(
+      this.choiceRow('Skip', SKIP_STEPS.map((step) => ({
+        label: `${step}s`, active: step === skipSeconds, pick: () => this.callbacks.setSkipSeconds(step),
+      }))),
+      this.choiceRow('Speed', SPEED_STEPS.map((rate) => ({
+        label: rate === 1 ? '1×' : `${rate}×`, active: rate === speed, pick: () => this.callbacks.setSpeed(rate),
+      }))),
+    );
+  }
+
+  private choiceRow(label: string, options: Array<{ label: string; active: boolean; pick: () => void }>): HTMLElement {
+    const row = $('div', 'player__setting');
+    const name = $('span', 'player__setting-label'); name.textContent = label;
+    const choices = $('span', 'player__setting-choices');
+    for (const option of options) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `player__chip${option.active ? ' player__chip--active' : ''}`;
+      button.textContent = option.label;
+      button.setAttribute('aria-pressed', String(option.active));
+      button.addEventListener('click', (event) => { event.stopPropagation(); option.pick(); });
+      choices.append(button);
+    }
+    row.append(name, choices);
+    return row;
   }
 
   /**

@@ -282,5 +282,61 @@ test.describe('recording playback (integration)', () => {
       await closeHarness(harness);
     }
   });
+
+  test('offers skip and speed, and unwinds Escape one layer at a time', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'off', recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(2_500);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
+        timeout: 20_000,
+      }).toBeGreaterThanOrEqual(1);
+
+      // Settings offers skip and speed — and no subtitles or quality row, because
+      // this player has one rendition and no subtitle track.
+      await page.locator('.player__icon--on-picture').nth(1).click();
+      await expect(page.locator('.player__setting')).toHaveCount(2);
+      await expect(page.locator('.player__setting-label').nth(0)).toHaveText('Skip');
+      await expect(page.locator('.player__setting-label').nth(1)).toHaveText('Speed');
+
+      // Picking a speed applies it to the element.
+      await page.locator('.player__setting').nth(1).locator('.player__chip', { hasText: '1.5×' }).click();
+      expect(await video.evaluate((el: HTMLVideoElement) => el.playbackRate)).toBe(1.5);
+
+      // Picking a skip step changes what the arrow keys move.
+      await page.locator('.player__setting').nth(0).locator('.player__chip', { hasText: '30s' }).click();
+      await video.evaluate((el: HTMLVideoElement) => { el.currentTime = 0; });
+      await page.keyboard.press('ArrowRight');
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 5_000,
+      }).toBeGreaterThan(1.5);
+
+      // `?` opens the map; Escape closes the map before it closes the player.
+      await page.keyboard.press('?');
+      await expect(page.locator('.player__help')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.player__help')).toBeHidden();
+      await expect(page.locator('.player')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.player')).toHaveCount(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
 });
 

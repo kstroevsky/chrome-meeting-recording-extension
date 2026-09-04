@@ -1,5 +1,6 @@
 /** Design card f19: the map, and the rule that makes single keys safe. */
 import {
+  KEYBOARD_HELP,
   adjacentNoteStart,
   isFieldTarget,
   nextSpeed,
@@ -56,6 +57,12 @@ describe('resolvePlayerAction', () => {
     expect(resolvePlayerAction({ key: 'ArrowRight', altKey: true })).toBeNull();
     // Shift is part of the map, not a disqualifier.
     expect(resolvePlayerAction({ key: 'N', shiftKey: true })).not.toBeNull();
+  });
+
+  it('opens the map on ?', () => {
+    expect(resolvePlayerAction({ key: '?' })).toEqual({ kind: 'help' });
+    // Still a bare key: a field must swallow it.
+    expect(resolvePlayerAction({ key: '?' }, { inField: true })).toBeNull();
   });
 
   it('ignores keys it does not own', () => {
@@ -116,5 +123,14 @@ describe('adjacentNoteStart', () => {
 
   it('sorts unordered input', () => {
     expect(adjacentNoteStart([60_000, 5_000, 20_000], 0, 1)).toBe(5_000);
+  });
+});
+
+describe('KEYBOARD_HELP', () => {
+  it('documents every action the resolver can produce', () => {
+    const documented = KEYBOARD_HELP.map((row) => row.keys).join(' ');
+    for (const fragment of ['Space', '←', 'J', 'M', '↑', 'N', 'F', '?', 'Esc']) {
+      expect(documented).toContain(fragment);
+    }
   });
 });

@@ -20,6 +20,7 @@ export type PlayerAction =
   | { kind: 'mute' }
   | { kind: 'note'; direction: -1 | 1 }
   | { kind: 'fullscreen' }
+  | { kind: 'help' }
   | { kind: 'escape' };
 
 /** The parts of a keyboard event this needs. */
@@ -54,6 +55,9 @@ export function resolvePlayerAction(event: KeyLike, options: KeymapOptions = {})
   // Escape always acts, in a field or not — it is how you get out of one.
   if (event.key === 'Escape') return { kind: 'escape' };
   if (options.inField) return null;
+
+  // `?` is shifted on most layouts, so match the character rather than the key.
+  if (event.key === '?') return { kind: 'help' };
 
   const skip = options.skipSeconds ?? 10;
   switch (event.key) {
@@ -101,3 +105,20 @@ export function adjacentNoteStart(
   for (let i = sorted.length - 1; i >= 0; i -= 1) if (sorted[i] < positionMs - 250) return sorted[i];
   return null;
 }
+
+/** Skip steps the settings menu offers, in seconds. */
+export const SKIP_STEPS = [5, 10, 30] as const;
+
+/** The map, as rendered by the `?` overlay. Kept beside the resolver so the
+ *  two cannot describe different keyboards. */
+export const KEYBOARD_HELP: ReadonlyArray<{ keys: string; description: string }> = [
+  { keys: 'Space', description: 'Play or pause' },
+  { keys: '← / →', description: 'Skip back or forward' },
+  { keys: 'J / L', description: 'Slower or faster' },
+  { keys: 'M', description: 'Mute every track' },
+  { keys: '↑ / ↓', description: 'Volume' },
+  { keys: 'N / ⇧N', description: 'Next or previous note' },
+  { keys: 'F', description: 'Fullscreen' },
+  { keys: '?', description: 'This map' },
+  { keys: 'Esc', description: 'Leave fullscreen, then close' },
+];

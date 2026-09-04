@@ -37,6 +37,8 @@ export class PlayerController {
   private readonly levels = new Map<string, number>();
   private readonly muted = new Set<string>();
   private readonly elements = new Map<string, HTMLMediaElement>();
+  private skipSeconds = 10;
+  private speed = 1;
   private manifest: PlaybackManifest | null = null;
   private track: PlaybackTrack | null = null;
   /** One recovery attempt per open — see `onMediaError`. */
@@ -59,6 +61,8 @@ export class PlayerController {
         if (!this.muted.delete(fileId)) this.muted.add(fileId);
         this.applyTrackState();
       },
+      setSkipSeconds: (seconds) => { this.skipSeconds = seconds; this.view.setSettings(this.skipSeconds, this.speed); },
+      setSpeed: (rate) => this.applySpeed(rate),
     });
     this.bindMedia();
     // Bound on the document rather than the dialog: the shortcuts should work
@@ -67,7 +71,10 @@ export class PlayerController {
   }
 
   private handleKey(event: KeyboardEvent): void {
-    const action = resolvePlayerAction(event, { inField: isFieldTarget(event.target) });
+    const action = resolvePlayerAction(event, {
+      inField: isFieldTarget(event.target),
+      skipSeconds: this.skipSeconds,
+    });
     if (!action) return;
     event.preventDefault();
     void this.dispatch(action);
@@ -78,11 +85,7 @@ export class PlayerController {
     switch (action.kind) {
       case 'play-pause': return void this.togglePlay();
       case 'skip': return this.seek((video.currentTime + action.seconds) * 1000);
-      case 'speed': {
-        const rate = nextSpeed(video.playbackRate, action.direction);
-        this.clock ? this.clock.setPlaybackRate(rate) : (video.playbackRate = rate);
-        return;
-      }
+      case 'speed': return this.applySpeed(nextSpeed(this.speed, action.direction));
       case 'volume': {
         // Rides the master; per-track levels are what the faders are for.
         if (!this.track) return;
@@ -109,13 +112,23 @@ export class PlayerController {
         return;
       }
       case 'fullscreen': return void this.toggleFullscreen();
+      case 'help': { this.view.toggleHelp(); return; }
       case 'escape': {
-        // Escape leaves fullscreen first, and only closes once out of it.
+        // Escape unwinds one layer at a time: the map, then fullscreen, then the
+        // player itself. Closing outright would lose the user's place.
+        if (this.view.helpOpen) { this.view.toggleHelp(false); return; }
         if (document.fullscreenElement) { await document.exitFullscreen().catch(() => {}); return; }
         this.close();
         return;
       }
     }
+  }
+
+  private applySpeed(rate: number): void {
+    this.speed = rate;
+    if (this.clock) this.clock.setPlaybackRate(rate);
+    else this.view.video.playbackRate = rate;
+    this.view.setSettings(this.skipSeconds, this.speed);
   }
 
   private seek(ms: number): void {
@@ -148,6 +161,7 @@ export class PlayerController {
     await this.attach(track);
     await this.attachAuxiliaries(manifest, track);
     this.applyTrackState();
+    this.view.setSettings(this.skipSeconds, this.speed);
   }
 
   /**
@@ -307,6 +321,9 @@ export class PlayerController {
     }
     this.view.showSelfCam(false);
     this.view.closePopovers();
+    this.view.toggleHelp(false);
+    this.skipSeconds = 10;
+    this.speed = 1;
     this.elements.clear();
     this.levels.clear();
     this.muted.clear();
