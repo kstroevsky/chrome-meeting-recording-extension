@@ -117,4 +117,61 @@ test.describe('recording playback (integration)', () => {
       await closeHarness(harness);
     }
   });
+
+  test('plays a mic and camera recording with every track on the tab clock', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'separate',
+        recordSelfVideo: true,
+      });
+      await meetPage.waitForTimeout(1_800);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      await expect(page.locator('.player')).toBeVisible();
+
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+
+      // Every retained track is attached, not just the picture.
+      await expect.poll(async () => await page.locator('.player__selfcam').getAttribute('src'), {
+        timeout: 20_000,
+      }).toMatch(/^blob:/);
+      await expect.poll(async () => await page.locator('.player audio').getAttribute('src'), {
+        timeout: 20_000,
+      }).toMatch(/^blob:/);
+      await expect(page.locator('.player__selfcam')).toBeVisible();
+
+      // Playing the master carries the auxiliaries with it, and they stay together.
+      await page.locator('.player__play').click();
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 15_000,
+      }).toBeGreaterThan(0.3);
+
+      const spread = await page.evaluate(() => {
+        const tab = document.querySelector('.player__video') as HTMLVideoElement;
+        const cam = document.querySelector('.player__selfcam') as HTMLVideoElement;
+        const mic = document.querySelector('.player audio') as HTMLAudioElement;
+        return [Math.abs(cam.currentTime - tab.currentTime), Math.abs(mic.currentTime - tab.currentTime)];
+      });
+      // Well inside the hard-resync band; this is alignment, not luck.
+      for (const delta of spread) expect(delta).toBeLessThan(0.5);
+
+      // The camera track must not double the tab's audio.
+      expect(await page.locator('.player__selfcam').evaluate((el: HTMLVideoElement) => el.muted)).toBe(true);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
 });
+

@@ -12,6 +12,7 @@
 import { isStreamableSource, masterTrack, type PlaybackManifest, type PlaybackTrack } from '../../shared/playback';
 import { resolveTrackSource, type SourceResolverDeps } from './playbackSource';
 import { PlayerView } from './PlayerView';
+import { PlaybackClock } from './PlaybackClock';
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
@@ -24,6 +25,10 @@ export type PlayerControllerDeps = {
 export class PlayerController {
   private readonly view: PlayerView;
   private revoke: (() => void) | null = null;
+  /** One per attached auxiliary; an unrevoked URL pins its OPFS file. */
+  private auxRevokes: Array<() => void> = [];
+  private clock: PlaybackClock | null = null;
+  private driftTimer: ReturnType<typeof setInterval> | null = null;
   private manifest: PlaybackManifest | null = null;
   private track: PlaybackTrack | null = null;
   /** One recovery attempt per open — see `onMediaError`. */
@@ -32,8 +37,8 @@ export class PlayerController {
   constructor(private readonly deps: PlayerControllerDeps) {
     this.view = new PlayerView({
       close: () => this.close(),
-      seekTo: (ms) => { this.view.video.currentTime = ms / 1000; },
-      togglePlay: () => { void (this.view.video.paused ? this.view.video.play().catch(() => {}) : this.view.video.pause()); },
+      seekTo: (ms) => { this.clock ? this.clock.seek(ms) : (this.view.video.currentTime = ms / 1000); },
+      togglePlay: () => { void this.togglePlay(); },
       toggleFullscreen: () => { void this.toggleFullscreen(); },
     });
     this.bindMedia();
@@ -60,34 +65,74 @@ export class PlayerController {
     }
     this.track = track;
     await this.attach(track);
+    await this.attachAuxiliaries(manifest, track);
+  }
+
+  private async togglePlay(): Promise<void> {
+    const playing = !this.view.video.paused;
+    if (!this.clock) {
+      await (playing ? this.view.video.pause() : this.view.video.play().catch(() => {}));
+      return;
+    }
+    if (playing) this.clock.pause();
+    else await this.clock.play().catch(() => {});
+  }
+
+  /**
+   * Attaches mic and camera tracks and puts them on the master's clock. A track
+   * that cannot be resolved is skipped rather than failing playback: hearing the
+   * meeting without the camera beats not watching it at all.
+   */
+  private async attachAuxiliaries(manifest: PlaybackManifest, master: PlaybackTrack): Promise<void> {
+    const clock = new PlaybackClock(this.view.video, {
+      onDrift: (seconds) => this.deps.warn?.(`Auxiliary track drifted ${(seconds * 1000).toFixed(0)}ms`),
+    });
+    for (const track of manifest.tracks) {
+      if (track.fileId === master.fileId) continue;
+      const element = track.stream === 'self-video' ? this.view.selfVideo : this.view.micAudio;
+      const resolved = await this.urlFor(track);
+      if (!resolved) {
+        // Better to watch the meeting without the camera than not at all.
+        this.deps.warn?.(`No playable source for the ${track.stream} track`);
+        continue;
+      }
+      if (resolved.revoke) this.auxRevokes.push(resolved.revoke);
+      element.src = resolved.url;
+      if (track.stream === 'self-video') this.view.showSelfCam(true);
+      clock.add({ element, timelineOffsetMs: track.timelineOffsetMs });
+    }
+    this.clock = clock;
+  }
+
+  /**
+   * Resolves one track to a URL a media element can take. Shared by the master
+   * and every auxiliary, so a Drive recording gets a lease per track rather
+   * than playing its picture alone.
+   */
+  private async urlFor(track: PlaybackTrack, refresh = false): Promise<{ url: string; revoke?: () => void } | undefined> {
+    if (!refresh && track.sources.some((source) => source.kind === 'opfs')) {
+      const resolved = await resolveTrackSource(track, this.deps.resolver);
+      if (resolved.kind === 'opfs') return { url: resolved.url, revoke: resolved.revoke };
+    }
+    if (track.sources.some((source) => source.kind === 'drive') && this.manifest) {
+      const url = await this.deps.prepareDriveSource(this.manifest.recordingId, track.fileId, refresh)
+        .catch((error) => { this.deps.warn?.('Drive playback preparation failed', error); return undefined; });
+      if (url) return { url };
+    }
+    return undefined;
   }
 
   private async attach(track: PlaybackTrack, refresh = false): Promise<void> {
-    const drive = track.sources.find((source) => source.kind === 'drive');
-    const preferOpfs = track.sources.find((source) => source.kind === 'opfs');
-
-    if (preferOpfs && !refresh) {
-      const resolved = await resolveTrackSource(track, this.deps.resolver);
-      if (resolved.kind === 'opfs') {
-        this.revoke = resolved.revoke;
-        this.view.setStatus(null);
-        this.view.video.src = resolved.url;
-        return;
-      }
-    }
-
-    if (drive && drive.kind === 'drive' && this.manifest) {
-      const url = await this.deps.prepareDriveSource(this.manifest.recordingId, track.fileId, refresh)
-        .catch((error) => { this.deps.warn?.('Drive playback preparation failed', error); return undefined; });
-      if (url) {
-        this.view.setStatus(null);
-        this.view.video.src = url;
-        return;
-      }
-      this.view.setStatus('Could not open this recording from Google Drive.');
+    const resolved = await this.urlFor(track, refresh);
+    if (!resolved) {
+      this.view.setStatus(track.sources.some((source) => source.kind === 'drive')
+        ? 'Could not open this recording from Google Drive.'
+        : 'This recording has no playable copy left.');
       return;
     }
-    this.view.setStatus('This recording has no playable copy left.');
+    this.revoke = resolved.revoke ?? null;
+    this.view.setStatus(null);
+    this.view.video.src = resolved.url;
   }
 
   private bindMedia(): void {
@@ -97,8 +142,8 @@ export class PlayerController {
       if (Number.isFinite(video.duration)) this.view.setPosition(video.currentTime * 1000, video.duration * 1000);
     });
     video.addEventListener('timeupdate', () => this.view.setPosition(video.currentTime * 1000));
-    video.addEventListener('play', () => this.view.setPlaying(true));
-    video.addEventListener('pause', () => this.view.setPlaying(false));
+    video.addEventListener('play', () => { this.view.setPlaying(true); this.startDriftWatch(); });
+    video.addEventListener('pause', () => { this.view.setPlaying(false); this.stopDriftWatch(); });
     video.addEventListener('error', () => { void this.onMediaError(); });
   }
 
@@ -123,6 +168,17 @@ export class PlayerController {
     if (this.view.video.src) this.view.video.currentTime = position;
   }
 
+  /** A few times a second is enough: drift accrues slowly (ADR-0006 §21). */
+  private startDriftWatch(): void {
+    if (this.driftTimer || !this.clock) return;
+    this.driftTimer = setInterval(() => this.clock?.correctDrift(), 400);
+  }
+
+  private stopDriftWatch(): void {
+    if (this.driftTimer) clearInterval(this.driftTimer);
+    this.driftTimer = null;
+  }
+
   private async toggleFullscreen(): Promise<void> {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
@@ -138,12 +194,20 @@ export class PlayerController {
   }
 
   private reset(): void {
-    this.view.video.pause();
-    this.view.video.removeAttribute('src');
-    this.view.video.load();
+    this.stopDriftWatch();
+    this.clock?.clear();
+    this.clock = null;
+    for (const element of [this.view.video, this.view.selfVideo, this.view.micAudio]) {
+      element.pause();
+      element.removeAttribute('src');
+      element.load();
+    }
+    this.view.showSelfCam(false);
     // Object URLs pin the underlying OPFS file; leaking them leaks the file.
     this.revoke?.();
     this.revoke = null;
+    for (const revoke of this.auxRevokes) revoke();
+    this.auxRevokes = [];
     this.manifest = null;
     this.track = null;
     this.refreshed = false;

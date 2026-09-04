@@ -264,3 +264,5 @@ button { -webkit-font-smoothing: antialiased; }
 .recording-row__play { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1), color 160ms cubic-bezier(.32, .72, 0, 1); }
 .recording-row__play:hover { background: var(--field); color: var(--detail); }
 .recording-row__play:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.player__selfcam { position: absolute; top: 12px; right: 12px; width: 104px; height: 59px; border-radius: 6px; object-fit: cover; background: #241f19; border: 1px solid rgba(250, 248, 244, .16); }
+.player__selfcam[hidden] { display: none; }

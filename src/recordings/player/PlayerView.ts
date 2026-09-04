@@ -27,6 +27,10 @@ export type PlayerViewCallbacks = {
 export class PlayerView {
   readonly overlay = $('div', 'player-overlay');
   readonly video = document.createElement('video');
+  /** Picture-in-picture for the camera track (design f12, top-right 104×59). */
+  readonly selfVideo = document.createElement('video');
+  /** The microphone track has no picture — it only needs to be heard. */
+  readonly micAudio = document.createElement('audio');
   private readonly dialog = $('article', 'player');
   private readonly title = $('span', 'player__title');
   private readonly date = $('span', 'player__date');
@@ -69,7 +73,16 @@ export class PlayerView {
     this.video.className = 'player__video';
     this.video.setAttribute('playsinline', '');
     this.video.preload = 'metadata';
-    this.stage.append(this.video, $('span', 'player__scrim'));
+    this.selfVideo.className = 'player__selfcam';
+    this.selfVideo.setAttribute('playsinline', '');
+    this.selfVideo.preload = 'metadata';
+    // Auxiliary tracks are driven by the clock, never by their own controls,
+    // and they must never contribute a second copy of the tab audio.
+    this.selfVideo.muted = true;
+    this.selfVideo.hidden = true;
+    this.micAudio.preload = 'metadata';
+    this.micAudio.hidden = true;
+    this.stage.append(this.video, this.selfVideo, this.micAudio, $('span', 'player__scrim'));
 
     const scrub = $('div', 'player__scrub');
     const hit = $('span', 'player__hit');
@@ -147,6 +160,11 @@ export class PlayerView {
     this.playButton.innerHTML = playing
       ? '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="1.5" width="3" height="9" rx="1"/><rect x="7" y="1.5" width="3" height="9" rx="1"/></svg>'
       : '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M3 1.8l7 4.2-7 4.2z"/></svg>';
+  }
+
+  /** Reveals the camera picture only once a self-video track is actually attached. */
+  showSelfCam(show: boolean): void {
+    this.selfVideo.hidden = !show;
   }
 
   /** A message on the picture — the recording is unreachable, not merely paused. */
