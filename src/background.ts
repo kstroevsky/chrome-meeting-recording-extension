@@ -14,6 +14,9 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
+import { addTabRemovedListener } from './platform/chrome/tabs';
+import { fetchDriveTokenWithFallback } from './background/driveAuth';
+import { DrivePlaybackAuthLeaseManager } from './background/DrivePlaybackAuthLeaseManager';
 import { RecordingPlaybackService } from './background/RecordingPlaybackService';
 import { reconcileRetainedMedia } from './background/RetainedMediaReconciler';
 import { existsByKey, hasLibraryDirectory, listLibraryFiles, removeByKey } from './offscreen/storage/opfsLayout';
@@ -75,7 +78,18 @@ const playback = new RecordingPlaybackService({
   getEntry: (id) => historyRepository.get(id),
   listNotations: (id) => notations.list(id),
 });
+const driveAuthLease = new DrivePlaybackAuthLeaseManager({
+  // The extension's existing Drive auth, not a second OAuth system.
+  getToken: async (options) => {
+    const res = await fetchDriveTokenWithFallback({ refresh: options?.refresh === true });
+    if (!res.ok) throw new Error(res.error);
+    return res.token;
+  },
+  warn: L.warn,
+});
 const telemetry = new TelemetryRuntime();
+
+
 
 globalThis.addEventListener?.('error', (event: ErrorEvent) => {
   telemetry.incident({ kind: 'application_error', stage: 'runtime', error: event.error });
@@ -257,9 +271,16 @@ const controller = new RecordingController({ L, offscreen, session, telemetry, n
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
-  playback, telemetry });
+  playback, driveAuthLease, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
+
+// A closed tab must not leave a live credential attached to an id Chrome can
+// recycle (ADR-0006 §15). Registered after recordingAutoStop so a closing
+// recorded tab still stops its recording first.
+addTabRemovedListener((tabId) => {
+  void driveAuthLease.releaseTab(tabId).catch((error) => L.warn('Drive lease release failed:', error));
+});
 
 // Register port listeners for offscreen and debug dashboard connections.
 chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
@@ -377,5 +398,14 @@ const sessionHydration = (async () => {
     }
   } catch (e) {
     L.warn('Retained-media reconciliation failed (non-fatal):', e);
+  }
+
+  // Session rules outlive the worker; the tabs holding them may not.
+  try {
+    const tabs = await chrome.tabs.query({});
+    const dropped = await driveAuthLease.reconcile(tabs.map((tab) => tab.id).filter((id): id is number => id != null));
+    if (dropped) L.log(`Dropped ${dropped} orphaned Drive playback rule(s)`);
+  } catch (e) {
+    L.warn('Drive playback lease reconciliation failed (non-fatal):', e);
   }
 })();

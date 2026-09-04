@@ -101,6 +101,22 @@ export type PopupUpdateActiveNotation = { type: 'UPDATE_ACTIVE_NOTATION'; id: st
 export type PopupRemoveActiveNotation = { type: 'REMOVE_ACTIVE_NOTATION'; id: string };
 export type PopupListRecordingNotations = { type: 'LIST_RECORDING_NOTATIONS'; recordingId: string };
 export type PopupGetPlaybackManifest = { type: 'GET_RECORDING_PLAYBACK_MANIFEST'; recordingId: string };
+/**
+ * Note what is absent: no `tabId`. Background reads it from `sender`, because a
+ * page that could name its own tab could ask for Drive credentials to be
+ * installed into someone else's (ADR-0006 §12).
+ */
+export type PopupPreparePlaybackSource = {
+  type: 'PREPARE_RECORDING_PLAYBACK_SOURCE';
+  recordingId: string;
+  fileId: string;
+  source: 'drive';
+};
+export type PopupRefreshPlaybackSource = {
+  type: 'REFRESH_RECORDING_PLAYBACK_SOURCE';
+  recordingId: string;
+  fileId: string;
+};
 /** Adds a notation to a finished recording at an explicit media offset. */
 export type PopupAddRecordingNotation = {
   type: 'ADD_RECORDING_NOTATION';
@@ -147,6 +163,8 @@ export type PopupToBg =
   | PopupRemoveActiveNotation
   | PopupListRecordingNotations
   | PopupGetPlaybackManifest
+  | PopupPreparePlaybackSource
+  | PopupRefreshPlaybackSource
   | PopupListRecordingNotationSummaries
   | PopupAddRecordingNotation
   | PopupUpdateRecordingNotation
@@ -180,6 +198,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupListRecordingNotations ? NotationListResult :
   T extends PopupGetPlaybackManifest ?
     { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :
+  T extends PopupPreparePlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
+  T extends PopupRefreshPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupListRecordingNotationSummaries ?
     { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
   T extends PopupAddRecordingNotation ? NotationResult :

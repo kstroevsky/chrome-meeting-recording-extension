@@ -5,6 +5,7 @@
  * popup commands to their dedicated handlers.
  */
 
+import type { DrivePlaybackAuthLeaseManager } from './DrivePlaybackAuthLeaseManager';
 import type { RecordingPlaybackService } from './RecordingPlaybackService';
 import { fetchDriveTokenWithFallback } from './driveAuth';
 import { isE2EMockDriveBuild } from '../shared/build';
@@ -50,6 +51,7 @@ export type MessageHandlersDeps = {
   history?: RecordingHistoryService;
   notations?: RecordingNotationService;
   playback?: RecordingPlaybackService;
+  driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
 };
 
@@ -58,7 +60,17 @@ export type MessageHandlersDeps = {
  * commands to PERF_EVENT, GET_DRIVE_TOKEN, START_RECORDING, STOP_RECORDING,
  * and GET_RECORDING_STATUS handlers.
  */
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, telemetry }: MessageHandlersDeps) {
+/**
+ * True only for a top-level page served by this extension. Guards the one
+ * message that installs a credential-bearing network rule.
+ */
+function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  const url = sender.url ?? '';
+  return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
+}
+
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -240,6 +252,31 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
         // A tombstoned or missing recording is not an error the player should
         // retry — it is a recording that is gone.
         sendResponse(manifest ? { ok: true, manifest } : { ok: false, error: 'This recording is no longer available' });
+        return;
+      }
+      if (msg.type === 'PREPARE_RECORDING_PLAYBACK_SOURCE' || msg.type === 'REFRESH_RECORDING_PLAYBACK_SOURCE') {
+        if (!driveAuthLease || !playback) throw new Error('Drive playback is unavailable');
+        // The tab id comes from the sender, never the message. A surface that
+        // could name its own tab could have Drive credentials installed into
+        // another one (ADR-0006 §12).
+        const tabId = sender.tab?.id;
+        if (tabId == null || !isExtensionPlayerSender(sender)) {
+          sendResponse({ ok: false, error: 'Playback can only be prepared by an extension page' });
+          return;
+        }
+        const manifest = await playback.getManifest(msg.recordingId);
+        const track = manifest?.tracks.find((candidate) => candidate.fileId === msg.fileId);
+        const drive = track?.sources.find((source) => source.kind === 'drive');
+        if (!drive || drive.kind !== 'drive') {
+          sendResponse({ ok: false, error: 'This file has no Drive copy to stream' });
+          return;
+        }
+        // A refresh re-mints the token and replaces the rule in place; the
+        // player keeps its position across the reload.
+        const url = await driveAuthLease.authorize(tabId, drive.fileId, {
+          refresh: msg.type === 'REFRESH_RECORDING_PLAYBACK_SOURCE',
+        });
+        sendResponse({ ok: true, url });
         return;
       }
       if (msg.type === 'LIST_RECORDING_NOTATIONS') {
