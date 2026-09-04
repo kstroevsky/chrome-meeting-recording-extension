@@ -100,6 +100,7 @@ export type PopupListActiveNotations = { type: 'LIST_ACTIVE_NOTATIONS' };
 export type PopupUpdateActiveNotation = { type: 'UPDATE_ACTIVE_NOTATION'; id: string; text: string };
 export type PopupRemoveActiveNotation = { type: 'REMOVE_ACTIVE_NOTATION'; id: string };
 export type PopupListRecordingNotations = { type: 'LIST_RECORDING_NOTATIONS'; recordingId: string };
+export type PopupGetPlaybackManifest = { type: 'GET_RECORDING_PLAYBACK_MANIFEST'; recordingId: string };
 /** Adds a notation to a finished recording at an explicit media offset. */
 export type PopupAddRecordingNotation = {
   type: 'ADD_RECORDING_NOTATION';
@@ -145,6 +146,7 @@ export type PopupToBg =
   | PopupUpdateActiveNotation
   | PopupRemoveActiveNotation
   | PopupListRecordingNotations
+  | PopupGetPlaybackManifest
   | PopupListRecordingNotationSummaries
   | PopupAddRecordingNotation
   | PopupUpdateRecordingNotation
@@ -176,6 +178,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupUpdateActiveNotation ? NotationListResult :
   T extends PopupRemoveActiveNotation ? NotationListResult :
   T extends PopupListRecordingNotations ? NotationListResult :
+  T extends PopupGetPlaybackManifest ?
+    { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :
   T extends PopupListRecordingNotationSummaries ?
     { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
   T extends PopupAddRecordingNotation ? NotationResult :

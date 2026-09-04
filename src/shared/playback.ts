@@ -34,10 +34,19 @@ export type PlaybackTrack = {
   sources: PlaybackSource[];
 };
 
+/**
+ * Drives the player's rail. Always `none` today — nothing produces transcripts
+ * yet — but the state is carried so the player branches on data rather than on
+ * a feature flag when transcription lands.
+ */
+export type TranscriptStatus = 'none' | 'processing' | 'ready';
+
 export type PlaybackManifest = {
   recordingId: string;
   title: string;
+  createdAt: number;
   durationMs?: number;
+  transcriptStatus: TranscriptStatus;
   notations: RecordingNotation[];
   tracks: PlaybackTrack[];
 };

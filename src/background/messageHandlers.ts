@@ -5,6 +5,7 @@
  * popup commands to their dedicated handlers.
  */
 
+import type { RecordingPlaybackService } from './RecordingPlaybackService';
 import { fetchDriveTokenWithFallback } from './driveAuth';
 import { isE2EMockDriveBuild } from '../shared/build';
 import { handleMeetingEndedMessage } from './recordingAutoStop';
@@ -48,6 +49,7 @@ export type MessageHandlersDeps = {
   cpuSampler?: CpuSampler | null;
   history?: RecordingHistoryService;
   notations?: RecordingNotationService;
+  playback?: RecordingPlaybackService;
   telemetry?: TelemetryRuntime;
 };
 
@@ -56,7 +58,7 @@ export type MessageHandlersDeps = {
  * commands to PERF_EVENT, GET_DRIVE_TOKEN, START_RECORDING, STOP_RECORDING,
  * and GET_RECORDING_STATUS handlers.
  */
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -230,6 +232,14 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
             ? await notations.update(historyId, msg.id, { text: msg.text })
             : await notations.remove(historyId, msg.id),
         });
+        return;
+      }
+      if (msg.type === 'GET_RECORDING_PLAYBACK_MANIFEST') {
+        if (!playback) throw new Error('Playback is unavailable');
+        const manifest = await playback.getManifest(msg.recordingId);
+        // A tombstoned or missing recording is not an error the player should
+        // retry — it is a recording that is gone.
+        sendResponse(manifest ? { ok: true, manifest } : { ok: false, error: 'This recording is no longer available' });
         return;
       }
       if (msg.type === 'LIST_RECORDING_NOTATIONS') {

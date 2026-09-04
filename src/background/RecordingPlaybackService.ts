@@ -31,6 +31,9 @@ export class RecordingPlaybackService {
     return {
       recordingId: entry.id,
       title: entry.name,
+      createdAt: entry.createdAt,
+      // No transcription pipeline exists yet, so the rail never renders today.
+      transcriptStatus: 'none',
       ...(entry.durationMs != null ? { durationMs: entry.durationMs } : {}),
       notations: await this.deps.listNotations(recordingId),
       tracks: media.map(toTrack).sort(byStreamOrder),

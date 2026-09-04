@@ -14,6 +14,7 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
+import { RecordingPlaybackService } from './background/RecordingPlaybackService';
 import { reconcileRetainedMedia } from './background/RetainedMediaReconciler';
 import { existsByKey, hasLibraryDirectory, listLibraryFiles, removeByKey } from './offscreen/storage/opfsLayout';
 import { OffscreenManager } from './background/OffscreenManager';
@@ -70,6 +71,10 @@ const history = new RecordingHistoryService(
     for (const key of keys) await removeByKey(root, key);
   },
 );
+const playback = new RecordingPlaybackService({
+  getEntry: (id) => historyRepository.get(id),
+  listNotations: (id) => notations.list(id),
+});
 const telemetry = new TelemetryRuntime();
 
 globalThis.addEventListener?.('error', (event: ErrorEvent) => {
@@ -251,7 +256,8 @@ registerSaveHandler(offscreen, L, history, (historyId) => session.runDurationMs(
 const controller = new RecordingController({ L, offscreen, session, telemetry, notations });
 
 // Register all popup message handlers.
-registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations, telemetry });
+registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
+  playback, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 
