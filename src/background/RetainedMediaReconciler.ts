@@ -23,6 +23,14 @@ import { parseLibraryKey } from '../offscreen/storage/opfsLayout';
 export const DEFAULT_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 
 export type RetainedMediaReconcilerDeps = {
+  /**
+   * False when `library/` has never been created. Nothing has ever been
+   * retained, so there is nothing to collect *and* nothing could have left a
+   * stale location behind — the whole pass is skipped, and history is not even
+   * opened. That keeps a fresh profile from paying for reconciliation it cannot
+   * need.
+   */
+  hasRetainedLibrary?: () => Promise<boolean>;
   /** Every file directly under `library/<history>/`. */
   listRetained: () => Promise<OpfsEntry[]>;
   /** Reads one history entry, tombstoned ones included. */
@@ -52,6 +60,8 @@ export async function reconcileRetainedMedia(deps: RetainedMediaReconcilerDeps):
   const now = deps.now ?? Date.now;
   const graceMs = deps.graceMs ?? DEFAULT_ORPHAN_GRACE_MS;
   const report: ReconcileReport = { healthy: 0, repaired: 0, collected: 0, deferred: 0, staleLocations: 0 };
+
+  if (deps.hasRetainedLibrary && !(await deps.hasRetainedLibrary())) return report;
 
   for (const entry of await deps.listRetained()) {
     try {

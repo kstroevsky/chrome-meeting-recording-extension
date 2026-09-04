@@ -195,3 +195,13 @@ export async function listLibraryFiles(root: DirectoryHandleLike): Promise<OpfsE
   }
   return entries;
 }
+
+/** True once anything has been retained (i.e. `library/` exists). */
+export async function hasLibraryDirectory(root: DirectoryHandleLike): Promise<boolean> {
+  try {
+    await root.getDirectoryHandle(LIBRARY_DIR);
+    return true;
+  } catch {
+    return false;
+  }
+}

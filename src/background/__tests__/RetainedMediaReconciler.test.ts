@@ -150,4 +150,20 @@ describe('reconcileRetainedMedia', () => {
       'Could not reconcile retained media; leaving it in place', KEY, expect.anything(),
     );
   });
+
+  it('does nothing, and does not open history, when nothing was ever retained', async () => {
+    const deps = makeDeps({ hasRetainedLibrary: jest.fn(async () => false) });
+
+    await expect(reconcileRetainedMedia(deps)).resolves.toEqual({
+      healthy: 0, repaired: 0, collected: 0, deferred: 0, staleLocations: 0,
+    });
+    expect(deps.listRetained).not.toHaveBeenCalled();
+    expect(deps.listLiveEntries).not.toHaveBeenCalled();
+  });
+
+  it('runs normally once a library exists', async () => {
+    const deps = makeDeps({ hasRetainedLibrary: jest.fn(async () => true) });
+    await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ repaired: 1 });
+  });
 });
+
