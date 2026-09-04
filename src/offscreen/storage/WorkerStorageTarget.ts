@@ -10,6 +10,7 @@
  */
 
 import type { SealedStorageFile, StorageTarget } from '../engine/RecorderEngineTypes';
+import { stagingKey } from './opfsLayout';
 import type { RecordingStream } from '../../shared/recording';
 import { debugPerf, nowMs, roundMs } from '../../shared/perf';
 import { TIMEOUTS } from '../../shared/timeouts';
@@ -179,7 +180,7 @@ export class WorkerStorageTarget implements StorageTarget {
       filename: this.filename,
       file,
       mimeType: this.mimeType,
-      opfsFilename: this.filename,
+      opfsFilename: stagingKey(this.filename),
       durationFixed,
       cleanup: async () => {
         try {
@@ -295,6 +296,6 @@ function openHandshake(worker: Worker, filename: string, mimeType: string): Prom
     };
     worker.addEventListener('message', onMessage as EventListener);
     worker.addEventListener('error', onError as EventListener);
-    worker.postMessage({ type: 'open', filename, mimeType });
+    worker.postMessage({ type: 'open', key: stagingKey(filename), filename, mimeType });
   });
 }

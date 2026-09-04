@@ -16,6 +16,7 @@
 
 import fixWebmDuration from 'webm-duration-fix';
 import { FlushPolicy } from './FlushPolicy';
+import { fileHandleForKey, removeByKey } from './opfsLayout';
 
 // FileSystemSyncAccessHandle is worker-only and absent from the DOM lib we
 // target, so declare the minimal surface we use.
@@ -31,7 +32,7 @@ interface SyncCapableFileHandle extends FileSystemFileHandle {
 }
 
 type InboundMessage =
-  | { type: 'open'; filename: string; mimeType: string }
+  | { type: 'open'; key: string; filename: string; mimeType: string }
   | { type: 'write'; seq: number; buffer: ArrayBuffer }
   | { type: 'close' }
   | { type: 'discard' };
@@ -44,6 +45,8 @@ const ctx = self as unknown as {
 let fileHandle: FileSystemFileHandle | null = null;
 let accessHandle: FileSystemSyncAccessHandle | null = null;
 let filename = '';
+/** Where the bytes live (ADR-0006). Distinct from `filename`, the display name. */
+let opfsKey = '';
 let mimeType = 'video/webm';
 let offset = 0;
 let flushPolicy: FlushPolicy | null = null;
@@ -54,9 +57,10 @@ ctx.onmessage = async (event) => {
     switch (msg.type) {
       case 'open': {
         filename = msg.filename;
+        opfsKey = msg.key;
         mimeType = msg.mimeType;
         const root = await navigator.storage.getDirectory();
-        fileHandle = await root.getFileHandle(filename, { create: true });
+        fileHandle = (await fileHandleForKey(root, opfsKey, { create: true })) as FileSystemFileHandle;
         accessHandle = await (fileHandle as SyncCapableFileHandle).createSyncAccessHandle();
         accessHandle.truncate(0);
         offset = 0;
@@ -114,8 +118,7 @@ ctx.onmessage = async (event) => {
         }
         accessHandle = null;
         try {
-          const root = await navigator.storage.getDirectory();
-          await root.removeEntry(filename);
+          await removeByKey(await navigator.storage.getDirectory(), opfsKey);
         } catch {
           /* a missing file is fine */
         }

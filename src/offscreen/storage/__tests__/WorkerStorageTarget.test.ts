@@ -95,7 +95,7 @@ describe('WorkerStorageTarget', () => {
     expect(target).toBeTruthy();
     expect(FakeWorker.instances).toHaveLength(1);
     expect(FakeWorker.instances[0].url).toBe('chrome-extension://test/opfsWorker.js');
-    expect(FakeWorker.instances[0].posted[0]).toEqual({ type: 'open', filename: 'rec.webm', mimeType: 'video/webm' });
+    expect(FakeWorker.instances[0].posted[0]).toEqual({ type: 'open', key: 'staging/rec.webm', filename: 'rec.webm', mimeType: 'video/webm' });
   });
 
   it('transfers chunk buffers (zero-copy) to the worker and resolves each write', async () => {
@@ -121,7 +121,7 @@ describe('WorkerStorageTarget', () => {
 
     const artifact = await target.close();
     expect(artifact?.filename).toBe('rec.webm');
-    expect(artifact?.opfsFilename).toBe('rec.webm');
+    expect(artifact?.opfsFilename).toBe('staging/rec.webm');
     expect(artifact?.file).toBeInstanceOf(File);
     expect(artifact?.durationFixed).toBe(true); // worker fixed duration in-thread
     expect(worker.posted.some((m) => m.type === 'close')).toBe(true);

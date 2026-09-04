@@ -31,6 +31,7 @@ describe('LocalFileTarget', () => {
   let mockClose: jest.Mock;
   let mockGetFile: jest.Mock;
   let mockRemoveEntry: jest.Mock;
+  let mockGetDirectoryHandle: jest.Mock;
 
   beforeEach(() => {
     mockWrite = jest.fn().mockResolvedValue(undefined);
@@ -45,7 +46,14 @@ describe('LocalFileTarget', () => {
       getFile: mockGetFile,
     });
     mockRemoveEntry = jest.fn().mockResolvedValue(undefined);
+    // Capture now lands in `staging/` (ADR-0006), so the root hands back a
+    // directory and the file operations happen inside it.
+    mockGetDirectoryHandle = jest.fn().mockResolvedValue({
+      getFileHandle: mockGetFileHandle,
+      removeEntry: mockRemoveEntry,
+    });
     mockGetDirectory = jest.fn().mockResolvedValue({
+      getDirectoryHandle: mockGetDirectoryHandle,
       getFileHandle: mockGetFileHandle,
       removeEntry: mockRemoveEntry,
     });
@@ -93,6 +101,17 @@ describe('LocalFileTarget', () => {
     expect(writeEvent?.fields.peakPendingWrites).toBe(1);
   });
 
+  it('opens its file inside staging/, not at the OPFS root', async () => {
+    const target = await LocalFileTarget.create('rec.webm', 'video/webm');
+    await target.write(new Blob(['chunk']));
+    expect(mockGetDirectoryHandle).toHaveBeenCalledWith('staging', { create: true });
+    expect(mockGetFileHandle).toHaveBeenCalledWith('rec.webm', { create: true });
+    // The display filename and the OPFS identity are now separate things.
+    const sealed = await target.close();
+    expect(sealed?.filename).toBe('rec.webm');
+    expect(sealed?.opfsFilename).toBe('staging/rec.webm');
+  });
+
   it('creates and writes chunks', async () => {
     const target = await LocalFileTarget.create('test.webm');
 
@@ -119,7 +138,7 @@ describe('LocalFileTarget', () => {
     expect(mockClose).toHaveBeenCalled();
     expect(mockGetFile).toHaveBeenCalled();
     expect(artifact?.filename).toBe('test.webm');
-    expect(artifact?.opfsFilename).toBe('test.webm');
+    expect(artifact?.opfsFilename).toBe('staging/test.webm');
     expect(await toText(artifact?.file)).toBe('test');
   });
 
