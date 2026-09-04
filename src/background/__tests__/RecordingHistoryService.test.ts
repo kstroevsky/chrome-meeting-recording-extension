@@ -608,7 +608,8 @@ describe('RecordingHistoryService artifact replicas', () => {
       await expect(service.remove('r1')).resolves.toBe(true);
 
       // Only OPFS keys: the Downloads file and the Drive file are the user's.
-      expect(deleteRetained).toHaveBeenCalledWith(['library/r1/tab.webm', 'library/r1/mic.webm']);
+      // The recording id rides along so the deleter can check for a playback lease.
+      expect(deleteRetained).toHaveBeenCalledWith(['library/r1/tab.webm', 'library/r1/mic.webm'], 'r1');
     });
 
     it('tombstones even when deleting the internal copies fails', async () => {

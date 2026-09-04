@@ -5,6 +5,7 @@
  * popup commands to their dedicated handlers.
  */
 
+import type { PlaybackLeaseManager } from './PlaybackLeaseManager';
 import type { DrivePlaybackAuthLeaseManager } from './DrivePlaybackAuthLeaseManager';
 import type { RecordingPlaybackService } from './RecordingPlaybackService';
 import { fetchDriveTokenWithFallback } from './driveAuth';
@@ -51,6 +52,7 @@ export type MessageHandlersDeps = {
   history?: RecordingHistoryService;
   notations?: RecordingNotationService;
   playback?: RecordingPlaybackService;
+  playbackLeases?: PlaybackLeaseManager;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
 };
@@ -70,7 +72,7 @@ function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean 
   return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
 }
 
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, driveAuthLease, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, playbackLeases, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -251,7 +253,20 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
         const manifest = await playback.getManifest(msg.recordingId);
         // A tombstoned or missing recording is not an error the player should
         // retry — it is a recording that is gone.
-        sendResponse(manifest ? { ok: true, manifest } : { ok: false, error: 'This recording is no longer available' });
+        if (!manifest) {
+          sendResponse({ ok: false, error: 'This recording is no longer available' });
+          return;
+        }
+        // Asking for the manifest is the moment a tab starts reading these
+        // bytes, so it is the moment the lease begins (ADR-0006 §15).
+        const readerTab = sender.tab?.id;
+        if (readerTab != null && playbackLeases && isExtensionPlayerSender(sender)) {
+          const keys = manifest.tracks.flatMap((track) => track.sources
+            .filter((source) => source.kind === 'opfs')
+            .map((source) => (source as { key: string }).key));
+          await playbackLeases.acquire(readerTab, manifest.recordingId, keys);
+        }
+        sendResponse({ ok: true, manifest });
         return;
       }
       if (msg.type === 'PREPARE_RECORDING_PLAYBACK_SOURCE' || msg.type === 'REFRESH_RECORDING_PLAYBACK_SOURCE') {

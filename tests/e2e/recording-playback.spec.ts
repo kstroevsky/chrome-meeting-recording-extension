@@ -338,5 +338,86 @@ test.describe('recording playback (integration)', () => {
       await closeHarness(harness);
     }
   });
+
+  test('keeps a playing recording readable after it is removed from history', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'off', recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(2_000);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
+        timeout: 20_000,
+      }).toBeGreaterThanOrEqual(1);
+
+      const countRetained = async () => await page.evaluate(async () => {
+        const root = await navigator.storage.getDirectory();
+        const library = await root.getDirectoryHandle('library').catch(() => null);
+        if (!library) return 0;
+        let total = 0;
+        for await (const owner of (library as unknown as { keys(): AsyncIterable<string> }).keys()) {
+          const dir = await library.getDirectoryHandle(owner);
+          for await (const _ of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) total += 1;
+        }
+        return total;
+      });
+      expect(await countRetained()).toBeGreaterThan(0);
+
+      // Remove the recording while the player holds it. The row goes at once…
+      const recordingId = await page.evaluate(async () => {
+        const res: any = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'LIST_RECORDING_HISTORY' }, resolve);
+        });
+        const id = res.entries[0].id;
+        await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'REMOVE_RECORDING_HISTORY', id }, resolve);
+        });
+        return id;
+      });
+      expect(recordingId).toBeTruthy();
+
+      // …but the bytes stay, because a reader still holds a lease, and playback
+      // keeps working rather than breaking mid-frame.
+      await page.waitForTimeout(1_500);
+      expect(await countRetained()).toBeGreaterThan(0);
+      await video.evaluate(async (el: HTMLVideoElement) => { await el.play().catch(() => {}); });
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 15_000,
+      }).toBeGreaterThan(0);
+
+      // Closing the last reader is what finally frees them.
+      await page.close();
+      const other = await harness.context.newPage();
+      await other.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect.poll(async () => await other.evaluate(async () => {
+        const root = await navigator.storage.getDirectory();
+        const library = await root.getDirectoryHandle('library').catch(() => null);
+        if (!library) return 0;
+        let total = 0;
+        for await (const owner of (library as unknown as { keys(): AsyncIterable<string> }).keys()) {
+          const dir = await library.getDirectoryHandle(owner);
+          for await (const _ of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) total += 1;
+        }
+        return total;
+      }), { timeout: 25_000 }).toBe(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
 });
 

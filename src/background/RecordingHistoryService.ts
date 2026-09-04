@@ -44,7 +44,7 @@ export class RecordingHistoryService {
      * and their Drive file are theirs, and removing a history row must not
      * touch either.
      */
-    private readonly deleteRetainedMedia?: (keys: string[]) => Promise<void>,
+    private readonly deleteRetainedMedia?: (keys: string[], historyId: string) => Promise<void>,
   ) {}
 
   async listPage(cursor?: RecordingHistoryCursor): Promise<RecordingHistoryPage> {
@@ -169,7 +169,7 @@ export class RecordingHistoryService {
     // is handled by the playback lease (ADR-0006 §15), which defers this;
     // until leases exist, the startup reconciler collects anything missed.
     if (removed && retainedKeys.length && this.deleteRetainedMedia) {
-      await this.deleteRetainedMedia(retainedKeys).catch(() => {});
+      await this.deleteRetainedMedia(retainedKeys, id).catch(() => {});
     }
     return removed;
   }
