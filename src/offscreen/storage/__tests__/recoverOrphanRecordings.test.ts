@@ -4,6 +4,7 @@ import {
 } from '../recoverOrphanRecordings';
 
 const NAME = 'google-meet-abc-20260101T0900-recording.webm';
+const KEY = `staging/${NAME}`;
 const CUTOFF = 1_000_000;
 const blob = (size: number) => ({ size } as Blob);
 
@@ -13,7 +14,7 @@ function makeDeps(over: Partial<OrphanRecoveryDeps> = {}): OrphanRecoveryDeps {
     warn: jest.fn(),
     cutoffMs: CUTOFF,
     // Default candidate is older than the cutoff -> a genuine orphan.
-    listOrphanCandidates: jest.fn(async () => [{ name: NAME, lastModifiedMs: CUTOFF - 1 }]),
+    listOrphanCandidates: jest.fn(async () => [{ key: KEY, filename: NAME, lastModifiedMs: CUTOFF - 1 }]),
     excludedNames: jest.fn(async () => new Set<string>()),
     openOpfsFile: jest.fn(async () => blob(100)),
     sealFile: jest.fn(async (raw) => raw),
@@ -35,12 +36,12 @@ describe('recoverOrphanRecordings', () => {
     const deps = makeDeps();
     await recoverOrphanRecordings(deps);
     expect(deps.sealFile).toHaveBeenCalledTimes(1);
-    expect(deps.saveRecovered).toHaveBeenCalledWith(NAME, expect.anything(), NAME);
+    expect(deps.saveRecovered).toHaveBeenCalledWith(NAME, expect.anything(), KEY);
   });
 
   it('skips files newer than the cutoff (the active recording is never touched)', async () => {
     const deps = makeDeps({
-      listOrphanCandidates: jest.fn(async () => [{ name: NAME, lastModifiedMs: CUTOFF + 1 }]),
+      listOrphanCandidates: jest.fn(async () => [{ key: KEY, filename: NAME, lastModifiedMs: CUTOFF + 1 }]),
     });
     await recoverOrphanRecordings(deps);
     expect(deps.openOpfsFile).not.toHaveBeenCalled();
@@ -48,7 +49,8 @@ describe('recoverOrphanRecordings', () => {
   });
 
   it('skips files that have a pending-upload marker (#1 owns them)', async () => {
-    const deps = makeDeps({ excludedNames: jest.fn(async () => new Set([NAME])) });
+    // Markers hold the OPFS key, so exclusion is matched on the key.
+    const deps = makeDeps({ excludedNames: jest.fn(async () => new Set([KEY])) });
     await recoverOrphanRecordings(deps);
     expect(deps.saveRecovered).not.toHaveBeenCalled();
   });
@@ -57,13 +59,13 @@ describe('recoverOrphanRecordings', () => {
     const deps = makeDeps({ openOpfsFile: jest.fn(async () => blob(0)) });
     await recoverOrphanRecordings(deps);
     expect(deps.saveRecovered).not.toHaveBeenCalled();
-    expect(deps.removeOpfsFile).toHaveBeenCalledWith(NAME);
+    expect(deps.removeOpfsFile).toHaveBeenCalledWith(KEY);
   });
 
   it('deletes a missing orphan (open returns null)', async () => {
     const deps = makeDeps({ openOpfsFile: jest.fn(async () => null) });
     await recoverOrphanRecordings(deps);
-    expect(deps.removeOpfsFile).toHaveBeenCalledWith(NAME);
+    expect(deps.removeOpfsFile).toHaveBeenCalledWith(KEY);
     expect(deps.saveRecovered).not.toHaveBeenCalled();
   });
 
@@ -75,11 +77,28 @@ describe('recoverOrphanRecordings', () => {
     expect(deps.warn).toHaveBeenCalled();
   });
 
+  /**
+   * OF-1: capture moved into `staging/`, but recordings orphaned before that
+   * still sit at the OPFS root under a bare filename. They must keep recovering,
+   * or a crash from before the upgrade strands its bytes forever.
+   */
+  it('recovers a pre-split orphan sitting at the OPFS root', async () => {
+    const legacy = 'google-meet-old-20251201T0900-recording.webm';
+    const deps = makeDeps({
+      listOrphanCandidates: jest.fn(async () => [
+        { key: legacy, filename: legacy, lastModifiedMs: CUTOFF - 1 },
+      ]),
+    });
+    await recoverOrphanRecordings(deps);
+    expect(deps.openOpfsFile).toHaveBeenCalledWith(legacy);
+    expect(deps.saveRecovered).toHaveBeenCalledWith(legacy, expect.anything(), legacy);
+  });
+
   it('processes each old-enough orphan independently', async () => {
     const deps = makeDeps({
       listOrphanCandidates: jest.fn(async () => [
-        { name: NAME, lastModifiedMs: CUTOFF - 1 },
-        { name: 'google-meet-abc-20260101T0900-mic.webm', lastModifiedMs: CUTOFF - 1 },
+        { key: KEY, filename: NAME, lastModifiedMs: CUTOFF - 1 },
+        { key: 'staging/google-meet-abc-20260101T0900-mic.webm', filename: 'google-meet-abc-20260101T0900-mic.webm', lastModifiedMs: CUTOFF - 1 },
       ]),
     });
     await recoverOrphanRecordings(deps);
@@ -90,16 +109,16 @@ describe('recoverOrphanRecordings', () => {
     const deps = makeDeps({
       maxPerRun: 2,
       listOrphanCandidates: jest.fn(async () => [
-        { name: 'a-recording.webm', lastModifiedMs: CUTOFF - 3 },
-        { name: 'b-recording.webm', lastModifiedMs: CUTOFF - 2 },
-        { name: 'c-recording.webm', lastModifiedMs: CUTOFF - 1 },
+        { key: 'staging/a-recording.webm', filename: 'a-recording.webm', lastModifiedMs: CUTOFF - 3 },
+        { key: 'staging/b-recording.webm', filename: 'b-recording.webm', lastModifiedMs: CUTOFF - 2 },
+        { key: 'staging/c-recording.webm', filename: 'c-recording.webm', lastModifiedMs: CUTOFF - 1 },
       ]),
     });
     await recoverOrphanRecordings(deps);
     expect(deps.saveRecovered).toHaveBeenCalledTimes(2);
     // Oldest-first: the two oldest are taken, the newest is deferred.
-    expect(deps.saveRecovered).toHaveBeenCalledWith('a-recording.webm', expect.anything(), 'a-recording.webm');
-    expect(deps.saveRecovered).toHaveBeenCalledWith('b-recording.webm', expect.anything(), 'b-recording.webm');
+    expect(deps.saveRecovered).toHaveBeenCalledWith('a-recording.webm', expect.anything(), 'staging/a-recording.webm');
+    expect(deps.saveRecovered).toHaveBeenCalledWith('b-recording.webm', expect.anything(), 'staging/b-recording.webm');
   });
 
   it('delivers raw bytes (skips the in-memory seal) for files above maxSealBytes', async () => {
@@ -107,7 +126,7 @@ describe('recoverOrphanRecordings', () => {
     const deps = makeDeps({ maxSealBytes: 100, openOpfsFile: jest.fn(async () => raw) });
     await recoverOrphanRecordings(deps);
     expect(deps.sealFile).not.toHaveBeenCalled();
-    expect(deps.saveRecovered).toHaveBeenCalledWith(NAME, raw, NAME);
+    expect(deps.saveRecovered).toHaveBeenCalledWith(NAME, raw, KEY);
   });
 
   it('still seals files at or below maxSealBytes', async () => {

@@ -63,7 +63,8 @@ export type DirectoryHandleLike = {
   getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<DirectoryHandleLike>;
   getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>;
   removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
-  keys(): AsyncIterable<string>;
+  /** Optional: the DOM lib we target omits it, though every real handle has it. */
+  keys?(): AsyncIterable<string>;
 };
 
 export type FileHandleLike = {
@@ -135,7 +136,9 @@ export async function listFiles(root: DirectoryHandleLike, prefix: OpfsKey | '')
     return entries; // the directory does not exist yet
   }
   try {
-    for await (const name of dir.keys()) {
+    const names = (dir as { keys?: () => AsyncIterable<string> }).keys?.();
+    if (!names) return entries;
+    for await (const name of names) {
       try {
         const file = await (await dir.getFileHandle(name)).getFile();
         entries.push({ key: prefix ? `${prefix}/${name}` : name, name, lastModifiedMs: file.lastModified });

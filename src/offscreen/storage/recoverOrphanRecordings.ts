@@ -25,8 +25,14 @@ import type { PendingUploadStore } from '../drive/PendingUploadStore';
 import type { LocalSaveRequest } from '../RecordingFinalizer';
 import type { RecordingStream } from '../../shared/recording';
 import { isWebmRecordingFilename } from '../../shared/recordingFormats';
+import { listFiles, readFileByKey, removeByKey, STAGING_DIR, type OpfsKey } from './opfsLayout';
 
-export type OrphanCandidate = { name: string; lastModifiedMs: number };
+/**
+ * A recoverable file. `key` is its OPFS identity (ADR-0006) and `filename` the
+ * display name; before the staging split these were the same string, which is
+ * why they had to be pulled apart.
+ */
+export type OrphanCandidate = { key: OpfsKey; filename: string; lastModifiedMs: number };
 
 /** Recover at most this many orphans per launch; the rest drain on later launches. */
 const MAX_ORPHANS_PER_RUN = 25;
@@ -53,16 +59,16 @@ export type OrphanRecoveryDeps = {
   maxSealBytes?: number;
   /** OPFS recording files with their last-modified time. */
   listOrphanCandidates: () => Promise<OrphanCandidate[]>;
-  /** Names to skip because another path owns them (e.g. pending Drive uploads). */
+  /** OPFS keys to skip because another path owns them (e.g. pending Drive uploads). */
   excludedNames: () => Promise<Set<string>>;
-  /** Reads an OPFS file, or null when missing/unreadable. */
-  openOpfsFile: (name: string) => Promise<Blob | null>;
+  /** Reads an OPFS file by key, or null when missing/unreadable. */
+  openOpfsFile: (key: OpfsKey) => Promise<Blob | null>;
   /** Best-effort duration fix; the wiring returns the raw bytes on failure. */
   sealFile: (raw: Blob) => Promise<Blob>;
   /** Hands a recovered file to the local-save flow (download + OPFS cleanup). */
-  saveRecovered: (filename: string, file: Blob, opfsFilename: string) => void;
+  saveRecovered: (filename: string, file: Blob, opfsKey: OpfsKey) => void;
   /** Deletes an empty/missing OPFS file outright. */
-  removeOpfsFile: (name: string) => Promise<void>;
+  removeOpfsFile: (key: OpfsKey) => Promise<void>;
 };
 
 export async function recoverOrphanRecordings(deps: OrphanRecoveryDeps): Promise<void> {
@@ -71,7 +77,7 @@ export async function recoverOrphanRecordings(deps: OrphanRecoveryDeps): Promise
     deps.excludedNames(),
   ]);
   const orphans = candidates
-    .filter((candidate) => candidate.lastModifiedMs < deps.cutoffMs && !excluded.has(candidate.name))
+    .filter((candidate) => candidate.lastModifiedMs < deps.cutoffMs && !excluded.has(candidate.key))
     .sort((a, b) => a.lastModifiedMs - b.lastModifiedMs); // oldest (most likely abandoned) first
   if (!orphans.length) return;
 
@@ -82,25 +88,25 @@ export async function recoverOrphanRecordings(deps: OrphanRecoveryDeps): Promise
       (deferred > 0 ? ` (${deferred} deferred to next launch)` : '')
   );
 
-  for (const { name } of batch) {
+  for (const { key, filename } of batch) {
     try {
-      const raw = await deps.openOpfsFile(name);
+      const raw = await deps.openOpfsFile(key);
       if (!raw || raw.size === 0) {
-        await deps.removeOpfsFile(name);
+        await deps.removeOpfsFile(key);
         continue;
       }
       // Skip the in-memory duration fix for oversized files — buffering a multi-GB
       // blob can OOM the offscreen. The raw, disk-backed bytes are still a complete,
       // playable WebM (the same best-effort fallback sealFile itself uses on error).
-      const sealed = !isWebmRecordingFilename(name)
+      const sealed = !isWebmRecordingFilename(filename)
         ? raw
         : deps.maxSealBytes != null && raw.size > deps.maxSealBytes ? raw : await deps.sealFile(raw);
       // Save flow downloads then (on success only) cleans up OPFS; a failed
       // download leaves the orphan in place for the next launch to retry.
-      deps.saveRecovered(name, sealed, name);
-      deps.log('Recovered orphaned recording', name);
+      deps.saveRecovered(filename, sealed, key);
+      deps.log('Recovered orphaned recording', key);
     } catch (e) {
-      deps.warn('Could not recover orphaned recording; will retry next launch', name, describeRuntimeError(e));
+      deps.warn('Could not recover orphaned recording; will retry next launch', key, describeRuntimeError(e));
     }
   }
 }
@@ -124,35 +130,25 @@ export function recoverOrphanRecordingsWithChrome(opts: {
     log: opts.log,
     warn: opts.warn,
     listOrphanCandidates: async () => {
-      const candidates: OrphanCandidate[] = [];
       try {
         const root = await navigator.storage.getDirectory();
-        for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) {
-          if (!isRecordingFilename(name)) continue;
-          try {
-            const handle = await root.getFileHandle(name);
-            const file = await handle.getFile();
-            candidates.push({ name, lastModifiedMs: file.lastModified });
-          } catch {
-            // Unreadable (e.g. locked by an active sync-access handle) -> skip.
-          }
-        }
+        // Two arms, and only two. `staging/` is where capture writes today. The
+        // OPFS root is where it wrote before ADR-0006, so anything left there is
+        // by definition a pre-split orphan — no version flag needed, and the arm
+        // retires itself once the last one drains. `listFiles` never descends,
+        // so `library/` is invisible here: recovery must never touch retained
+        // media.
+        const entries = [...await listFiles(root, STAGING_DIR), ...await listFiles(root, '')];
+        return entries
+          .filter((entry) => isRecordingFilename(entry.name))
+          .map((entry) => ({ key: entry.key, filename: entry.name, lastModifiedMs: entry.lastModifiedMs }));
       } catch {
-        /* OPFS unavailable */
+        return []; /* OPFS unavailable */
       }
-      return candidates;
     },
     excludedNames: async () =>
       new Set((await opts.pendingUploads.list()).map((entry) => entry.opfsFilename)),
-    openOpfsFile: async (name) => {
-      try {
-        const root = await navigator.storage.getDirectory();
-        const handle = await root.getFileHandle(name);
-        return await handle.getFile();
-      } catch {
-        return null;
-      }
-    },
+    openOpfsFile: async (key) => readFileByKey(await navigator.storage.getDirectory(), key),
     sealFile: async (raw) => {
       try {
         const { default: fixWebmDuration } = await import('webm-duration-fix');
@@ -161,23 +157,16 @@ export function recoverOrphanRecordingsWithChrome(opts: {
         return raw; // best-effort: deliver the raw (possibly partial) file unsealed
       }
     },
-    saveRecovered: (filename, file, opfsFilename) => {
+    saveRecovered: (filename, file, opfsKey) => {
       const blobUrl = URL.createObjectURL(file);
       opts.requestSave({
         stream: streamFromRecordingFilename(filename),
         filename,
         blobUrl,
-        opfsFilename,
+        opfsFilename: opfsKey,
       });
     },
-    removeOpfsFile: async (name) => {
-      try {
-        const root = await navigator.storage.getDirectory();
-        await root.removeEntry(name);
-      } catch {
-        /* already gone */
-      }
-    },
+    removeOpfsFile: async (key) => removeByKey(await navigator.storage.getDirectory(), key),
   });
 }
 

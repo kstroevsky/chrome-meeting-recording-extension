@@ -8,6 +8,41 @@
 
 The long-meeting safety mechanism. Recorder chunks stream straight to OPFS so memory stays **bounded** instead of growing with recording length — a real 22-min / 507 MB recording peaks at ~23 MB JS heap (i.e. O(1) memory, not O(recording size)). Think of it as a small **bounded producer→consumer pipeline**: `MediaRecorder` produces chunks, a write target consumes them to disk, and a backpressure gate plus a fallback ladder keep the buffer between them from ever growing without limit. Everything in this folder exists to make the consumer either keep up, degrade gracefully, or stop cleanly with the captured prefix preserved — never to silently drop data or OOM the document.
 
+## Two OPFS namespaces (ADR-0006)
+
+OPFS is split in two, with different owners:
+
+```
+staging/   capture, sealing, delivery, crash recovery — transient by design
+library/   media the extension intentionally retains for the player
+```
+
+Files are addressed by an **OPFS key**: a `/`-separated path relative to the OPFS
+root (`opfsLayout.ts`). `SealedStorageFile.opfsFilename` is that key, not a bare
+name — the display filename and the physical identity are now separate things,
+which is what lets a recording be promoted into `library/` without renaming it.
+
+One property carries the entire legacy migration: **a key with no separator is a
+pre-split root file**. Recordings orphaned before the upgrade, and pending-upload
+markers written before it, hold bare filenames and keep resolving at the root
+with no version flag, no marker, and no migration pass. Orphan recovery scans
+`staging/` *and* the root for exactly that reason, and the root arm retires
+itself once the last one drains.
+
+`listFiles` never descends into subdirectories, which is what keeps a root scan
+from seeing `library/`. **Orphan recovery must never touch retained media** —
+deleting it belongs to history/retention, not capture recovery.
+
+Promotion (`RetainedMediaStore`) moves a sealed artifact from `staging/` to
+`library/`. It cannot be atomic with the IndexedDB metadata write, so it is
+idempotent instead: library keys are deterministic, and a promotion interrupted
+by a crash re-runs onto the same destination. It prefers
+`FileSystemHandle.move()` — a metadata operation rather than a multi-gigabyte
+copy — but decides that capability by *calling* it and catching, never by
+`typeof`: a shipping Chromium target exposes `move` and throws `NotAllowedError`
+from it (see `tests/spikes/opfs-move-spike.mjs`). The fallback is a streamed copy,
+bounded in memory but not in disk.
+
 ## The `StorageTarget` contract
 
 The three targets are interchangeable because they honor one small interface (`../engine/RecorderEngineTypes.ts`):
@@ -22,7 +57,7 @@ interface SealedStorageFile {
   filename: string;
   file: Blob;                    // the sealed recording
   mimeType?: string;             // base type for download/upload, e.g. video/mp4
-  opfsFilename?: string;         // set iff OPFS-backed → the orphan-recovery key
+  opfsFilename?: string;         // set iff OPFS-backed → the OPFS *key* (see below)
   durationFixed?: boolean;       // true if the WebM duration fix already ran (in-worker)
   cleanup: () => Promise<void>;  // delete the temp/OPFS file once delivered
 }
