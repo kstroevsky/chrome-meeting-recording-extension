@@ -38,6 +38,13 @@ export class RecordingHistoryService {
      * than a direct dependency keeps this service port-only.
      */
     private readonly onRemoved?: (id: string) => Promise<void>,
+    /**
+     * Deletes extension-owned playback copies when a recording is removed
+     * (ADR-0006). Only OPFS keys are ever passed here: a user's Downloads file
+     * and their Drive file are theirs, and removing a history row must not
+     * touch either.
+     */
+    private readonly deleteRetainedMedia?: (keys: string[]) => Promise<void>,
   ) {}
 
   async listPage(cursor?: RecordingHistoryCursor): Promise<RecordingHistoryPage> {
@@ -146,14 +153,24 @@ export class RecordingHistoryService {
 
   async remove(id: string): Promise<boolean> {
     let removed = false;
+    let retainedKeys: string[] = [];
     await this.repository.update(id, (current) => {
       if (!current || current.deletedAt) return current;
       removed = true;
+      retainedKeys = current.files.flatMap((file) => file.locations
+        .filter((location) => location.kind === 'opfs')
+        .map((location) => location.key));
       return { ...current, deletedAt: this.now() };
     });
     // The tombstone is the durable outcome; dependent cleanup is best-effort so
     // a failing side store can never make a delete look like it did not happen.
     if (removed && this.onRemoved) await this.onRemoved(id).catch(() => {});
+    // Internal playback copies go with the recording. A file still being played
+    // is handled by the playback lease (ADR-0006 §15), which defers this;
+    // until leases exist, the startup reconciler collects anything missed.
+    if (removed && retainedKeys.length && this.deleteRetainedMedia) {
+      await this.deleteRetainedMedia(retainedKeys).catch(() => {});
+    }
     return removed;
   }
 

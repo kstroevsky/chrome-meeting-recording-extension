@@ -33,7 +33,7 @@ export class RecordingsController {
   }
 
   async remove(id: string) {
-    if (!confirm('Remove this item from recording history? Files will not be deleted.')) return;
+    if (!confirm('Remove this item from recording history? Its in-extension playback copy is deleted; your downloaded and Google Drive files are not.')) return;
     try {
       const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
       if (!response.ok) throw new Error(response.error);
@@ -45,7 +45,7 @@ export class RecordingsController {
   async removeMany(ids: string[]) {
     const uniqueIds = [...new Set(ids)].filter((id) => this.entries.some((entry) => entry.id === id));
     if (!uniqueIds.length) return;
-    if (!confirm(`Remove ${uniqueIds.length} item${uniqueIds.length === 1 ? '' : 's'} from recording history? Files will not be deleted.`)) return;
+    if (!confirm(`Remove ${uniqueIds.length} item${uniqueIds.length === 1 ? '' : 's'} from recording history? Their in-extension playback copies are deleted; your downloaded and Google Drive files are not.`)) return;
     try {
       for (const id of uniqueIds) {
         const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });

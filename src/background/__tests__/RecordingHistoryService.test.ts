@@ -584,5 +584,63 @@ describe('RecordingHistoryService artifact replicas', () => {
     expect(entry.deletedAt).toBe(10);
     expect(entry.files[0].locations).toEqual([]);
   });
+
+  /** ADR-0006 §24: removing a recording deletes only what the extension owns. */
+  describe('removal deletes internal copies only', () => {
+    const seeded = async () => {
+      const repo = new MemoryRepository();
+      const deleteRetained = jest.fn().mockResolvedValue(undefined);
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, undefined, deleteRetained);
+      await service.createPending('r1', [
+        { id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' },
+        { id: 'r1:mic', stream: 'mic', filename: 'demo-mic.webm' },
+      ], 'drive');
+      await service.recordArtifactLocation('r1', 'r1:tab', { kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 5 });
+      await service.recordArtifactLocation('r1', 'r1:mic', { kind: 'opfs', key: 'library/r1/mic.webm', retainedAt: 5 });
+      await service.localSaveSettled('r1', 'tab', 7, 'complete');
+      await service.applyUploadJob(uploadJob());
+      return { repo, service, deleteRetained };
+    };
+
+    it('deletes every retained OPFS copy and nothing else', async () => {
+      const { service, deleteRetained } = await seeded();
+
+      await expect(service.remove('r1')).resolves.toBe(true);
+
+      // Only OPFS keys: the Downloads file and the Drive file are the user's.
+      expect(deleteRetained).toHaveBeenCalledWith(['library/r1/tab.webm', 'library/r1/mic.webm']);
+    });
+
+    it('tombstones even when deleting the internal copies fails', async () => {
+      const repo = new MemoryRepository();
+      const deleteRetained = jest.fn().mockRejectedValue(new Error('disk error'));
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, undefined, deleteRetained);
+      await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'a.webm' }], 'local');
+      await service.recordArtifactLocation('r1', 'r1:tab', { kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 5 });
+
+      await expect(service.remove('r1')).resolves.toBe(true);
+      expect((await repo.get('r1'))!.deletedAt).toBe(10);
+    });
+
+    it('does not call the deleter when nothing was retained', async () => {
+      const repo = new MemoryRepository();
+      const deleteRetained = jest.fn();
+      const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, undefined, deleteRetained);
+      await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'a.webm' }], 'local');
+      await service.localSaveSettled('r1', 'tab', 7, 'complete');
+
+      await service.remove('r1');
+      expect(deleteRetained).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op on a second removal', async () => {
+      const { service, deleteRetained } = await seeded();
+      await service.remove('r1');
+      deleteRetained.mockClear();
+
+      await expect(service.remove('r1')).resolves.toBe(false);
+      expect(deleteRetained).not.toHaveBeenCalled();
+    });
+  });
 });
 

@@ -14,6 +14,8 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
+import { reconcileRetainedMedia } from './background/RetainedMediaReconciler';
+import { existsByKey, hasLibraryDirectory, listLibraryFiles, removeByKey } from './offscreen/storage/opfsLayout';
 import { OffscreenManager } from './background/OffscreenManager';
 import { PerfDebugStore } from './background/PerfDebugStore';
 import { RecordingController } from './background/RecordingController';
@@ -335,5 +337,39 @@ const sessionHydration = (async () => {
     L.warn('Session re-hydration failed (non-fatal):', e);
   } finally {
     sessionHydrated = true;
+  }
+
+  // Converge library/ and history after a crash (ADR-0006). Background reads
+  // OPFS here only to list and delete — it never reads media bytes, which stay
+  // the browser's job to move. Strictly best-effort: a failure must not keep
+  // the worker from serving recording commands.
+  try {
+    // Once per browser session, not once per service-worker wake: an MV3 worker
+    // is evicted and restarted constantly, and this pass is startup work, not
+    // per-event work. `chrome.storage.session` outlives the worker and dies with
+    // the browser, which is exactly the lifetime wanted here.
+    const RECONCILED_KEY = 'retainedMediaReconciled';
+    const already = await chrome.storage.session.get(RECONCILED_KEY).catch(() => ({} as Record<string, unknown>));
+    if ((already as Record<string, unknown>)[RECONCILED_KEY]) return;
+    await chrome.storage.session.set({ [RECONCILED_KEY]: true }).catch(() => {});
+
+    const report = await reconcileRetainedMedia({
+      hasRetainedLibrary: async () => hasLibraryDirectory(await navigator.storage.getDirectory()),
+      listRetained: async () => listLibraryFiles(await navigator.storage.getDirectory()),
+      getEntry: (id) => historyRepository.get(id),
+      listLiveEntries: () => history.list(),
+      exists: async (key) => existsByKey(await navigator.storage.getDirectory(), key),
+      removeRetained: async (key) => removeByKey(await navigator.storage.getDirectory(), key),
+      recordLocation: (historyId, fileId, key, retainedAt) =>
+        history.recordArtifactLocation(historyId, fileId, { kind: 'opfs', key, retainedAt }),
+      dropLocation: (historyId, fileId, key) => history.dropArtifactLocation(historyId, fileId, key),
+      log: L.log,
+      warn: L.warn,
+    });
+    if (report.repaired || report.collected || report.staleLocations) {
+      L.log('Retained-media reconciliation:', report);
+    }
+  } catch (e) {
+    L.warn('Retained-media reconciliation failed (non-fatal):', e);
   }
 })();
