@@ -36,11 +36,11 @@ export function stopKeepAlive() {
 export function registerSaveHandler(
   offscreen: OffscreenManager,
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void },
-  history?: Pick<RecordingHistoryService, 'createPending' | 'localSaveSettled' | 'setDuration'>,
+  history?: Pick<RecordingHistoryService, 'createPending' | 'localSaveSettled' | 'setDuration' | 'recordArtifactLocation'>,
   /** Recorded duration of the run that produced this artifact, for the history row. */
   runDurationMs?: (historyId: string) => number | undefined,
 ) {
-  offscreen.onSaveRequested = ({ historyId, stream, kind, filename, blobUrl, opfsFilename }) => {
+  offscreen.onSaveRequested = ({ historyId, stream, kind, retainedKey, filename, blobUrl, opfsFilename }) => {
     const resolvedFilename =
       typeof filename === 'string' && filename.trim()
         ? filename
@@ -71,6 +71,15 @@ export function registerSaveHandler(
           // still holds it here: OFFSCREEN_SAVE is dispatched from the finalize
           // path before the offscreen reports `idle`.
           await history?.setDuration(historyId, runDurationMs?.(historyId));
+          // Persist the retained copy before the download is even attempted, so
+          // a failed delivery still leaves a playable recording (ADR-0006).
+          if (retainedKey) {
+            await history?.recordArtifactLocation(historyId, fileId, {
+              kind: 'opfs',
+              key: retainedKey,
+              retainedAt: Date.now(),
+            });
+          }
         } catch (error) {
           L.warn('Recording history initialization failed:', error);
         }
@@ -113,7 +122,11 @@ export function registerSaveHandler(
       if (historyId) void history?.localSaveSettled(historyId, stream, downloadId, settled, undefined, kind)
         .catch((historyError) => L.warn('Recording history update failed:', historyError));
       if (settled === 'complete') {
-        offscreen.revokeBlobUrl(blobUrl, opfsFilename);
+        // A retained artifact was promoted out of staging before delivery, so
+        // the extension owns these bytes now: free the object URL and keep the
+        // file. Without one, the pre-ADR-0006 rule still applies — the staging
+        // source is temporary and a confirmed download is what retires it.
+        offscreen.revokeBlobUrl(blobUrl, retainedKey ? undefined : opfsFilename);
       } else if (settled === 'interrupted') {
         offscreen.revokeBlobUrl(blobUrl);
       }

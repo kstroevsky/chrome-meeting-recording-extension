@@ -7,6 +7,7 @@ import {
   recordingLabelFromFilename,
   upsertArtifactLocation,
   type ArtifactDelivery,
+  type ArtifactLocation,
   type RecordingHistoryCursor,
   type RecordingHistoryEntry,
   type RecordingHistoryFile,
@@ -329,6 +330,26 @@ export class RecordingHistoryService {
         };
       });
       return { ...current, files, status: summarize(files) };
+    });
+  }
+
+  /**
+   * Records one physical replica of an artifact (ADR-0006). Used by the
+   * finalize path to persist a retained OPFS copy before external delivery is
+   * even attempted, so a failed download still leaves a playable recording.
+   * A no-op for a missing or tombstoned row, so a late call cannot resurrect one.
+   */
+  async recordArtifactLocation(
+    historyId: string,
+    fileId: string,
+    location: ArtifactLocation,
+  ): Promise<void> {
+    await this.repository.update(historyId, (current) => {
+      if (!current || current.deletedAt) return current;
+      const files = current.files.map((file) => file.id === fileId
+        ? { ...file, locations: upsertArtifactLocation(file.locations, location) }
+        : file);
+      return { ...current, files };
     });
   }
 
