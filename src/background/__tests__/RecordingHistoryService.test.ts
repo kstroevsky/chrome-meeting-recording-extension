@@ -333,3 +333,229 @@ describe('RecordingHistoryService', () => {
     }));
   });
 });
+
+/**
+ * ADR-0006: delivery completions add replicas to a logical artifact instead of
+ * reassigning its one destination.
+ */
+describe('RecordingHistoryService artifact replicas', () => {
+  const uploadJob = (overrides: Record<string, unknown> = {}) => ({
+    id: 'job-1',
+    historyId: 'r1',
+    label: 'Demo',
+    status: 'completed' as const,
+    progress: 1,
+    files: [{ stream: 'tab' as const, filename: 'demo-recording.webm', status: 'uploaded' as const, driveFileId: 'd1' }],
+    startedAt: 10,
+    finishedAt: 11,
+    ...overrides,
+  });
+  const tabFile = async (repo: MemoryRepository) => (await repo.get('r1'))!.files[0];
+
+  it('starts a pending row with no replicas and the requested delivery recorded', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+
+    expect(await tabFile(repo)).toMatchObject({
+      mimeType: 'video/webm',
+      locations: [],
+      delivery: { requested: 'drive', status: 'pending' },
+    });
+  });
+
+  it('adds a drive replica on upload without disturbing an existing download replica', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+
+    await service.applyUploadJob(uploadJob({
+      files: [{ stream: 'tab', filename: 'demo-recording.webm', status: 'uploaded', driveFileId: 'd1', webViewLink: 'https://drive.example/d1' }],
+    }));
+
+    expect(await tabFile(repo)).toMatchObject({
+      locations: [
+        { kind: 'download', downloadId: 7 },
+        { kind: 'drive', fileId: 'd1', webViewLink: 'https://drive.example/d1' },
+      ],
+      delivery: { requested: 'drive', status: 'uploaded' },
+    });
+  });
+
+  it('records a Drive-requested local save as local-fallback, and a local one as downloaded', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+    expect((await tabFile(repo)).delivery).toEqual({ requested: 'drive', status: 'local-fallback' });
+
+    const localRepo = new MemoryRepository();
+    const localService = new RecordingHistoryService(localRepo, jest.fn(), () => 10);
+    await localService.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+    await localService.localSaveSettled('r1', 'tab', 7, 'complete');
+    expect((await tabFile(localRepo)).delivery).toEqual({ requested: 'local', status: 'downloaded' });
+  });
+
+  it('records no replica for an interrupted download and fails the delivery', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+
+    await service.localSaveSettled('r1', 'tab', 7, 'interrupted');
+
+    expect(await tabFile(repo)).toMatchObject({
+      locations: [],
+      delivery: { requested: 'local', status: 'failed', error: 'Download interrupted' },
+    });
+  });
+
+  it('holds delivery pending through a Drive failure until the local save settles', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+
+    await service.applyTerminalUploadJob(uploadJob({
+      status: 'failed',
+      files: [{ stream: 'tab', filename: 'demo-recording.webm', status: 'fallback' }],
+    }));
+    // Drive is done and lost; whether this is a fallback or a total failure is
+    // not yet known, so the outcome must not be guessed here.
+    expect((await tabFile(repo)).delivery).toEqual({ requested: 'drive', status: 'pending' });
+
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+    expect(await tabFile(repo)).toMatchObject({
+      locations: [{ kind: 'download', downloadId: 7 }],
+      delivery: { requested: 'drive', status: 'local-fallback' },
+    });
+  });
+
+  it('fails the delivery when a recovery source is gone', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+
+    await service.applyTerminalUploadJob(uploadJob({
+      status: 'failed',
+      files: [{ stream: 'tab', filename: 'demo-recording.webm', status: 'unavailable', error: 'Source gone' }],
+    }));
+
+    expect((await tabFile(repo)).delivery).toEqual({ requested: 'drive', status: 'failed', error: 'Source gone' });
+  });
+
+  it('reports a partial delivery per file rather than one verdict for the recording', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [
+      { id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' },
+      { id: 'r1:mic', stream: 'mic', filename: 'demo-mic.webm' },
+    ], 'drive');
+
+    await service.applyTerminalUploadJob(uploadJob({
+      status: 'partial',
+      files: [
+        { stream: 'tab', filename: 'demo-recording.webm', status: 'uploaded', driveFileId: 'd1' },
+        { stream: 'mic', filename: 'demo-mic.webm', status: 'unavailable', error: 'Source gone' },
+      ],
+    }));
+
+    const entry = (await repo.get('r1'))!;
+    expect(entry.files.map((file) => file.delivery)).toEqual([
+      { requested: 'drive', status: 'uploaded' },
+      { requested: 'drive', status: 'failed', error: 'Source gone' },
+    ]);
+    expect(entry.files[0].locations).toEqual([{ kind: 'drive', fileId: 'd1' }]);
+    expect(entry.files[1].locations).toEqual([]);
+  });
+
+  it('does not duplicate a replica when the same completion is applied twice', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+
+    await service.applyUploadJob(uploadJob());
+    await service.applyUploadJob(uploadJob());
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+
+    expect((await tabFile(repo)).locations).toEqual([
+      { kind: 'drive', fileId: 'd1' },
+      { kind: 'download', downloadId: 7 },
+    ]);
+  });
+
+  it('replaces rather than accumulates when a replica of the same kind moves', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+    await service.localSaveSettled('r1', 'tab', 8, 'complete');
+
+    expect((await tabFile(repo)).locations).toEqual([{ kind: 'download', downloadId: 8 }]);
+  });
+
+  it('adds no replica to a tombstoned recording', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+    await service.remove('r1');
+
+    await service.applyUploadJob(uploadJob());
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+
+    const entry = (await repo.get('r1'))!;
+    expect(entry.deletedAt).toBe(10);
+    expect(entry.files[0].locations).toEqual([]);
+    expect(entry.files[0].delivery).toEqual({ requested: 'drive', status: 'pending' });
+  });
+
+  it('settles only the artifact of the matching kind, leaving the sidecar alone', async () => {
+    // The sidecar rides the tab stream (ADR-0005). Matching on stream alone gave
+    // it the media file's download id, and after ADR-0006 its replica and
+    // delivery too.
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'drive');
+    await service.applyTerminalUploadJob(uploadJob({
+      status: 'failed',
+      files: [
+        { stream: 'tab', filename: 'demo-recording.webm', status: 'fallback' },
+        { stream: 'tab', kind: 'notes', filename: 'demo.vtt', status: 'fallback' },
+      ],
+    }));
+
+    await service.localSaveSettled('r1', 'tab', 7, 'complete');
+
+    const byId = new Map((await repo.get('r1'))!.files.map((file) => [file.id, file]));
+    expect(byId.get('r1:tab')).toMatchObject({
+      locations: [{ kind: 'download', downloadId: 7 }],
+      delivery: { requested: 'drive', status: 'local-fallback' },
+    });
+    expect(byId.get('r1:notes')).toMatchObject({
+      locations: [],
+      delivery: { status: 'pending' },
+    });
+    expect(byId.get('r1:notes')?.downloadId).toBeUndefined();
+  });
+
+  it('settles the sidecar on its own download without touching the media row', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [
+      { id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' },
+      { id: 'r1:notes', stream: 'tab', kind: 'notes', filename: 'demo.vtt' },
+    ], 'local');
+
+    await service.localSaveSettled('r1', 'tab', 8, 'complete', undefined, 'notes');
+
+    const byId = new Map((await repo.get('r1'))!.files.map((file) => [file.id, file]));
+    expect(byId.get('r1:notes')).toMatchObject({
+      mimeType: 'text/vtt',
+      locations: [{ kind: 'download', downloadId: 8 }],
+      delivery: { requested: 'local', status: 'downloaded' },
+    });
+    expect(byId.get('r1:tab')).toMatchObject({ locations: [], delivery: { status: 'pending' } });
+  });
+});
+

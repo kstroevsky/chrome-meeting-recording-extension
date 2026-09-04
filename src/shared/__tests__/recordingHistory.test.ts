@@ -49,3 +49,97 @@ describe('recording history durable-data boundaries', () => {
     expect(isRecordingHistoryMessage({ type: 'SET_RECORDING_HISTORY_NOTE', id: 'x', note: 1 })).toBe(false);
   });
 });
+
+/** ADR-0006: a logical artifact has replicas; delivery is a separate question. */
+describe('artifact locations and delivery', () => {
+  const entry = (files: unknown[], storageMode: 'local' | 'drive' = 'local') =>
+    normalizeRecordingHistoryEntry({ id: 'r1', name: 'R', createdAt: 1, storageMode, files });
+  const file = (overrides: Record<string, unknown>, storageMode: 'local' | 'drive' = 'local') =>
+    entry([{ id: 'r1:tab', stream: 'tab', filename: 'r.webm', destination: 'local', status: 'available', ...overrides }], storageMode)?.files[0];
+
+  describe('legacy rows, which carry no locations', () => {
+    it('synthesizes a download replica and a plain downloaded delivery', () => {
+      expect(file({ downloadId: 7 })).toMatchObject({
+        locations: [{ kind: 'download', downloadId: 7 }],
+        delivery: { requested: 'local', status: 'downloaded' },
+      });
+    });
+
+    it('synthesizes a drive replica, carrying the view link when present', () => {
+      expect(file({ destination: 'drive', driveFileId: 'd1', webViewLink: 'https://drive.example/d1' }, 'drive')).toMatchObject({
+        locations: [{ kind: 'drive', fileId: 'd1', webViewLink: 'https://drive.example/d1' }],
+        delivery: { requested: 'drive', status: 'uploaded' },
+      });
+    });
+
+    it('recovers local-fallback — the outcome the single-destination shape could not express', () => {
+      // Drive was requested, the bytes landed in Downloads, and the legacy row
+      // recorded only where they landed.
+      expect(file({ downloadId: 7 }, 'drive')).toMatchObject({
+        locations: [{ kind: 'download', downloadId: 7 }],
+        delivery: { requested: 'drive', status: 'local-fallback' },
+      });
+    });
+
+    it('reports both replicas when Drive succeeded and a local copy also exists', () => {
+      expect(file({ destination: 'drive', driveFileId: 'd1', downloadId: 7 }, 'drive')?.locations).toEqual([
+        { kind: 'download', downloadId: 7 },
+        { kind: 'drive', fileId: 'd1' },
+      ]);
+    });
+
+    it('maps pending and unavailable onto pending and failed, keeping the error', () => {
+      expect(file({ status: 'pending' })?.delivery).toEqual({ requested: 'local', status: 'pending' });
+      expect(file({ status: 'unavailable', error: 'Download interrupted' })?.delivery).toEqual({
+        requested: 'local', status: 'failed', error: 'Download interrupted',
+      });
+    });
+
+    it('derives mimeType from the filename, including the notes sidecar', () => {
+      expect(file({ filename: 'r.webm' })?.mimeType).toBe('video/webm');
+      expect(file({ filename: 'r.mp4' })?.mimeType).toBe('video/mp4');
+      expect(file({ filename: 'r.m4a' })?.mimeType).toBe('audio/mp4');
+      expect(file({ filename: 'r.vtt', kind: 'notes' })?.mimeType).toBe('text/vtt');
+    });
+  });
+
+  describe('rows already written in the new shape', () => {
+    it('keeps stored locations, delivery and mimeType verbatim', () => {
+      expect(file({
+        mimeType: 'video/mp4',
+        locations: [{ kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 99 }],
+        delivery: { requested: 'drive', status: 'local-fallback', error: 'Drive quota' },
+        downloadId: 7,
+      })).toMatchObject({
+        mimeType: 'video/mp4',
+        locations: [{ kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 99 }],
+        delivery: { requested: 'drive', status: 'local-fallback', error: 'Drive quota' },
+      });
+    });
+
+    it('does not resurrect a replica the owner deliberately removed', () => {
+      // An empty list is a real state — retention deleted the OPFS copy — so it
+      // must not be re-synthesized from the legacy fields that still linger.
+      expect(file({ locations: [], downloadId: 7, driveFileId: 'd1' })?.locations).toEqual([]);
+    });
+
+    it('drops malformed location entries without discarding the row', () => {
+      expect(file({
+        locations: [
+          { kind: 'download', downloadId: 1.5 },
+          { kind: 'opfs', key: '   ' },
+          { kind: 'drive' },
+          { kind: 'elsewhere', key: 'x' },
+          { kind: 'download', downloadId: 7 },
+        ],
+      })?.locations).toEqual([{ kind: 'download', downloadId: 7 }]);
+    });
+
+    it('keeps a negative timelineOffsetMs, which means the track started before the master', () => {
+      expect(file({ timelineOffsetMs: -120 })?.timelineOffsetMs).toBe(-120);
+      expect(file({ timelineOffsetMs: 0 })?.timelineOffsetMs).toBe(0);
+      expect(file({ timelineOffsetMs: Number.NaN })?.timelineOffsetMs).toBeUndefined();
+      expect(file({})?.timelineOffsetMs).toBeUndefined();
+    });
+  });
+});
