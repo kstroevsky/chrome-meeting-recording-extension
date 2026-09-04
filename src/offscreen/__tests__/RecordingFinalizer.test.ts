@@ -544,5 +544,90 @@ describe('RecordingFinalizer', () => {
       expect(deps.requestSave).toHaveBeenCalledWith(expect.not.objectContaining({ retainedKey: expect.anything() }));
     });
   });
+
+  /**
+   * ADR-0006 crash boundaries on the Drive path. A Drive failure must leave the
+   * user with *both* a retained playback copy and a Downloads copy; a Drive
+   * success must not consume local disk forever.
+   */
+  describe('Drive delivery boundaries', () => {
+    const withFolder = () => jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    const failUpload = () => jest.spyOn(DriveTarget.prototype, 'upload').mockRejectedValue(new DOMException('network timeout', 'AbortError'));
+    const staged = (name: string) => ({ ...makeArtifact(name), opfsFilename: `staging/${name}` });
+
+    it('promotes the failed artifact before falling back to a local download', async () => {
+      withFolder(); failUpload();
+      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Atab.webm' }) };
+      deps.retainedMedia = retainedMedia;
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'tab', artifact: staged('tab.webm') as any }],
+      } as any);
+
+      expect(retainedMedia.promote).toHaveBeenCalledWith('staging/tab.webm', 'recording:1', 'recording:1:tab', 'tab.webm');
+      // Both replicas: the recording stays playable even though Drive lost it.
+      expect(deps.requestSave).toHaveBeenCalledWith(expect.objectContaining({
+        retainedKey: 'library/recording%3A1/recording%3A1%3Atab.webm',
+      }));
+      expect(retainedMedia.promote.mock.invocationCallOrder[0])
+        .toBeLessThan(deps.requestSave.mock.invocationCallOrder[0]);
+    });
+
+    it('does not retain a local copy when the Drive upload succeeds', async () => {
+      withFolder();
+      jest.spyOn(DriveTarget.prototype, 'upload').mockResolvedValue({ id: 'drive-1', webViewLink: 'https://drive.example/1' } as any);
+      const retainedMedia = { promote: jest.fn() };
+      deps.retainedMedia = retainedMedia;
+      const tab = staged('tab.webm');
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'tab', artifact: tab as any }],
+      } as any);
+
+      // There is no reason to consume local disk permanently for every Drive
+      // recording, so the staging artifact is cleaned rather than promoted.
+      expect(retainedMedia.promote).not.toHaveBeenCalled();
+      expect(deps.requestSave).not.toHaveBeenCalled();
+      expect(tab.cleanup).toHaveBeenCalled();
+    });
+
+    it('does not promote on a retry that suppresses the duplicate download', async () => {
+      withFolder(); failUpload();
+      const retainedMedia = { promote: jest.fn() };
+      deps.retainedMedia = retainedMedia;
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        skipLocalFallback: true,
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'tab', artifact: staged('tab.webm') as any }],
+      } as any);
+
+      // The original failure already retained and downloaded it.
+      expect(retainedMedia.promote).not.toHaveBeenCalled();
+      expect(deps.requestSave).not.toHaveBeenCalled();
+    });
+
+    it('still falls back locally when the shared Drive setup dies before any upload', async () => {
+      jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockRejectedValue(new Error('folder lookup failed'));
+      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Amic.webm' }) };
+      deps.retainedMedia = retainedMedia;
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'mic', artifact: staged('mic.webm') as any }],
+      } as any);
+
+      expect(retainedMedia.promote).toHaveBeenCalledWith('staging/mic.webm', 'recording:1', 'recording:1:mic', 'mic.webm');
+      expect(deps.requestSave).toHaveBeenCalledWith(expect.objectContaining({
+        retainedKey: 'library/recording%3A1/recording%3A1%3Amic.webm',
+      }));
+    });
+  });
 });
 

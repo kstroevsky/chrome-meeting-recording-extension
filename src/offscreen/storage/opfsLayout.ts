@@ -58,6 +58,23 @@ export function libraryKey(historyId: string, fileId: string, filename: string):
   return `${LIBRARY_DIR}/${encodeSegment(historyId)}/${encodeSegment(fileId)}${extensionOf(filename)}`;
 }
 
+/**
+ * Inverse of `libraryKey`. Returns undefined for anything that is not a
+ * well-formed library path, so a stray file cannot be mistaken for owned media.
+ */
+export function parseLibraryKey(key: OpfsKey): { historyId: string; fileId: string } | undefined {
+  const segments = keySegments(key);
+  if (segments.length !== 3 || segments[0] !== LIBRARY_DIR) return undefined;
+  const withoutExtension = segments[2].replace(/\.[A-Za-z0-9]+$/, '');
+  try {
+    const historyId = decodeURIComponent(segments[1]);
+    const fileId = decodeURIComponent(withoutExtension);
+    return historyId && fileId ? { historyId, fileId } : undefined;
+  } catch {
+    return undefined; // malformed percent-encoding
+  }
+}
+
 /** Minimal structural view of the OPFS handles this module needs. */
 export type DirectoryHandleLike = {
   getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<DirectoryHandleLike>;
