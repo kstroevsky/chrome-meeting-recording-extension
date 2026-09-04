@@ -5,6 +5,7 @@
  * that are driven by recording session phase transitions.
  */
 
+import { recordingHistoryFileId } from '../shared/recordingHistory';
 import { pokeRuntime } from '../platform/chrome/runtime';
 import { awaitDownloadSettled, downloadFile } from '../platform/chrome/downloads';
 import { isBusyPhase, type RecordingPhase } from '../shared/recording';
@@ -60,7 +61,7 @@ export function registerSaveHandler(
           // The sidecar rides a media stream, so a stream-keyed id would collide
           // with that stream's media row — and `createPending` skips a known id,
           // which silently dropped the media file from history entirely.
-          const fileId = kind === 'notes' ? `${historyId}:notes` : `${historyId}:${stream}`;
+          const fileId = recordingHistoryFileId(historyId, stream, kind);
           await history?.createPending(
             historyId,
             [{ id: fileId, stream, ...(kind ? { kind } : {}), filename: resolvedFilename }],

@@ -86,6 +86,16 @@ export type RecordingHistoryMessage =
   | { type: 'REMOVE_RECORDING_HISTORY'; id: string }
   | { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
+/**
+ * Stable identity of one artifact inside a recording. The notes sidecar rides a
+ * media stream (ADR-0005), so it cannot be keyed by stream alone — it would
+ * collide with that stream's media row. Derived in one place because three call
+ * sites deriving it independently is how they drifted apart.
+ */
+export function recordingHistoryFileId(historyId: string, stream: RecordingStream, kind?: 'notes'): string {
+  return kind === 'notes' ? `${historyId}:notes` : `${historyId}:${stream}`;
+}
+
 export function createRecordingHistoryId(): string {
   return `recording:${crypto.randomUUID()}`;
 }

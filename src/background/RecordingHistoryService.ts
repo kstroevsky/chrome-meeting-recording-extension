@@ -3,6 +3,7 @@ import type { RecordingStream, StorageMode, UploadJob } from '../shared/recordin
 import { buildRenamedRecordingFilename, slugifyRecordingTitle } from '../shared/recording';
 import {
   pendingArtifactFields,
+  recordingHistoryFileId,
   recordingLabelFromFilename,
   upsertArtifactLocation,
   type ArtifactDelivery,
@@ -248,7 +249,7 @@ export class RecordingHistoryService {
         .filter((candidate) => candidate.kind === 'notes'
           && !files.some((file) => file.kind === 'notes'))
         .map((candidate) => ({
-          id: `${historyId}:notes`,
+          id: recordingHistoryFileId(historyId, candidate.stream, 'notes'),
           stream: candidate.stream,
           kind: 'notes' as const,
           filename: candidate.filename,
@@ -362,7 +363,7 @@ function createEntryFromUploadJob(job: UploadJob): RecordingHistoryEntry {
     // The sidecar rides a media stream so the upload can order it, so it cannot
     // be keyed by that stream: it would collide with the real file of the same
     // stream, and its own `kind` has to survive for the rename to name it.
-    id: file.kind === 'notes' ? `${historyId}:notes` : `${historyId}:${file.stream}`,
+    id: recordingHistoryFileId(historyId, file.stream, file.kind),
     stream: file.stream,
     ...(file.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename: file.filename,
