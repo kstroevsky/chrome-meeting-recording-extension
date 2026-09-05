@@ -321,3 +321,8 @@ button { -webkit-font-smoothing: antialiased; }
 .player__file--unavailable { cursor: default; opacity: .55; }
 .player__file--unavailable:hover { background: transparent; }
 .player__file--unavailable .player__file-format { color: var(--accent-dark); letter-spacing: .1em; }
+.detail-destination { margin-bottom: 6px; }
+.detail-destination__select { width: 100%; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12.5px; font-family: inherit; cursor: pointer; }
+.detail-destination__select:disabled { opacity: .6; cursor: progress; }
+.detail-destination__select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.detail-destination__hint { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }

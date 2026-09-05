@@ -1,3 +1,4 @@
+import { loadExtensionSettingsFromStorage } from '../shared/settings';
 import { sendToBackground } from '../shared/messages';
 import { PlayerController } from './player/PlayerController';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
@@ -10,7 +11,7 @@ export class RecordingsController {
   private loadingMore = false;
   constructor(private readonly view: RecordingsView) {}
 
-  async init() { await this.refresh(); }
+  async init() { await Promise.all([this.refresh(), this.loadDestinations()]); }
 
   async rename(id: string, name: string) {
     try {
@@ -91,6 +92,33 @@ export class RecordingsController {
       await player.open(recordingId);
     } catch (error) {
       this.view.showError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
+   * Moves the recording's Drive folder into a destination, then re-reads
+   * history so the picker reflects what Drive actually did rather than what
+   * was asked for.
+   */
+  async fileTo(recordingId: string, presetId: string | null) {
+    try {
+      const response = await sendToBackground({
+        type: 'FILE_RECORDING_TO_DESTINATION', recordingId, presetId,
+      });
+      if (!response.ok) throw new Error(response.error);
+    } catch (error) {
+      this.view.showError(error instanceof Error ? error.message : String(error));
+    } finally {
+      await this.refresh();
+    }
+  }
+
+  private async loadDestinations() {
+    try {
+      const settings = await loadExtensionSettingsFromStorage();
+      this.view.setDestinations(settings.storage.driveFolderPresets);
+    } catch {
+      // A settings read failure just means no destinations to offer.
     }
   }
 

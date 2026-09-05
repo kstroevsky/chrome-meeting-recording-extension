@@ -1,3 +1,4 @@
+import type { DriveFolderPreset } from '../shared/settings';
 import {
   dayLabel,
   durationOf,
@@ -21,6 +22,7 @@ export type RecordingsViewCallbacks = {
   remove: (id: string) => void;
   removeMany: (ids: string[]) => void;
   openLocal: (recordingId: string, fileId: string) => void;
+  fileTo: (recordingId: string, presetId: string | null) => void;
   play: (recordingId: string) => void;
   loadMore: () => void;
 };
@@ -69,6 +71,7 @@ export class RecordingsView {
     this.noteSummaries = summaries;
   }
   private openId: string | null = null;
+  private destinations: DriveFolderPreset[] = [];
   private editingId: string | null = null;
 
   constructor(
@@ -360,6 +363,48 @@ export class RecordingsView {
     return row;
   }
 
+  /**
+   * Where this recording is filed. A recording made before destinations existed
+   * simply reads as unfiled — it is in the built-in folder, which is the truth,
+   * rather than being guessed into a destination.
+   */
+  private destinationPicker(entry: RecordingHistoryEntry): HTMLElement {
+    const row = $('div', 'detail-destination');
+    const select = document.createElement('select');
+    select.className = 'detail-destination__select';
+    select.setAttribute('aria-label', 'Google Drive destination');
+
+    const unfiled = document.createElement('option');
+    unfiled.value = '';
+    unfiled.textContent = 'Google Meet Records (unfiled)';
+    select.append(unfiled);
+    for (const preset of this.destinations) {
+      const option = document.createElement('option');
+      option.value = preset.id;
+      option.textContent = preset.name;
+      select.append(option);
+    }
+    select.value = entry.driveFolderPresetId ?? '';
+
+    select.addEventListener('change', () => {
+      select.disabled = true;
+      this.callbacks.fileTo(entry.id, select.value || null);
+    });
+    row.append(select);
+
+    if (!this.destinations.length) {
+      const hint = $('p', 'detail-destination__hint');
+      hint.textContent = 'Add destinations in Settings to sort recordings into your own folders.';
+      row.append(hint);
+    }
+    return row;
+  }
+
+  setDestinations(destinations: DriveFolderPreset[]): void {
+    this.destinations = destinations;
+    if (this.openId) this.redraw();
+  }
+
   private selectionBox(selected: boolean, label: string): HTMLButtonElement {
     const box = document.createElement('button');
     box.className = `selection-box${selected ? ' selection-box--selected' : ''}`;
@@ -415,8 +460,15 @@ export class RecordingsView {
     note.addEventListener('blur', () => {
       if (note.value !== (entry.note ?? '')) this.callbacks.note(entry.id, note.value);
     });
+    body.append(heading, meta, noteLabel, note);
+    // Only a Drive recording can be filed: there is no folder to move otherwise.
+    if (entry.storageMode === 'drive' && entry.driveFolderId) {
+      const destinationLabel = $('div', 'detail-section-label');
+      destinationLabel.textContent = 'DESTINATION';
+      body.append(destinationLabel, this.destinationPicker(entry));
+    }
     const fileLabel = $('div', 'detail-section-label'); fileLabel.textContent = 'FILES';
-    body.append(heading, meta, noteLabel, note, fileLabel);
+    body.append(fileLabel);
     dialog.append(body);
 
     const files = $('ul', 'recording-files');
