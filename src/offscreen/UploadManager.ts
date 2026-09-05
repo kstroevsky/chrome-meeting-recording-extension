@@ -17,6 +17,7 @@ import type { CompletedRecordingArtifact } from './engine/RecorderEngineTypes';
 import type { UploadJob, UploadJobFile, UploadJobStatus, UploadSummary } from '../shared/recording';
 import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { describeRuntimeError } from './errors';
+import type { RecordingStream } from '../shared/recording';
 
 const MAX_RETRYABLE_BYTES = 128 * 1024 * 1024;
 const RETRY_RETENTION_MS = 5 * 60 * 1000;
@@ -34,6 +35,15 @@ export interface JobFinalizer {
   }): Promise<UploadSummary | undefined>;
 }
 
+/** What is remembered per failed file when the bytes live in the library. */
+type RetainedRetry = {
+  key: string;
+  stream: RecordingStream;
+  kind?: 'notes';
+  filename: string;
+  mimeType?: string;
+};
+
 export type UploadManagerDeps = {
   finalizer: JobFinalizer;
   /** Sink for the job's latest state; the offscreen posts it as OFFSCREEN_UPLOAD_STATE. */
@@ -43,6 +53,12 @@ export type UploadManagerDeps = {
   now?: () => number;
   genId?: () => string;
   warn?: (...a: any[]) => void;
+  /**
+   * Reads bytes back out of the retained library. Present, a failed upload whose
+   * artifacts were promoted stays retryable for as long as the recording exists,
+   * because the bytes are on disk rather than held here.
+   */
+  readRetained?: (key: string) => Promise<File | null>;
 };
 
 export class UploadManager {
@@ -55,11 +71,19 @@ export class UploadManager {
   private seq = 0;
   /**
    * The most-recent job that ended with fallbacks, kept so the popup's "Retry"
-   * can re-upload its still-failed files from the retained (default Worker target ⇒
-   * in-memory) artifacts. Bounded to one: a newer failure or a successful retry
-   * evicts it, so a failed recording can't pin its bytes in memory indefinitely.
+   * can re-upload its still-failed files. Bounded to one: a newer failure or a
+   * successful retry evicts it.
+   *
+   * Two flavours, because what it costs to keep differs. When every failed file
+   * was promoted to the retained library, only its key is held, and the entry
+   * neither expires nor counts against a byte budget — the bytes are on disk and
+   * outlive this object. Otherwise the in-memory artifacts are held under the
+   * old budget, so a failed recording cannot pin its bytes in memory forever.
    */
-  private lastFailed: { jobId: string; historyId?: string; telemetryRunId?: string; artifacts: CompletedRecordingArtifact[]; expiresAt: number } | null = null;
+  private lastFailed:
+    | { jobId: string; historyId?: string; telemetryRunId?: string; artifacts: CompletedRecordingArtifact[]; expiresAt: number; retainedKeys?: undefined }
+    | { jobId: string; historyId?: string; telemetryRunId?: string; artifacts: CompletedRecordingArtifact[]; expiresAt?: undefined; retainedKeys: RetainedRetry[] }
+    | null = null;
   private retryExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: UploadManagerDeps) {
@@ -83,10 +107,19 @@ export class UploadManager {
    * when the job is no longer retryable here (a newer failure evicted it, or the
    * offscreen restarted and lost the bytes).
    */
-  retry(jobId: string): boolean {
+  async retry(jobId: string): Promise<boolean> {
     this.clearExpiredRetry();
     if (this.lastFailed?.jobId !== jobId) return false;
-    const { artifacts, historyId, telemetryRunId } = this.lastFailed;
+    const { historyId, telemetryRunId, retainedKeys } = this.lastFailed;
+    const artifacts = retainedKeys
+      ? await this.rehydrate(retainedKeys)
+      : this.lastFailed.artifacts;
+    if (!artifacts) {
+      // The library no longer holds them (history deleted, or a failed read):
+      // say so rather than enqueue a job with nothing to upload.
+      this.clearRetryable();
+      return false;
+    }
     this.clearRetryable();
     // The original failure already saved a local copy, so suppress the download
     // failsafe on the retry — a re-failure must not duplicate it (ADR-0004).
@@ -198,6 +231,31 @@ export class UploadManager {
     const failedFiles = new Set(settled.files.filter((f) => f.status === 'fallback').map((f) => f.filename));
     if (failedFiles.size > 0) {
       const retryArtifacts = artifacts.filter((artifact) => failedFiles.has(artifact.artifact.filename));
+
+      // Every failed file on disk means nothing has to be held here, so neither
+      // the byte budget nor the five-minute window applies.
+      const retainedKeys = this.deps.readRetained && retryArtifacts.length > 0
+        && retryArtifacts.every((entry) => !!entry.artifact.retainedKey)
+        ? retryArtifacts.map((entry) => ({
+            key: entry.artifact.retainedKey!,
+            stream: entry.stream,
+            kind: entry.kind,
+            filename: entry.artifact.filename,
+            mimeType: entry.artifact.mimeType,
+          }))
+        : null;
+      if (retainedKeys) {
+        this.clearRetryable();
+        this.lastFailed = {
+          jobId: settled.id,
+          historyId: settled.historyId,
+          telemetryRunId: this.jobs.get(settled.id)?.telemetryRunId,
+          artifacts: retryArtifacts,
+          retainedKeys,
+        };
+        return;
+      }
+
       const bytes = retryArtifacts.reduce((total, entry) => total + entry.artifact.file.size, 0);
       if (bytes > MAX_RETRYABLE_BYTES) {
         this.clearRetryable();
@@ -229,7 +287,35 @@ export class UploadManager {
   }
 
   private clearExpiredRetry(): void {
-    if (this.lastFailed && this.lastFailed.expiresAt <= this.now()) this.clearRetryable();
+    // A retained entry has no expiry: its bytes are on disk, not held here.
+    if (this.lastFailed?.expiresAt != null && this.lastFailed.expiresAt <= this.now()) this.clearRetryable();
+  }
+
+  /** Rebuilds retryable artifacts from the library; null if any is gone. */
+  private async rehydrate(keys: RetainedRetry[]): Promise<CompletedRecordingArtifact[] | null> {
+    const read = this.deps.readRetained;
+    if (!read) return null;
+    const artifacts: CompletedRecordingArtifact[] = [];
+    for (const entry of keys) {
+      const file = await read(entry.key).catch(() => null);
+      if (!file) {
+        this.deps.warn?.(`Upload retry unavailable: retained media ${entry.key} is gone`);
+        return null;
+      }
+      artifacts.push({
+        stream: entry.stream,
+        ...(entry.kind ? { kind: entry.kind } : {}),
+        artifact: {
+          filename: entry.filename,
+          file,
+          ...(entry.mimeType ? { mimeType: entry.mimeType } : {}),
+          retainedKey: entry.key,
+          // The library owns these bytes; an upload must never delete them.
+          cleanup: async () => {},
+        },
+      });
+    }
+    return artifacts;
   }
 
   private clearRetryable(): void {

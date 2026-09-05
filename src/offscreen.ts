@@ -327,6 +327,9 @@ const uploadManager = new UploadManager({
   finalizer,
   report: reportUploadJob,
   warn: L.warn,
+  // Lets a failed upload stay retryable from the library rather than from a
+  // five-minute, 128 MB in-memory budget.
+  readRetained: (key) => retainedMediaStore.read(key),
 });
 
 const engine = new RecorderEngine({

@@ -246,6 +246,9 @@ export class RecordingFinalizer {
       const fileId = recordingHistoryFileId(context.historyId, stream, kind);
       const retained = await this.deps.retainedMedia.promote(stagingKey, context.historyId, fileId, artifact.filename);
       this.deps.log('Promoted to the retained library', retained.key);
+      // Stamped on the artifact so a later upload retry can re-read these bytes
+      // rather than depend on the File this promotion just invalidated.
+      artifact.retainedKey = retained.key;
       return retained;
     } catch (e) {
       this.deps.warn('Could not retain a playback copy; delivering without one', artifact.filename, describeRuntimeError(e));

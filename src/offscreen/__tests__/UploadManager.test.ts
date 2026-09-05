@@ -4,8 +4,13 @@ import type { RecordingStream, UploadJob, UploadSummary } from '../../shared/rec
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function artifact(stream: RecordingStream, filename: string) {
-  return { stream, artifact: { filename, file: new Blob(['x']), cleanup: jest.fn() } } as any;
+function artifact(stream: RecordingStream, filename: string, over: Record<string, unknown> = {}) {
+  return { stream, artifact: { filename, file: new Blob(['x']), cleanup: jest.fn(), ...over } } as any;
+}
+
+/** An artifact already promoted into the retained library. */
+function retained(stream: RecordingStream, filename: string, key = `library/rec/${filename}`) {
+  return artifact(stream, filename, { retainedKey: key });
 }
 
 function setup(finalize: JobFinalizer['finalize'], over: Partial<ConstructorParameters<typeof UploadManager>[0]> = {}) {
@@ -188,7 +193,7 @@ describe('UploadManager (ADR-0004)', () => {
     await flush();
     expect(reports[reports.length - 1]).toMatchObject({ id, status: 'failed' });
 
-    expect(manager.retry(id)).toBe(true);
+    expect(await manager.retry(id)).toBe(true);
     await flush();
     expect(reports[reports.length - 1]).toMatchObject({ id, status: 'completed' });
     expect(finalize).toHaveBeenCalledTimes(2);
@@ -208,7 +213,7 @@ describe('UploadManager (ADR-0004)', () => {
     await flush();
     expect(reports[reports.length - 1].status).toBe('partial');
 
-    expect(manager.retry(id)).toBe(true);
+    expect(await manager.retry(id)).toBe(true);
     await flush();
     // The retry re-ran only the failed (mic) file.
     expect(finalize.mock.calls[1][0].artifacts.map((a: any) => a.artifact.filename)).toEqual(['mic.webm']);
@@ -219,8 +224,8 @@ describe('UploadManager (ADR-0004)', () => {
     const { manager } = setup(async () => ({ uploaded: [{ stream: 'tab', filename: 'a.webm' }], localFallbacks: [] }));
     const id = manager.enqueue([artifact('tab', 'a.webm')]);
     await flush();
-    expect(manager.retry(id)).toBe(false); // succeeded ⇒ nothing retained
-    expect(manager.retry('no-such-job')).toBe(false);
+    expect(await manager.retry(id)).toBe(false); // succeeded ⇒ nothing retained
+    expect(await manager.retry('no-such-job')).toBe(false);
   });
 
   // Every file falls back, so the job re-fails on each attempt.
@@ -231,9 +236,9 @@ describe('UploadManager (ADR-0004)', () => {
     const { manager } = setup(alwaysFails() as any);
     const id = manager.enqueue([artifact('tab', 'tab.webm')]);
     await flush();
-    expect(manager.retry(id)).toBe(true);
+    expect(await manager.retry(id)).toBe(true);
     await flush();
-    expect(manager.retry(id)).toBe(true); // re-failed ⇒ still retryable
+    expect(await manager.retry(id)).toBe(true); // re-failed ⇒ still retryable
   });
 
   it('retains only the most-recent failure (a newer one evicts the older)', async () => {
@@ -242,8 +247,8 @@ describe('UploadManager (ADR-0004)', () => {
     await flush();
     const newer = manager.enqueue([artifact('tab', 'b.webm')]);
     await flush();
-    expect(manager.retry(older)).toBe(false); // evicted by the newer failure
-    expect(manager.retry(newer)).toBe(true);
+    expect(await manager.retry(older)).toBe(false); // evicted by the newer failure
+    expect(await manager.retry(newer)).toBe(true);
   });
 
   it('keeps the local-download failsafe on the original upload but skips it on retry', async () => {
@@ -253,7 +258,7 @@ describe('UploadManager (ADR-0004)', () => {
     await flush();
     expect(finalize.mock.calls[0][0].skipLocalFallback).toBe(false); // original ⇒ download on failure
 
-    manager.retry(id);
+    await manager.retry(id);
     await flush();
     expect(finalize.mock.calls[1][0].skipLocalFallback).toBe(true); // retry ⇒ no duplicate download
   });
@@ -265,7 +270,7 @@ describe('UploadManager (ADR-0004)', () => {
     await flush();
 
     now += 5 * 60 * 1000;
-    expect(manager.retry(id)).toBe(false);
+    expect(await manager.retry(id)).toBe(false);
   });
 
   it('does not retain a retry payload above the memory budget', async () => {
@@ -277,6 +282,109 @@ describe('UploadManager (ADR-0004)', () => {
     const id = manager.enqueue([oversized]);
     await flush();
 
-    expect(manager.retry(id)).toBe(false);
+    expect(await manager.retry(id)).toBe(false);
+  });
+
+  describe('retry from the retained library', () => {
+    const failOnce = () => {
+      let attempt = 0;
+      return jest.fn(async (opts: any) => {
+        attempt += 1;
+        return attempt === 1
+          ? { uploaded: [], localFallbacks: [{ stream: 'tab', filename: 'tab.webm' }] }
+          : { uploaded: opts.artifacts.map((a: any) => ({ stream: a.stream, filename: a.artifact.filename })), localFallbacks: [] };
+      });
+    };
+
+    it('re-reads the bytes from the library instead of holding them', async () => {
+      const libraryFile = new File(['retained bytes'], 'tab.webm');
+      const readRetained = jest.fn(async () => libraryFile);
+      const finalize = failOnce();
+      const { manager, reports } = setup(finalize as any, { readRetained });
+
+      const original = retained('tab', 'tab.webm');
+      const id = manager.enqueue([original]);
+      await flush();
+      expect(reports[reports.length - 1].status).toBe('failed');
+
+      expect(await manager.retry(id)).toBe(true);
+      await flush();
+      expect(readRetained).toHaveBeenCalledWith('library/rec/tab.webm');
+      // The retry uploads the file the library handed back, not the one the
+      // original job held — that File was invalidated when promotion moved it.
+      const retriedArtifact = finalize.mock.calls[1][0].artifacts[0].artifact;
+      expect(retriedArtifact.file).toBe(libraryFile);
+      expect(retriedArtifact.file).not.toBe(original.artifact.file);
+      expect(reports[reports.length - 1].status).toBe('completed');
+    });
+
+    it('gives the rehydrated artifact a cleanup that cannot delete the library copy', async () => {
+      const readRetained = jest.fn(async () => new File(['retained bytes'], 'tab.webm'));
+      const finalize = failOnce();
+      const { manager } = setup(finalize as any, { readRetained });
+      const original = retained('tab', 'tab.webm');
+      const id = manager.enqueue([original]);
+      await flush();
+      await manager.retry(id);
+      await flush();
+
+      // The library owns these bytes; an upload deleting them would take the
+      // player's only copy with it. So the rehydrated cleanup is inert, and the
+      // original artifact's cleanup is never reused for the retry.
+      const retriedArtifact = finalize.mock.calls[1][0].artifacts[0].artifact;
+      expect(retriedArtifact.cleanup).not.toBe(original.artifact.cleanup);
+      await expect(retriedArtifact.cleanup()).resolves.toBeUndefined();
+      expect(original.artifact.cleanup).not.toHaveBeenCalled();
+      // It still knows where it lives, so a re-failure is remembered the same way.
+      expect(retriedArtifact.retainedKey).toBe('library/rec/tab.webm');
+    });
+
+    it('stays retryable past the in-memory retention window', async () => {
+      const readRetained = jest.fn(async () => new File(['retained bytes'], 'tab.webm'));
+      let clock = 1000;
+      const { manager } = setup(failOnce() as any, { readRetained, now: () => clock });
+
+      const id = manager.enqueue([retained('tab', 'tab.webm')]);
+      await flush();
+      clock += 60 * 60 * 1000; // an hour, far past the five-minute budget
+      expect(await manager.retry(id)).toBe(true);
+    });
+
+    it('stays retryable past the byte budget', async () => {
+      const readRetained = jest.fn(async () => new File(['retained bytes'], 'tab.webm'));
+      const warn = jest.fn();
+      const huge = retained('tab', 'tab.webm');
+      // 512 MB — four times the in-memory budget that used to drop Retry.
+      Object.defineProperty(huge.artifact.file, 'size', { value: 512 * 1024 * 1024 });
+      const { manager } = setup(failOnce() as any, { readRetained, warn });
+
+      const id = manager.enqueue([huge]);
+      await flush();
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('retention budget'));
+      expect(await manager.retry(id)).toBe(true);
+    });
+
+    it('reports the job unretryable when the library no longer holds it', async () => {
+      const readRetained = jest.fn(async () => null);
+      const { manager } = setup(failOnce() as any, { readRetained });
+
+      const id = manager.enqueue([retained('tab', 'tab.webm')]);
+      await flush();
+      expect(await manager.retry(id)).toBe(false);
+      // And it does not stay half-remembered for a second attempt.
+      expect(await manager.retry(id)).toBe(false);
+    });
+
+    it('falls back to the in-memory budget when the files were never promoted', async () => {
+      const readRetained = jest.fn(async () => new File(['x'], 'tab.webm'));
+      let clock = 1000;
+      const { manager } = setup(failOnce() as any, { readRetained, now: () => clock });
+
+      const id = manager.enqueue([artifact('tab', 'tab.webm')]);
+      await flush();
+      clock += 60 * 60 * 1000;
+      expect(await manager.retry(id)).toBe(false);
+      expect(readRetained).not.toHaveBeenCalled();
+    });
   });
 });

@@ -33,7 +33,7 @@ export type RpcHandlerDeps = {
   onStopRequested: (notesSidecar?: { vtt: string }) => void;
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
-  retryUpload: (jobId: string) => boolean;
+  retryUpload: (jobId: string) => boolean | Promise<boolean>;
   /** Reads retained library bytes back so a deferred delivery can be written. */
   openRetained?: (key: string) => Promise<File | null>;
   /** Cancels an active/queued upload and starts local fallback downloads. */
@@ -176,7 +176,7 @@ async function handleOffscreenRetryUpload(
   deps: RpcHandlerDeps
 ): Promise<{ ok: boolean; error?: string }> {
   if (typeof msg.jobId !== 'string') return { ok: false, error: 'Missing jobId' };
-  const retried = deps.retryUpload(msg.jobId);
+  const retried = await deps.retryUpload(msg.jobId);
   return retried ? { ok: true } : { ok: false, error: 'Upload is no longer retryable' };
 }
 
