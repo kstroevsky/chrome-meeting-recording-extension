@@ -14,6 +14,9 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
+import { DriveDestinationFiler } from './background/DriveDestinationFiler';
+import { loadExtensionSettingsFromStorage } from './shared/settings';
+import { DRIVE_ROOT_FOLDER_NAME } from './offscreen/drive/constants';
 import { DriveArtifactResolver } from './background/DriveArtifactResolver';
 import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
 import { addTabRemovedListener } from './platform/chrome/tabs';
@@ -106,10 +109,17 @@ const driveAuthLease = new DrivePlaybackAuthLeaseManager({
   warn: L.warn,
 });
 /** One authenticated Drive call, shared by metadata and folder listing. */
-const driveJson = async (url: string): Promise<{ status: number; body: any }> => {
+const driveJson = async (url: string, init: RequestInit = {}): Promise<{ status: number; body: any }> => {
   const res = await fetchDriveTokenWithFallback();
   if (!res.ok) throw new Error(res.error);
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${res.token}` } });
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${res.token}`,
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init.headers,
+    },
+  });
   return { status: response.status, body: response.status === 204 ? null : await response.json().catch(() => null) };
 };
 const driveArtifacts = new DriveArtifactResolver({
@@ -130,6 +140,60 @@ const driveArtifacts = new DriveArtifactResolver({
   },
   warn: L.warn,
 });
+const driveFolders = new DriveDestinationFiler({
+  getFolder: async (id) => {
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,name,parents`);
+    return status === 200 ? body : null;
+  },
+  findRootFolder: async (name) => {
+    const query = encodeURIComponent(
+      `name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder'`
+      + " and 'root' in parents and trashed = false");
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,parents)&pageSize=1`);
+    return status === 200 ? (body?.files?.[0] ?? null) : null;
+  },
+  createRootFolder: async (name) => {
+    const { status, body } = await driveJson('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' }),
+    });
+    if (status !== 200) throw new Error(`Could not create the destination folder (${status})`);
+    return body;
+  },
+  moveFolder: async (folderId, addParent, removeParents) => {
+    const params = new URLSearchParams({ addParents: addParent, fields: 'id,parents' });
+    if (removeParents.length) params.set('removeParents', removeParents.join(','));
+    const { status } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?${params}`,
+      { method: 'PATCH', body: '{}' });
+    if (status !== 200) throw new Error(`Could not move the recording folder (${status})`);
+  },
+  warn: L.warn,
+});
+
+/**
+ * Files a recording under a destination, or unfiles it back to the built-in
+ * folder. Drive first, history second: a history row claiming a destination the
+ * move never reached would be a lie.
+ */
+const fileRecordingToDestination = async (recordingId: string, presetId: string | null) => {
+  const entry = await historyRepository.get(recordingId);
+  if (!entry || entry.deletedAt) throw new Error('This recording is no longer available');
+  if (!entry.driveFolderId) throw new Error('This recording has no Google Drive folder to move');
+
+  const settings = await loadExtensionSettingsFromStorage();
+  const preset = presetId
+    ? settings.storage.driveFolderPresets.find((candidate) => candidate.id === presetId)
+    : undefined;
+  if (presetId && !preset) throw new Error('That destination no longer exists');
+
+  const result = await driveFolders.file(entry.driveFolderId, preset?.name ?? DRIVE_ROOT_FOLDER_NAME);
+  if (result.status === 'missing') throw new Error('This recording\u2019s folder is no longer in Google Drive');
+  await history.setDriveDestination(recordingId, presetId);
+};
+
 const telemetry = new TelemetryRuntime();
 
 
@@ -314,7 +378,7 @@ const controller = new RecordingController({ L, offscreen, session, telemetry, n
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
-  playback, playbackLeases, driveArtifacts, driveAuthLease, telemetry });
+  playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination, driveAuthLease, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 

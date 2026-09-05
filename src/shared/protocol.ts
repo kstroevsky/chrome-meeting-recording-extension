@@ -100,6 +100,12 @@ export type PopupListActiveNotations = { type: 'LIST_ACTIVE_NOTATIONS' };
 export type PopupUpdateActiveNotation = { type: 'UPDATE_ACTIVE_NOTATION'; id: string; text: string };
 export type PopupRemoveActiveNotation = { type: 'REMOVE_ACTIVE_NOTATION'; id: string };
 export type PopupListRecordingNotations = { type: 'LIST_RECORDING_NOTATIONS'; recordingId: string };
+/** Files a finished recording into one of the user's destinations; null unfiles it. */
+export type PopupFileRecordingToDestination = {
+  type: 'FILE_RECORDING_TO_DESTINATION';
+  recordingId: string;
+  presetId: string | null;
+};
 export type PopupGetPlaybackManifest = { type: 'GET_RECORDING_PLAYBACK_MANIFEST'; recordingId: string };
 /**
  * Note what is absent: no `tabId`. Background reads it from `sender`, because a
@@ -163,6 +169,7 @@ export type PopupToBg =
   | PopupRemoveActiveNotation
   | PopupListRecordingNotations
   | PopupGetPlaybackManifest
+  | PopupFileRecordingToDestination
   | PopupPreparePlaybackSource
   | PopupRefreshPlaybackSource
   | PopupListRecordingNotationSummaries
@@ -196,6 +203,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupUpdateActiveNotation ? NotationListResult :
   T extends PopupRemoveActiveNotation ? NotationListResult :
   T extends PopupListRecordingNotations ? NotationListResult :
+  T extends PopupFileRecordingToDestination ? { ok: true } | { ok: false; error: string } :
   T extends PopupGetPlaybackManifest ?
     { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :
   T extends PopupPreparePlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :

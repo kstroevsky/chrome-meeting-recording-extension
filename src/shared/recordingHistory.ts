@@ -69,6 +69,12 @@ export type RecordingHistoryEntry = {
   userNamed?: true;
   /** Persisted per-recording Drive folder metadata for later artifact renames. */
   driveFolderId?: string;
+  /**
+   * Which named destination this recording is filed under (ADR-0006 follow-up).
+   * Absent means unfiled: it is still in the built-in folder, which is also the
+   * only thing a recording made before destinations existed can say.
+   */
+  driveFolderPresetId?: string;
   driveFolderName?: string;
   folderWebViewLink?: string;
   createdAt: number;
@@ -147,6 +153,7 @@ export function normalizeRecordingHistoryEntry(value: unknown): RecordingHistory
     ...(durationMs != null ? { durationMs } : {}),
     ...(candidate.userNamed === true ? { userNamed: true as const } : {}),
     ...(typeof candidate.driveFolderId === 'string' && candidate.driveFolderId.trim() ? { driveFolderId: candidate.driveFolderId.trim() } : {}),
+    ...(typeof candidate.driveFolderPresetId === 'string' && candidate.driveFolderPresetId.trim() ? { driveFolderPresetId: candidate.driveFolderPresetId.trim() } : {}),
     ...(typeof candidate.driveFolderName === 'string' && candidate.driveFolderName.trim() ? { driveFolderName: candidate.driveFolderName.trim() } : {}),
     ...(typeof candidate.folderWebViewLink === 'string' && candidate.folderWebViewLink.trim() ? { folderWebViewLink: candidate.folderWebViewLink.trim() } : {}),
     createdAt,
