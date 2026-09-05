@@ -54,6 +54,12 @@ const $ = (tag: string, className?: string): HTMLElement => {
 
 
 
+/**
+ * How long typing settles before the table repaints. Long enough to collapse a
+ * burst, short enough that the list feels attached to the box.
+ */
+const SEARCH_REPAINT_MS = 120;
+
 /** DOM-only renderer for the standalone, paged recordings history. */
 export class RecordingsView {
   private entries: RecordingHistoryEntry[] = [];
@@ -76,6 +82,17 @@ export class RecordingsView {
   /** The open modal's picker, torn down with the modal so its listeners go too. */
   private destinationListbox: ListboxSelect | null = null;
   private editingId: string | null = null;
+  /**
+   * The list is split into three hosts built once. The toolbar host matters:
+   * rebuilding it destroyed the very input the user was typing into, which is
+   * why a redraw used to restore focus and caret by hand.
+   */
+  private toolbarHost: HTMLElement | null = null;
+  private tableHost: HTMLElement | null = null;
+  private detailHost: HTMLElement | null = null;
+  /** Which toolbar is mounted, so it is only rebuilt when the kind changes. */
+  private toolbarKind: 'search' | 'bulk' | null = null;
+  private searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly list: HTMLElement,
@@ -112,21 +129,55 @@ export class RecordingsView {
 
   showError(message = '') { this.error.textContent = message; this.error.hidden = !message; }
 
-  private redraw({ focusSearch = false } = {}) {
+  private redraw() {
     // The picker owns document-level listeners; a redraw discards its element,
     // so it has to be torn down here rather than only when a new one is built.
     this.destinationListbox?.destroy();
     this.destinationListbox = null;
-    this.list.replaceChildren();
     this.empty.hidden = this.entries.length > 0;
     this.loadMoreButton.hidden = !this.hasMore;
-    if (!this.entries.length) return;
+
+    if (!this.toolbarHost) {
+      this.toolbarHost = $('div', 'recordings-toolbar-host');
+      this.tableHost = $('div', 'recordings-table-host');
+      this.detailHost = $('div', 'recordings-detail-host');
+      this.list.append(this.toolbarHost, this.tableHost, this.detailHost);
+    }
+    this.list.hidden = !this.entries.length;
+    if (!this.entries.length) {
+      this.tableHost!.replaceChildren();
+      this.detailHost!.replaceChildren();
+      return;
+    }
 
     const visible = this.visibleEntries();
-    this.list.append(this.selected.size ? this.bulkToolbar() : this.searchToolbar(visible.length, focusSearch));
-    this.list.append(this.table(visible));
+    this.syncToolbar(visible.length);
+    this.tableHost!.replaceChildren(this.table(visible));
     const openEntry = this.entries.find((entry) => entry.id === this.openId);
-    if (openEntry) this.list.append(this.detail(openEntry));
+    this.detailHost!.replaceChildren(...(openEntry ? [this.detail(openEntry)] : []));
+  }
+
+  /**
+   * Swaps between the search and bulk toolbars, and otherwise leaves the
+   * mounted one alone so a live search input keeps its focus and caret.
+   */
+  private syncToolbar(visibleCount: number): void {
+    const kind = this.selected.size ? 'bulk' : 'search';
+    if (kind !== this.toolbarKind) {
+      this.toolbarKind = kind;
+      this.toolbarHost!.replaceChildren(kind === 'bulk' ? this.bulkToolbar() : this.searchToolbar());
+    }
+    if (kind === 'search') this.updateSearchCount(visibleCount);
+  }
+
+  private updateSearchCount(visibleCount: number): void {
+    const total = this.toolbarHost?.querySelector<HTMLElement>('.recordings-count');
+    if (!total) return;
+    // While searching, the count is only useful next to what it was drawn from,
+    // and saying where the match came from is the point of the split below (f2).
+    total.textContent = this.query.trim()
+      ? `${visibleCount} OF ${this.entries.length} · IN NAMES AND NOTES`
+      : `${visibleCount} RECORDING${visibleCount === 1 ? '' : 'S'}`;
   }
 
   private visibleEntries(): RecordingHistoryEntry[] {
@@ -146,7 +197,7 @@ export class RecordingsView {
     });
   }
 
-  private searchToolbar(count: number, focusSearch: boolean): HTMLElement {
+  private searchToolbar(): HTMLElement {
     const toolbar = $('div', 'recordings-toolbar');
     const search = document.createElement('input');
     search.className = 'recording-search';
@@ -154,22 +205,19 @@ export class RecordingsView {
     search.value = this.query;
     search.placeholder = 'Search name or note…';
     search.setAttribute('aria-label', 'Search recordings');
+    // Repainting the table costs about 24µs a row, so a burst of keystrokes is
+    // collapsed into one repaint. The count is not debounced: it is one text
+    // node, and it is the feedback that the search is live.
     search.addEventListener('input', () => {
       this.query = search.value;
-      this.redraw({ focusSearch: true });
+      this.updateSearchCount(this.visibleEntries().length);
+      if (this.searchDebounce) clearTimeout(this.searchDebounce);
+      this.searchDebounce = setTimeout(() => {
+        this.searchDebounce = null;
+        this.redraw();
+      }, SEARCH_REPAINT_MS);
     });
-    const total = $('span', 'recordings-count');
-    // While searching, the count is only useful next to what it was drawn from,
-    // and saying where the match came from is the point of the split below (f2).
-    total.textContent = this.query.trim()
-      ? `${count} OF ${this.entries.length} · IN NAMES AND NOTES`
-      : `${count} RECORDING${count === 1 ? '' : 'S'}`;
-    toolbar.append(search, total);
-    if (focusSearch) requestAnimationFrame(() => {
-      const currentSearch = this.list.querySelector<HTMLInputElement>('.recording-search');
-      currentSearch?.focus();
-      currentSearch?.setSelectionRange(currentSearch.value.length, currentSearch.value.length);
-    });
+    toolbar.append(search, $('span', 'recordings-count'));
     return toolbar;
   }
 
