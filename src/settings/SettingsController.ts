@@ -9,9 +9,12 @@
 
 import {
   DEFAULT_EXTENSION_SETTINGS,
+  MAX_DRIVE_FOLDER_NAME_LENGTH,
+  MAX_DRIVE_FOLDER_PRESETS,
   loadExtensionSettingsFromStorage,
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
+  type DriveFolderPreset,
   type ExtensionSettings,
 } from '../shared/settings';
 import { getRecordingFormatCapabilities, type RecordingFormatCapabilities } from '../shared/recordingFormats';
@@ -32,6 +35,9 @@ export type SettingsElements = {
   tabContentType: HTMLSelectElement | null;
   tabResolutionPreset: HTMLSelectElement | null;
   tabMaxFrameRate: HTMLInputElement | null;
+  destinationsList?: HTMLElement | null;
+  destinationAdd?: HTMLButtonElement | null;
+  destinationsNote?: HTMLElement | null;
   micEchoCancellation: HTMLInputElement | null;
   micNoiseSuppression: HTMLInputElement | null;
   micAutoGain: HTMLInputElement | null;
@@ -52,6 +58,12 @@ type SettingsDocument = Document & {
 
 export class SettingsController {
   private readonly formatCapabilities: RecordingFormatCapabilities = getRecordingFormatCapabilities();
+  /**
+   * Edited in memory and written on save like every other control. Ids are
+   * minted here and never reused, so renaming a destination cannot silently
+   * re-target the recordings that chose it.
+   */
+  private destinations: DriveFolderPreset[] = [];
 
   constructor(private readonly el: SettingsElements) {}
 
@@ -62,9 +74,11 @@ export class SettingsController {
     try {
       const stored = await loadExtensionSettingsFromStorage();
       this.applySettings(stored);
+      this.applyDestinations(stored.storage.driveFolderPresets);
     } catch (error) {
       console.error('[settings] failed to load settings', error);
       this.applySettings(DEFAULT_EXTENSION_SETTINGS);
+      this.applyDestinations(DEFAULT_EXTENSION_SETTINGS.storage.driveFolderPresets);
       this.setStatus('Failed to load saved settings. Using defaults.', true);
     }
     this.applyFormatCapabilities();
@@ -156,6 +170,9 @@ export class SettingsController {
         selfVideoResolutionPreset: el.selfVideoResolutionPreset?.value,
         selfVideoUseAutoResolution: !!el.selfVideoAutoResolution?.checked,
       },
+      storage: {
+        driveFolderPresets: this.readDestinations(),
+      },
       professional: {
         selfVideoFrameRate: Number(el.selfVideoFrameRate?.value),
         tabContentType: el.tabContentType?.value,
@@ -168,6 +185,63 @@ export class SettingsController {
         chunkExtendedTimesliceMs: Number(el.chunkExtendedTimeslice?.value),
       },
     };
+  }
+
+  private applyDestinations(presets: readonly DriveFolderPreset[]): void {
+    this.destinations = presets.map((preset) => ({ ...preset }));
+    this.el.destinationAdd?.addEventListener('click', () => {
+      this.destinations.push({ id: newDestinationId(), name: '' });
+      this.renderDestinations();
+      // Focus the row just added; adding one and then hunting for it is silly.
+      const inputs = this.el.destinationsList?.querySelectorAll<HTMLInputElement>('.destination-name');
+      inputs?.[inputs.length - 1]?.focus();
+    }, { once: false });
+    this.renderDestinations();
+  }
+
+  private renderDestinations(): void {
+    const list = this.el.destinationsList;
+    if (!list) return;
+    list.replaceChildren();
+    this.destinations.forEach((preset, index) => {
+      const row = document.createElement('div');
+      row.className = 'destination-row';
+      const input = document.createElement('input');
+      input.className = 'destination-name';
+      input.type = 'text';
+      input.value = preset.name;
+      input.maxLength = MAX_DRIVE_FOLDER_NAME_LENGTH;
+      input.placeholder = 'e.g. Work meetings';
+      input.setAttribute('aria-label', `Destination ${index + 1} name`);
+      // Kept in the model on every keystroke so saving never depends on blur.
+      input.addEventListener('input', () => { this.destinations[index].name = input.value; });
+      const remove = document.createElement('button');
+      remove.className = 'destination-remove';
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.title = 'Remove destination';
+      remove.setAttribute('aria-label', `Remove destination ${index + 1}`);
+      remove.addEventListener('click', () => {
+        this.destinations.splice(index, 1);
+        this.renderDestinations();
+      });
+      row.append(input, remove);
+      list.append(row);
+    });
+
+    const full = this.destinations.length >= MAX_DRIVE_FOLDER_PRESETS;
+    if (this.el.destinationAdd) this.el.destinationAdd.disabled = full;
+    if (this.el.destinationsNote) {
+      this.el.destinationsNote.textContent = full
+        ? `That is the maximum of ${MAX_DRIVE_FOLDER_PRESETS} destinations.`
+        : '';
+      this.el.destinationsNote.hidden = !full;
+    }
+  }
+
+  /** Blank rows are dropped here; the normalizer also drops them on load. */
+  private readDestinations(): DriveFolderPreset[] {
+    return this.destinations.filter((preset) => preset.name.trim().length > 0);
   }
 
   /** Disables native and custom-selector options unavailable in this Chromium build. */
@@ -417,4 +491,9 @@ export class SettingsController {
     this.el.professionalToggle?.setAttribute('aria-expanded', String(open));
     if (this.el.professionalFields) this.el.professionalFields.hidden = !open;
   }
+}
+
+/** Ids only need to be unique within one user's settings. */
+function newDestinationId(): string {
+  return `dest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }

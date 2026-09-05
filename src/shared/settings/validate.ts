@@ -6,7 +6,7 @@
  * the Settings module.
  */
 
-import type { ChunkingSettings, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings, TabContentType } from './model';
+import type { ChunkingSettings, DriveFolderPreset, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings, TabContentType } from './model';
 import type { MicrophoneRecordingFormat, VideoRecordingFormat } from '../recordingFormats';
 
 export type BoundedPositiveIntResult = number | null;
@@ -76,4 +76,38 @@ export function validateChunkingSettings(candidate: Record<string, unknown>): Ch
   const extendedTimesliceMs = readBoundedPositiveInt(candidate.extendedTimesliceMs, 250, 60_000);
   if (!defaultTimesliceMs || !extendedTimesliceMs || extendedTimesliceMs < defaultTimesliceMs) return null;
   return { defaultTimesliceMs, extendedTimesliceMs };
+}
+
+/**
+ * Sanitizes the user's Drive destinations.
+ *
+ * A preset name becomes a real Drive folder name, so it is trimmed, length-
+ * capped and stripped of the characters that make a folder awkward to address.
+ * Duplicates are collapsed case-insensitively: two destinations that resolve to
+ * the same folder are one destination with two labels, and the picker would be
+ * lying.
+ */
+export function validateDriveFolderPresets(
+  value: unknown,
+  limits: { maxPresets: number; maxNameLength: number },
+): DriveFolderPreset[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const presets: DriveFolderPreset[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const raw = candidate as { id?: unknown; name?: unknown };
+    const name = typeof raw.name === 'string'
+      // Slashes and control characters read as paths; they are not.
+      ? raw.name.replace(/[\\/\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limits.maxNameLength)
+      : '';
+    const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : '';
+    if (!name || !id) continue;
+    const key = name.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    presets.push({ id, name });
+    if (presets.length >= limits.maxPresets) break;
+  }
+  return presets;
 }
