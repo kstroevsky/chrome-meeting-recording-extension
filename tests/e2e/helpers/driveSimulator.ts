@@ -41,6 +41,8 @@ export type DriveSimulatorStats = {
   permanentFailures: number;
   metadataReads: number;
   metadataUpdates: number;
+  /** Folder re-parents, i.e. recordings filed into a destination. */
+  folderMoves: number;
   activeUploads: number;
   maxConcurrentUploads: number;
   uploadedBytes: number;
@@ -113,6 +115,7 @@ function createHandler(
   const resources = new Map<string, string>();
   let folderSequence = 0;
   let sessionSequence = 0;
+  const parents = new Map<string, string[]>();
 
   return async (request: InterceptedRequest): Promise<MockResponse> => {
     const url = new URL(request.url);
@@ -149,6 +152,9 @@ function createHandler(
       const name = metadata.name ?? id;
       resources.set(id, name);
       stats.resources[id] = name;
+      parents.set(id, Array.isArray((metadata as { parents?: string[] }).parents)
+        ? (metadata as { parents: string[] }).parents
+        : []);
       return record({
         status: 200,
         body: JSON.stringify({ id, name }),
@@ -213,13 +219,25 @@ function createHandler(
       stats.metadataReads += 1;
       return name == null
         ? record({ status: 404, body: JSON.stringify({ error: { message: 'Unknown mock resource' } }) })
-        : record({ status: 200, body: JSON.stringify({ id, name }) });
+        : record({ status: 200, body: JSON.stringify({ id, name, parents: parents.get(id) ?? [] }) });
     }
 
     if (metadataMatch && method === 'PATCH') {
       const id = decodeURIComponent(metadataMatch[1]);
       if (!resources.has(id)) {
         return record({ status: 404, body: JSON.stringify({ error: { message: 'Unknown mock resource' } }) });
+      }
+      // Real Drive re-parents through query params with an empty body, so a
+      // PATCH carrying only addParents/removeParents is a move, not a rename.
+      const addParents = url.searchParams.get('addParents');
+      const removeParents = url.searchParams.get('removeParents');
+      if (addParents || removeParents) {
+        const current = new Set(parents.get(id) ?? []);
+        for (const parent of (removeParents ?? '').split(',').filter(Boolean)) current.delete(parent);
+        for (const parent of (addParents ?? '').split(',').filter(Boolean)) current.add(parent);
+        parents.set(id, [...current]);
+        stats.folderMoves += 1;
+        return record({ status: 200, body: JSON.stringify({ id, parents: [...current] }) });
       }
       let metadata: { name?: string } = {};
       try {
@@ -397,6 +415,7 @@ export async function installDriveSimulator(
     mediaReads: [],
     metadataReads: 0,
     metadataUpdates: 0,
+    folderMoves: 0,
     activeUploads: 0,
     maxConcurrentUploads: 0,
     uploadedBytes: 0,

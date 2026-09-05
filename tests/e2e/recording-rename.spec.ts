@@ -89,4 +89,86 @@ test.describe('post-upload recording rename (integration)', () => {
       await closeHarness(harness);
     }
   });
+
+  /**
+   * The regression for the defect that cost a user an hour of microphone audio:
+   * the notes sidecar took the mic row's identity, so two rows shared an id and
+   * a rename then renamed the sidecar's Drive file to `-mic.webm`.
+   *
+   * Unit tests cover the guards; this covers the real upload path that produced
+   * the bad data in the first place.
+   */
+  test('a mic recording with notes gives every artifact its own identity', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const drive = await installDriveSimulator(harness.context, 'fast');
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'drive',
+        micMode: 'separate',
+        recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(1_200);
+      // A note is what produces the WebVTT sidecar riding a media stream.
+      const marked = await sendRuntimeMessage<{ ok: boolean }>(
+        harness.controlPage, { type: 'MARK_NOTATION', text: 'decision point' });
+      expect(marked.ok).toBe(true);
+      await meetPage.waitForTimeout(800);
+      await stopRecording(harness.controlPage);
+
+      type Row = { id: string; stream: string; kind?: string; filename: string; driveFileId?: string };
+      const readRows = async (): Promise<Row[]> => {
+        const history = await sendRuntimeMessage<{ entries: Array<{ id: string; files: Row[] }> }>(
+          harness.controlPage, { type: 'LIST_RECORDING_HISTORY' });
+        return history.entries[0]?.files ?? [];
+      };
+
+      await expect.poll(async () => (await readRows()).filter((f) => f.driveFileId).length, {
+        timeout: 45_000,
+      }).toBe(3);
+
+      const rows = await readRows();
+
+      // Every artifact is its own row: no two share an id.
+      const ids = rows.map((r) => r.id);
+      expect(new Set(ids).size).toBe(ids.length);
+
+      // And no two share a Drive file — a shared id is what let a rename
+      // rename the wrong file.
+      const driveIds = rows.map((r) => r.driveFileId!);
+      expect(new Set(driveIds).size).toBe(driveIds.length);
+
+      // The sidecar is a sidecar, by id, by kind and by extension.
+      const notes = rows.find((r) => r.filename.endsWith('.vtt'))!;
+      expect(notes).toBeDefined();
+      expect(notes.id.endsWith(':notes')).toBe(true);
+      expect(notes.kind).toBe('notes');
+      const mic = rows.find((r) => r.stream === 'mic' && r.kind !== 'notes')!;
+      expect(mic.id.endsWith(':mic')).toBe(true);
+      expect(mic.filename).toMatch(/-mic\.webm$/);
+      expect(mic.driveFileId).not.toBe(notes.driveFileId);
+
+      // Renaming must not relabel the sidecar as media — this is the exact step
+      // that turned a user's `-notes.vtt` into `-mic.webm`.
+      const entryId = (await sendRuntimeMessage<{ entries: Array<{ id: string }> }>(
+        harness.controlPage, { type: 'LIST_RECORDING_HISTORY' })).entries[0].id;
+      const renamed = await sendRuntimeMessage<{ ok: boolean; error?: string }>(
+        harness.controlPage, { type: 'RENAME_RECORDING_HISTORY', id: entryId, name: 'Weekly Sync' });
+      expect(renamed.ok).toBe(true);
+
+      const after = await readRows();
+      const notesAfter = after.find((r) => r.id === notes.id)!;
+      const micAfter = after.find((r) => r.id === mic.id)!;
+      expect(notesAfter.filename).toMatch(/-notes\.vtt$/);
+      expect(micAfter.filename).toMatch(/-mic\.webm$/);
+
+      // Drive agrees: the sidecar's own file kept a .vtt name.
+      expect(drive.resources[notes.driveFileId!]).toMatch(/-notes\.vtt$/);
+      expect(drive.resources[mic.driveFileId!]).toMatch(/-mic\.webm$/);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
 });
+
