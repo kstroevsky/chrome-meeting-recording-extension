@@ -25,6 +25,7 @@ import { CompletedNamingPrompt } from './history/CompletedNamingPrompt';
 import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
+import type { DriveFolderPreset } from '../shared/settings';
 import { SessionTabsView } from './history/SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
 import type {
@@ -100,6 +101,8 @@ export class PopupController {
   private lastSession?: RecordingStatusView;
   /** Preview rendering must never start Chrome polling or live UI timers. */
   private previewing = false;
+  /** Drive destinations offered when naming; empty until settings load. */
+  private destinations: DriveFolderPreset[] = [];
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -107,6 +110,8 @@ export class PopupController {
     this.naming = new CompletedNamingPrompt(this.recordingNameDialog, {
       notify: (message) => this.toast(message),
       rename: (historyId, name) => this.renameRecording(historyId, name),
+      destinations: () => this.destinations,
+      fileTo: (historyId, presetId) => this.fileRecordingToDestination(historyId, presetId),
       applySession: (session) => this.state.applySession(session),
       reveal: (jobId) => this.sessionTabs.select(jobId),
       latest: () => ({ phase: this.lastPhase, session: this.lastSession }),
@@ -134,6 +139,7 @@ export class PopupController {
     });
     this.state = new PopupStateController(el, {
       onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
+      onSettings: (settings) => { this.destinations = settings.storage.driveFolderPresets; },
       onToast: (msg) => this.toast(msg),
       onAlert: (msg) => alert(msg),
     });
@@ -515,6 +521,13 @@ export class PopupController {
     if (response.ok === false) throw new Error(response.error || 'Could not rename this recording');
     if (response.session) this.state.applySession(response.session);
     return response.entry;
+  }
+
+  private async fileRecordingToDestination(recordingId: string, presetId: string): Promise<void> {
+    const response = await sendToBackground({
+      type: 'FILE_RECORDING_TO_DESTINATION', recordingId, presetId,
+    });
+    if (response.ok === false) throw new Error(response.error || 'Could not file this recording');
   }
 
   /**

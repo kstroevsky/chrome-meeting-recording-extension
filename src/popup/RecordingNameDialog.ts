@@ -1,4 +1,16 @@
 import { slugifyRecordingTitle } from '../shared/recording';
+import type { DriveFolderPreset } from '../shared/settings';
+
+/**
+ * The Drive folder choice offered alongside the name. Omitted entirely by
+ * callers that only rename, so the dialog keeps its single-field shape there.
+ */
+export type RecordingNameDialogDestinations = {
+  presets: DriveFolderPreset[];
+  /** Reads as the built-in folder, which is where an unfiled recording is. */
+  unfiledLabel: string;
+  initialId: string | null;
+};
 
 export type RecordingNameDialogOptions = {
   title: string;
@@ -6,7 +18,9 @@ export type RecordingNameDialogOptions = {
   initialValue: string;
   saveLabel?: string;
   cancelLabel?: string;
-  onSave: (name: string) => Promise<void>;
+  destinations?: RecordingNameDialogDestinations;
+  /** Receives the destination the user picked, or null for the built-in folder. */
+  onSave: (name: string, destinationId: string | null) => Promise<void>;
 };
 
 export type RecordingNameDialogOutcome = 'saved' | 'canceled';
@@ -17,6 +31,8 @@ type DialogParts = {
   title: HTMLElement;
   message: HTMLElement;
   input: HTMLInputElement;
+  destinationRow: HTMLElement;
+  destinationSelect: HTMLSelectElement;
   error: HTMLElement;
   saveBtn: HTMLButtonElement;
   cancelBtn: HTMLButtonElement;
@@ -45,6 +61,7 @@ export class RecordingNameDialog {
     parts.input.value = options.initialValue;
     parts.saveBtn.textContent = options.saveLabel ?? 'Save name';
     parts.cancelBtn.textContent = options.cancelLabel ?? 'Skip';
+    this.fillDestinations(parts, options.destinations);
     this.showError();
     this.setBusy(false);
 
@@ -73,13 +90,14 @@ export class RecordingNameDialog {
     const parts = this.parts;
     if (!pending || !parts || this.busy) return;
     const name = parts.input.value.trim();
+    const destinationId = pending.options.destinations ? parts.destinationSelect.value || null : null;
     if (!name) { this.showError('Recording name cannot be blank'); return; }
     if (!slugifyRecordingTitle(name)) { this.showError('Use at least one letter or number'); return; }
 
     this.showError();
     this.setBusy(true);
     try {
-      await pending.options.onSave(name);
+      await pending.options.onSave(name, destinationId);
       this.setBusy(false);
       this.close('saved');
     } catch (error) {
@@ -103,6 +121,7 @@ export class RecordingNameDialog {
     this.busy = busy;
     if (!this.parts) return;
     this.parts.input.disabled = busy;
+    this.parts.destinationSelect.disabled = busy;
     this.parts.saveBtn.disabled = busy;
     this.parts.cancelBtn.disabled = busy;
     this.parts.saveBtn.textContent = busy ? 'Saving…' : (this.pending?.options.saveLabel ?? this.parts.saveBtn.textContent);
@@ -146,6 +165,16 @@ export class RecordingNameDialog {
     input.setAttribute('aria-label', 'Recording name');
     input.setAttribute('aria-describedby', 'recording-name-modal-error');
 
+    const destinationRow = this.doc.createElement('label');
+    destinationRow.className = 'recording-name-destination';
+    destinationRow.hidden = true;
+    const destinationLabel = this.doc.createElement('span');
+    destinationLabel.className = 'recording-name-destination__label';
+    destinationLabel.textContent = 'Save to';
+    const destinationSelect = this.doc.createElement('select');
+    destinationSelect.className = 'recording-name-destination__select';
+    destinationRow.append(destinationLabel, destinationSelect);
+
     const error = this.doc.createElement('p');
     error.className = 'recording-name-error';
     error.id = 'recording-name-modal-error';
@@ -163,7 +192,7 @@ export class RecordingNameDialog {
     cancelBtn.className = 'btn btn-secondary';
     cancelBtn.dataset.recordingNameCancel = '';
     actions.append(saveBtn, cancelBtn);
-    card.append(icon, title, message, input, error, actions);
+    card.append(icon, title, message, input, destinationRow, error, actions);
     overlay.append(card);
     this.doc.body.appendChild(overlay);
 
@@ -177,7 +206,26 @@ export class RecordingNameDialog {
       if (event.key === 'Tab') this.trapFocus(event, input, cancelBtn);
     });
 
-    return { overlay, card, title, message, input, error, saveBtn, cancelBtn };
+    return { overlay, card, title, message, input, destinationRow, destinationSelect, error, saveBtn, cancelBtn };
+  }
+
+  /** Hidden unless the caller offers destinations, so a plain rename is unchanged. */
+  private fillDestinations(parts: DialogParts, destinations?: RecordingNameDialogDestinations): void {
+    parts.destinationRow.hidden = !destinations;
+    parts.destinationSelect.replaceChildren();
+    if (!destinations) return;
+
+    const unfiled = this.doc.createElement('option');
+    unfiled.value = '';
+    unfiled.textContent = destinations.unfiledLabel;
+    parts.destinationSelect.append(unfiled);
+    for (const preset of destinations.presets) {
+      const option = this.doc.createElement('option');
+      option.value = preset.id;
+      option.textContent = preset.name;
+      parts.destinationSelect.append(option);
+    }
+    parts.destinationSelect.value = destinations.initialId ?? '';
   }
 
   private trapFocus(event: KeyboardEvent, first: HTMLElement, last: HTMLElement): void {

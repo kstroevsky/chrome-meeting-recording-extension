@@ -21,6 +21,13 @@ body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: a
 .recording-name-input { box-sizing: border-box; width: 100%; height: 44px; margin-top: 15px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: 600 14px 'Space Grotesk', sans-serif; outline: 0; }
 .recording-name-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .recording-name-input[aria-invalid="true"] { border-color: var(--danger, #c43d3d); }
+/* The Drive folder offered next to the name; hidden when none are configured. */
+.recording-name-destination { display: flex; align-items: center; gap: 8px; margin-top: 10px; text-align: left; }
+.recording-name-destination__label { flex-shrink: 0; color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+.recording-name-destination__select { flex: 1; min-width: 0; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: 500 12.5px 'Space Grotesk', sans-serif; cursor: pointer; }
+.recording-name-destination__select:disabled { opacity: .6; cursor: progress; }
+.recording-name-destination__select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .recording-name-error { min-height: 17px; margin-top: 6px; color: var(--danger, #c43d3d); font-size: 11px; line-height: 1.4; }
 .recording-name-error[hidden] { display: block; visibility: hidden; }
 .recording-name-card .modal-actions { margin-top: 10px; }

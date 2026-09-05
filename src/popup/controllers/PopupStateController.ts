@@ -10,6 +10,7 @@ import {
   buildDefaultRunConfigFromSettings,
   getSelfVideoProfileSettings,
   loadExtensionSettingsFromStorage,
+  type ExtensionSettings,
   type SelfVideoProfileSettings,
 } from '../../shared/settings';
 import {
@@ -26,6 +27,8 @@ import type { PopupElements } from '../popupView';
 
 export type PopupStateCallbacks = {
   onPhaseChange: (phase: RecordingPhase, session: RecordingStatusView) => void;
+  /** Hands on the settings this controller already reads, so nothing reads them twice. */
+  onSettings?: (settings: ExtensionSettings) => void;
   onToast: (msg: string) => void;
   onAlert: (msg: string) => void;
 };
@@ -51,6 +54,7 @@ export class PopupStateController {
       const settings = await loadExtensionSettingsFromStorage();
       this.idleDefaultRunConfig = buildDefaultRunConfigFromSettings(settings);
       this.selfVideoProfile = getSelfVideoProfileSettings(settings);
+      this.callbacks.onSettings?.(settings);
     } catch {
       this.idleDefaultRunConfig = createDefaultRunConfig();
       this.selfVideoProfile = getSelfVideoProfileSettings();

@@ -11,16 +11,25 @@
  *
  * A skipped name is a real answer, told to the background, so the same
  * recording is never asked about twice.
+ *
+ * The same prompt offers the Drive destination, because naming is the one
+ * moment the user is already thinking about what the recording was. Skipping
+ * leaves it in the built-in folder rather than guessing a destination.
  */
 
 import type { RecordingNameDialog } from '../RecordingNameDialog';
 import { sendToBackground } from '../../shared/messages';
+import type { DriveFolderPreset } from '../../shared/settings';
 import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
 
 export type CompletedNamingActions = {
   notify: (message: string) => void;
   /** Renames through the caller, which owns the session the response carries. */
   rename: (historyId: string, name: string) => Promise<unknown>;
+  /** Destinations offered in the prompt; empty until settings load, or when none exist. */
+  destinations: () => DriveFolderPreset[];
+  /** Files the recording's Drive folder into the chosen destination. */
+  fileTo: (historyId: string, presetId: string) => Promise<unknown>;
   applySession: (session: RecordingStatusView) => void;
   /** Brings the job being named into view before its prompt appears. */
   reveal: (jobId: string) => void;
@@ -54,6 +63,7 @@ export class CompletedNamingPrompt {
 
     this.pending = job.id;
     this.actions.reveal(job.id);
+    const presets = this.actions.destinations();
     try {
       const outcome = await this.dialog.ask({
         title: 'Name this recording',
@@ -61,7 +71,15 @@ export class CompletedNamingPrompt {
         initialValue: job.label,
         saveLabel: 'Save name',
         cancelLabel: 'Skip',
-        onSave: async (name) => { await this.actions.rename(job.historyId!, name); },
+        destinations: presets.length
+          ? { presets, unfiledLabel: 'Google Meet Records', initialId: null }
+          : undefined,
+        onSave: async (name, destinationId) => {
+          // Rename first: filing moves the folder this rename just retitled,
+          // and a failed move must not cost the user the name they typed.
+          await this.actions.rename(job.historyId!, name);
+          if (destinationId) await this.actions.fileTo(job.historyId!, destinationId);
+        },
       });
       if (outcome === 'canceled') {
         // Skipping is recorded, so this recording is not asked about again.
