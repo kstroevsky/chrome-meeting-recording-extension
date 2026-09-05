@@ -26,8 +26,11 @@ export class RecordingPlaybackService {
     const entry = await this.deps.getEntry(recordingId);
     if (!entry || entry.deletedAt) return undefined;
 
-    // The sidecar is notes, not media; it has no place among playable tracks.
-    const media = entry.files.filter((file) => file.kind !== 'notes');
+    // The sidecar is notes, not media. Filtered by `kind` *and* by media type,
+    // because rows written before the sidecar carried its own identity can be
+    // stored without `kind` and would otherwise arrive as a playable track.
+    const media = entry.files.filter((file) => file.kind !== 'notes'
+      && (file.mimeType.startsWith('video/') || file.mimeType.startsWith('audio/')));
     return {
       recordingId: entry.id,
       title: entry.name,

@@ -116,9 +116,9 @@ export function normalizeRecordingHistoryEntry(value: unknown): RecordingHistory
   const storageMode = candidate.storageMode === 'drive' ? 'drive' : candidate.storageMode === 'local' ? 'local' : undefined;
   if (!id || !name || createdAt == null || !storageMode || !Array.isArray(candidate.files)) return undefined;
 
-  const files = candidate.files
+  const files = dedupeById(candidate.files
     .map((file) => normalizeRecordingHistoryFile(file, storageMode))
-    .filter((file): file is RecordingHistoryFile => file != null);
+    .filter((file): file is RecordingHistoryFile => file != null));
   if (!files.length) return undefined;
 
   const status = candidate.status === 'complete' || candidate.status === 'partial' || candidate.status === 'saving'
@@ -301,6 +301,35 @@ export function pendingArtifactFields(
     locations: [],
     delivery: { requested, status: 'pending' },
   };
+}
+
+/**
+ * Two rows must never share an id. When durable data holds a pair anyway — a
+ * notes sidecar that took a media row's identity wrote exactly this — keeping
+ * both is the worst option: the player shows the file twice, and a rename picks
+ * one at random and renames the other's Drive file to match.
+ *
+ * The id says what the row is supposed to be, so that is the tie-breaker: a
+ * `:notes` id keeps the row marked `notes`, any other id keeps the row that is
+ * not. A remaining tie keeps the larger file, because a stub beside real media
+ * is the stub.
+ */
+function dedupeById(files: RecordingHistoryFile[]): RecordingHistoryFile[] {
+  const byId = new Map<string, RecordingHistoryFile>();
+  for (const file of files) {
+    const existing = byId.get(file.id);
+    if (!existing) { byId.set(file.id, file); continue; }
+    byId.set(file.id, preferred(existing, file));
+  }
+  return [...byId.values()];
+}
+
+function preferred(a: RecordingHistoryFile, b: RecordingHistoryFile): RecordingHistoryFile {
+  const wantsNotes = a.id.endsWith(':notes');
+  const aMatches = (a.kind === 'notes') === wantsNotes;
+  const bMatches = (b.kind === 'notes') === wantsNotes;
+  if (aMatches !== bMatches) return aMatches ? a : b;
+  return (b.bytes ?? 0) > (a.bytes ?? 0) ? b : a;
 }
 
 function summarizeHistoryFiles(files: RecordingHistoryFile[]): RecordingHistoryEntry['status'] {

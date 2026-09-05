@@ -103,8 +103,15 @@ export class RecordingHistoryService {
     if (remoteFiles.some((file) => !file.driveFileId)) {
       throw new Error('This Drive recording is missing the metadata needed to rename all uploaded files');
     }
+    // A Drive id claimed by two rows cannot be renamed: each row would name it
+    // differently and the last write would win. Renaming the wrong file is how
+    // a notes sidecar ended up called `-mic.webm`, so an ambiguous id is left
+    // alone rather than guessed at.
+    const claims = new Map<string, number>();
+    for (const file of remoteFiles) claims.set(file.driveFileId!, (claims.get(file.driveFileId!) ?? 0) + 1);
+    const unambiguous = remoteFiles.filter((file) => claims.get(file.driveFileId!) === 1);
     return [
-      ...remoteFiles.map((file) => ({
+      ...unambiguous.map((file) => ({
         id: file.driveFileId!,
         name: buildRenamedRecordingFilename(title, file.stream, file.filename, file.kind),
       })),

@@ -143,3 +143,60 @@ describe('artifact locations and delivery', () => {
     });
   });
 });
+
+/**
+ * The corruption that cost a user an hour of microphone audio: a notes sidecar
+ * stored under the mic row's id, so history held two rows called `…:mic`.
+ */
+describe('two rows sharing an id', () => {
+  const entryWith = (files: unknown[]) => normalizeRecordingHistoryEntry({
+    id: 'r1', name: 'R', createdAt: 1, storageMode: 'drive', files,
+  });
+  const row = (over: Record<string, unknown>) => ({
+    id: 'r1:mic', stream: 'mic', filename: 'a-mic.webm',
+    destination: 'drive', status: 'available', ...over,
+  });
+
+  it('keeps the real media and drops the sidecar wearing its id', () => {
+    const entry = entryWith([
+      row({ bytes: 86, mimeType: 'text/vtt', kind: 'notes' }),
+      row({ bytes: 44_911_708, mimeType: 'audio/webm' }),
+    ]);
+    expect(entry!.files).toHaveLength(1);
+    expect(entry!.files[0].bytes).toBe(44_911_708);
+    expect(entry!.files[0].kind).toBeUndefined();
+  });
+
+  it('resolves in the same way whichever order they were stored', () => {
+    const entry = entryWith([
+      row({ bytes: 44_911_708, mimeType: 'audio/webm' }),
+      row({ bytes: 86, mimeType: 'text/vtt', kind: 'notes' }),
+    ]);
+    expect(entry!.files).toHaveLength(1);
+    expect(entry!.files[0].bytes).toBe(44_911_708);
+  });
+
+  it('keeps the sidecar when the id says it is one', () => {
+    const entry = entryWith([
+      { ...row({ bytes: 400, mimeType: 'audio/webm' }), id: 'r1:notes' },
+      { ...row({ bytes: 86, mimeType: 'text/vtt', kind: 'notes' }), id: 'r1:notes' },
+    ]);
+    expect(entry!.files).toHaveLength(1);
+    expect(entry!.files[0].kind).toBe('notes');
+  });
+
+  it('falls back to the larger file when neither row matches its id', () => {
+    const entry = entryWith([row({ bytes: 10 }), row({ bytes: 5_000 })]);
+    expect(entry!.files).toHaveLength(1);
+    expect(entry!.files[0].bytes).toBe(5_000);
+  });
+
+  it('leaves distinct ids alone', () => {
+    const entry = entryWith([
+      row({ bytes: 1 }),
+      { ...row({ bytes: 2 }), id: 'r1:tab', stream: 'tab', filename: 'a.webm' },
+    ]);
+    expect(entry!.files.map((f) => f.id)).toEqual(['r1:mic', 'r1:tab']);
+  });
+});
+
