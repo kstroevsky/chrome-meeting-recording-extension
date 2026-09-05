@@ -116,5 +116,12 @@ describe('manifest helpers', () => {
     expect(masterTrack(manifestWith([
       { stream: 'mic', sources: [{ kind: 'download', downloadId: 1, playableInExtension: false }] },
     ]))).toBeUndefined();
+
+    // A tab track with only a Downloads copy is not a master: the readable mic
+    // track is, or playback fails for a recording that was perfectly reachable.
+    expect(masterTrack(manifestWith([
+      { stream: 'tab', sources: [{ kind: 'download', downloadId: 1, playableInExtension: false }] },
+      { stream: 'mic', sources: [{ kind: 'opfs', key: 'a' }] },
+    ]))?.stream).toBe('mic');
   });
 });

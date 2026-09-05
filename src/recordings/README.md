@@ -72,6 +72,12 @@ The durable domain types and message guard are [`shared/recordingHistory.ts`](..
 
 `__tests__/` covers controller paging, deduplication, rename/remove reconciliation, and local-file actions with mocked background messages. The history service/repository tests live beside the background implementation because atomic mutation, remote-rename coordination, and IndexedDB ordering are persistence contracts, not page behavior. `tests/e2e/recording-history.spec.ts` validates a real v2→v3 IndexedDB migration and active-only paging index; `tests/e2e/recording-rename.spec.ts` covers the completed-upload prompt and remote folder/file rename path.
 
+## Player
+
+Playing a recording back is a modal on this page, not a page of its own — which
+is also what lets background scope a Drive authorization to `sender.tab.id`.
+See [`player/README.md`](player/README.md).
+
 ## Related
 
 - [`popup`](../popup/README.md) — popup navigation and detached upload tabs.

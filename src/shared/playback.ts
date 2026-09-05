@@ -56,10 +56,16 @@ export function isStreamableSource(source: PlaybackSource): boolean {
   return source.kind === 'opfs' || source.kind === 'drive';
 }
 
-/** The track the clock follows: the tab capture when present (ADR-0006 §21). */
+/**
+ * The track the clock follows: the tab capture when present (ADR-0006 §21).
+ *
+ * Only ever a track the extension can actually stream. A tab track that exists
+ * but has nothing but a Downloads copy is not a master — picking it would fail
+ * playback for a recording whose mic track is right there and readable.
+ */
 export function masterTrack(manifest: PlaybackManifest): PlaybackTrack | undefined {
-  return manifest.tracks.find((track) => track.stream === 'tab')
-    ?? manifest.tracks.find((track) => track.sources.some(isStreamableSource));
+  const streamable = manifest.tracks.filter((track) => track.sources.some(isStreamableSource));
+  return streamable.find((track) => track.stream === 'tab') ?? streamable[0];
 }
 
 /** True when nothing in the recording can be played inside the extension. */
