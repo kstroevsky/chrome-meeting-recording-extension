@@ -34,10 +34,8 @@ export type PlayerViewCallbacks = {
 export class PlayerView {
   readonly overlay = $('div', 'player-overlay');
   readonly video = document.createElement('video');
-  /** Picture-in-picture for the camera track (design f12, top-right 104×59). */
-  readonly selfVideo = document.createElement('video');
-  /** The microphone track has no picture — it only needs to be heard. */
-  readonly micAudio = document.createElement('audio');
+  /** Auxiliary media elements, one per non-master track (never shared). */
+  readonly auxiliaries = $('div', 'player__aux');
   private readonly dialog = $('article', 'player');
   private readonly title = $('span', 'player__title');
   private readonly date = $('span', 'player__date');
@@ -100,16 +98,7 @@ export class PlayerView {
     this.video.className = 'player__video';
     this.video.setAttribute('playsinline', '');
     this.video.preload = 'metadata';
-    this.selfVideo.className = 'player__selfcam';
-    this.selfVideo.setAttribute('playsinline', '');
-    this.selfVideo.preload = 'metadata';
-    // Auxiliary tracks are driven by the clock, never by their own controls,
-    // and they must never contribute a second copy of the tab audio.
-    this.selfVideo.muted = true;
-    this.selfVideo.hidden = true;
-    this.micAudio.preload = 'metadata';
-    this.micAudio.hidden = true;
-    this.stage.append(this.video, this.selfVideo, this.micAudio, $('span', 'player__scrim'));
+    this.stage.append(this.video, this.auxiliaries, $('span', 'player__scrim'));
 
     const scrub = $('div', 'player__scrub');
     const hit = $('span', 'player__hit');
@@ -181,7 +170,16 @@ export class PlayerView {
     });
     this.filesMenu.hidden = true;
     this.volumeMenu.hidden = true;
+    this.settingsMenu.hidden = true;
+    for (const menu of [this.filesMenu, this.volumeMenu, this.settingsMenu]) this.keepOpen(menu);
     this.setPlaying(false);
+  }
+
+  /** Popovers swallow their own clicks; without this a drag ends by closing them. */
+  private keepOpen(menu: HTMLElement): void {
+    for (const type of ['click', 'pointerdown', 'mousedown'] as const) {
+      menu.addEventListener(type, (event) => event.stopPropagation());
+    }
   }
 
   private togglePopover(menu: HTMLElement): void {
@@ -212,13 +210,74 @@ export class PlayerView {
   setSettings(skipSeconds: number, speed: number): void {
     this.settingsMenu.replaceChildren();
     this.settingsMenu.append(
-      this.choiceRow('Skip', SKIP_STEPS.map((step) => ({
+      this.choiceRow('Arrow-key skip', SKIP_STEPS.map((step) => ({
         label: `${step}s`, active: step === skipSeconds, pick: () => this.callbacks.setSkipSeconds(step),
       }))),
       this.choiceRow('Speed', SPEED_STEPS.map((rate) => ({
         label: rate === 1 ? '1×' : `${rate}×`, active: rate === speed, pick: () => this.callbacks.setSpeed(rate),
       }))),
     );
+  }
+
+  /**
+   * Vertical fader driven by pointer events. Pointer capture is what makes the
+   * drag survive leaving the element, which is most of a fader's travel.
+   */
+  private buildFader(level: number, label: string, onChange: (level: number) => void): HTMLElement {
+    const track = $('div', 'player__fader-track');
+    const fill = $('span', 'player__fader-fill');
+    const thumb = $('span', 'player__fader-thumb');
+    track.append(fill, thumb);
+    track.tabIndex = 0;
+    track.setAttribute('role', 'slider');
+    track.setAttribute('aria-label', `${label} volume`);
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+
+    let current = level;
+    const paint = () => {
+      const pct = Math.round(current * 100);
+      fill.style.height = `${pct}%`;
+      thumb.style.bottom = `calc(${pct}% - 7px)`;
+      track.setAttribute('aria-valuenow', String(pct));
+    };
+    const setFromPointer = (clientY: number) => {
+      const rect = track.getBoundingClientRect();
+      // Inverted: the top of a fader is loud.
+      current = Math.min(1, Math.max(0, (rect.bottom - clientY) / rect.height));
+      paint();
+      onChange(current);
+    };
+
+    // Listeners go on the document for the life of the gesture rather than
+    // relying on pointer capture: capture retargets inconsistently here, and a
+    // fader's travel takes the pointer off the 6px track almost immediately.
+    track.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setFromPointer(event.clientY);
+      const onMove = (move: PointerEvent) => setFromPointer(move.clientY);
+      const onUp = () => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    });
+    track.addEventListener('keydown', (event) => {
+      const step = event.key === 'ArrowUp' ? 0.05 : event.key === 'ArrowDown' ? -0.05 : 0;
+      if (!step) return;
+      event.preventDefault();
+      event.stopPropagation();
+      current = Math.min(1, Math.max(0, current + step));
+      paint();
+      onChange(current);
+    });
+
+    paint();
+    return track;
   }
 
   private choiceRow(label: string, options: Array<{ label: string; active: boolean; pick: () => void }>): HTMLElement {
@@ -250,13 +309,17 @@ export class PlayerView {
     this.filesMenu.replaceChildren();
     for (const track of tracks) {
       const row = document.createElement('button');
-      row.className = `player__file${track.shown ? ' player__file--on' : ''}`;
+      const on = track.shown && track.available;
+      row.className = `player__file${on ? ' player__file--on' : ''}${track.available ? '' : ' player__file--unavailable'}`;
       row.type = 'button';
+      row.disabled = !track.available;
       row.setAttribute('role', 'menuitemcheckbox');
-      row.setAttribute('aria-checked', String(track.shown));
+      row.setAttribute('aria-checked', String(on));
       const check = $('span', 'player__file-check');
       const label = $('span', 'player__file-label'); label.textContent = track.label;
-      const format = $('span', 'player__file-format'); format.textContent = track.format;
+      const format = $('span', 'player__file-format');
+      // Says why it is not playing, rather than showing a checkbox that does nothing.
+      format.textContent = track.available ? track.format : 'UNAVAILABLE';
       row.append(check, label, format);
       row.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -270,20 +333,20 @@ export class PlayerView {
     this.volumeButton.hidden = faders.length === 0;
     for (const track of faders) {
       const column = $('div', 'player__fader');
+      column.dataset.fileId = track.fileId;
       const level = levels.get(track.fileId) ?? 1;
       const readout = $('span', 'player__fader-level');
       readout.textContent = muted.has(track.fileId) ? 'MUTED' : `${Math.round(level * 100)}`;
-      const slider = document.createElement('input');
-      slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1';
-      slider.value = String(Math.round(level * 100));
-      slider.className = 'player__fader-input';
-      slider.setAttribute('aria-label', `${track.label} volume`);
-      slider.addEventListener('input', () => this.callbacks.setVolume(track.fileId, Number(slider.value) / 100));
-      slider.addEventListener('click', (event) => event.stopPropagation());
+      readout.dataset.role = 'level';
+      // A custom fader rather than <input type=range>: vertical range support is
+      // inconsistent — it renders, takes the initial click, then refuses to track
+      // a drag — and the design's fader is a bespoke control regardless.
+      const slider = this.buildFader(level, track.label, (next) => this.callbacks.setVolume(track.fileId, next));
       // Clicking the name mutes that track — the design's affordance, not a label.
       const name = document.createElement('button');
       name.type = 'button';
       name.className = `player__fader-name${muted.has(track.fileId) ? ' player__fader-name--muted' : ''}`;
+      name.dataset.role = 'name';
       name.textContent = track.label;
       name.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -292,6 +355,20 @@ export class PlayerView {
       column.append(readout, slider, name);
       this.volumeMenu.append(column);
     }
+  }
+
+  /**
+   * Updates one fader's readout without rebuilding the menu. Re-rendering on
+   * every pointermove destroyed the very node being dragged, which is why the
+   * fader tracked erratically.
+   */
+  updateFader(fileId: string, level: number, muted: boolean): void {
+    const column = this.volumeMenu.querySelector<HTMLElement>(`[data-file-id="${CSS.escape(fileId)}"]`);
+    if (!column) return;
+    const readout = column.querySelector<HTMLElement>('[data-role="level"]');
+    if (readout) readout.textContent = muted ? 'MUTED' : `${Math.round(level * 100)}`;
+    const name = column.querySelector<HTMLElement>('[data-role="name"]');
+    name?.classList.toggle('player__fader-name--muted', muted);
   }
 
   /** Renders everything the manifest determines; sources are attached separately. */
@@ -338,9 +415,34 @@ export class PlayerView {
       : '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M3 1.8l7 4.2-7 4.2z"/></svg>';
   }
 
-  /** Reveals the camera picture only once a self-video track is actually attached. */
-  showSelfCam(show: boolean): void {
-    this.selfVideo.hidden = !show;
+  /**
+   * Creates a dedicated element for one auxiliary track. One element per track,
+   * never a shared one: two tracks of the same kind would otherwise overwrite
+   * each other's source and only the last would be heard.
+   */
+  addAuxiliary(kind: 'video' | 'audio'): HTMLMediaElement {
+    const element = document.createElement(kind);
+    element.preload = 'metadata';
+    if (kind === 'video') {
+      const video = element as HTMLVideoElement;
+      video.className = 'player__selfcam';
+      video.setAttribute('playsinline', '');
+      // The camera carries no audio; unmuting it would double the tab's.
+      video.muted = true;
+    } else {
+      element.hidden = true;
+    }
+    this.auxiliaries.append(element);
+    return element;
+  }
+
+  clearAuxiliaries(): void {
+    for (const element of Array.from(this.auxiliaries.children) as HTMLMediaElement[]) {
+      element.pause();
+      element.removeAttribute('src');
+      element.load();
+    }
+    this.auxiliaries.replaceChildren();
   }
 
   /** A message on the picture — the recording is unreachable, not merely paused. */

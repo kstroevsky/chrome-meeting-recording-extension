@@ -147,13 +147,12 @@ test.describe('recording playback (integration)', () => {
       await expect.poll(async () => await page.locator('.player__selfcam').getAttribute('src'), {
         timeout: 20_000,
       }).toMatch(/^blob:/);
-      await expect.poll(async () => await page.locator('.player audio').getAttribute('src'), {
+      await expect.poll(async () => await page.locator('.player__aux audio').getAttribute('src'), {
         timeout: 20_000,
       }).toMatch(/^blob:/);
       await expect(page.locator('.player__selfcam')).toBeVisible();
 
-      // Playing the master carries the auxiliaries with it, and they stay together.
-      await page.locator('.player__play').click();
+      // Autoplay carries the auxiliaries with it, and they stay together.
       await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
         timeout: 15_000,
       }).toBeGreaterThan(0.3);
@@ -161,7 +160,7 @@ test.describe('recording playback (integration)', () => {
       const spread = await page.evaluate(() => {
         const tab = document.querySelector('.player__video') as HTMLVideoElement;
         const cam = document.querySelector('.player__selfcam') as HTMLVideoElement;
-        const mic = document.querySelector('.player audio') as HTMLAudioElement;
+        const mic = document.querySelector('.player__aux audio') as HTMLAudioElement;
         return [Math.abs(cam.currentTime - tab.currentTime), Math.abs(mic.currentTime - tab.currentTime)];
       });
       // Well inside the hard-resync band; this is alignment, not luck.
@@ -169,6 +168,14 @@ test.describe('recording playback (integration)', () => {
 
       // The camera track must not double the tab's audio.
       expect(await page.locator('.player__selfcam').evaluate((el: HTMLVideoElement) => el.muted)).toBe(true);
+
+      // The microphone must actually be audible, and actually advancing.
+      const mic = page.locator('.player__aux audio');
+      expect(await mic.evaluate((el: HTMLAudioElement) => el.muted)).toBe(false);
+      expect(await mic.evaluate((el: HTMLAudioElement) => el.volume)).toBe(1);
+      await expect.poll(async () => await mic.evaluate((el: HTMLAudioElement) => el.currentTime), {
+        timeout: 15_000,
+      }).toBeGreaterThan(0);
     } finally {
       await closeHarness(harness);
     }
@@ -198,13 +205,14 @@ test.describe('recording playback (integration)', () => {
         timeout: 20_000,
       }).toBeGreaterThanOrEqual(1);
 
-      // Space plays, space pauses.
-      await page.keyboard.press('Space');
+      // Opening autoplays, so the first Space pauses and the second resumes.
       await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused), {
-        timeout: 10_000,
+        timeout: 15_000,
       }).toBe(false);
       await page.keyboard.press('Space');
       await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
+      await page.keyboard.press('Space');
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(false);
 
       // L steps the speed up the ladder; J steps back.
       await page.keyboard.press('l');
@@ -268,15 +276,50 @@ test.describe('recording playback (integration)', () => {
       await expect(page.locator('.player__selfcam')).toBeVisible();
       await expect(page.locator('.player__files-count')).toHaveText('3');
 
-      // One fader per audio track; the camera gets none.
+      // One fader per audio track and no more: the camera carries no audio, so
+      // a third fader would mean a track was misclassified.
       await page.locator('.player__files').click();
       await page.locator('.player__icon--on-picture').first().click();
       await expect(page.locator('.player__fader')).toHaveCount(2);
+      await expect(page.locator('.player__fader-name').nth(0)).toHaveText('Tab video');
+      await expect(page.locator('.player__fader-name').nth(1)).toHaveText('Microphone');
+
+      // Dragging a fader must not dismiss the popup — a click inside it used to
+      // bubble to the overlay and close the menu mid-drag.
+      const fader = page.locator('.player__fader-track').nth(1);
+      const box = (await fader.boundingBox())!;
+      // A real drag, not a synthetic input event: the bug was that the pointer
+      // gesture dismissed the popup and the vertical slider never tracked.
+      await page.mouse.move(box.x + box.width / 2, box.y + 6);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height - 6, { steps: 12 });
+      await page.mouse.up();
+
+      await expect(page.locator('.player__menu--volume')).toBeVisible();
+      await expect.poll(async () => await page.locator('.player__aux audio')
+        .evaluate((el: HTMLAudioElement) => el.volume), { timeout: 5_000 }).toBeLessThan(0.25);
+      // The readout followed, and the node survived the gesture — re-rendering
+      // the menu mid-drag used to replace the element under the pointer.
+      await expect(page.locator('.player__fader-level').nth(1)).not.toHaveText('100');
+      await expect(page.locator('.player__fader-track')).toHaveCount(2);
+
+      // The fader tracks the pointer continuously, not just the first press.
+      const seen: number[] = [];
+      const box2 = (await fader.boundingBox())!;
+      await page.mouse.move(box2.x + box2.width / 2, box2.y + box2.height - 4);
+      await page.mouse.down();
+      for (const fraction of [0.75, 0.5, 0.25]) {
+        await page.mouse.move(box2.x + box2.width / 2, box2.y + box2.height * fraction);
+        seen.push(await page.locator('.player__aux audio').evaluate((el: HTMLAudioElement) => el.volume));
+      }
+      await page.mouse.up();
+      expect(seen[0]).toBeLessThan(seen[1]);
+      expect(seen[1]).toBeLessThan(seen[2]);
 
       // Clicking a track name mutes that track only.
       await page.locator('.player__fader-name').nth(1).click();
       await expect(page.locator('.player__fader-name').nth(1)).toHaveClass(/player__fader-name--muted/);
-      expect(await page.locator('.player audio').evaluate((el: HTMLAudioElement) => el.muted)).toBe(true);
+      expect(await page.locator('.player__aux audio').evaluate((el: HTMLAudioElement) => el.muted)).toBe(true);
       expect(await page.locator('.player__video').evaluate((el: HTMLVideoElement) => el.muted)).toBe(false);
     } finally {
       await closeHarness(harness);
@@ -311,7 +354,7 @@ test.describe('recording playback (integration)', () => {
       // this player has one rendition and no subtitle track.
       await page.locator('.player__icon--on-picture').nth(1).click();
       await expect(page.locator('.player__setting')).toHaveCount(2);
-      await expect(page.locator('.player__setting-label').nth(0)).toHaveText('Skip');
+      await expect(page.locator('.player__setting-label').nth(0)).toHaveText('Arrow-key skip');
       await expect(page.locator('.player__setting-label').nth(1)).toHaveText('Speed');
 
       // Picking a speed applies it to the element.

@@ -26,6 +26,8 @@ export type TrackDescriptor = {
   hasAudio: boolean;
   /** False once the user switches it off; the row stays either way. */
   shown: boolean;
+  /** False when no source could be attached — the row says so rather than lying. */
+  available: boolean;
 };
 
 const LABELS: Record<RecordingStream, string> = {
@@ -37,6 +39,14 @@ const LABELS: Record<RecordingStream, string> = {
 /** Order the design lists them in, not the order history happens to store them. */
 const ORDER: RecordingStream[] = ['tab', 'self-video', 'mic'];
 
+function label(stream: RecordingStream, perStream: Map<string, number>, seen: Map<string, number>): string {
+  const base = LABELS[stream] ?? stream;
+  if ((perStream.get(stream) ?? 0) < 2) return base;
+  const index = (seen.get(stream) ?? 0) + 1;
+  seen.set(stream, index);
+  return `${base} ${index}`;
+}
+
 function formatOf(track: PlaybackTrack): string {
   const extension = /\.([A-Za-z0-9]+)$/.exec(track.filename)?.[1];
   if (extension) return extension.toUpperCase();
@@ -46,18 +56,27 @@ function formatOf(track: PlaybackTrack): string {
 export function describeTracks(
   manifest: PlaybackManifest,
   shown: ReadonlySet<string> | null = null,
+  attached: ReadonlySet<string> | null = null,
 ): TrackDescriptor[] {
+  const perStream = new Map<string, number>();
+  for (const track of manifest.tracks) perStream.set(track.stream, (perStream.get(track.stream) ?? 0) + 1);
+  const seen = new Map<string, number>();
   return [...manifest.tracks]
     .sort((a, b) => ORDER.indexOf(a.stream) - ORDER.indexOf(b.stream))
     .map((track) => ({
       fileId: track.fileId,
       stream: track.stream,
-      label: LABELS[track.stream] ?? track.stream,
+      // Two rows of the same stream is not supposed to happen, but when history
+      // holds one, two identical labels are useless — number them instead.
+      label: label(track.stream, perStream, seen),
       format: formatOf(track),
-      // The camera is recorded without audio; the tab carries the room.
+      // Both keyed on the stream. The mime type cannot be trusted for this:
+      // `contentTypeForRecordingFilename` maps every `.webm` to `video/webm`,
+      // microphone files included.
       hasVideo: track.stream !== 'mic',
       hasAudio: track.stream !== 'self-video',
       shown: shown ? shown.has(track.fileId) : true,
+      available: attached ? attached.has(track.fileId) : true,
     }));
 }
 
@@ -66,9 +85,13 @@ export function shownCount(tracks: readonly TrackDescriptor[]): number {
   return tracks.filter((track) => track.shown).length;
 }
 
-/** The rows the volume popup gets a fader for. One audio track, one fader. */
+/**
+ * The rows the volume popup gets a fader for. One audio track, one fader — and
+ * none for a track that never attached, because a fader that controls nothing
+ * is worse than no fader.
+ */
 export function audioTracks(tracks: readonly TrackDescriptor[]): TrackDescriptor[] {
-  return tracks.filter((track) => track.hasAudio);
+  return tracks.filter((track) => track.hasAudio && track.available);
 }
 
 /**

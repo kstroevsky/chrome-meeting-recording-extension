@@ -37,6 +37,8 @@ export class PlayerController {
   private readonly levels = new Map<string, number>();
   private readonly muted = new Set<string>();
   private readonly elements = new Map<string, HTMLMediaElement>();
+  /** File ids that really got a source; everything else is reported unavailable. */
+  private readonly attached = new Set<string>();
   private skipSeconds = 10;
   private speed = 1;
   private manifest: PlaybackManifest | null = null;
@@ -55,11 +57,15 @@ export class PlayerController {
         this.levels.set(fileId, level);
         // Moving a muted fader is an unmute — otherwise nothing appears to happen.
         if (level > 0) this.muted.delete(fileId);
-        this.applyTrackState();
+        // Elements and readout only: rebuilding the menu here would replace the
+        // fader the pointer is holding.
+        this.applyLevels();
+        this.view.updateFader(fileId, level, this.muted.has(fileId));
       },
       toggleTrackMuted: (fileId) => {
         if (!this.muted.delete(fileId)) this.muted.add(fileId);
-        this.applyTrackState();
+        this.applyLevels();
+        this.view.updateFader(fileId, this.levels.get(fileId) ?? 1, this.muted.has(fileId));
       },
       setSkipSeconds: (seconds) => { this.skipSeconds = seconds; this.view.setSettings(this.skipSeconds, this.speed); },
       setSpeed: (rate) => this.applySpeed(rate),
@@ -156,12 +162,20 @@ export class PlayerController {
       return;
     }
     this.track = track;
+    // Deliberately logged: when playback misbehaves for a recording we cannot
+    // reproduce, this one line says what the manifest actually held.
+    console.debug('[player] tracks', manifest.tracks.map((t) =>
+      `${t.stream}|${t.mimeType}|${t.sources.map((s) => s.kind).join('+') || 'none'}`).join('  '));
     this.elements.set(track.fileId, this.view.video);
     this.shown = new Set(manifest.tracks.map((candidate) => candidate.fileId));
     await this.attach(track);
     await this.attachAuxiliaries(manifest, track);
     this.applyTrackState();
     this.view.setSettings(this.skipSeconds, this.speed);
+
+    // Opening a recording is an explicit request to watch it, and the click that
+    // opened the player is the gesture that lets audio start.
+    if (this.attached.size) await this.togglePlay().catch(() => {});
   }
 
   /**
@@ -169,17 +183,28 @@ export class PlayerController {
    * menus from the same state so the trigger count and the checkboxes cannot
    * disagree with what is actually playing.
    */
+  /** Pushes level and mute onto the elements. Renders nothing. */
+  private applyLevels(): void {
+    for (const [fileId, element] of this.elements) {
+      const on = this.shown.has(fileId);
+      const isCamera = element !== this.view.video && element.tagName === 'VIDEO';
+      element.volume = this.levels.get(fileId) ?? 1;
+      element.muted = !on || this.muted.has(fileId) || isCamera;
+    }
+  }
+
   private applyTrackState(): void {
     for (const [fileId, element] of this.elements) {
       const on = this.shown.has(fileId);
+      const isCamera = element !== this.view.video && element.tagName === 'VIDEO';
       element.volume = this.levels.get(fileId) ?? 1;
       // The camera never carries audio, so it stays muted whatever the user does.
-      element.muted = !on || this.muted.has(fileId) || element === this.view.selfVideo;
-      if (element === this.view.selfVideo) this.view.showSelfCam(on);
+      element.muted = !on || this.muted.has(fileId) || isCamera;
+      if (isCamera) element.hidden = !on;
       if (element === this.view.video) this.view.video.classList.toggle('player__video--hidden', !on);
     }
     if (this.manifest) {
-      this.view.setTracks(describeTracks(this.manifest, this.shown), this.levels, this.muted);
+      this.view.setTracks(describeTracks(this.manifest, this.shown, this.attached), this.levels, this.muted);
     }
   }
 
@@ -204,17 +229,22 @@ export class PlayerController {
     });
     for (const track of manifest.tracks) {
       if (track.fileId === master.fileId) continue;
-      const element = track.stream === 'self-video' ? this.view.selfVideo : this.view.micAudio;
       const resolved = await this.urlFor(track);
       if (!resolved) {
         // Better to watch the meeting without the camera than not at all.
         this.deps.warn?.(`No playable source for the ${track.stream} track`);
         continue;
       }
+      // A dedicated element per track: sharing one meant a second audio track
+      // silently replaced the first, and only the last was ever heard.
+      // Keyed on the stream, not the mime type: `contentTypeForRecordingFilename`
+      // maps every `.webm` to `video/webm`, so a microphone file claims to be
+      // video and would render a second picture-in-picture.
+      const element = this.view.addAuxiliary(track.stream === 'self-video' ? 'video' : 'audio');
       if (resolved.revoke) this.auxRevokes.push(resolved.revoke);
       element.src = resolved.url;
       this.elements.set(track.fileId, element);
-      if (track.stream === 'self-video') this.view.showSelfCam(true);
+      this.attached.add(track.fileId);
       clock.add({ element, timelineOffsetMs: track.timelineOffsetMs });
     }
     this.clock = clock;
@@ -249,6 +279,7 @@ export class PlayerController {
     this.revoke = resolved.revoke ?? null;
     this.view.setStatus(null);
     this.view.video.src = resolved.url;
+    this.attached.add(track.fileId);
   }
 
   private bindMedia(): void {
@@ -314,12 +345,10 @@ export class PlayerController {
     this.stopDriftWatch();
     this.clock?.clear();
     this.clock = null;
-    for (const element of [this.view.video, this.view.selfVideo, this.view.micAudio]) {
-      element.pause();
-      element.removeAttribute('src');
-      element.load();
-    }
-    this.view.showSelfCam(false);
+    this.view.video.pause();
+    this.view.video.removeAttribute('src');
+    this.view.video.load();
+    this.view.clearAuxiliaries();
     this.view.closePopovers();
     this.view.toggleHelp(false);
     this.skipSeconds = 10;
@@ -327,6 +356,7 @@ export class PlayerController {
     this.elements.clear();
     this.levels.clear();
     this.muted.clear();
+    this.attached.clear();
     this.shown = new Set();
     // Object URLs pin the underlying OPFS file; leaking them leaks the file.
     this.revoke?.();

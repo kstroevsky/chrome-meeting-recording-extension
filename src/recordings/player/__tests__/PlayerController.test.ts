@@ -150,3 +150,41 @@ describe('closing', () => {
     expect(document.querySelector('.player')).toBeNull();
   });
 });
+
+describe('autoplay', () => {
+  it('starts playing as soon as a source attaches', async () => {
+    const opfs = createFakeOpfs();
+    opfs.seed('library/r1/tab.webm', 128);
+    const controller = new PlayerController({
+      getManifest: async () => manifest([{ kind: 'opfs', key: 'library/r1/tab.webm' }]),
+      prepareDriveSource: async () => undefined,
+      resolver: {
+        getRoot: async () => opfs.root,
+        createObjectURL: () => 'blob:x',
+        revokeObjectURL: () => {},
+      },
+    });
+    document.body.append(controller.element);
+    const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
+    const play = jest.fn(async () => {});
+    Object.defineProperty(video, 'play', { value: play });
+
+    await controller.open('r1');
+    expect(play).toHaveBeenCalled();
+  });
+
+  it('does not try to play a recording with nothing attached', async () => {
+    const controller = new PlayerController({
+      getManifest: async () => manifest([]),
+      prepareDriveSource: async () => undefined,
+    });
+    document.body.append(controller.element);
+    const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
+    const play = jest.fn(async () => {});
+    Object.defineProperty(video, 'play', { value: play });
+
+    await controller.open('r1');
+    expect(play).not.toHaveBeenCalled();
+  });
+});
+

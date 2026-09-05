@@ -72,10 +72,17 @@ export class PlaybackClock {
     track.element.playbackRate = this.master.playbackRate;
   }
 
+  /**
+   * Starts every track. An auxiliary that refuses to play (still buffering, or
+   * a decode error) must not take the master down with it — `Promise.all` would
+   * reject on the first failure and leave the whole player silent, which is how
+   * a broken mic track stopped the video from playing at all.
+   */
   async play(): Promise<void> {
     // Align before starting, or every track begins from wherever it was paused.
     for (const track of this.auxiliaries) this.alignOne(track);
-    await Promise.all([this.master.play(), ...this.auxiliaries.map((t) => t.element.play())]);
+    await this.master.play();
+    await Promise.allSettled(this.auxiliaries.map((track) => track.element.play()));
   }
 
   pause(): void {

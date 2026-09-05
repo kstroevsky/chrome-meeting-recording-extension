@@ -78,3 +78,18 @@ describe('toggleShown', () => {
     expect([...toggleShown(new Set(['a']), 'a')]).toEqual(['a']);
   });
 });
+
+describe('availability', () => {
+  it('marks a track that never attached, and gives it no fader', () => {
+    // A Drive recording whose mic could not be authorized must say so rather
+    // than offering a fader that controls silence.
+    const tracks = describeTracks(manifest(['tab', 'mic']), null, new Set(['r1:tab']));
+    expect(tracks.map((t) => [t.stream, t.available])).toEqual([['tab', true], ['mic', false]]);
+    expect(audioTracks(tracks).map((t) => t.stream)).toEqual(['tab']);
+  });
+
+  it('treats everything as available when nothing has been attached yet', () => {
+    expect(describeTracks(manifest(['tab', 'mic'])).every((t) => t.available)).toBe(true);
+  });
+});
+
