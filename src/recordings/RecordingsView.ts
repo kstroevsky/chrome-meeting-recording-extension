@@ -1,4 +1,5 @@
 import type { DriveFolderPreset } from '../shared/settings';
+import { createListboxSelect, type ListboxSelect } from '../ui/listboxSelect';
 import {
   dayLabel,
   durationOf,
@@ -72,6 +73,8 @@ export class RecordingsView {
   }
   private openId: string | null = null;
   private destinations: DriveFolderPreset[] = [];
+  /** The open modal's picker, torn down with the modal so its listeners go too. */
+  private destinationListbox: ListboxSelect | null = null;
   private editingId: string | null = null;
 
   constructor(
@@ -110,6 +113,10 @@ export class RecordingsView {
   showError(message = '') { this.error.textContent = message; this.error.hidden = !message; }
 
   private redraw({ focusSearch = false } = {}) {
+    // The picker owns document-level listeners; a redraw discards its element,
+    // so it has to be torn down here rather than only when a new one is built.
+    this.destinationListbox?.destroy();
+    this.destinationListbox = null;
     this.list.replaceChildren();
     this.empty.hidden = this.entries.length > 0;
     this.loadMoreButton.hidden = !this.hasMore;
@@ -370,27 +377,21 @@ export class RecordingsView {
    */
   private destinationPicker(entry: RecordingHistoryEntry): HTMLElement {
     const row = $('div', 'detail-destination');
-    const select = document.createElement('select');
-    select.className = 'detail-destination__select';
-    select.setAttribute('aria-label', 'Google Drive destination');
-
-    const unfiled = document.createElement('option');
-    unfiled.value = '';
-    unfiled.textContent = 'Google Meet Records (unfiled)';
-    select.append(unfiled);
-    for (const preset of this.destinations) {
-      const option = document.createElement('option');
-      option.value = preset.id;
-      option.textContent = preset.name;
-      select.append(option);
-    }
-    select.value = entry.driveFolderPresetId ?? '';
-
-    select.addEventListener('change', () => {
-      select.disabled = true;
-      this.callbacks.fileTo(entry.id, select.value || null);
+    const listbox = createListboxSelect({
+      label: 'Google Drive destination',
+      className: 'detail-destination__select',
+      options: [
+        { value: '', label: 'Google Meet Records (unfiled)' },
+        ...this.destinations.map((preset) => ({ value: preset.id, label: preset.name })),
+      ],
+      value: entry.driveFolderPresetId ?? '',
+      onChange: (value) => {
+        listbox.setDisabled(true);
+        this.callbacks.fileTo(entry.id, value || null);
+      },
     });
-    row.append(select);
+    this.destinationListbox = listbox;
+    row.append(listbox.root);
 
     if (!this.destinations.length) {
       const hint = $('p', 'detail-destination__hint');

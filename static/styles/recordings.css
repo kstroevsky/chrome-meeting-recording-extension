@@ -322,7 +322,25 @@ button { -webkit-font-smoothing: antialiased; }
 .player__file--unavailable:hover { background: transparent; }
 .player__file--unavailable .player__file-format { color: var(--accent-dark); letter-spacing: .1em; }
 .detail-destination { margin-bottom: 6px; }
-.detail-destination__select { width: 100%; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12.5px; font-family: inherit; cursor: pointer; }
-.detail-destination__select:disabled { opacity: .6; cursor: progress; }
-.detail-destination__select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* The shared listbox (src/shared/ui/listboxSelect.ts), in this page's palette.
+   The native select inside it holds the value and stays out of the tab order. */
+.detail-destination__select { position: relative; display: block; }
+.detail-destination__select .native-select { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+.detail-destination__select .select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 7px; width: 100%; height: 36px; padding: 0 11px; border: 0; border-radius: 6px; background: var(--field); color: var(--body); font: 400 12.5px 'Space Grotesk', sans-serif; text-align: left; cursor: pointer; transition: background 140ms ease-out, box-shadow 140ms ease-out; }
+.detail-destination__select .select-trigger [data-select-label] { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.detail-destination__select .select-trigger::after { content: ''; width: 9px; height: 6px; flex: 0 0 auto; background: var(--faint); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.detail-destination__select .select-trigger:hover,
+.detail-destination__select .select-trigger[aria-expanded='true'] { background: var(--selection); color: var(--ink); }
+/* Matches .detail-note:focus, so the two fields in this modal focus alike. */
+.detail-destination__select .select-trigger:focus-visible { outline: 0; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.detail-destination__select .select-trigger:disabled { opacity: .6; cursor: progress; }
+.detail-destination__select .select-options { position: absolute; z-index: 60; top: calc(100% + 4px); right: 0; left: 0; max-height: 216px; padding: 5px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); box-shadow: var(--modal-shadow); }
+.detail-destination__select .select-options button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--body); font: 500 12px 'IBM Plex Mono', monospace; text-align: left; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.detail-destination__select .select-options button:hover,
+.detail-destination__select .select-options button:focus-visible { background: var(--selection); color: var(--ink); outline: 0; }
+.detail-destination__select .select-options button[aria-selected='true'] { background: var(--selection); color: var(--ink); font-weight: 600; }
+.detail-destination__select .select-check { flex: 0 0 auto; width: 12px; height: 10px; margin-left: auto; color: var(--success); }
+.detail-destination__select .select-options button[aria-selected='false'] .select-check { display: none; }
+
 .detail-destination__hint { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }

@@ -5,7 +5,10 @@ const save = () => document.querySelector<HTMLButtonElement>('[data-recording-na
 const cancel = () => document.querySelector<HTMLButtonElement>('[data-recording-name-cancel]')!;
 const overlay = () => document.querySelector<HTMLElement>('.recording-name-overlay')!;
 const destinationRow = () => document.querySelector<HTMLElement>('.recording-name-destination')!;
-const destination = () => document.querySelector<HTMLSelectElement>('.recording-name-destination__select')!;
+const picker = () => document.querySelector<HTMLElement>('.recording-name-destination__select')!;
+const destination = () => picker().querySelector<HTMLSelectElement>('.native-select')!;
+const destinationTrigger = () => picker().querySelector<HTMLButtonElement>('.select-trigger')!;
+const destinationOptions = () => Array.from(picker().querySelectorAll<HTMLButtonElement>('[role="option"]'));
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('RecordingNameDialog', () => {
@@ -103,14 +106,20 @@ describe('RecordingNameDialog', () => {
       });
 
       expect(destinationRow().hidden).toBe(false);
-      expect(Array.from(destination().options, (option) => [option.value, option.textContent])).toEqual([
+      expect(destinationTrigger().textContent).toBe('Google Meet Records');
+      expect(destinationOptions().map((option) => [option.dataset.value, option.textContent?.trim()])).toEqual([
         ['', 'Google Meet Records'],
         ['dest-a', 'Work meetings'],
         ['dest-b', 'Interviews'],
       ]);
-      expect(destination().value).toBe('');
 
-      destination().value = 'dest-b';
+      // Chosen the way a user does: open the listbox, pick an option.
+      destinationTrigger().click();
+      expect(destinationTrigger().getAttribute('aria-expanded')).toBe('true');
+      destinationOptions()[2].click();
+      expect(destinationTrigger().getAttribute('aria-expanded')).toBe('false');
+      expect(destinationTrigger().textContent).toBe('Interviews');
+
       input().value = 'Candidate screen';
       save().click();
       await flush();
@@ -139,13 +148,14 @@ describe('RecordingNameDialog', () => {
         destinations: { presets, unfiledLabel: 'Google Meet Records', initialId: 'dest-a' },
       });
       expect(destination().value).toBe('dest-a');
+      expect(destinationTrigger().textContent).toBe('Work meetings');
       dialog.dismiss();
 
       void dialog.ask({
         title: 'Rename', message: 'Choose a name', initialValue: 'Default', onSave: async () => {},
       });
       expect(destinationRow().hidden).toBe(true);
-      expect(destination().options).toHaveLength(0);
+      expect(destinationOptions()).toHaveLength(0);
     });
 
     it('disables the picker while saving', async () => {
@@ -159,10 +169,10 @@ describe('RecordingNameDialog', () => {
       input().value = 'Retro';
       save().click();
 
-      expect(destination().disabled).toBe(true);
+      expect(destinationTrigger().disabled).toBe(true);
       resolveSave();
       await flush();
-      expect(destination().disabled).toBe(false);
+      expect(destinationTrigger().disabled).toBe(false);
     });
   });
 });

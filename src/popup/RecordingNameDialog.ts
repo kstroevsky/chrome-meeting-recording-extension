@@ -1,5 +1,6 @@
 import { slugifyRecordingTitle } from '../shared/recording';
 import type { DriveFolderPreset } from '../shared/settings';
+import { createListboxSelect, type ListboxSelect } from '../ui/listboxSelect';
 
 /**
  * The Drive folder choice offered alongside the name. Omitted entirely by
@@ -32,7 +33,7 @@ type DialogParts = {
   message: HTMLElement;
   input: HTMLInputElement;
   destinationRow: HTMLElement;
-  destinationSelect: HTMLSelectElement;
+  destinationSelect: ListboxSelect;
   error: HTMLElement;
   saveBtn: HTMLButtonElement;
   cancelBtn: HTMLButtonElement;
@@ -81,6 +82,7 @@ export class RecordingNameDialog {
   dispose(): void {
     this.setBusy(false);
     this.close('canceled');
+    this.parts?.destinationSelect.destroy();
     this.parts?.overlay.remove();
     this.parts = null;
   }
@@ -90,7 +92,7 @@ export class RecordingNameDialog {
     const parts = this.parts;
     if (!pending || !parts || this.busy) return;
     const name = parts.input.value.trim();
-    const destinationId = pending.options.destinations ? parts.destinationSelect.value || null : null;
+    const destinationId = pending.options.destinations ? parts.destinationSelect.getValue() || null : null;
     if (!name) { this.showError('Recording name cannot be blank'); return; }
     if (!slugifyRecordingTitle(name)) { this.showError('Use at least one letter or number'); return; }
 
@@ -111,7 +113,10 @@ export class RecordingNameDialog {
     const pending = this.pending;
     if (!pending || this.busy) return;
     this.pending = null;
-    if (this.parts) this.parts.overlay.hidden = true;
+    if (this.parts) {
+      this.parts.destinationSelect.close();
+      this.parts.overlay.hidden = true;
+    }
     this.previousFocus?.focus();
     this.previousFocus = null;
     pending.settle(outcome);
@@ -121,7 +126,7 @@ export class RecordingNameDialog {
     this.busy = busy;
     if (!this.parts) return;
     this.parts.input.disabled = busy;
-    this.parts.destinationSelect.disabled = busy;
+    this.parts.destinationSelect.setDisabled(busy);
     this.parts.saveBtn.disabled = busy;
     this.parts.cancelBtn.disabled = busy;
     this.parts.saveBtn.textContent = busy ? 'Saving…' : (this.pending?.options.saveLabel ?? this.parts.saveBtn.textContent);
@@ -165,15 +170,20 @@ export class RecordingNameDialog {
     input.setAttribute('aria-label', 'Recording name');
     input.setAttribute('aria-describedby', 'recording-name-modal-error');
 
-    const destinationRow = this.doc.createElement('label');
+    const destinationRow = this.doc.createElement('div');
     destinationRow.className = 'recording-name-destination';
     destinationRow.hidden = true;
     const destinationLabel = this.doc.createElement('span');
     destinationLabel.className = 'recording-name-destination__label';
     destinationLabel.textContent = 'Save to';
-    const destinationSelect = this.doc.createElement('select');
-    destinationSelect.className = 'recording-name-destination__select';
-    destinationRow.append(destinationLabel, destinationSelect);
+    const destinationSelect = createListboxSelect({
+      label: 'Google Drive destination',
+      className: 'recording-name-destination__select',
+      options: [],
+      onChange: () => {},
+      doc: this.doc,
+    });
+    destinationRow.append(destinationLabel, destinationSelect.root);
 
     const error = this.doc.createElement('p');
     error.className = 'recording-name-error';
@@ -212,20 +222,14 @@ export class RecordingNameDialog {
   /** Hidden unless the caller offers destinations, so a plain rename is unchanged. */
   private fillDestinations(parts: DialogParts, destinations?: RecordingNameDialogDestinations): void {
     parts.destinationRow.hidden = !destinations;
-    parts.destinationSelect.replaceChildren();
-    if (!destinations) return;
-
-    const unfiled = this.doc.createElement('option');
-    unfiled.value = '';
-    unfiled.textContent = destinations.unfiledLabel;
-    parts.destinationSelect.append(unfiled);
-    for (const preset of destinations.presets) {
-      const option = this.doc.createElement('option');
-      option.value = preset.id;
-      option.textContent = preset.name;
-      parts.destinationSelect.append(option);
+    if (!destinations) {
+      parts.destinationSelect.setOptions([]);
+      return;
     }
-    parts.destinationSelect.value = destinations.initialId ?? '';
+    parts.destinationSelect.setOptions([
+      { value: '', label: destinations.unfiledLabel },
+      ...destinations.presets.map((preset) => ({ value: preset.id, label: preset.name })),
+    ], destinations.initialId ?? '');
   }
 
   private trapFocus(event: KeyboardEvent, first: HTMLElement, last: HTMLElement): void {
