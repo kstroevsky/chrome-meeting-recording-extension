@@ -5,6 +5,7 @@
  * popup commands to their dedicated handlers.
  */
 
+import type { DriveArtifactResolver } from './DriveArtifactResolver';
 import type { PlaybackLeaseManager } from './PlaybackLeaseManager';
 import type { DrivePlaybackAuthLeaseManager } from './DrivePlaybackAuthLeaseManager';
 import type { RecordingPlaybackService } from './RecordingPlaybackService';
@@ -53,6 +54,7 @@ export type MessageHandlersDeps = {
   notations?: RecordingNotationService;
   playback?: RecordingPlaybackService;
   playbackLeases?: PlaybackLeaseManager;
+  driveArtifacts?: DriveArtifactResolver;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
 };
@@ -72,7 +74,7 @@ function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean 
   return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
 }
 
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, playbackLeases, driveAuthLease, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, playbackLeases, driveArtifacts, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -286,9 +288,34 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
           sendResponse({ ok: false, error: 'This file has no Drive copy to stream' });
           return;
         }
+        // Verify before authorizing. A Drive id survives moves and renames but
+        // not the trash, and history can simply hold the wrong one — both used
+        // to surface as an unexplained failure to play.
+        let fileId = drive.fileId;
+        if (driveArtifacts) {
+          const state = await driveArtifacts.resolve({
+            fileId,
+            folderId: (await playback.getFolderId(msg.recordingId)) ?? undefined,
+            filename: track!.filename,
+            ...(track!.bytes != null ? { bytes: track!.bytes } : {}),
+          });
+          if (state.status === 'trashed') {
+            sendResponse({ ok: false, error: 'This file is in your Google Drive trash. Restore it to play the recording.' });
+            return;
+          }
+          if (state.status === 'missing') {
+            sendResponse({ ok: false, error: 'This file is no longer in Google Drive.' });
+            return;
+          }
+          if (state.status === 'relinked') {
+            // Heal the row so the next open costs nothing.
+            fileId = state.fileId;
+            await history?.recordArtifactLocation(msg.recordingId, msg.fileId, { kind: 'drive', fileId });
+          }
+        }
         // A refresh re-mints the token and replaces the rule in place; the
         // player keeps its position across the reload.
-        const url = await driveAuthLease.authorize(tabId, drive.fileId, {
+        const url = await driveAuthLease.authorize(tabId, fileId, {
           refresh: msg.type === 'REFRESH_RECORDING_PLAYBACK_SOURCE',
         });
         sendResponse({ ok: true, url });

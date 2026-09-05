@@ -21,6 +21,12 @@ export type RecordingPlaybackServiceDeps = {
 export class RecordingPlaybackService {
   constructor(private readonly deps: RecordingPlaybackServiceDeps) {}
 
+  /** The recording's Drive folder, for re-finding a file whose id went stale. */
+  async getFolderId(recordingId: string): Promise<string | undefined> {
+    const entry = await this.deps.getEntry(recordingId);
+    return entry?.deletedAt ? undefined : entry?.driveFolderId;
+  }
+
   /** Undefined for a missing or tombstoned recording — never a partial manifest. */
   async getManifest(recordingId: string): Promise<PlaybackManifest | undefined> {
     const entry = await this.deps.getEntry(recordingId);

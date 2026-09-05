@@ -14,6 +14,7 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
+import { DriveArtifactResolver } from './background/DriveArtifactResolver';
 import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
 import { addTabRemovedListener } from './platform/chrome/tabs';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
@@ -101,6 +102,31 @@ const driveAuthLease = new DrivePlaybackAuthLeaseManager({
     const res = await fetchDriveTokenWithFallback({ refresh: options?.refresh === true });
     if (!res.ok) throw new Error(res.error);
     return res.token;
+  },
+  warn: L.warn,
+});
+/** One authenticated Drive call, shared by metadata and folder listing. */
+const driveJson = async (url: string): Promise<{ status: number; body: any }> => {
+  const res = await fetchDriveTokenWithFallback();
+  if (!res.ok) throw new Error(res.error);
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${res.token}` } });
+  return { status: response.status, body: response.status === 204 ? null : await response.json().catch(() => null) };
+};
+const driveArtifacts = new DriveArtifactResolver({
+  getMetadata: async (fileId) => {
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,size,trashed`);
+    if (status === 404) return null;
+    if (status !== 200) throw new Error(`Drive metadata ${status}`);
+    return body;
+  },
+  listFolder: async (folderId) => {
+    // Quoted ids are safe here: a Drive id is [A-Za-z0-9_-] only.
+    const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,size,trashed)&pageSize=200`);
+    if (status !== 200) throw new Error(`Drive folder listing ${status}`);
+    return body?.files ?? [];
   },
   warn: L.warn,
 });
@@ -288,7 +314,7 @@ const controller = new RecordingController({ L, offscreen, session, telemetry, n
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
-  playback, playbackLeases, driveAuthLease, telemetry });
+  playback, playbackLeases, driveArtifacts, driveAuthLease, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 

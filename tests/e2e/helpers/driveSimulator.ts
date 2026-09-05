@@ -199,6 +199,16 @@ function createHandler(
     const metadataMatch = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
     if (metadataMatch && method === 'GET') {
       const id = decodeURIComponent(metadataMatch[1]);
+      // A file registered for playback has metadata too — the player verifies a
+      // file exists (and is not trashed) before asking for authorization.
+      const media = mediaContent.get(id);
+      if (media) {
+        stats.metadataReads += 1;
+        return record({
+          status: 200,
+          body: JSON.stringify({ id, name: mediaNames.get(id) ?? id, size: String(media.length), trashed: false }),
+        });
+      }
       const name = resources.get(id);
       stats.metadataReads += 1;
       return name == null
@@ -361,11 +371,13 @@ function createHandler(
 }
 
 /** Registers bytes a test wants `alt=media` to serve for one file id. */
-export function setDriveMediaContent(fileId: string, bytes: Buffer): void {
+export function setDriveMediaContent(fileId: string, bytes: Buffer, name = fileId): void {
   mediaContent.set(fileId, bytes);
+  mediaNames.set(fileId, name);
 }
 
 const mediaContent = new Map<string, Buffer>();
+const mediaNames = new Map<string, string>();
 
 export async function installDriveSimulator(
   context: BrowserContext,
