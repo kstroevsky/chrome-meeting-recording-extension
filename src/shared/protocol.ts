@@ -106,6 +106,14 @@ export type PopupFileRecordingToDestination = {
   recordingId: string;
   presetId: string | null;
 };
+/** Recordings whose bytes are in the library but not yet written to Downloads. */
+export type PopupListPendingLocalDeliveries = { type: 'LIST_PENDING_LOCAL_DELIVERIES' };
+/** Writes a deferred local recording into the chosen folder; null means Downloads itself. */
+export type PopupDeliverLocalRecording = {
+  type: 'DELIVER_LOCAL_RECORDING';
+  recordingId: string;
+  folderId: string | null;
+};
 export type PopupGetPlaybackManifest = { type: 'GET_RECORDING_PLAYBACK_MANIFEST'; recordingId: string };
 /**
  * Note what is absent: no `tabId`. Background reads it from `sender`, because a
@@ -170,6 +178,8 @@ export type PopupToBg =
   | PopupListRecordingNotations
   | PopupGetPlaybackManifest
   | PopupFileRecordingToDestination
+  | PopupListPendingLocalDeliveries
+  | PopupDeliverLocalRecording
   | PopupPreparePlaybackSource
   | PopupRefreshPlaybackSource
   | PopupListRecordingNotationSummaries
@@ -203,6 +213,9 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupUpdateActiveNotation ? NotationListResult :
   T extends PopupRemoveActiveNotation ? NotationListResult :
   T extends PopupListRecordingNotations ? NotationListResult :
+  T extends PopupListPendingLocalDeliveries
+    ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
+  T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupFileRecordingToDestination ? { ok: true } | { ok: false; error: string } :
   T extends PopupGetPlaybackManifest ?
     { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :

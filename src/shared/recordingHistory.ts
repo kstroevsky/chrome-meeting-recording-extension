@@ -378,3 +378,25 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
     && typeof message.recordingId === 'string' && message.recordingId.length > 0
     && typeof message.fileId === 'string' && message.fileId.length > 0;
 }
+
+/**
+ * True when this artifact still owes the user a file in their download
+ * directory: the library holds the bytes, nothing has been written yet, and no
+ * delivery has been attempted.
+ *
+ * Derived rather than tracked. History is durable, so a recording awaiting a
+ * folder survives a worker eviction, a browser restart, and a prompt nobody
+ * answered — a parallel list in session storage would not.
+ */
+export function awaitsLocalDelivery(file: RecordingHistoryFile): boolean {
+  if (file.kind === 'notes') return false;
+  if (file.delivery.status !== 'pending') return false;
+  if (file.locations.some((location) => location.kind === 'download')) return false;
+  return file.locations.some((location) => location.kind === 'opfs');
+}
+
+/** The media files of an entry that are still owed to the download directory. */
+export function pendingLocalDeliveries(entry: RecordingHistoryEntry): RecordingHistoryFile[] {
+  if (entry.deletedAt) return [];
+  return entry.files.filter(awaitsLocalDelivery);
+}

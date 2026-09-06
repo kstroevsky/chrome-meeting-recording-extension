@@ -9,7 +9,7 @@ import { recordingHistoryFileId } from '../shared/recordingHistory';
 import { pokeRuntime } from '../platform/chrome/runtime';
 import { awaitDownloadSettled, downloadFile } from '../platform/chrome/downloads';
 import type { RecordingStream } from '../shared/recording';
-import type { RecordingHistoryFile } from '../shared/recordingHistory';
+import { awaitsLocalDelivery, type RecordingHistoryFile } from '../shared/recordingHistory';
 import { isBusyPhase, type RecordingPhase } from '../shared/recording';
 import { broadcastToPopup } from '../shared/messages';
 import type { OffscreenManager } from './OffscreenManager';
@@ -41,6 +41,8 @@ export function registerSaveHandler(
   history?: Pick<RecordingHistoryService, 'createPending' | 'localSaveSettled' | 'setDuration' | 'recordArtifactLocation'>,
   /** Recorded duration of the run that produced this artifact, for the history row. */
   runDurationMs?: (historyId: string) => number | undefined,
+  /** How many download sub-folders the user has defined; zero means never ask. */
+  localFolderCount: () => Promise<number> = async () => 0,
 ) {
   /**
    * Writes one artifact to the download directory and reconciles history with
@@ -152,10 +154,18 @@ export function registerSaveHandler(
       // can wait for the folder the user is about to pick. Nothing is lost if
       // they never answer — the entry has a retained copy and no download
       // replica, which is exactly what the startup reconciler looks for.
-      if (deferDelivery && retainedKey && historyId) {
-        offscreen.revokeBlobUrl(blobUrl);
-        await broadcastToPopup({ type: 'RECORDING_AWAITING_DELIVERY', historyId });
-        return;
+      // Two conditions, both about not asking a question that cannot be
+      // answered. There must be folders to choose between — a user who never
+      // made one is not interrupted — and a popup must be open to be asked in,
+      // or the recording would sit in the library awaiting a prompt that is
+      // never coming. Either way it is written straight away, as it was before
+      // folders existed.
+      if (deferDelivery && retainedKey && historyId && (await localFolderCount()) > 0) {
+        const asked = await broadcastToPopup({ type: 'RECORDING_AWAITING_DELIVERY', historyId });
+        if (asked) {
+          offscreen.revokeBlobUrl(blobUrl);
+          return;
+        }
       }
 
       await deliver({ historyId, stream, kind, filename: resolvedFilename, blobUrl, retainedKey, opfsFilename });
@@ -177,10 +187,9 @@ export function registerSaveHandler(
   ): Promise<number> => {
     let delivered = 0;
     for (const file of entry.files) {
-      if (file.kind === 'notes') continue;
+      if (!awaitsLocalDelivery(file)) continue;
       const retained = file.locations.find((location) => location.kind === 'opfs');
-      const alreadyWritten = file.locations.some((location) => location.kind === 'download');
-      if (!retained || alreadyWritten) continue;
+      if (!retained) continue;
       const blobUrl = await offscreen.openRetained(retained.key);
       if (!blobUrl) {
         L.warn('Deferred delivery skipped: retained bytes are gone', retained.key);

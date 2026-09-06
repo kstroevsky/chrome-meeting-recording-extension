@@ -35,6 +35,7 @@ import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
+import { pendingLocalDeliveries } from './shared/recordingHistory';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
 import { RecordingNotationRepository } from './background/RecordingNotationRepository';
 import { RecordingNotationService } from './background/RecordingNotationService';
@@ -371,14 +372,60 @@ const phaseWatchdog = createPhaseWatchdog({
   },
 });
 
-registerSaveHandler(offscreen, L, history, (historyId) => session.runDurationMs(historyId));
+const { deliverDeferred } = registerSaveHandler(
+  offscreen, L, history,
+  (historyId) => session.runDurationMs(historyId),
+  async () => {
+    try {
+      return (await loadExtensionSettingsFromStorage()).storage.localFolderPresets.length;
+    } catch {
+      return 0;
+    }
+  },
+);
+
+/** Entries whose bytes are in the library but not yet written to Downloads. */
+const listPendingLocalDeliveries = async (): Promise<{ id: string; name: string }[]> => {
+  const page = await historyRepository.listPage({ limit: 25 });
+  return page.entries
+    .filter((entry) => pendingLocalDeliveries(entry).length > 0)
+    .map((entry) => ({ id: entry.id, name: entry.name }));
+};
+
+const deliverLocalRecording = async (recordingId: string, folderId: string | null): Promise<void> => {
+  const entry = await historyRepository.get(recordingId);
+  if (!entry || entry.deletedAt) throw new Error('This recording is no longer available');
+  let folder: string | undefined;
+  if (folderId) {
+    const settings = await loadExtensionSettingsFromStorage();
+    folder = settings.storage.localFolderPresets.find((preset) => preset.id === folderId)?.name;
+    if (!folder) throw new Error('That folder no longer exists');
+  }
+  await deliverDeferred(entry, folder);
+};
+
+/**
+ * Anything still owed to the download directory is written on startup, with no
+ * folder. A prompt the user never answered must cost them a delay, not a file.
+ */
+const deliverAbandonedLocalRecordings = async (): Promise<void> => {
+  try {
+    for (const pending of await listPendingLocalDeliveries()) {
+      const entry = await historyRepository.get(pending.id);
+      if (entry) await deliverDeferred(entry);
+    }
+  } catch (error) {
+    L.warn('Reconciling deferred local deliveries failed:', error);
+  }
+};
 
 // The recording control plane: every start/stop trigger drives this one seam.
 const controller = new RecordingController({ L, offscreen, session, telemetry, notations });
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
-  playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination, driveAuthLease, telemetry });
+  playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination,
+  listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording, driveAuthLease, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 
@@ -509,6 +556,17 @@ const sessionHydration = (async () => {
     }
   } catch (e) {
     L.warn('Retained-media reconciliation failed (non-fatal):', e);
+  }
+
+  // A folder prompt nobody answered must not cost the user their file. Gated on
+  // the library existing so a profile that has never retained anything is not
+  // made to open the history database just to be told there is nothing to do.
+  try {
+    if (await hasLibraryDirectory(await navigator.storage.getDirectory())) {
+      await deliverAbandonedLocalRecordings();
+    }
+  } catch (e) {
+    L.warn('Reconciling deferred local deliveries failed (non-fatal):', e);
   }
 
   // Session state outlives the worker; the tabs it names may not.

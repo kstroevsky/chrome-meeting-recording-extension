@@ -77,9 +77,9 @@ export type LocalSaveRequest = RecordingArtifactContext & {
    * save will defer: a Drive fallback is already past its prompt, and the notes
    * sidecar is not something anyone files.
    *
-   * Not set yet. The background half is in place and tested, but nothing asks
-   * for a folder, so deferring here would strand every local recording in the
-   * library instead of writing it. Turned on with the prompt that answers it.
+   * Safe to defer because promotion already happened: the bytes are in the
+   * library, so an unanswered prompt costs a delay, never a recording. The
+   * startup reconciler delivers anything still waiting.
    */
   deferDelivery?: boolean;
   blobUrl: string;
@@ -220,6 +220,7 @@ export class RecordingFinalizer {
       ...(retainedKey ? { retainedKey } : {}),
       filename: artifact.filename,
       ...(artifact.startOffsetMs != null ? { startOffsetMs: artifact.startOffsetMs } : {}),
+      ...(reason === 'local' && kind !== 'notes' && retainedKey ? { deferDelivery: true } : {}),
       blobUrl,
       opfsFilename: artifact.opfsFilename,
     });
