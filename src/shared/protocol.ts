@@ -239,6 +239,7 @@ export type ContentMeetingEnded = {
 
 export type BgToPopup =
   | { type: 'RECORDING_STATE'; session: RecordingStatusView }
+  | { type: 'RECORDING_AWAITING_DELIVERY'; historyId: string }
   | { type: 'RECORDING_SAVED'; filename?: string }
   | { type: 'RECORDING_SAVE_ERROR'; filename?: string; error: string };
 
@@ -294,6 +295,13 @@ export type BgToOffscreenRpc =
   | RpcRequest<{ type: 'OFFSCREEN_SET_INPUT_DEVICE'; device: RecordingInputDevice; deviceId: string }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_PAUSED'; paused: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_RETRY_UPLOAD'; jobId: string }>
+  /**
+   * Re-opens retained library bytes as an object URL. The worker cannot make
+   * one — `URL.createObjectURL` is not available to a service worker — so a
+   * delivery deferred past the offscreen document's lifetime asks for a fresh
+   * URL here rather than holding a stale one.
+   */
+  | RpcRequest<{ type: 'OFFSCREEN_OPEN_RETAINED'; key: string }>
   | RpcRequest<{ type: 'OFFSCREEN_CANCEL_UPLOAD'; jobId: string }>
   | RpcRequest<{
       type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES';
@@ -312,7 +320,7 @@ export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY'; version?: string }
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
-  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string }
+  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
   | { type: 'TELEMETRY_SNAPSHOT'; snapshot: import('./telemetry').TelemetrySnapshot; critical?: boolean }
   | { type: 'TELEMETRY_FLUSH'; snapshot: import('./telemetry').TelemetrySnapshot; reason: 'incident' | 'recording_complete' | 'upload_complete' };
 

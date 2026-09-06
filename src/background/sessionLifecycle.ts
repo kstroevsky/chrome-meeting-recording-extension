@@ -8,6 +8,8 @@
 import { recordingHistoryFileId } from '../shared/recordingHistory';
 import { pokeRuntime } from '../platform/chrome/runtime';
 import { awaitDownloadSettled, downloadFile } from '../platform/chrome/downloads';
+import type { RecordingStream } from '../shared/recording';
+import type { RecordingHistoryFile } from '../shared/recordingHistory';
 import { isBusyPhase, type RecordingPhase } from '../shared/recording';
 import { broadcastToPopup } from '../shared/messages';
 import type { OffscreenManager } from './OffscreenManager';
@@ -40,7 +42,70 @@ export function registerSaveHandler(
   /** Recorded duration of the run that produced this artifact, for the history row. */
   runDurationMs?: (historyId: string) => number | undefined,
 ) {
-  offscreen.onSaveRequested = ({ historyId, stream, kind, retainedKey, filename, startOffsetMs, blobUrl, opfsFilename }) => {
+  /**
+   * Writes one artifact to the download directory and reconciles history with
+   * what actually happened. Shared by the immediate path and by a delivery the
+   * user deferred while choosing a folder, so the settle and cleanup rules
+   * cannot drift apart between them.
+   */
+  const deliver = async (
+    args: {
+      historyId: string; stream: RecordingStream; kind?: 'notes';
+      filename: string; blobUrl: string; retainedKey?: string; opfsFilename?: string;
+      /** Prefixed onto the filename, creating a sub-folder of the download directory. */
+      folder?: string;
+    },
+  ): Promise<void> => {
+    const { historyId, stream, kind, blobUrl, retainedKey, opfsFilename } = args;
+    const resolvedFilename = args.folder ? `${args.folder}/${args.filename}` : args.filename;
+    const downloadStartedAt = nowMs();
+    let downloadId: number | undefined;
+    try {
+      downloadId = await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
+      debugPerf(L.log, 'finalizer', 'download_complete', {
+        filename: resolvedFilename,
+        durationMs: roundMs(nowMs() - downloadStartedAt),
+        stream,
+      });
+      await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      debugPerf(L.log, 'finalizer', 'download_failed', {
+        durationMs: roundMs(nowMs() - downloadStartedAt),
+        stream,
+      });
+      L.warn('downloads.download error:', message);
+      await broadcastToPopup({ type: 'RECORDING_SAVE_ERROR', filename: resolvedFilename, error: message });
+      if (historyId) void history?.localSaveSettled(historyId, stream, undefined, 'interrupted', message, kind)
+        .catch((historyError) => L.warn('Recording history update failed:', historyError));
+      // The download never started: free the in-memory URL but keep the OPFS
+      // source so crash recovery can retry it on a later launch.
+      offscreen.revokeBlobUrl(blobUrl);
+      return;
+    }
+
+    // Clean up only once the download has *actually* settled. Event-driven, so a
+    // suspended worker can't drop the cleanup the way the old blind 10s timer
+    // could — which would leak a correctly-saved file into OPFS forever. The
+    // OPFS source is deleted ONLY on confirmed completion; an interrupted (or
+    // never-settling) download keeps it so crash recovery can reclaim it.
+    const settled = downloadId != null ? await awaitDownloadSettled(downloadId) : 'timeout';
+    if (historyId) void history?.localSaveSettled(historyId, stream, downloadId, settled, undefined, kind)
+      .catch((historyError) => L.warn('Recording history update failed:', historyError));
+    if (settled === 'complete') {
+      // A retained artifact was promoted out of staging before delivery, so
+      // the extension owns these bytes now: free the object URL and keep the
+      // file. Without one, the pre-ADR-0006 rule still applies — the staging
+      // source is temporary and a confirmed download is what retires it.
+      offscreen.revokeBlobUrl(blobUrl, retainedKey ? undefined : opfsFilename);
+    } else if (settled === 'interrupted') {
+      offscreen.revokeBlobUrl(blobUrl);
+    }
+    // 'timeout': the download may still be writing — leave both the URL and the
+    // OPFS file untouched; recovery reclaims the file later if it was saved.
+  };
+
+  offscreen.onSaveRequested = ({ historyId, stream, kind, retainedKey, filename, startOffsetMs, blobUrl, opfsFilename, deferDelivery }) => {
     const resolvedFilename =
       typeof filename === 'string' && filename.trim()
         ? filename
@@ -50,8 +115,6 @@ export function registerSaveHandler(
 
     L.log('Saving OFFSCREEN_SAVE via blobUrl', resolvedFilename);
     void (async () => {
-      const downloadStartedAt = nowMs();
-      let downloadId: number | undefined;
 
       if (historyId) {
         // Establish the row before Chrome can settle the download. Otherwise a
@@ -85,55 +148,59 @@ export function registerSaveHandler(
         }
       }
 
-      try {
-        downloadId = await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
-        debugPerf(L.log, 'finalizer', 'download_complete', {
-          filename: resolvedFilename,
-          durationMs: roundMs(nowMs() - downloadStartedAt),
-          stream: /-mic\.(?:webm|m4a)$/.test(resolvedFilename)
-            ? 'mic'
-            : /-self-video\.(?:webm|mp4)$/.test(resolvedFilename)
-              ? 'self-video'
-              : 'tab',
-        });
-        await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        debugPerf(L.log, 'finalizer', 'download_failed', {
-          durationMs: roundMs(nowMs() - downloadStartedAt),
-          stream,
-        });
-        L.warn('downloads.download error:', message);
-        await broadcastToPopup({ type: 'RECORDING_SAVE_ERROR', filename: resolvedFilename, error: message });
-        if (historyId) void history?.localSaveSettled(historyId, stream, undefined, 'interrupted', message, kind)
-          .catch((historyError) => L.warn('Recording history update failed:', historyError));
-        // The download never started: free the in-memory URL but keep the OPFS
-        // source so crash recovery can retry it on a later launch.
+      // Deferred: the bytes are recorded in the library above, so the download
+      // can wait for the folder the user is about to pick. Nothing is lost if
+      // they never answer — the entry has a retained copy and no download
+      // replica, which is exactly what the startup reconciler looks for.
+      if (deferDelivery && retainedKey && historyId) {
         offscreen.revokeBlobUrl(blobUrl);
+        await broadcastToPopup({ type: 'RECORDING_AWAITING_DELIVERY', historyId });
         return;
       }
 
-      // Clean up only once the download has *actually* settled. Event-driven, so a
-      // suspended worker can't drop the cleanup the way the old blind 10s timer
-      // could — which would leak a correctly-saved file into OPFS forever. The
-      // OPFS source is deleted ONLY on confirmed completion; an interrupted (or
-      // never-settling) download keeps it so crash recovery can reclaim it.
-      const settled = downloadId != null ? await awaitDownloadSettled(downloadId) : 'timeout';
-      if (historyId) void history?.localSaveSettled(historyId, stream, downloadId, settled, undefined, kind)
-        .catch((historyError) => L.warn('Recording history update failed:', historyError));
-      if (settled === 'complete') {
-        // A retained artifact was promoted out of staging before delivery, so
-        // the extension owns these bytes now: free the object URL and keep the
-        // file. Without one, the pre-ADR-0006 rule still applies — the staging
-        // source is temporary and a confirmed download is what retires it.
-        offscreen.revokeBlobUrl(blobUrl, retainedKey ? undefined : opfsFilename);
-      } else if (settled === 'interrupted') {
-        offscreen.revokeBlobUrl(blobUrl);
-      }
-      // 'timeout': the download may still be writing — leave both the URL and the
-      // OPFS file untouched; recovery reclaims the file later if it was saved.
+      await deliver({ historyId, stream, kind, filename: resolvedFilename, blobUrl, retainedKey, opfsFilename });
     })();
   };
+
+  /**
+   * Writes a recording whose delivery was deferred, into an optional sub-folder
+   * of the download directory.
+   *
+   * "Deferred" is not tracked separately: it is any media file that has retained
+   * library bytes and no download replica yet. Deriving it from history rather
+   * than a parallel list is what makes this survive a worker eviction, a browser
+   * restart, and a prompt nobody ever answered.
+   */
+  const deliverDeferred = async (
+    entry: { id: string; files: readonly RecordingHistoryFile[] },
+    folder?: string,
+  ): Promise<number> => {
+    let delivered = 0;
+    for (const file of entry.files) {
+      if (file.kind === 'notes') continue;
+      const retained = file.locations.find((location) => location.kind === 'opfs');
+      const alreadyWritten = file.locations.some((location) => location.kind === 'download');
+      if (!retained || alreadyWritten) continue;
+      const blobUrl = await offscreen.openRetained(retained.key);
+      if (!blobUrl) {
+        L.warn('Deferred delivery skipped: retained bytes are gone', retained.key);
+        continue;
+      }
+      await deliver({
+        historyId: entry.id,
+        stream: file.stream,
+        ...(file.kind ? { kind: file.kind } : {}),
+        filename: file.filename,
+        blobUrl,
+        retainedKey: retained.key,
+        ...(folder ? { folder } : {}),
+      });
+      delivered += 1;
+    }
+    return delivered;
+  };
+
+  return { deliverDeferred };
 }
 
 /**

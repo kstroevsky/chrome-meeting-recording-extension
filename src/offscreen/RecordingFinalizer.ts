@@ -72,6 +72,16 @@ export type LocalSaveRequest = RecordingArtifactContext & {
   filename: string;
   /** Where this stream's recorder began, relative to the run (RecordingHistoryFile). */
   startOffsetMs?: number;
+  /**
+   * Hold the download until the user has chosen a folder. Only a plain local
+   * save will defer: a Drive fallback is already past its prompt, and the notes
+   * sidecar is not something anyone files.
+   *
+   * Not set yet. The background half is in place and tested, but nothing asks
+   * for a folder, so deferring here would strand every local recording in the
+   * library instead of writing it. Turned on with the prompt that answers it.
+   */
+  deferDelivery?: boolean;
   blobUrl: string;
   opfsFilename?: string;
 };

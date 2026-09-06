@@ -99,12 +99,19 @@ test.describe('Drive destinations (integration)', () => {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.locator('.recording-row').first().click();
 
-      // A recording made before it was filed reads as unfiled, not as a guess.
-      const picker = page.locator('.detail-destination__select');
-      await expect(picker).toBeVisible({ timeout: 20_000 });
-      await expect(picker).toHaveValue('');
+      // Driven through the listbox the user actually sees, not the native
+      // select it keeps as its value holder.
+      const trigger = page.locator('.detail-destination__select .select-trigger');
+      const chooseDestination = async (label: string) => {
+        await trigger.click();
+        await page.locator('.detail-destination__select [role="option"]', { hasText: label }).click();
+      };
 
-      await picker.selectOption({ label: 'Psychotherapy' });
+      // A recording made before it was filed reads as unfiled, not as a guess.
+      await expect(trigger).toBeVisible({ timeout: 20_000 });
+      await expect(trigger).toHaveText('Google Meet Records (unfiled)');
+
+      await chooseDestination('Psychotherapy');
       await expect.poll(() => Object.values(drive.resources).includes('Psychotherapy'), {
         timeout: 20_000,
       }).toBe(true);
@@ -114,17 +121,17 @@ test.describe('Drive destinations (integration)', () => {
       // The choice survives a reload, because it is recorded in history.
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.locator('.recording-row').first().click();
-      await expect(page.locator('.detail-destination__select')).not.toHaveValue('');
+      await expect(trigger).toHaveText('Psychotherapy', { timeout: 20_000 });
 
       // And it can be unfiled again — back to the built-in folder.
       const movesBefore = drive.folderMoves;
-      await page.locator('.detail-destination__select').selectOption('');
+      await chooseDestination('Google Meet Records (unfiled)');
       await expect.poll(() => drive.folderMoves, { timeout: 20_000 }).toBeGreaterThan(movesBefore);
-      await expect(page.locator('.detail-destination__select')).toHaveValue('', { timeout: 20_000 });
+      await expect(trigger).toHaveText('Google Meet Records (unfiled)', { timeout: 20_000 });
 
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.locator('.recording-row').first().click();
-      await expect(page.locator('.detail-destination__select')).toHaveValue('');
+      await expect(trigger).toHaveText('Google Meet Records (unfiled)');
     } finally {
       await closeHarness(harness);
     }
