@@ -81,6 +81,21 @@ export function describeTracks(
 }
 
 /** What the FILES trigger counts: files currently on, not files that exist. */
+/**
+ * Where an auxiliary sits against the master, in milliseconds.
+ *
+ * The manifest carries run-relative offsets because which track drives playback
+ * is only decided here — a tab track with nothing but a Downloads copy cannot
+ * be the master — so a master-relative number baked in at capture would be
+ * wrong for exactly those recordings. Re-basing is the subtraction.
+ */
+export function clockOffsetMs(
+  track: Pick<PlaybackTrack, 'captureStartOffsetMs'>,
+  master: Pick<PlaybackTrack, 'captureStartOffsetMs'>,
+): number {
+  return track.captureStartOffsetMs - master.captureStartOffsetMs;
+}
+
 export function shownCount(tracks: readonly TrackDescriptor[]): number {
   return tracks.filter((track) => track.shown).length;
 }

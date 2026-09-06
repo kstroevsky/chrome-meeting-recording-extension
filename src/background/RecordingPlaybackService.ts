@@ -63,7 +63,7 @@ function toTrack(file: RecordingHistoryFile): PlaybackTrack {
     filename: file.filename,
     mimeType: file.mimeType,
     ...(file.bytes != null ? { bytes: file.bytes } : {}),
-    timelineOffsetMs: file.timelineOffsetMs ?? 0,
+    captureStartOffsetMs: file.captureStartOffsetMs ?? 0,
     sources: toSources(file),
   };
 }

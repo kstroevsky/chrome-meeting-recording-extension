@@ -135,11 +135,11 @@ describe('artifact locations and delivery', () => {
       })?.locations).toEqual([{ kind: 'download', downloadId: 7 }]);
     });
 
-    it('keeps a negative timelineOffsetMs, which means the track started before the master', () => {
-      expect(file({ timelineOffsetMs: -120 })?.timelineOffsetMs).toBe(-120);
-      expect(file({ timelineOffsetMs: 0 })?.timelineOffsetMs).toBe(0);
-      expect(file({ timelineOffsetMs: Number.NaN })?.timelineOffsetMs).toBeUndefined();
-      expect(file({})?.timelineOffsetMs).toBeUndefined();
+    it('keeps a negative captureStartOffsetMs, which means the track started before the master', () => {
+      expect(file({ captureStartOffsetMs: -120 })?.captureStartOffsetMs).toBe(-120);
+      expect(file({ captureStartOffsetMs: 0 })?.captureStartOffsetMs).toBe(0);
+      expect(file({ captureStartOffsetMs: Number.NaN })?.captureStartOffsetMs).toBeUndefined();
+      expect(file({})?.captureStartOffsetMs).toBeUndefined();
     });
   });
 });

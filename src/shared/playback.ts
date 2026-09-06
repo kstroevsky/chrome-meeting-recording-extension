@@ -29,7 +29,8 @@ export type PlaybackTrack = {
   mimeType: string;
   bytes?: number;
   /** Signed offset against the tab/master track; 0 until capture measures it. */
-  timelineOffsetMs: number;
+  /** Milliseconds after the run started that this track's recorder began. */
+  captureStartOffsetMs: number;
   /** Preference-ordered. Empty means the extension can no longer reach this track. */
   sources: PlaybackSource[];
 };

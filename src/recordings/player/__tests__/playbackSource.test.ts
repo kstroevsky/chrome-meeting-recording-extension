@@ -5,7 +5,7 @@ import type { PlaybackSource, PlaybackTrack } from '../../../shared/playback';
 
 const track = (sources: PlaybackSource[]): PlaybackTrack => ({
   fileId: 'r1:tab', stream: 'tab', filename: 'tab.webm', mimeType: 'video/webm',
-  timelineOffsetMs: 0, sources,
+  captureStartOffsetMs: 0, sources,
 });
 
 function deps(opfs = createFakeOpfs()) {

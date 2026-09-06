@@ -75,11 +75,11 @@ describe('RecordingPlaybackService.getManifest', () => {
 
   it('defaults a track offset to 0 and preserves a measured one', async () => {
     const service = make(entry({
-      files: [file('r1:tab', 'tab'), file('r1:mic', 'mic', { timelineOffsetMs: -120 })],
+      files: [file('r1:tab', 'tab'), file('r1:mic', 'mic', { captureStartOffsetMs: -120 })],
     }));
 
     const manifest = (await service.getManifest('r1'))!;
-    expect(manifest.tracks.map((t) => t.timelineOffsetMs)).toEqual([0, -120]);
+    expect(manifest.tracks.map((t) => t.captureStartOffsetMs)).toEqual([0, -120]);
   });
 
   it('returns nothing for a missing or tombstoned recording', async () => {

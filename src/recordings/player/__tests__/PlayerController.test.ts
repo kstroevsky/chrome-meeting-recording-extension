@@ -14,7 +14,7 @@ const manifest = (sources: PlaybackSource[], extra: Partial<PlaybackManifest> = 
   notations: [],
   tracks: [{
     fileId: 'r1:tab', stream: 'tab', filename: 'tab.webm', mimeType: 'video/webm',
-    timelineOffsetMs: 0, sources,
+    captureStartOffsetMs: 0, sources,
   }],
   ...extra,
 });

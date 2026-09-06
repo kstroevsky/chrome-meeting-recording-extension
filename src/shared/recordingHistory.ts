@@ -31,12 +31,19 @@ export type RecordingHistoryFile = {
   /** Container type of the stored bytes; derived from the filename on legacy rows. */
   mimeType: string;
   /**
-   * Signed offset of this track's first sample relative to the tab/master track.
-   * Independently started MediaRecorders land close together, but "close" is not
-   * a durable media-format invariant (ADR-0006). Negative is meaningful: this
-   * track started *before* the master.
+   * Milliseconds between the run starting and this track's `MediaRecorder`
+   * firing `onstart`. Independently started recorders land close together, but
+   * "close" is not a durable media-format invariant (ADR-0006).
+   *
+   * Relative to the run rather than to a master track, deliberately: which
+   * track drives playback is decided at play time (a tab track with only a
+   * Downloads copy cannot), so a master-relative number baked in at capture
+   * would be wrong for exactly the recordings that pick a different one. The
+   * player subtracts its master's value to re-base.
+   *
+   * Absent on rows captured before this was measured.
    */
-  timelineOffsetMs?: number;
+  captureStartOffsetMs?: number;
   /** Every physical replica of these bytes. Empty means the extension owns none. */
   locations: ArtifactLocation[];
   delivery: ArtifactDelivery;
@@ -181,8 +188,8 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     : locationsFromLegacyFields(legacy);
   // Signed: a negative offset is valid data, so this cannot reuse the `>= 0`
   // guard the byte counts use.
-  const timelineOffsetMs = typeof candidate.timelineOffsetMs === 'number' && Number.isFinite(candidate.timelineOffsetMs)
-    ? candidate.timelineOffsetMs
+  const captureStartOffsetMs = typeof candidate.captureStartOffsetMs === 'number' && Number.isFinite(candidate.captureStartOffsetMs)
+    ? candidate.captureStartOffsetMs
     : undefined;
   return {
     id,
@@ -190,7 +197,7 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     ...(candidate.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename,
     mimeType: optionalString('mimeType') ?? contentTypeForRecordingFilename(filename),
-    ...(timelineOffsetMs != null ? { timelineOffsetMs } : {}),
+    ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),
     locations,
     delivery: normalizeArtifactDelivery(candidate.delivery, legacy, requested),
     destination,

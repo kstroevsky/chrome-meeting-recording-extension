@@ -1,4 +1,5 @@
-import { audioTracks, describeTracks, shownCount, toggleShown } from '../playerTracks';
+import {
+  clockOffsetMs, audioTracks, describeTracks, shownCount, toggleShown } from '../playerTracks';
 import type { PlaybackManifest } from '../../../shared/playback';
 
 const manifest = (streams: Array<'tab' | 'mic' | 'self-video'>): PlaybackManifest => ({
@@ -12,7 +13,7 @@ const manifest = (streams: Array<'tab' | 'mic' | 'self-video'>): PlaybackManifes
     stream,
     filename: `${stream}.${stream === 'mic' ? 'm4a' : 'webm'}`,
     mimeType: stream === 'mic' ? 'audio/mp4' : 'video/webm',
-    timelineOffsetMs: 0,
+    captureStartOffsetMs: 0,
     sources: [],
   })),
 });
@@ -93,3 +94,35 @@ describe('availability', () => {
   });
 });
 
+
+describe('clockOffsetMs', () => {
+  const at = (captureStartOffsetMs: number) => ({ captureStartOffsetMs });
+
+  it('is zero for the master against itself', () => {
+    const master = at(340);
+    expect(clockOffsetMs(master, master)).toBe(0);
+  });
+
+  it('re-bases an auxiliary onto the master rather than onto the run', () => {
+    // Both started after the run began; what playback needs is the 120 ms
+    // between them, not either raw figure.
+    expect(clockOffsetMs(at(460), at(340))).toBe(120);
+  });
+
+  it('keeps the sign when the auxiliary started first', () => {
+    expect(clockOffsetMs(at(220), at(340))).toBe(-120);
+  });
+
+  it('gives the same answer whichever track ends up driving', () => {
+    const tab = at(340);
+    const mic = at(460);
+    // A tab track with only a Downloads copy cannot be master, so the mic can
+    // be — and the pair must stay 120 ms apart either way.
+    expect(clockOffsetMs(mic, tab)).toBe(120);
+    expect(clockOffsetMs(tab, mic)).toBe(-120);
+  });
+
+  it('treats unmeasured tracks as aligned, which is the old behaviour', () => {
+    expect(clockOffsetMs(at(0), at(0))).toBe(0);
+  });
+});

@@ -14,7 +14,7 @@ import { resolveTrackSource, type SourceResolverDeps } from './playbackSource';
 import { PlayerView } from './PlayerView';
 import { PlaybackClock } from './PlaybackClock';
 import { adjacentNoteStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
-import { describeTracks, toggleShown } from './playerTracks';
+import { clockOffsetMs, describeTracks, toggleShown } from './playerTracks';
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
@@ -245,7 +245,7 @@ export class PlayerController {
       element.src = resolved.url;
       this.elements.set(track.fileId, element);
       this.attached.add(track.fileId);
-      clock.add({ element, timelineOffsetMs: track.timelineOffsetMs });
+      clock.add({ element, timelineOffsetMs: clockOffsetMs(track, master) });
     }
     this.clock = clock;
   }
