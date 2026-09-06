@@ -230,8 +230,8 @@ function getPort(): chrome.runtime.Port {
 
 // ─── State helpers ───────────────────────────────────────────────────────────
 
-function requestSave({ historyId, stream, kind, retainedKey, filename, blobUrl, opfsFilename }: import('./offscreen/RecordingFinalizer').LocalSaveRequest) {
-  getPort().postMessage({ type: 'OFFSCREEN_SAVE', historyId: historyId ?? '', stream, ...(kind ? { kind } : {}), ...(retainedKey ? { retainedKey } : {}), filename, blobUrl, opfsFilename });
+function requestSave({ historyId, stream, kind, retainedKey, filename, startOffsetMs, blobUrl, opfsFilename }: import('./offscreen/RecordingFinalizer').LocalSaveRequest) {
+  getPort().postMessage({ type: 'OFFSCREEN_SAVE', historyId: historyId ?? '', stream, ...(kind ? { kind } : {}), ...(retainedKey ? { retainedKey } : {}), filename, ...(startOffsetMs != null ? { startOffsetMs } : {}), blobUrl, opfsFilename });
 }
 
 async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {

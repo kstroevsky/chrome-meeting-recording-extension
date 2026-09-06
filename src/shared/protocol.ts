@@ -304,7 +304,7 @@ export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY'; version?: string }
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
-  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; blobUrl: string; opfsFilename?: string; retainedKey?: string }
+  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string }
   | { type: 'TELEMETRY_SNAPSHOT'; snapshot: import('./telemetry').TelemetrySnapshot; critical?: boolean }
   | { type: 'TELEMETRY_FLUSH'; snapshot: import('./telemetry').TelemetrySnapshot; reason: 'incident' | 'recording_complete' | 'upload_complete' };
 

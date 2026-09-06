@@ -16,6 +16,7 @@ import {
   makeChunkHandler,
   openStorageTarget,
   sealAndFixArtifact,
+  stampStartOffset,
 } from './RecorderTaskUtils';
 import type { CompletedRecordingArtifact, RecorderEngineDeps } from './RecorderEngineTypes';
 import { debugPerf } from '../../shared/perf';
@@ -73,7 +74,9 @@ export async function startMicRecorder(
   const finalize = async (label: string) => {
     try {
       const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps, 'mic');
-      callbacks.onStopped(artifact ? { stream: 'mic', artifact } : null);
+      stampStartOffset(artifact, actualStartTimeMs, runStartedAt);
+      callbacks.onStopped(artifact
+? { stream: 'mic', artifact } : null);
     } catch (e) {
       deps.error(`${label} finalize/save failed`, describeMediaError(e));
       callbacks.onStopped(null);

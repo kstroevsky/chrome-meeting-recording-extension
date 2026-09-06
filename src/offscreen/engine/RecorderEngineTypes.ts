@@ -17,6 +17,16 @@ export interface SealedStorageFile {
   opfsFilename?: string;
   /** True when the WebM duration fix already ran (e.g. inside the OPFS worker). */
   durationFixed?: boolean;
+  /**
+   * Milliseconds between the run starting and this stream's `MediaRecorder`
+   * firing `onstart`. Independently started recorders do not share a timeline
+   * origin, so playback lines the tracks up against each other rather than
+   * assuming they began together.
+   *
+   * It measures the recorder starting, not the first sample reaching it — a
+   * good approximation, not the true media offset.
+   */
+  startOffsetMs?: number;
   cleanup: () => Promise<void>;
 }
 

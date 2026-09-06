@@ -40,7 +40,7 @@ export function registerSaveHandler(
   /** Recorded duration of the run that produced this artifact, for the history row. */
   runDurationMs?: (historyId: string) => number | undefined,
 ) {
-  offscreen.onSaveRequested = ({ historyId, stream, kind, retainedKey, filename, blobUrl, opfsFilename }) => {
+  offscreen.onSaveRequested = ({ historyId, stream, kind, retainedKey, filename, startOffsetMs, blobUrl, opfsFilename }) => {
     const resolvedFilename =
       typeof filename === 'string' && filename.trim()
         ? filename
@@ -64,7 +64,7 @@ export function registerSaveHandler(
           const fileId = recordingHistoryFileId(historyId, stream, kind);
           await history?.createPending(
             historyId,
-            [{ id: fileId, stream, ...(kind ? { kind } : {}), filename: resolvedFilename }],
+            [{ id: fileId, stream, ...(kind ? { kind } : {}), filename: resolvedFilename, ...(startOffsetMs != null ? { captureStartOffsetMs: startOffsetMs } : {}) }],
             'local',
           );
           // Once the row exists, stamp the run's duration onto it. The session

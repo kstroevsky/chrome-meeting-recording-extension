@@ -15,7 +15,7 @@ import {
 } from '../shared/recordingHistory';
 import type { RecordingHistoryRepositoryPort } from './RecordingHistoryRepository';
 
-type PendingFile = Pick<RecordingHistoryFile, 'id' | 'stream' | 'kind' | 'filename' | 'bytes'>;
+type PendingFile = Pick<RecordingHistoryFile, 'id' | 'stream' | 'kind' | 'filename' | 'bytes' | 'captureStartOffsetMs'>;
 type DriveRenameResource = { id: string; name: string };
 export type DriveRenameResult = {
   ok: boolean;
@@ -427,6 +427,7 @@ function createEntryFromUploadJob(job: UploadJob): RecordingHistoryEntry {
     stream: file.stream,
     ...(file.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename: file.filename,
+    ...(file.startOffsetMs != null ? { captureStartOffsetMs: file.startOffsetMs } : {}),
     ...pendingArtifactFields(file.filename, 'drive'),
     ...(file.status === 'uploaded' && file.driveFileId
       ? {

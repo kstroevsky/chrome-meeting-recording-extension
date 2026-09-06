@@ -14,6 +14,7 @@ import {
   makeChunkHandler,
   openStorageTarget,
   sealAndFixArtifact,
+  stampStartOffset,
 } from './RecorderTaskUtils';
 import type {
   CompletedRecordingArtifact,
@@ -98,6 +99,7 @@ export async function startTabRecorder(
   const finalize = async (label: string) => {
     try {
       const artifact = await sealAndFixArtifact(target, started, actualStartTimeMs, label, deps, 'tab');
+      stampStartOffset(artifact, actualStartTimeMs, runStartedAt);
       if (artifact) {
         callbacks.onStopped({
           stream: 'tab',

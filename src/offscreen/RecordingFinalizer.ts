@@ -70,6 +70,8 @@ export type LocalSaveRequest = RecordingArtifactContext & {
    */
   retainedKey?: string;
   filename: string;
+  /** Where this stream's recorder began, relative to the run (RecordingHistoryFile). */
+  startOffsetMs?: number;
   blobUrl: string;
   opfsFilename?: string;
 };
@@ -207,6 +209,7 @@ export class RecordingFinalizer {
       ...(kind ? { kind } : {}),
       ...(retainedKey ? { retainedKey } : {}),
       filename: artifact.filename,
+      ...(artifact.startOffsetMs != null ? { startOffsetMs: artifact.startOffsetMs } : {}),
       blobUrl,
       opfsFilename: artifact.opfsFilename,
     });

@@ -136,6 +136,21 @@ export async function openStorageTarget(
  */
 const MAX_CONSECUTIVE_WRITE_FAILURES = 3;
 
+/**
+ * Records where this stream's recorder began relative to the run, so playback
+ * can line independently started tracks up instead of assuming a shared origin.
+ * Skipped when the recorder never reported a start — an unmeasured offset is
+ * left absent rather than asserted as zero.
+ */
+export function stampStartOffset(
+  artifact: SealedStorageFile | null,
+  actualStartTimeMs: number,
+  runStartedAt: number,
+): void {
+  if (!artifact || actualStartTimeMs <= 0) return;
+  artifact.startOffsetMs = Math.round(actualStartTimeMs - runStartedAt);
+}
+
 /** Creates an ondataavailable handler that writes chunks to the target and logs perf events. */
 export function makeChunkHandler(
   target: StorageTarget,
