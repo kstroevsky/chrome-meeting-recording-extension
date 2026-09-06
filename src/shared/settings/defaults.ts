@@ -23,6 +23,8 @@ export const EXTENSION_SETTINGS_STORAGE_KEY = 'extensionSettings';
 /** Enough destinations to organise by, few enough to stay a picker. */
 export const MAX_DRIVE_FOLDER_PRESETS = 20;
 export const MAX_DRIVE_FOLDER_NAME_LENGTH = 60;
+export const MAX_LOCAL_FOLDER_PRESETS = 20;
+export const MAX_LOCAL_FOLDER_NAME_LENGTH = 60;
 export const THEME_OPTIONS = ['system', 'light', 'dark'] as const satisfies readonly ThemePreference[];
 export const RECORDING_MODE_OPTIONS = ['opfs', 'drive'] as const;
 export const MICROPHONE_MODE_OPTIONS = ['off', 'mixed', 'separate'] as const;
@@ -110,6 +112,7 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     // No presets to begin with: every recording lands in the single built-in
     // folder, exactly as it did before destinations existed.
     driveFolderPresets: Object.freeze([]) as unknown as ExtensionSettings['storage']['driveFolderPresets'],
+    localFolderPresets: Object.freeze([]) as unknown as ExtensionSettings['storage']['localFolderPresets'],
   }),
   professional: Object.freeze({
     selfVideoFrameRate: EXTENSION_DEFAULTS.capture.selfVideo.frameRate,

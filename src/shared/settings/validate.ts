@@ -6,7 +6,7 @@
  * the Settings module.
  */
 
-import type { ChunkingSettings, DriveFolderPreset, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings, TabContentType } from './model';
+import type { ChunkingSettings, FolderPreset, MicrophoneCaptureSettings, SelfVideoProfileSettings, TabCaptureSettings, TabContentType } from './model';
 import type { MicrophoneRecordingFormat, VideoRecordingFormat } from '../recordingFormats';
 
 export type BoundedPositiveIntResult = number | null;
@@ -87,20 +87,44 @@ export function validateChunkingSettings(candidate: Record<string, unknown>): Ch
  * the same folder are one destination with two labels, and the picker would be
  * lying.
  */
-export function validateDriveFolderPresets(
+/**
+ * Drive names only have to survive being a Drive folder title, so slashes and
+ * control characters are the whole hazard.
+ */
+const DRIVE_FORBIDDEN = /[\\/\u0000-\u001f]/g;
+
+/**
+ * Local names become a real path segment under the download directory, so they
+ * also lose the characters Windows cannot represent. Chrome sanitises again on
+ * its side; this keeps the *stored* name honest about what the user will see.
+ */
+const LOCAL_FORBIDDEN = /[\\/:*?"<>|\u0000-\u001f]/g;
+
+function sanitizeFolderName(raw: unknown, maxLength: number, forbidden: RegExp): string {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .replace(forbidden, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    // A trailing dot is legal to type and invalid as a Windows directory.
+    .replace(/\.+$/, '')
+    .trim()
+    .slice(0, maxLength)
+    .trim();
+}
+
+function validatePresets(
   value: unknown,
   limits: { maxPresets: number; maxNameLength: number },
-): DriveFolderPreset[] {
+  forbidden: RegExp,
+): FolderPreset[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
-  const presets: DriveFolderPreset[] = [];
+  const presets: FolderPreset[] = [];
   for (const candidate of value) {
     if (!candidate || typeof candidate !== 'object') continue;
     const raw = candidate as { id?: unknown; name?: unknown };
-    const name = typeof raw.name === 'string'
-      // Slashes and control characters read as paths; they are not.
-      ? raw.name.replace(/[\\/\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limits.maxNameLength)
-      : '';
+    const name = sanitizeFolderName(raw.name, limits.maxNameLength, forbidden);
     const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : '';
     if (!name || !id) continue;
     const key = name.toLocaleLowerCase();
@@ -110,4 +134,19 @@ export function validateDriveFolderPresets(
     if (presets.length >= limits.maxPresets) break;
   }
   return presets;
+}
+
+export function validateDriveFolderPresets(
+  value: unknown,
+  limits: { maxPresets: number; maxNameLength: number },
+): FolderPreset[] {
+  return validatePresets(value, limits, DRIVE_FORBIDDEN);
+}
+
+/** Same shape as the Drive list, stricter about what a path segment may contain. */
+export function validateLocalFolderPresets(
+  value: unknown,
+  limits: { maxPresets: number; maxNameLength: number },
+): FolderPreset[] {
+  return validatePresets(value, limits, LOCAL_FORBIDDEN);
 }

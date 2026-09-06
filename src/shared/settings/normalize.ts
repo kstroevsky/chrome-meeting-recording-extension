@@ -11,6 +11,8 @@ import { isRecord } from '../typeGuards';
 import {
   DEFAULT_EXTENSION_SETTINGS,
   MAX_DRIVE_FOLDER_NAME_LENGTH,
+  MAX_LOCAL_FOLDER_PRESETS,
+  MAX_LOCAL_FOLDER_NAME_LENGTH,
   MAX_DRIVE_FOLDER_PRESETS,
   LEGACY_CAMERA_FORMAT_TO_PRESET,
   LEGACY_VIDEO_FORMAT_OPTIONS,
@@ -26,6 +28,7 @@ import {
 import {
   validateChunkingSettings,
   validateDriveFolderPresets,
+  validateLocalFolderPresets,
   validateMicrophoneSettings,
   validateSelfVideoProfile,
   validateTabOutput,
@@ -230,7 +233,11 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
     maxPresets: MAX_DRIVE_FOLDER_PRESETS,
     maxNameLength: MAX_DRIVE_FOLDER_NAME_LENGTH,
   });
-  const storage: ExtensionSettings['storage'] = { driveFolderPresets };
+  const localFolderPresets = validateLocalFolderPresets(storageCandidate.localFolderPresets, {
+    maxPresets: MAX_LOCAL_FOLDER_PRESETS,
+    maxNameLength: MAX_LOCAL_FOLDER_NAME_LENGTH,
+  });
+  const storage: ExtensionSettings['storage'] = { driveFolderPresets, localFolderPresets };
 
   return { privacy, appearance, basic, storage, professional };
 }

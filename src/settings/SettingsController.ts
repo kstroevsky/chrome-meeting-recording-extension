@@ -10,15 +10,17 @@
 import {
   DEFAULT_EXTENSION_SETTINGS,
   MAX_DRIVE_FOLDER_NAME_LENGTH,
+  MAX_LOCAL_FOLDER_PRESETS,
+  MAX_LOCAL_FOLDER_NAME_LENGTH,
   MAX_DRIVE_FOLDER_PRESETS,
   loadExtensionSettingsFromStorage,
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
-  type DriveFolderPreset,
   type ExtensionSettings,
 } from '../shared/settings';
 import { getRecordingFormatCapabilities, type RecordingFormatCapabilities } from '../shared/recordingFormats';
 import { applyThemePreference } from '../shared/theme';
+import { FolderPresetList } from './FolderPresetList';
 
 export type SettingsElements = {
   anonymousDiagnostics: HTMLInputElement | null;
@@ -38,6 +40,9 @@ export type SettingsElements = {
   destinationsList?: HTMLElement | null;
   destinationAdd?: HTMLButtonElement | null;
   destinationsNote?: HTMLElement | null;
+  localFoldersList?: HTMLElement | null;
+  localFolderAdd?: HTMLButtonElement | null;
+  localFoldersNote?: HTMLElement | null;
   micEchoCancellation: HTMLInputElement | null;
   micNoiseSuppression: HTMLInputElement | null;
   micAutoGain: HTMLInputElement | null;
@@ -59,26 +64,44 @@ type SettingsDocument = Document & {
 export class SettingsController {
   private readonly formatCapabilities: RecordingFormatCapabilities = getRecordingFormatCapabilities();
   /**
-   * Edited in memory and written on save like every other control. Ids are
-   * minted here and never reused, so renaming a destination cannot silently
+   * Two lists, edited in memory and written on save like every other control.
+   * Ids are minted once and never reused, so renaming a folder cannot silently
    * re-target the recordings that chose it.
    */
-  private destinations: DriveFolderPreset[] = [];
+  private readonly driveFolders: FolderPresetList;
+  private readonly localFolders: FolderPresetList;
 
-  constructor(private readonly el: SettingsElements) {}
+  constructor(private readonly el: SettingsElements) {
+    this.driveFolders = new FolderPresetList({
+      elements: { list: el.destinationsList, add: el.destinationAdd, note: el.destinationsNote },
+      maxPresets: MAX_DRIVE_FOLDER_PRESETS,
+      maxNameLength: MAX_DRIVE_FOLDER_NAME_LENGTH,
+      placeholder: 'e.g. Work meetings',
+      noun: 'Destination',
+      idPrefix: 'dest',
+    });
+    this.localFolders = new FolderPresetList({
+      elements: { list: el.localFoldersList, add: el.localFolderAdd, note: el.localFoldersNote },
+      maxPresets: MAX_LOCAL_FOLDER_PRESETS,
+      maxNameLength: MAX_LOCAL_FOLDER_NAME_LENGTH,
+      placeholder: 'e.g. Therapy 2026',
+      noun: 'Folder',
+      idPrefix: 'local',
+    });
+  }
 
   /** Loads saved settings into the form and wires save/reset + the tooltip controller. */
   async init(): Promise<void> {
     this.wireConsoleControls();
+    this.driveFolders.wire();
+    this.localFolders.wire();
 
     try {
       const stored = await loadExtensionSettingsFromStorage();
       this.applySettings(stored);
-      this.applyDestinations(stored.storage.driveFolderPresets);
     } catch (error) {
       console.error('[settings] failed to load settings', error);
       this.applySettings(DEFAULT_EXTENSION_SETTINGS);
-      this.applyDestinations(DEFAULT_EXTENSION_SETTINGS.storage.driveFolderPresets);
       this.setStatus('Failed to load saved settings. Using defaults.', true);
     }
     this.applyFormatCapabilities();
@@ -121,6 +144,10 @@ export class SettingsController {
   /** Mirrors normalized settings into the current form controls. */
   private applySettings(settings: Readonly<ExtensionSettings>): void {
     const el = this.el;
+    // Repainted here rather than only at load, so "Reset to defaults" actually
+    // clears the lists instead of leaving rows the reset just erased.
+    this.driveFolders.apply(settings.storage.driveFolderPresets);
+    this.localFolders.apply(settings.storage.localFolderPresets);
     if (el.anonymousDiagnostics) el.anonymousDiagnostics.checked = settings.privacy.anonymousDiagnostics;
     if (el.theme) el.theme.value = settings.appearance.theme;
     applyThemePreference(settings.appearance.theme);
@@ -171,7 +198,8 @@ export class SettingsController {
         selfVideoUseAutoResolution: !!el.selfVideoAutoResolution?.checked,
       },
       storage: {
-        driveFolderPresets: this.readDestinations(),
+        driveFolderPresets: this.driveFolders.read(),
+        localFolderPresets: this.localFolders.read(),
       },
       professional: {
         selfVideoFrameRate: Number(el.selfVideoFrameRate?.value),
@@ -187,62 +215,8 @@ export class SettingsController {
     };
   }
 
-  private applyDestinations(presets: readonly DriveFolderPreset[]): void {
-    this.destinations = presets.map((preset) => ({ ...preset }));
-    this.el.destinationAdd?.addEventListener('click', () => {
-      this.destinations.push({ id: newDestinationId(), name: '' });
-      this.renderDestinations();
-      // Focus the row just added; adding one and then hunting for it is silly.
-      const inputs = this.el.destinationsList?.querySelectorAll<HTMLInputElement>('.destination-name');
-      inputs?.[inputs.length - 1]?.focus();
-    }, { once: false });
-    this.renderDestinations();
-  }
 
-  private renderDestinations(): void {
-    const list = this.el.destinationsList;
-    if (!list) return;
-    list.replaceChildren();
-    this.destinations.forEach((preset, index) => {
-      const row = document.createElement('div');
-      row.className = 'destination-row';
-      const input = document.createElement('input');
-      input.className = 'destination-name';
-      input.type = 'text';
-      input.value = preset.name;
-      input.maxLength = MAX_DRIVE_FOLDER_NAME_LENGTH;
-      input.placeholder = 'e.g. Work meetings';
-      input.setAttribute('aria-label', `Destination ${index + 1} name`);
-      // Kept in the model on every keystroke so saving never depends on blur.
-      input.addEventListener('input', () => { this.destinations[index].name = input.value; });
-      const remove = document.createElement('button');
-      remove.className = 'destination-remove';
-      remove.type = 'button';
-      remove.textContent = '×';
-      remove.title = 'Remove destination';
-      remove.setAttribute('aria-label', `Remove destination ${index + 1}`);
-      remove.addEventListener('click', () => {
-        this.destinations.splice(index, 1);
-        this.renderDestinations();
-      });
-      row.append(input, remove);
-      list.append(row);
-    });
 
-    const full = this.destinations.length >= MAX_DRIVE_FOLDER_PRESETS;
-    if (this.el.destinationAdd) this.el.destinationAdd.disabled = full;
-    if (this.el.destinationsNote) {
-      this.el.destinationsNote.textContent = full
-        ? `That is the maximum of ${MAX_DRIVE_FOLDER_PRESETS} destinations.`
-        : '';
-      this.el.destinationsNote.hidden = !full;
-    }
-  }
-
-  /** Blank rows are dropped here; the normalizer also drops them on load. */
-  private readDestinations(): DriveFolderPreset[] {
-    return this.destinations.filter((preset) => preset.name.trim().length > 0);
-  }
 
   /** Disables native and custom-selector options unavailable in this Chromium build. */
   private applyFormatCapabilities(): void {
@@ -494,6 +468,3 @@ export class SettingsController {
 }
 
 /** Ids only need to be unique within one user's settings. */
-function newDestinationId(): string {
-  return `dest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
