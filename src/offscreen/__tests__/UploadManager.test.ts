@@ -350,6 +350,20 @@ describe('UploadManager (ADR-0004)', () => {
       expect(await manager.retry(id)).toBe(true);
     });
 
+    it('drops its reference to the bytes, which is the point of the library path', async () => {
+      const readRetained = jest.fn(async () => new File(['retained bytes'], 'tab.webm'));
+      const { manager } = setup(failOnce() as any, { readRetained });
+      const original = retained('tab', 'tab.webm');
+      manager.enqueue([original]);
+      await flush();
+
+      // Holding the artifacts would keep their Blobs reachable and leave the
+      // offscreen document pinning the failed recording exactly as before.
+      const remembered = (manager as any).lastFailed;
+      expect(remembered.retainedKeys).toHaveLength(1);
+      expect(remembered.artifacts).toBeUndefined();
+    });
+
     it('stays retryable past the byte budget', async () => {
       const readRetained = jest.fn(async () => new File(['retained bytes'], 'tab.webm'));
       const warn = jest.fn();

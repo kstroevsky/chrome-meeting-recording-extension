@@ -82,7 +82,7 @@ export class UploadManager {
    */
   private lastFailed:
     | { jobId: string; historyId?: string; telemetryRunId?: string; artifacts: CompletedRecordingArtifact[]; expiresAt: number; retainedKeys?: undefined }
-    | { jobId: string; historyId?: string; telemetryRunId?: string; artifacts: CompletedRecordingArtifact[]; expiresAt?: undefined; retainedKeys: RetainedRetry[] }
+    | { jobId: string; historyId?: string; telemetryRunId?: string; artifacts?: undefined; expiresAt?: undefined; retainedKeys: RetainedRetry[] }
     | null = null;
   private retryExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -250,7 +250,8 @@ export class UploadManager {
           jobId: settled.id,
           historyId: settled.historyId,
           telemetryRunId: this.jobs.get(settled.id)?.telemetryRunId,
-          artifacts: retryArtifacts,
+          // Deliberately not the artifacts: holding them would keep the Blobs
+          // reachable and defeat the point of reading from the library.
           retainedKeys,
         };
         return;

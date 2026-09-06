@@ -12,6 +12,9 @@
  * On close the worker also runs the WebM duration fix here, so the streaming
  * parse stays off the offscreen main thread (and keeps that dependency out of
  * the offscreen bundle — the main thread only loads it on the rare fallback).
+ * The fixed bytes are written back to the file, because the file — not the Blob
+ * this returns — is what promotion moves into the retained library, and what
+ * the player and the local download eventually read.
  */
 
 import fixWebmDuration from 'webm-duration-fix';
@@ -36,6 +39,11 @@ type InboundMessage =
   | { type: 'write'; seq: number; buffer: ArrayBuffer }
   | { type: 'close' }
   | { type: 'discard' };
+
+/** The duration fix is an EBML operation, so it applies to audio and video alike. */
+function isWebmMime(mimeType: string): boolean {
+  return mimeType.startsWith('video/webm') || mimeType.startsWith('audio/webm');
+}
 
 const ctx = self as unknown as {
   onmessage: ((event: MessageEvent<InboundMessage>) => void) | null;
@@ -95,19 +103,35 @@ ctx.onmessage = async (event) => {
         }
         // The file is readable normally once the exclusive sync handle is closed.
         let file: Blob | null = offset > 0 && fileHandle ? await fileHandle.getFile() : null;
+        let bytes = offset;
         let durationFixed = false;
-        if (file && mimeType === 'video/webm') {
+        // Any WebM, not just video: a separate microphone opens its target as
+        // `audio/webm`, and an audio track with no Duration is as unseekable as
+        // a video one — the player syncs it against the tab clock.
+        if (file && fileHandle && isWebmMime(mimeType)) {
           try {
-            // Streams the file + lazy-slices the body, so the result crosses back
-            // to the main thread as a cheap Blob reference, not a full copy.
-            file = await fixWebmDuration(file);
+            const fixed = await fixWebmDuration(file);
+            // The fix inserts a Duration element rather than overwriting spare
+            // bytes, so the body shifts and an in-place patch is not possible —
+            // the file is rewritten whole. `createWritable` streams into a swap
+            // file and only replaces the original on close, which matters here:
+            // `fixed` is a lazy slice of that very file, so the read source has
+            // to stay intact until the write is complete. A failure before
+            // close discards the swap and leaves the original untouched.
+            const writable = await fileHandle.createWritable();
+            await writable.write(fixed);
+            await writable.close();
+            file = await fileHandle.getFile();
+            bytes = file.size;
             durationFixed = true;
           } catch {
-            // Leave it unfixed; the main thread will attempt the fix as a fallback.
+            // Leave it unfixed on disk; the main thread attempts the in-memory
+            // fix as a fallback so the delivered copy is still correct.
+            file = await fileHandle.getFile();
           }
         }
         if (file) file = new File([file], filename, { type: mimeType });
-        ctx.postMessage({ type: 'sealed', file, bytes: offset, durationFixed });
+        ctx.postMessage({ type: 'sealed', file, bytes, durationFixed });
         break;
       }
       case 'discard': {
