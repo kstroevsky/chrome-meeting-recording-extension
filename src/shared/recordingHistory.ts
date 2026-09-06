@@ -1,4 +1,26 @@
 import type { RecordingStream, StorageMode } from './recording';
+import { contentTypeForRecordingFilename } from './recordingFormats';
+
+/**
+ * Where a logical artifact physically exists. A recording artifact is immutable
+ * logical media; OPFS, Downloads and Drive are *replicas* of it (ADR-0006), so
+ * one file can hold several at once — a Drive upload that fell back locally has
+ * both. At most one replica per `kind`.
+ */
+export type ArtifactLocation =
+  | { kind: 'opfs'; key: string; retainedAt: number }
+  | { kind: 'download'; downloadId: number }
+  | { kind: 'drive'; fileId: string; webViewLink?: string };
+
+export type ArtifactDeliveryStatus = 'pending' | 'downloaded' | 'uploaded' | 'local-fallback' | 'failed';
+
+/** Did the delivery the user asked for succeed? Not the same as where bytes are. */
+export type ArtifactDelivery = {
+  /** What the user requested at recording time. `StorageMode` is 'local' | 'drive'. */
+  requested: StorageMode;
+  status: ArtifactDeliveryStatus;
+  error?: string;
+};
 
 export type RecordingHistoryFile = {
   id: string;
@@ -6,6 +28,28 @@ export type RecordingHistoryFile = {
   /** Absent for media; `notes` marks the WebVTT sidecar (ADR-0005). */
   kind?: 'notes';
   filename: string;
+  /** Container type of the stored bytes; derived from the filename on legacy rows. */
+  mimeType: string;
+  /**
+   * Milliseconds between the run starting and this track's `MediaRecorder`
+   * firing `onstart`. Independently started recorders land close together, but
+   * "close" is not a durable media-format invariant (ADR-0006).
+   *
+   * Relative to the run rather than to a master track, deliberately: which
+   * track drives playback is decided at play time (a tab track with only a
+   * Downloads copy cannot), so a master-relative number baked in at capture
+   * would be wrong for exactly the recordings that pick a different one. The
+   * player subtracts its master's value to re-base.
+   *
+   * Absent on rows captured before this was measured.
+   */
+  captureStartOffsetMs?: number;
+  /** Every physical replica of these bytes. Empty means the extension owns none. */
+  locations: ArtifactLocation[];
+  delivery: ArtifactDelivery;
+
+  // Legacy single-destination fields, retained for one migration period
+  // (ADR-0006). `locations` and `delivery` are the truth for new code.
   destination: StorageMode;
   status: 'pending' | 'available' | 'unavailable';
   bytes?: number;
@@ -49,6 +93,16 @@ export type RecordingHistoryMessage =
   | { type: 'REMOVE_RECORDING_HISTORY'; id: string }
   | { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
+/**
+ * Stable identity of one artifact inside a recording. The notes sidecar rides a
+ * media stream (ADR-0005), so it cannot be keyed by stream alone — it would
+ * collide with that stream's media row. Derived in one place because three call
+ * sites deriving it independently is how they drifted apart.
+ */
+export function recordingHistoryFileId(historyId: string, stream: RecordingStream, kind?: 'notes'): string {
+  return kind === 'notes' ? `${historyId}:notes` : `${historyId}:${stream}`;
+}
+
 export function createRecordingHistoryId(): string {
   return `recording:${crypto.randomUUID()}`;
 }
@@ -69,9 +123,9 @@ export function normalizeRecordingHistoryEntry(value: unknown): RecordingHistory
   const storageMode = candidate.storageMode === 'drive' ? 'drive' : candidate.storageMode === 'local' ? 'local' : undefined;
   if (!id || !name || createdAt == null || !storageMode || !Array.isArray(candidate.files)) return undefined;
 
-  const files = candidate.files
-    .map(normalizeRecordingHistoryFile)
-    .filter((file): file is RecordingHistoryFile => file != null);
+  const files = dedupeById(candidate.files
+    .map((file) => normalizeRecordingHistoryFile(file, storageMode))
+    .filter((file): file is RecordingHistoryFile => file != null));
   if (!files.length) return undefined;
 
   const status = candidate.status === 'complete' || candidate.status === 'partial' || candidate.status === 'saving'
@@ -103,7 +157,7 @@ export function normalizeRecordingHistoryEntry(value: unknown): RecordingHistory
   };
 }
 
-function normalizeRecordingHistoryFile(value: unknown): RecordingHistoryFile | undefined {
+function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): RecordingHistoryFile | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const candidate = value as Record<string, unknown>;
   const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
@@ -121,19 +175,168 @@ function normalizeRecordingHistoryFile(value: unknown): RecordingHistoryFile | u
   const downloadId = typeof candidate.downloadId === 'number' && Number.isInteger(candidate.downloadId)
     ? candidate.downloadId
     : undefined;
+  const driveFileId = optionalString('driveFileId');
+  const webViewLink = optionalString('webViewLink');
+  const error = optionalString('error');
+  const legacy: LegacyDeliveryFields = { destination, status, downloadId, driveFileId, webViewLink, error };
+  // A row written before ADR-0006 carries no `locations`, so its replicas are
+  // synthesized from the single-destination fields. A row that *has* the field
+  // keeps it verbatim — including a deliberately empty list — so re-normalizing
+  // can never resurrect a replica its owner just removed.
+  const locations = Array.isArray(candidate.locations)
+    ? candidate.locations.map(normalizeArtifactLocation).filter((location): location is ArtifactLocation => location != null)
+    : locationsFromLegacyFields(legacy);
+  // Signed: a negative offset is valid data, so this cannot reuse the `>= 0`
+  // guard the byte counts use.
+  const captureStartOffsetMs = typeof candidate.captureStartOffsetMs === 'number' && Number.isFinite(candidate.captureStartOffsetMs)
+    ? candidate.captureStartOffsetMs
+    : undefined;
   return {
     id,
     stream,
     ...(candidate.kind === 'notes' ? { kind: 'notes' as const } : {}),
     filename,
+    mimeType: optionalString('mimeType') ?? contentTypeForRecordingFilename(filename),
+    ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),
+    locations,
+    delivery: normalizeArtifactDelivery(candidate.delivery, legacy, requested),
     destination,
     status,
     ...(bytes != null ? { bytes } : {}),
     ...(downloadId != null ? { downloadId } : {}),
-    ...(optionalString('driveFileId') ? { driveFileId: optionalString('driveFileId') } : {}),
-    ...(optionalString('webViewLink') ? { webViewLink: optionalString('webViewLink') } : {}),
-    ...(optionalString('error') ? { error: optionalString('error') } : {}),
+    ...(driveFileId ? { driveFileId } : {}),
+    ...(webViewLink ? { webViewLink } : {}),
+    ...(error ? { error } : {}),
   };
+}
+
+function normalizeArtifactLocation(value: unknown): ArtifactLocation | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind === 'opfs') {
+    const key = typeof candidate.key === 'string' ? candidate.key.trim() : '';
+    const retainedAt = typeof candidate.retainedAt === 'number' && Number.isFinite(candidate.retainedAt)
+      ? candidate.retainedAt
+      : undefined;
+    return key && retainedAt != null ? { kind: 'opfs', key, retainedAt } : undefined;
+  }
+  if (candidate.kind === 'download') {
+    return typeof candidate.downloadId === 'number' && Number.isInteger(candidate.downloadId)
+      ? { kind: 'download', downloadId: candidate.downloadId }
+      : undefined;
+  }
+  if (candidate.kind === 'drive') {
+    const fileId = typeof candidate.fileId === 'string' ? candidate.fileId.trim() : '';
+    const webViewLink = typeof candidate.webViewLink === 'string' && candidate.webViewLink.trim()
+      ? candidate.webViewLink.trim()
+      : undefined;
+    return fileId ? { kind: 'drive', fileId, ...(webViewLink ? { webViewLink } : {}) } : undefined;
+  }
+  return undefined;
+}
+
+const ARTIFACT_DELIVERY_STATUSES: readonly ArtifactDeliveryStatus[] = [
+  'pending',
+  'downloaded',
+  'uploaded',
+  'local-fallback',
+  'failed',
+];
+
+function normalizeArtifactDelivery(value: unknown, legacy: LegacyDeliveryFields, requested: StorageMode): ArtifactDelivery {
+  if (value && typeof value === 'object') {
+    const candidate = value as Record<string, unknown>;
+    const stored = ARTIFACT_DELIVERY_STATUSES.find((entry) => entry === candidate.status);
+    if (stored) {
+      const storedRequested = candidate.requested === 'drive' ? 'drive'
+        : candidate.requested === 'local' ? 'local'
+        : requested;
+      const error = typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error.trim() : undefined;
+      return { requested: storedRequested, status: stored, ...(error ? { error } : {}) };
+    }
+  }
+  return deliveryFromLegacyFields(legacy, requested);
+}
+
+type LegacyDeliveryFields = {
+  destination: StorageMode;
+  status: RecordingHistoryFile['status'];
+  downloadId?: number;
+  driveFileId?: string;
+  webViewLink?: string;
+  error?: string;
+};
+
+/** Replicas implied by a pre-ADR-0006 row's single-destination fields. */
+export function locationsFromLegacyFields(
+  file: Pick<LegacyDeliveryFields, 'downloadId' | 'driveFileId' | 'webViewLink'>,
+): ArtifactLocation[] {
+  const locations: ArtifactLocation[] = [];
+  if (file.downloadId != null) locations.push({ kind: 'download', downloadId: file.downloadId });
+  if (file.driveFileId) {
+    locations.push({ kind: 'drive', fileId: file.driveFileId, ...(file.webViewLink ? { webViewLink: file.webViewLink } : {}) });
+  }
+  return locations;
+}
+
+/**
+ * Delivery outcome implied by a pre-ADR-0006 row. `local-fallback` is precisely
+ * the case the legacy shape could not express: Drive was requested, the bytes
+ * landed in Downloads, and the row recorded only where they landed.
+ */
+export function deliveryFromLegacyFields(file: LegacyDeliveryFields, requested: StorageMode): ArtifactDelivery {
+  const status: ArtifactDeliveryStatus = file.status === 'unavailable' ? 'failed'
+    : file.status === 'pending' ? 'pending'
+    : file.destination === 'drive' ? 'uploaded'
+    : requested === 'drive' ? 'local-fallback'
+    : 'downloaded';
+  return { requested, status, ...(file.error ? { error: file.error } : {}) };
+}
+
+/** Adds or replaces the replica of `next.kind`, leaving the other kinds in place. */
+export function upsertArtifactLocation(locations: ArtifactLocation[], next: ArtifactLocation): ArtifactLocation[] {
+  return [...locations.filter((location) => location.kind !== next.kind), next];
+}
+
+/** ADR-0006 fields for a freshly created row that has no replicas yet. */
+export function pendingArtifactFields(
+  filename: string,
+  requested: StorageMode,
+): Pick<RecordingHistoryFile, 'mimeType' | 'locations' | 'delivery'> {
+  return {
+    mimeType: contentTypeForRecordingFilename(filename),
+    locations: [],
+    delivery: { requested, status: 'pending' },
+  };
+}
+
+/**
+ * Two rows must never share an id. When durable data holds a pair anyway — a
+ * notes sidecar that took a media row's identity wrote exactly this — keeping
+ * both is the worst option: the player shows the file twice, and a rename picks
+ * one at random and renames the other's Drive file to match.
+ *
+ * The id says what the row is supposed to be, so that is the tie-breaker: a
+ * `:notes` id keeps the row marked `notes`, any other id keeps the row that is
+ * not. A remaining tie keeps the larger file, because a stub beside real media
+ * is the stub.
+ */
+function dedupeById(files: RecordingHistoryFile[]): RecordingHistoryFile[] {
+  const byId = new Map<string, RecordingHistoryFile>();
+  for (const file of files) {
+    const existing = byId.get(file.id);
+    if (!existing) { byId.set(file.id, file); continue; }
+    byId.set(file.id, preferred(existing, file));
+  }
+  return [...byId.values()];
+}
+
+function preferred(a: RecordingHistoryFile, b: RecordingHistoryFile): RecordingHistoryFile {
+  const wantsNotes = a.id.endsWith(':notes');
+  const aMatches = (a.kind === 'notes') === wantsNotes;
+  const bMatches = (b.kind === 'notes') === wantsNotes;
+  if (aMatches !== bMatches) return aMatches ? a : b;
+  return (b.bytes ?? 0) > (a.bytes ?? 0) ? b : a;
 }
 
 function summarizeHistoryFiles(files: RecordingHistoryFile[]): RecordingHistoryEntry['status'] {

@@ -8,6 +8,7 @@
  */
 
 import type { RecordingArtifactContext, RecordingStream, UploadSummary } from '../shared/recording';
+import { recordingHistoryFileId } from '../shared/recordingHistory';
 import { DriveTarget } from './DriveTarget';
 import { DriveFolderResolver } from './drive/DriveFolderResolver';
 import { DRIVE_ROOT_FOLDER_NAME } from './drive/constants';
@@ -46,12 +47,31 @@ export type RecordingFinalizerDeps = {
    * persist (e.g. unit tests).
    */
   pendingUploads?: PendingUploadStore;
+  /**
+   * Transfers a sealed staging artifact into the retained library before it is
+   * handed to Downloads (ADR-0006). Optional: absent for contexts with no
+   * history row to retain against, such as legacy orphan recovery.
+   */
+  retainedMedia?: {
+    promote(stagingKey: string, recordingId: string, fileId: string, filename?: string): Promise<{ key: string; file: File }>;
+  };
 };
 
 /** One local-download request with explicit artifact ownership. */
 export type LocalSaveRequest = RecordingArtifactContext & {
   stream: RecordingStream;
+  /** The notes sidecar rides a media stream, so `stream` alone cannot identify it. */
+  kind?: 'notes';
+  /**
+   * Set once the artifact has been promoted into the retained library. Its
+   * presence is what tells the delivery side these bytes are owned rather than
+   * temporary — so a completed download records a replica instead of deleting
+   * the source (ADR-0006).
+   */
+  retainedKey?: string;
   filename: string;
+  /** Where this stream's recorder began, relative to the run (RecordingHistoryFile). */
+  startOffsetMs?: number;
   blobUrl: string;
   opfsFilename?: string;
 };
@@ -140,7 +160,7 @@ export class RecordingFinalizer {
     }
 
     for (const entry of orderedArtifacts) {
-      this.saveArtifactLocally(entry.artifact, entry.stream, 'local', context);
+      await this.saveArtifactLocally(entry.artifact, entry.stream, 'local', context, entry.kind);
     }
     logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
       durationMs: roundMs(nowMs() - startedAt),
@@ -161,13 +181,21 @@ export class RecordingFinalizer {
     return [...artifacts].sort((a, b) => rank(a) - rank(b));
   }
 
-  private saveArtifactLocally(
+  private async saveArtifactLocally(
     artifact: SealedStorageFile,
     stream: RecordingStream,
     reason: 'local' | 'fallback',
     context: RecordingArtifactContext,
+    kind?: 'notes',
   ) {
-    const blobUrl = URL.createObjectURL(artifact.file);
+    // Ownership transfers *before* delivery is attempted. That ordering is the
+    // point: if the download then fails, the recording is still playable from
+    // the library rather than being lost with the staging file.
+    const retained = await this.promoteForRetention(artifact, stream, context, kind);
+    // From the *retained* File: promotion moved the bytes, which invalidates the
+    // File the sealed artifact is still holding.
+    const blobUrl = URL.createObjectURL(retained?.file ?? artifact.file);
+    const retainedKey = retained?.key;
     logPerf(this.deps.log, 'finalizer', 'local_save_requested', {
       filename: artifact.filename,
       artifactBytes: artifact.file.size,
@@ -178,10 +206,40 @@ export class RecordingFinalizer {
       ...(context.historyId ? { historyId: context.historyId } : {}),
       ...(context.uploadJobId ? { uploadJobId: context.uploadJobId } : {}),
       stream,
+      ...(kind ? { kind } : {}),
+      ...(retainedKey ? { retainedKey } : {}),
       filename: artifact.filename,
+      ...(artifact.startOffsetMs != null ? { startOffsetMs: artifact.startOffsetMs } : {}),
       blobUrl,
       opfsFilename: artifact.opfsFilename,
     });
+  }
+
+  /**
+   * Promotes a sealed staging artifact into the retained library. Best-effort:
+   * a promotion failure must not cost the user the download, so it degrades to
+   * the pre-ADR-0006 behaviour (deliver, then clean up staging) rather than
+   * aborting delivery.
+   */
+  private async promoteForRetention(
+    artifact: SealedStorageFile,
+    stream: RecordingStream,
+    context: RecordingArtifactContext,
+    kind?: 'notes',
+  ): Promise<{ key: string; file: File } | undefined> {
+    const stagingKey = artifact.opfsFilename;
+    // No history row means nothing owns the bytes long-term (legacy orphan
+    // recovery), and a memory-backed artifact has no staging file to promote.
+    if (!this.deps.retainedMedia || !context.historyId || !stagingKey) return undefined;
+    try {
+      const fileId = recordingHistoryFileId(context.historyId, stream, kind);
+      const retained = await this.deps.retainedMedia.promote(stagingKey, context.historyId, fileId, artifact.filename);
+      this.deps.log('Promoted to the retained library', retained.key);
+      return retained;
+    } catch (e) {
+      this.deps.warn('Could not retain a playback copy; delivering without one', artifact.filename, describeRuntimeError(e));
+      return undefined;
+    }
   }
 
   private async cleanupArtifact(artifact: SealedStorageFile) {
@@ -247,11 +305,11 @@ export class RecordingFinalizer {
     const outcomes = await runWithConcurrency(
       artifacts,
       Math.min(PERF_FLAGS.parallelUploadConcurrency, 2),
-      async ({ artifact, stream }, index) => {
+      async ({ artifact, stream, kind }, index) => {
         const markFileDone = () => { loadedPerFile[index] = artifact.file.size; reportProgress(); };
         const startedAt = nowMs();
         if (sharedSetupError) {
-          if (!skipLocalFallback) this.saveArtifactLocally(artifact, stream, 'fallback', context);
+          if (!skipLocalFallback) await this.saveArtifactLocally(artifact, stream, 'fallback', context, kind);
           markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, bytes: artifact.file.size, uploaded: false, error: sharedSetupError } satisfies UploadOutcome;
@@ -304,7 +362,7 @@ export class RecordingFinalizer {
             this.deps.warn('Retry upload failed; keeping the existing local copy', artifact.filename, error);
           } else {
             this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
-            this.saveArtifactLocally(artifact, stream, 'fallback', context);
+            await this.saveArtifactLocally(artifact, stream, 'fallback', context, kind);
           }
           markFileDone();
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });

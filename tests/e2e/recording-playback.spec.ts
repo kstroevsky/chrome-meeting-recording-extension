@@ -1,0 +1,466 @@
+import { expect, test } from '@playwright/test';
+import {
+  closeHarness,
+  findMockMeetTabId,
+  launchExtensionHarness,
+  openMockMeetPage,
+  saveRecordingSettings,
+  sendRuntimeMessage,
+  startRecording,
+  stopRecording,
+} from './helpers/extensionHarness';
+
+/**
+ * The whole ADR-0006 chain, in one pass: capture writes to `staging/`, local
+ * finalization promotes into `library/`, history records the OPFS replica, and
+ * the player reads those bytes back through a real media element.
+ *
+ * This is the case unit tests structurally cannot cover — they mock `File`, and
+ * the bug that shipped past them was a `File` invalidated by `move()`.
+ */
+test.describe('recording playback (integration)', () => {
+  test('promotes a local recording and plays it back from the retained copy', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+
+      await meetPage.waitForTimeout(1_500);
+      const marked = await sendRuntimeMessage<{ ok: boolean }>(
+        harness.controlPage,
+        { type: 'MARK_NOTATION', text: 'decision point' },
+      );
+      expect(marked.ok).toBe(true);
+      await meetPage.waitForTimeout(800);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+
+      // Promotion really happened: the bytes are under `library/`, not `staging/`.
+      const retained = await expect.poll(async () => await page.evaluate(async () => {
+        const root = await navigator.storage.getDirectory();
+        const walk = async (dir: FileSystemDirectoryHandle, prefix: string): Promise<string[]> => {
+          const out: string[] = [];
+          for await (const name of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) {
+            try {
+              const file = await (await dir.getFileHandle(name)).getFile();
+              out.push(`${prefix}${name}:${file.size}`);
+            } catch {
+              const child = await dir.getDirectoryHandle(name);
+              out.push(...await walk(child, `${prefix}${name}/`));
+            }
+          }
+          return out;
+        };
+        return await walk(root, '');
+      }), { timeout: 25_000 }).toEqual(expect.arrayContaining([expect.stringMatching(/^library\/.+:\d+$/)]));
+      void retained;
+
+      // Play, and confirm the element got real bytes rather than an empty src.
+      await page.locator('.recording-row__play').first().click();
+      const player = page.locator('.player');
+      await expect(player).toBeVisible();
+
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 })
+        .toMatch(/^blob:/);
+
+      // The picture is not merely present — the media stack parsed it.
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
+        timeout: 20_000,
+      }).toBeGreaterThanOrEqual(1);
+
+      /*
+       * Deliberately not asserted against `el.duration`. The WebM duration fix
+       * produces a new in-memory Blob that goes to Downloads and Drive, while
+       * the bytes retained in OPFS keep the unfixed header — so the element
+       * reports `Infinity` here. The player takes its total from the manifest's
+       * recorded duration instead, which is the better source anyway: it is
+       * pause-aware (ADR-0005), and a container duration is not.
+       */
+      await expect(page.locator('.player__clock')).toHaveText(/^0:00 \/ \d+:\d{2}$/);
+      await expect(page.locator('.player__clock')).not.toHaveText('0:00 / 0:00');
+
+      // No failure banner over the picture.
+      await expect(page.locator('.player__status')).toBeHidden();
+
+      // It actually plays, rather than merely loading.
+      await video.evaluate(async (el: HTMLVideoElement) => { await el.play().catch(() => {}); });
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 15_000,
+      }).toBeGreaterThan(0);
+      await video.evaluate((el: HTMLVideoElement) => el.pause());
+
+      // An un-cued container still seeks locally, because the whole file is on disk.
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) =>
+        el.seekable.length ? el.seekable.end(0) : 0), { timeout: 10_000 }).toBeGreaterThan(0);
+
+      // The note is on the scrubber and is a seek target.
+      const mark = page.locator('.player__mark').first();
+      await expect(mark).toBeVisible();
+      await mark.click();
+
+      // Closing releases the object URL rather than leaving the file pinned.
+      await page.locator('.player__close').click();
+      await expect(player).toHaveCount(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  test('plays a mic and camera recording with every track on the tab clock', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'separate',
+        recordSelfVideo: true,
+      });
+      await meetPage.waitForTimeout(1_800);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      await expect(page.locator('.player')).toBeVisible();
+
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+
+      // Every retained track is attached, not just the picture.
+      await expect.poll(async () => await page.locator('.player__selfcam').getAttribute('src'), {
+        timeout: 20_000,
+      }).toMatch(/^blob:/);
+      await expect.poll(async () => await page.locator('.player__aux audio').getAttribute('src'), {
+        timeout: 20_000,
+      }).toMatch(/^blob:/);
+      await expect(page.locator('.player__selfcam')).toBeVisible();
+
+      // Autoplay carries the auxiliaries with it, and they stay together.
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 15_000,
+      }).toBeGreaterThan(0.3);
+
+      const spread = await page.evaluate(() => {
+        const tab = document.querySelector('.player__video') as HTMLVideoElement;
+        const cam = document.querySelector('.player__selfcam') as HTMLVideoElement;
+        const mic = document.querySelector('.player__aux audio') as HTMLAudioElement;
+        return [Math.abs(cam.currentTime - tab.currentTime), Math.abs(mic.currentTime - tab.currentTime)];
+      });
+      // Well inside the hard-resync band; this is alignment, not luck.
+      for (const delta of spread) expect(delta).toBeLessThan(0.5);
+
+      // The camera track must not double the tab's audio.
+      expect(await page.locator('.player__selfcam').evaluate((el: HTMLVideoElement) => el.muted)).toBe(true);
+
+      // The microphone must actually be audible, and actually advancing.
+      const mic = page.locator('.player__aux audio');
+      expect(await mic.evaluate((el: HTMLAudioElement) => el.muted)).toBe(false);
+      expect(await mic.evaluate((el: HTMLAudioElement) => el.volume)).toBe(1);
+      await expect.poll(async () => await mic.evaluate((el: HTMLAudioElement) => el.currentTime), {
+        timeout: 15_000,
+      }).toBeGreaterThan(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  test('drives the player from the keyboard (design f19)', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'off', recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(2_500);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
+        timeout: 20_000,
+      }).toBeGreaterThanOrEqual(1);
+
+      // Opening autoplays, so the first Space pauses and the second resumes.
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused), {
+        timeout: 15_000,
+      }).toBe(false);
+      await page.keyboard.press('Space');
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
+      await page.keyboard.press('Space');
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(false);
+
+      // L steps the speed up the ladder; J steps back.
+      await page.keyboard.press('l');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.playbackRate)).toBe(1.25);
+      await page.keyboard.press('j');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.playbackRate)).toBe(1);
+
+      // M mutes and unmutes.
+      await page.keyboard.press('m');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.muted)).toBe(true);
+      await page.keyboard.press('m');
+      expect(await video.evaluate((el: HTMLVideoElement) => el.muted)).toBe(false);
+
+      // Escape closes when not in fullscreen.
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.player')).toHaveCount(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  test('lists every file and lets one be switched off reversibly', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'separate', recordSelfVideo: true,
+      });
+      await meetPage.waitForTimeout(1_800);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      await expect.poll(async () => await page.locator('.player__video').getAttribute('src'), {
+        timeout: 20_000,
+      }).toMatch(/^blob:/);
+
+      // The trigger counts what is on.
+      await expect(page.locator('.player__files-count')).toHaveText('3');
+      await page.locator('.player__files').click();
+      const rows = page.locator('.player__file');
+      await expect(rows).toHaveCount(3);
+      await expect(rows.nth(0).locator('.player__file-label')).toHaveText('Tab video');
+      await expect(rows.nth(1).locator('.player__file-label')).toHaveText('Self camera');
+      await expect(rows.nth(2).locator('.player__file-label')).toHaveText('Microphone');
+
+      // Switching the camera off hides it — but the row stays, so it is reversible.
+      await rows.nth(1).click();
+      await expect(page.locator('.player__selfcam')).toBeHidden();
+      await expect(page.locator('.player__files-count')).toHaveText('2');
+      await expect(page.locator('.player__file')).toHaveCount(3);
+      await expect(page.locator('.player__file').nth(1)).toHaveAttribute('aria-checked', 'false');
+
+      await page.locator('.player__file').nth(1).click();
+      await expect(page.locator('.player__selfcam')).toBeVisible();
+      await expect(page.locator('.player__files-count')).toHaveText('3');
+
+      // One fader per audio track and no more: the camera carries no audio, so
+      // a third fader would mean a track was misclassified.
+      await page.locator('.player__files').click();
+      await page.locator('.player__icon--on-picture').first().click();
+      await expect(page.locator('.player__fader')).toHaveCount(2);
+      await expect(page.locator('.player__fader-name').nth(0)).toHaveText('Tab video');
+      await expect(page.locator('.player__fader-name').nth(1)).toHaveText('Microphone');
+
+      // Dragging a fader must not dismiss the popup — a click inside it used to
+      // bubble to the overlay and close the menu mid-drag.
+      const fader = page.locator('.player__fader-track').nth(1);
+      const box = (await fader.boundingBox())!;
+      // A real drag, not a synthetic input event: the bug was that the pointer
+      // gesture dismissed the popup and the vertical slider never tracked.
+      await page.mouse.move(box.x + box.width / 2, box.y + 6);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height - 6, { steps: 12 });
+      await page.mouse.up();
+
+      await expect(page.locator('.player__menu--volume')).toBeVisible();
+      await expect.poll(async () => await page.locator('.player__aux audio')
+        .evaluate((el: HTMLAudioElement) => el.volume), { timeout: 5_000 }).toBeLessThan(0.25);
+      // The readout followed, and the node survived the gesture — re-rendering
+      // the menu mid-drag used to replace the element under the pointer.
+      await expect(page.locator('.player__fader-level').nth(1)).not.toHaveText('100');
+      await expect(page.locator('.player__fader-track')).toHaveCount(2);
+
+      // The fader tracks the pointer continuously, not just the first press.
+      const seen: number[] = [];
+      const box2 = (await fader.boundingBox())!;
+      await page.mouse.move(box2.x + box2.width / 2, box2.y + box2.height - 4);
+      await page.mouse.down();
+      for (const fraction of [0.75, 0.5, 0.25]) {
+        await page.mouse.move(box2.x + box2.width / 2, box2.y + box2.height * fraction);
+        seen.push(await page.locator('.player__aux audio').evaluate((el: HTMLAudioElement) => el.volume));
+      }
+      await page.mouse.up();
+      expect(seen[0]).toBeLessThan(seen[1]);
+      expect(seen[1]).toBeLessThan(seen[2]);
+
+      // Clicking a track name mutes that track only.
+      await page.locator('.player__fader-name').nth(1).click();
+      await expect(page.locator('.player__fader-name').nth(1)).toHaveClass(/player__fader-name--muted/);
+      expect(await page.locator('.player__aux audio').evaluate((el: HTMLAudioElement) => el.muted)).toBe(true);
+      expect(await page.locator('.player__video').evaluate((el: HTMLVideoElement) => el.muted)).toBe(false);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  test('offers skip and speed, and unwinds Escape one layer at a time', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'off', recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(2_500);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
+        timeout: 20_000,
+      }).toBeGreaterThanOrEqual(1);
+
+      // Settings offers skip and speed — and no subtitles or quality row, because
+      // this player has one rendition and no subtitle track.
+      await page.locator('.player__icon--on-picture').nth(1).click();
+      await expect(page.locator('.player__setting')).toHaveCount(2);
+      await expect(page.locator('.player__setting-label').nth(0)).toHaveText('Arrow-key skip');
+      await expect(page.locator('.player__setting-label').nth(1)).toHaveText('Speed');
+
+      // Picking a speed applies it to the element.
+      await page.locator('.player__setting').nth(1).locator('.player__chip', { hasText: '1.5×' }).click();
+      expect(await video.evaluate((el: HTMLVideoElement) => el.playbackRate)).toBe(1.5);
+
+      // Picking a skip step changes what the arrow keys move.
+      await page.locator('.player__setting').nth(0).locator('.player__chip', { hasText: '30s' }).click();
+      await video.evaluate((el: HTMLVideoElement) => { el.currentTime = 0; });
+      await page.keyboard.press('ArrowRight');
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 5_000,
+      }).toBeGreaterThan(1.5);
+
+      // `?` opens the map; Escape closes the map before it closes the player.
+      await page.keyboard.press('?');
+      await expect(page.locator('.player__help')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.player__help')).toBeHidden();
+      await expect(page.locator('.player')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.player')).toHaveCount(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  test('keeps a playing recording readable after it is removed from history', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const meetPage = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage);
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'off', recordSelfVideo: false,
+      });
+      await meetPage.waitForTimeout(2_000);
+      await stopRecording(harness.controlPage);
+
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
+      await page.locator('.recording-row__play').first().click();
+      const video = page.locator('.player__video');
+      await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
+        timeout: 20_000,
+      }).toBeGreaterThanOrEqual(1);
+
+      const countRetained = async () => await page.evaluate(async () => {
+        const root = await navigator.storage.getDirectory();
+        const library = await root.getDirectoryHandle('library').catch(() => null);
+        if (!library) return 0;
+        let total = 0;
+        for await (const owner of (library as unknown as { keys(): AsyncIterable<string> }).keys()) {
+          const dir = await library.getDirectoryHandle(owner);
+          for await (const _ of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) total += 1;
+        }
+        return total;
+      });
+      expect(await countRetained()).toBeGreaterThan(0);
+
+      // Remove the recording while the player holds it. The row goes at once…
+      const recordingId = await page.evaluate(async () => {
+        const res: any = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'LIST_RECORDING_HISTORY' }, resolve);
+        });
+        const id = res.entries[0].id;
+        await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'REMOVE_RECORDING_HISTORY', id }, resolve);
+        });
+        return id;
+      });
+      expect(recordingId).toBeTruthy();
+
+      // …but the bytes stay, because a reader still holds a lease, and playback
+      // keeps working rather than breaking mid-frame.
+      await page.waitForTimeout(1_500);
+      expect(await countRetained()).toBeGreaterThan(0);
+      await video.evaluate(async (el: HTMLVideoElement) => { await el.play().catch(() => {}); });
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 15_000,
+      }).toBeGreaterThan(0);
+
+      // Closing the last reader is what finally frees them.
+      await page.close();
+      const other = await harness.context.newPage();
+      await other.goto(`chrome-extension://${harness.extensionId}/recordings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await expect.poll(async () => await other.evaluate(async () => {
+        const root = await navigator.storage.getDirectory();
+        const library = await root.getDirectoryHandle('library').catch(() => null);
+        if (!library) return 0;
+        let total = 0;
+        for await (const owner of (library as unknown as { keys(): AsyncIterable<string> }).keys()) {
+          const dir = await library.getDirectoryHandle(owner);
+          for await (const _ of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) total += 1;
+        }
+        return total;
+      }), { timeout: 25_000 }).toBe(0);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+});
+

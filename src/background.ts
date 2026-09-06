@@ -14,6 +14,14 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
+import { DriveArtifactResolver } from './background/DriveArtifactResolver';
+import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
+import { addTabRemovedListener } from './platform/chrome/tabs';
+import { fetchDriveTokenWithFallback } from './background/driveAuth';
+import { DrivePlaybackAuthLeaseManager } from './background/DrivePlaybackAuthLeaseManager';
+import { RecordingPlaybackService } from './background/RecordingPlaybackService';
+import { reconcileRetainedMedia } from './background/RetainedMediaReconciler';
+import { existsByKey, hasLibraryDirectory, listLibraryFiles, removeByKey } from './offscreen/storage/opfsLayout';
 import { OffscreenManager } from './background/OffscreenManager';
 import { PerfDebugStore } from './background/PerfDebugStore';
 import { RecordingController } from './background/RecordingController';
@@ -53,8 +61,20 @@ const offscreen = new OffscreenManager();
 // Notations are their own aggregate in the same database (ADR-0005), so they
 // are constructed first: history delegates its dependent cleanup to them.
 const notations = new RecordingNotationService(new RecordingNotationRepository());
+const historyRepository = new RecordingHistoryRepository();
+const LEASE_STORAGE_KEY = 'playbackLeases';
+const deleteRetainedKeys = async (keys: string[]) => {
+  const root = await navigator.storage.getDirectory();
+  for (const key of keys) await removeByKey(root, key);
+};
+const playbackLeases = new PlaybackLeaseManager({
+  read: async () => (await chrome.storage.session.get(LEASE_STORAGE_KEY))?.[LEASE_STORAGE_KEY],
+  write: async (state) => { await chrome.storage.session.set({ [LEASE_STORAGE_KEY]: state }); },
+  deleteRetained: deleteRetainedKeys,
+  warn: L.warn,
+});
 const history = new RecordingHistoryService(
-  new RecordingHistoryRepository(),
+  historyRepository,
   openDownloadedFile,
   Date.now,
   async (resources) => {
@@ -62,8 +82,57 @@ const history = new RecordingHistoryService(
     return await offscreen.rpc({ type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES', resources });
   },
   (id) => notations.removeAll(id),
+  async (keys, historyId) => {
+    // The tombstone already stands. If a player is reading these bytes, the
+    // deletion waits for it rather than pulling the file out mid-frame.
+    if (await playbackLeases.isLeased(historyId)) {
+      await playbackLeases.defer(historyId, keys);
+      return;
+    }
+    await deleteRetainedKeys(keys);
+  },
 );
+const playback = new RecordingPlaybackService({
+  getEntry: (id) => historyRepository.get(id),
+  listNotations: (id) => notations.list(id),
+});
+const driveAuthLease = new DrivePlaybackAuthLeaseManager({
+  // The extension's existing Drive auth, not a second OAuth system.
+  getToken: async (options) => {
+    const res = await fetchDriveTokenWithFallback({ refresh: options?.refresh === true });
+    if (!res.ok) throw new Error(res.error);
+    return res.token;
+  },
+  warn: L.warn,
+});
+/** One authenticated Drive call, shared by metadata and folder listing. */
+const driveJson = async (url: string): Promise<{ status: number; body: any }> => {
+  const res = await fetchDriveTokenWithFallback();
+  if (!res.ok) throw new Error(res.error);
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${res.token}` } });
+  return { status: response.status, body: response.status === 204 ? null : await response.json().catch(() => null) };
+};
+const driveArtifacts = new DriveArtifactResolver({
+  getMetadata: async (fileId) => {
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,size,trashed`);
+    if (status === 404) return null;
+    if (status !== 200) throw new Error(`Drive metadata ${status}`);
+    return body;
+  },
+  listFolder: async (folderId) => {
+    // Quoted ids are safe here: a Drive id is [A-Za-z0-9_-] only.
+    const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,size,trashed)&pageSize=200`);
+    if (status !== 200) throw new Error(`Drive folder listing ${status}`);
+    return body?.files ?? [];
+  },
+  warn: L.warn,
+});
 const telemetry = new TelemetryRuntime();
+
+
 
 globalThis.addEventListener?.('error', (event: ErrorEvent) => {
   telemetry.incident({ kind: 'application_error', stage: 'runtime', error: event.error });
@@ -244,9 +313,21 @@ registerSaveHandler(offscreen, L, history, (historyId) => session.runDurationMs(
 const controller = new RecordingController({ L, offscreen, session, telemetry, notations });
 
 // Register all popup message handlers.
-registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations, telemetry });
+registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
+  playback, playbackLeases, driveArtifacts, driveAuthLease, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
+
+// A closed tab must not leave a live credential attached to an id Chrome can
+// recycle (ADR-0006 §15). Registered after recordingAutoStop so a closing
+// recorded tab still stops its recording first.
+addTabRemovedListener((tabId) => {
+  void driveAuthLease.releaseTab(tabId).catch((error) => L.warn('Drive lease release failed:', error));
+  // Releasing the last reader is what finally frees a deleted recording's bytes.
+  void playbackLeases.releaseTab(tabId)
+    .then((freed) => { if (freed) L.log(`Freed retained media for ${freed} deleted recording(s)`); })
+    .catch((error) => L.warn('Playback lease release failed:', error));
+});
 
 // Register port listeners for offscreen and debug dashboard connections.
 chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
@@ -330,5 +411,51 @@ const sessionHydration = (async () => {
     L.warn('Session re-hydration failed (non-fatal):', e);
   } finally {
     sessionHydrated = true;
+  }
+
+  // Converge library/ and history after a crash (ADR-0006). Background reads
+  // OPFS here only to list and delete — it never reads media bytes, which stay
+  // the browser's job to move. Strictly best-effort: a failure must not keep
+  // the worker from serving recording commands.
+  try {
+    // Once per browser session, not once per service-worker wake: an MV3 worker
+    // is evicted and restarted constantly, and this pass is startup work, not
+    // per-event work. `chrome.storage.session` outlives the worker and dies with
+    // the browser, which is exactly the lifetime wanted here.
+    const RECONCILED_KEY = 'retainedMediaReconciled';
+    const already = await chrome.storage.session.get(RECONCILED_KEY).catch(() => ({} as Record<string, unknown>));
+    if ((already as Record<string, unknown>)[RECONCILED_KEY]) return;
+    await chrome.storage.session.set({ [RECONCILED_KEY]: true }).catch(() => {});
+
+    const report = await reconcileRetainedMedia({
+      hasRetainedLibrary: async () => hasLibraryDirectory(await navigator.storage.getDirectory()),
+      listRetained: async () => listLibraryFiles(await navigator.storage.getDirectory()),
+      getEntry: (id) => historyRepository.get(id),
+      listLiveEntries: () => history.list(),
+      exists: async (key) => existsByKey(await navigator.storage.getDirectory(), key),
+      removeRetained: async (key) => removeByKey(await navigator.storage.getDirectory(), key),
+      recordLocation: (historyId, fileId, key, retainedAt) =>
+        history.recordArtifactLocation(historyId, fileId, { kind: 'opfs', key, retainedAt }),
+      dropLocation: (historyId, fileId, key) => history.dropArtifactLocation(historyId, fileId, key),
+      log: L.log,
+      warn: L.warn,
+    });
+    if (report.repaired || report.collected || report.staleLocations) {
+      L.log('Retained-media reconciliation:', report);
+    }
+  } catch (e) {
+    L.warn('Retained-media reconciliation failed (non-fatal):', e);
+  }
+
+  // Session state outlives the worker; the tabs it names may not.
+  try {
+    const tabs = await chrome.tabs.query({});
+    const liveTabIds = tabs.map((tab) => tab.id).filter((id): id is number => id != null);
+    const dropped = await driveAuthLease.reconcile(liveTabIds);
+    if (dropped) L.log(`Dropped ${dropped} orphaned Drive playback rule(s)`);
+    const freed = await playbackLeases.reconcile(liveTabIds);
+    if (freed) L.log(`Freed retained media for ${freed} recording(s) whose player is gone`);
+  } catch (e) {
+    L.warn('Playback lease reconciliation failed (non-fatal):', e);
   }
 })();

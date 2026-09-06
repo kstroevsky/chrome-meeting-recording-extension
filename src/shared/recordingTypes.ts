@@ -85,6 +85,8 @@ export type UploadSummaryEntry = {
   driveFileId?: string;
   webViewLink?: string;
   error?: string;
+  /** Carried from capture so history can line the tracks up (see RecordingHistoryFile). */
+  startOffsetMs?: number;
 };
 
 export type UploadSummary = {
@@ -119,6 +121,8 @@ export type UploadJobFile = {
   driveFileId?: string;
   webViewLink?: string;
   error?: string;
+  /** Carried from capture so history can line the tracks up (see RecordingHistoryFile). */
+  startOffsetMs?: number;
 };
 
 /**

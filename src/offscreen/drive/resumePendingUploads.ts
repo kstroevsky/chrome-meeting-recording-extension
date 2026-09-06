@@ -6,6 +6,7 @@
  * state instead of silently uploading a file behind the background's back.
  */
 
+import { readFileByKey, removeByKey } from '../storage/opfsLayout';
 import type { UploadJob, UploadJobFile } from '../../shared/recording';
 import { DriveTarget, type DriveUploadResult } from '../DriveTarget';
 import { describeRuntimeError } from '../errors';
@@ -173,23 +174,11 @@ export function resumePendingDriveUploadsWithChrome(opts: {
     log: opts.log,
     warn: opts.warn,
     reportJob: opts.reportJob,
-    openOpfsFile: async (name) => {
-      try {
-        const root = await navigator.storage.getDirectory();
-        const handle = await root.getFileHandle(name);
-        return await handle.getFile();
-      } catch {
-        return null;
-      }
-    },
-    removeOpfsFile: async (name) => {
-      try {
-        const root = await navigator.storage.getDirectory();
-        await root.removeEntry(name);
-      } catch {
-        /* already gone */
-      }
-    },
+    // A marker holds the OPFS key that was current when it was written: a
+    // `staging/...` path today, a bare root filename before ADR-0006. Key-based
+    // resolution handles both without a migration pass.
+    openOpfsFile: async (key) => readFileByKey(await navigator.storage.getDirectory(), key),
+    removeOpfsFile: async (key) => removeByKey(await navigator.storage.getDirectory(), key),
     fixDuration: async (raw) => {
       const { default: fixWebmDuration } = await import('webm-duration-fix');
       return await fixWebmDuration(raw as File);

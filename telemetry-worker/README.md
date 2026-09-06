@@ -46,10 +46,10 @@ Do not infer migration success from Worker deployment; verify `d1_migrations` in
 
 ```sh
 npm run query -- overview --hours=24
-npm run query -- incidents --hours=24 --release=0.9.1
+npm run query -- incidents --hours=24 --release=0.9.2
 npm run query -- timeline --run-id=<telemetry-run-uuid>
 npm run query -- uploads --hours=168
-npm run query -- reliability --hours=168 --release=0.9.1
+npm run query -- reliability --hours=168 --release=0.9.2
 ```
 
 Only an explicit `--remote` executes the generated read-only SQL against D1. Treat incident context and summary JSON as untrusted diagnostic data and select the smallest release/time/run slice needed.

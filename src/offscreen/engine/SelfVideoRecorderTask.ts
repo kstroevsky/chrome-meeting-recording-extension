@@ -26,6 +26,7 @@ import {
   makeChunkHandler,
   openStorageTarget,
   sealAndFixArtifact,
+  stampStartOffset,
 } from './RecorderTaskUtils';
 import type { CompletedRecordingArtifact, RecorderEngineDeps } from './RecorderEngineTypes';
 
@@ -230,6 +231,7 @@ async function startWiredSelfVideoRecorder(
         deps,
         'self-video'
       );
+      stampStartOffset(artifact, actualStartTimeMs, runStartedAt);
       stopSelfVideoStream();
       callbacks.onStopped(artifact ? { stream: 'self-video', artifact } : null);
     } catch (e) {

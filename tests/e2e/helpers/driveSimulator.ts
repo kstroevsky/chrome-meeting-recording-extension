@@ -17,8 +17,20 @@ export type DriveRequestRecord = {
   sessionId: string | null;
 };
 
+/** One `alt=media` read, so a test can assert what the media stack asked for. */
+export type DriveMediaRead = {
+  fileId: string;
+  range: string | null;
+  start: number;
+  end: number;
+  status: number;
+  authorized: boolean;
+};
+
 export type DriveSimulatorStats = {
   profile: DriveSimulatorProfile;
+  /** Bytes served per file id, registered by the test. */
+  mediaReads: DriveMediaRead[];
   folderLookups: number;
   foldersCreated: number;
   sessionsCreated: number;
@@ -55,6 +67,9 @@ type MockResponse = {
   status: number;
   headers?: Record<string, string>;
   body?: string;
+  /** Set for `alt=media`; fulfilled as bytes rather than JSON. */
+  bytes?: Buffer;
+  contentType?: string;
   sessionId?: string | null;
   contentRange?: string | null;
 };
@@ -140,9 +155,60 @@ function createHandler(
       });
     }
 
+    // Playback: `files.get?alt=media`. Real Drive answers 206 with Content-Range
+    // and — measured 2026-09-04 — no redirect and no Accept-Ranges header, so
+    // this mirrors that rather than an idealised range server.
+    const mediaMatch = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
+    if (mediaMatch && method === 'GET' && url.searchParams.get('alt') === 'media') {
+      const id = decodeURIComponent(mediaMatch[1]);
+      const content = mediaContent.get(id);
+      const authorized = Boolean(authorization);
+      if (!content) {
+        return record({ status: 404, body: JSON.stringify({ error: { message: 'Unknown mock media' } }) });
+      }
+      /*
+       * Deliberately serves media whether or not the request carries a bearer
+       * token, and records which. Playwright's request interception fulfils a
+       * request before declarativeNetRequest's `modifyHeaders` runs, so the
+       * DNR-injected header is structurally unobservable here — 401ing would
+       * only assert a limitation of the harness. That the rule reaches the wire
+       * is proven against real Drive in `tests/spikes/drive-playback`; what a
+       * test *can* check here is the installed rule's shape and that the token
+       * never reaches the page.
+       */
+      const rangeHeader = header(request.headers, 'range');
+      const match = rangeHeader?.match(/^bytes=(\d*)-(\d*)$/);
+      const start = match && match[1] ? Number(match[1]) : 0;
+      const end = match && match[2] ? Number(match[2]) : content.length - 1;
+      const clampedEnd = Math.min(end, content.length - 1);
+      const partial = Boolean(match);
+      stats.mediaReads.push({
+        fileId: id, range: rangeHeader ?? null, start, end: clampedEnd,
+        status: partial ? 206 : 200, authorized: true,
+      });
+      return record({
+        status: partial ? 206 : 200,
+        bytes: content.subarray(start, clampedEnd + 1),
+        contentType: 'video/webm',
+        headers: partial
+          ? { 'Content-Range': `bytes ${start}-${clampedEnd}/${content.length}` }
+          : { 'Content-Length': String(content.length) },
+      });
+    }
+
     const metadataMatch = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
     if (metadataMatch && method === 'GET') {
       const id = decodeURIComponent(metadataMatch[1]);
+      // A file registered for playback has metadata too — the player verifies a
+      // file exists (and is not trashed) before asking for authorization.
+      const media = mediaContent.get(id);
+      if (media) {
+        stats.metadataReads += 1;
+        return record({
+          status: 200,
+          body: JSON.stringify({ id, name: mediaNames.get(id) ?? id, size: String(media.length), trashed: false }),
+        });
+      }
       const name = resources.get(id);
       stats.metadataReads += 1;
       return name == null
@@ -304,6 +370,15 @@ function createHandler(
   };
 }
 
+/** Registers bytes a test wants `alt=media` to serve for one file id. */
+export function setDriveMediaContent(fileId: string, bytes: Buffer, name = fileId): void {
+  mediaContent.set(fileId, bytes);
+  mediaNames.set(fileId, name);
+}
+
+const mediaContent = new Map<string, Buffer>();
+const mediaNames = new Map<string, string>();
+
 export async function installDriveSimulator(
   context: BrowserContext,
   profile: DriveSimulatorProfile,
@@ -319,6 +394,7 @@ export async function installDriveSimulator(
     retryResponses: 0,
     authFailures: 0,
     permanentFailures: 0,
+    mediaReads: [],
     metadataReads: 0,
     metadataUpdates: 0,
     activeUploads: 0,
@@ -340,8 +416,8 @@ export async function installDriveSimulator(
     await route.fulfill({
       status: response.status,
       headers: response.headers,
-      contentType: 'application/json',
-      body: response.body ?? '',
+      contentType: response.contentType ?? 'application/json',
+      ...(response.bytes ? { body: response.bytes } : { body: response.body ?? '' }),
     });
   });
   return stats;

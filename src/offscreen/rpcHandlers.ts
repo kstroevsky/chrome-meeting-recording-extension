@@ -20,6 +20,7 @@ import type {
 } from '../shared/protocol';
 import type { RecorderEngine } from './RecorderEngine';
 import { describeRuntimeError } from './errors';
+import { removeByKey } from './storage/opfsLayout';
 import type { DriveRenameResource } from './drive/DriveMetadataRenamer';
 
 export type RpcHandlerDeps = {
@@ -202,8 +203,7 @@ async function handleRevokeBlobUrl(
 
   if (typeof opfsFilename === 'string') {
     try {
-      const root = await navigator.storage.getDirectory();
-      await root.removeEntry(opfsFilename);
+      await removeByKey(await navigator.storage.getDirectory(), opfsFilename);
       deps.log('Cleaned up OPFS file', opfsFilename);
     } catch (e) {
       deps.error('Failed to cleanup OPFS file', describeRuntimeError(e));

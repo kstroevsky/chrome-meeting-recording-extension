@@ -216,3 +216,108 @@ button { -webkit-font-smoothing: antialiased; }
    the matched substring in gold. */
 .recording-day--match .recording-day__label { color: var(--muted); letter-spacing: .12em; }
 .recording-row__hit { color: var(--detail); font-weight: 600; }
+
+/* ── Player (design card f12: picture controls, no transcript rail) ──────────
+   The rail is absent rather than hidden when a recording has no transcript, so
+   the picture takes the full width. Colours on the picture are fixed rather
+   than tokenised: they sit on video, not on the page surface. */
+.player-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 22px; background: var(--overlay); }
+.player { width: min(760px, calc(100vw - 44px)); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--modal-shadow); overflow: hidden; }
+
+.player__header { display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 12px 0 8px; }
+.player__title { flex: 1; min-width: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player__divider { width: 1px; height: 16px; background: var(--divider); flex-shrink: 0; }
+.player__date { flex-shrink: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; color: var(--muted); letter-spacing: .1em; }
+.player__icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--detail); cursor: pointer; flex-shrink: 0; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__icon:hover { background: var(--field); }
+.player__close { flex-shrink: 0; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; transition: color 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__close:hover { color: var(--body); }
+
+.player__stage { position: relative; height: 376px; border-top: 1px solid var(--divider); background: #1c1a17; overflow: hidden; }
+.player__video { width: 100%; height: 100%; object-fit: contain; background: #1c1a17; display: block; }
+.player__scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 148px; pointer-events: none; background: linear-gradient(rgba(10, 9, 8, 0) 0%, rgba(10, 9, 8, .56) 48%, rgba(10, 9, 8, .88) 100%); }
+.player__stage--quiet .player__scrub, .player__stage--quiet .player__controls { opacity: .35; pointer-events: none; }
+/* `display` on a class beats the UA's [hidden] rule, so the attribute needs
+   restating — without this an empty scrim sits over the picture forever. */
+.player__status[hidden] { display: none; }
+.player__status { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; padding: 0 40px; text-align: center; font-size: 12.5px; line-height: 1.5; color: #e6ded0; background: rgba(10, 9, 8, .72); }
+
+/* Scrubber: a 16px hit zone around a 5px rail, so a note mark is hittable. */
+.player__scrub { position: absolute; left: 12px; right: 12px; bottom: 38px; }
+.player__hit { position: relative; display: block; height: 16px; cursor: pointer; }
+.player__hit:focus-visible { outline: 2px solid #f2ede3; outline-offset: 2px; border-radius: 3px; }
+.player__track { position: absolute; left: 0; right: 0; top: 5.5px; height: 5px; border-radius: 2px; background: rgba(250, 248, 244, .26); }
+.player__played { position: absolute; left: 0; top: 0; height: 100%; border-radius: 2px; background: #faf8f4; }
+.player__marks { position: absolute; inset: 0; }
+.player__mark { position: absolute; top: 0; height: 100%; border-radius: 2px; background: var(--detail); cursor: pointer; }
+.player__mark--unnamed { background: rgba(250, 248, 244, .5); }
+.player__playhead { position: absolute; top: -4px; width: 4px; height: 13px; margin-left: -2px; border-radius: 2px; background: #faf8f4; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+
+.player__controls { position: absolute; left: 12px; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.player__play { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: #faf8f4; color: #1c1a17; cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__play:hover { background: #fff; }
+.player__clock { flex: 1; min-width: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: #e6ded0; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.player__icon--on-picture { background: rgba(250, 248, 244, .1); color: #f2ede3; }
+.player__icon--on-picture:hover { background: rgba(250, 248, 244, .18); }
+.player__play:focus-visible, .player__icon:focus-visible, .player__close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.player__icon--on-picture:focus-visible { outline-color: #f2ede3; }
+.recording-row__play { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1), color 160ms cubic-bezier(.32, .72, 0, 1); }
+.recording-row__play:hover { background: var(--field); color: var(--detail); }
+.recording-row__play:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.player__selfcam { position: absolute; top: 12px; right: 12px; width: 104px; height: 59px; border-radius: 6px; object-fit: cover; background: #241f19; border: 1px solid rgba(250, 248, 244, .16); }
+.player__selfcam[hidden] { display: none; }
+
+/* FILES dropdown and the volume popup (design: header control + fader popup). */
+.player__popover { position: relative; display: inline-flex; flex-shrink: 0; }
+.player__files { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__files:hover { background: var(--field); }
+.player__files[hidden] { display: none; }
+.player__files-label { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600; letter-spacing: .08em; color: var(--detail); }
+.player__files-count { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: var(--faint); }
+.player__menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 4; min-width: 180px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 14px 30px -10px rgba(28, 26, 23, .28); }
+.player__menu[hidden] { display: none; }
+.player__popover--up .player__menu { top: auto; bottom: calc(100% + 6px); }
+.player__file { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
+.player__file:hover { background: var(--field); }
+.player__file-check { width: 13px; height: 13px; flex-shrink: 0; border: 1.5px solid var(--border-strong, var(--border)); border-radius: 4px; }
+.player__file--on .player__file-check { border-color: var(--detail); background: var(--detail); }
+.player__file-label { flex: 1; font-size: 12.5px; color: var(--body); }
+.player__file-format { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .12em; color: var(--faint); }
+.player__menu--volume { display: flex; gap: 14px; padding: 10px 12px; min-width: 0; }
+.player__fader { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.player__fader-level { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .1em; color: var(--muted); }
+.player__fader-track { position: relative; width: 6px; height: 92px; border-radius: 3px; background: var(--divider); cursor: grab; touch-action: none; }
+.player__fader-track:active { cursor: grabbing; }
+.player__fader-track:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.player__fader-fill { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 3px; background: var(--detail); }
+.player__fader-thumb { position: absolute; left: 50%; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--detail); box-shadow: 0 1px 3px rgba(28, 26, 23, .35); pointer-events: none; }
+.player__fader-name { border: 0; background: transparent; padding: 0; font-size: 10px; color: var(--muted); cursor: pointer; }
+.player__fader-name:hover { color: var(--body); }
+.player__fader-name--muted { color: var(--faint); text-decoration: line-through; }
+.player__video--hidden { visibility: hidden; }
+.player__menu--settings { min-width: 210px; padding: 8px; }
+.player__setting { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 30px; padding: 0 4px; }
+.player__setting-label { font-size: 12.5px; color: var(--body); }
+.player__setting-choices { display: inline-flex; gap: 4px; }
+.player__chip { height: 22px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; background: transparent; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .04em; color: var(--muted); cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__chip:hover { background: var(--field); }
+.player__chip--active { border-color: var(--detail); background: var(--selection); color: var(--detail); }
+.player__help { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; gap: 6px; padding: 26px 34px; overflow-y: auto; background: rgba(10, 9, 8, .86); }
+.player__help[hidden] { display: none; }
+.player__help-title { margin: 0 0 6px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .14em; color: #a49c8e; }
+.player__help-row { display: flex; align-items: baseline; gap: 14px; }
+.player__help-keys { flex: 0 0 84px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; color: #f2ede3; }
+.player__help-text { font-size: 12px; color: #d8d1c4; }
+
+/* Fullscreen (design f15): the picture takes the screen; chrome stays legible. */
+.player-overlay:fullscreen { padding: 0; background: #000; }
+.player-overlay:fullscreen .player { width: 100%; height: 100%; border: 0; border-radius: 0; display: flex; flex-direction: column; box-shadow: none; }
+.player-overlay:fullscreen .player__stage { flex: 1; height: auto; }
+.player-overlay:fullscreen .player__video { height: 100%; }
+/* Auxiliary tracks: audio is invisible, the camera renders as the PiP. */
+.player__aux { position: absolute; inset: 0; pointer-events: none; }
+.player__aux audio { display: none; }
+.player__aux .player__selfcam { pointer-events: auto; }
+.player__file--unavailable { cursor: default; opacity: .55; }
+.player__file--unavailable:hover { background: transparent; }
+.player__file--unavailable .player__file-format { color: var(--accent-dark); letter-spacing: .1em; }

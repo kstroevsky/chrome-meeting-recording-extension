@@ -117,6 +117,7 @@ describe('registerSaveHandler', () => {
       createPending: jest.fn(() => new Promise<void>((resolve) => { releaseHistory = resolve; })),
       localSaveSettled: jest.fn().mockResolvedValue(undefined),
       setDuration: jest.fn().mockResolvedValue(undefined),
+      recordArtifactLocation: jest.fn().mockResolvedValue(undefined),
     };
     registerSaveHandler(offscreen, L, history);
 
@@ -133,7 +134,122 @@ describe('registerSaveHandler', () => {
     await flushMicrotasks();
 
     expect(downloadFile).toHaveBeenCalledTimes(1);
-    expect(history.localSaveSettled).toHaveBeenCalledWith('recording:1', 'tab', 1, 'complete');
+    expect(history.localSaveSettled).toHaveBeenCalledWith('recording:1', 'tab', 1, 'complete', undefined, undefined);
+  });
+
+  /**
+   * ADR-0006: a promoted artifact is owned by the extension, so a completed
+   * download records a second replica instead of retiring the source. This is
+   * the ordering that makes a failed download survivable, and it is emphatically
+   * not "stop calling cleanup" — ownership moved out of staging first.
+   */
+  describe('retained artifacts', () => {
+    const historyDouble = () => ({
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+      recordArtifactLocation: jest.fn().mockResolvedValue(undefined),
+    });
+
+    it('persists the retained copy before the download is attempted', async () => {
+      const history = historyDouble();
+      registerSaveHandler(offscreen, L, history);
+
+      offscreen.onSaveRequested({
+        historyId: 'recording:1', stream: 'tab', filename: 'demo-recording.webm',
+        blobUrl: 'blob:1', opfsFilename: 'staging/demo-recording.webm',
+        retainedKey: 'library/recording%3A1/recording%3A1%3Atab.webm',
+      });
+      await flushMicrotasks();
+
+      expect(history.recordArtifactLocation).toHaveBeenCalledWith(
+        'recording:1',
+        'recording:1:tab',
+        { kind: 'opfs', key: 'library/recording%3A1/recording%3A1%3Atab.webm', retainedAt: expect.any(Number) },
+      );
+      // Ordering matters: the replica is on record before Chrome is asked to download.
+      expect(history.recordArtifactLocation.mock.invocationCallOrder[0])
+        .toBeLessThan((downloadFile as jest.Mock).mock.invocationCallOrder[0]);
+    });
+
+    it('keeps the retained file when the download completes, freeing only the URL', async () => {
+      registerSaveHandler(offscreen, L, historyDouble());
+
+      offscreen.onSaveRequested({
+        historyId: 'recording:1', stream: 'tab', filename: 'demo-recording.webm',
+        blobUrl: 'blob:1', opfsFilename: 'staging/demo-recording.webm',
+        retainedKey: 'library/recording%3A1/recording%3A1%3Atab.webm',
+      });
+      await flushMicrotasks();
+
+      expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1', undefined);
+    });
+
+    it('still retires a non-retained staging file on a confirmed download', async () => {
+      registerSaveHandler(offscreen, L, historyDouble());
+
+      // No retainedKey: legacy orphan recovery has no history row to own the bytes.
+      offscreen.onSaveRequested({
+        historyId: 'recording:1', stream: 'tab', filename: 'demo-recording.webm',
+        blobUrl: 'blob:1', opfsFilename: 'staging/demo-recording.webm',
+      });
+      await flushMicrotasks();
+
+      expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1', 'staging/demo-recording.webm');
+    });
+  });
+
+  /**
+   * ADR-0005: the notes sidecar rides a media stream, so `stream` alone cannot
+   * identify it. Dropping `kind` on this path made the sidecar collide with the
+   * media row — and `createPending` skips a known id, so the recording itself
+   * vanished from history.
+   */
+  it('gives the notes sidecar its own row instead of colliding with its media stream', async () => {
+    const history = {
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+      recordArtifactLocation: jest.fn().mockResolvedValue(undefined),
+    };
+    registerSaveHandler(offscreen, L, history);
+
+    // sortArtifacts delivers the sidecar first, then the media file.
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', kind: 'notes', filename: 'demo.vtt', blobUrl: 'blob:1' });
+    await flushMicrotasks();
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', filename: 'demo-recording.webm', blobUrl: 'blob:2' });
+    await flushMicrotasks();
+
+    expect(history.createPending).toHaveBeenNthCalledWith(
+      1,
+      'recording:1',
+      [{ id: 'recording:1:notes', stream: 'tab', kind: 'notes', filename: 'demo.vtt' }],
+      'local',
+    );
+    expect(history.createPending).toHaveBeenNthCalledWith(
+      2,
+      'recording:1',
+      [{ id: 'recording:1:tab', stream: 'tab', filename: 'demo-recording.webm' }],
+      'local',
+    );
+  });
+
+  it('settles each artifact against its own row, carrying kind through', async () => {
+    const history = {
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+      recordArtifactLocation: jest.fn().mockResolvedValue(undefined),
+    };
+    registerSaveHandler(offscreen, L, history);
+
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', kind: 'notes', filename: 'demo.vtt', blobUrl: 'blob:1' });
+    await flushMicrotasks();
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', filename: 'demo-recording.webm', blobUrl: 'blob:2' });
+    await flushMicrotasks();
+
+    expect(history.localSaveSettled).toHaveBeenNthCalledWith(1, 'recording:1', 'tab', 1, 'complete', undefined, 'notes');
+    expect(history.localSaveSettled).toHaveBeenNthCalledWith(2, 'recording:1', 'tab', 1, 'complete', undefined, undefined);
   });
 
   it('stamps the run duration onto the row it just created', async () => {
@@ -141,6 +257,7 @@ describe('registerSaveHandler', () => {
       createPending: jest.fn().mockResolvedValue(undefined),
       localSaveSettled: jest.fn().mockResolvedValue(undefined),
       setDuration: jest.fn().mockResolvedValue(undefined),
+      recordArtifactLocation: jest.fn().mockResolvedValue(undefined),
     };
     const runDurationMs = jest.fn().mockReturnValue(63_000);
     registerSaveHandler(offscreen, L, history, runDurationMs);
@@ -160,6 +277,7 @@ describe('registerSaveHandler', () => {
       createPending: jest.fn().mockResolvedValue(undefined),
       localSaveSettled: jest.fn().mockResolvedValue(undefined),
       setDuration: jest.fn().mockResolvedValue(undefined),
+      recordArtifactLocation: jest.fn().mockResolvedValue(undefined),
     };
     registerSaveHandler(offscreen, L, history, () => undefined);
 

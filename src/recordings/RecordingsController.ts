@@ -1,8 +1,10 @@
 import { sendToBackground } from '../shared/messages';
+import { PlayerController } from './player/PlayerController';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
 import { RecordingsView } from './RecordingsView';
 
 export class RecordingsController {
+  private player: PlayerController | null = null;
   private entries: RecordingHistoryEntry[] = [];
   private nextCursor: RecordingHistoryCursor | undefined;
   private loadingMore = false;
@@ -33,7 +35,7 @@ export class RecordingsController {
   }
 
   async remove(id: string) {
-    if (!confirm('Remove this item from recording history? Files will not be deleted.')) return;
+    if (!confirm('Remove this item from recording history? Its in-extension playback copy is deleted; your downloaded and Google Drive files are not.')) return;
     try {
       const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
       if (!response.ok) throw new Error(response.error);
@@ -45,7 +47,7 @@ export class RecordingsController {
   async removeMany(ids: string[]) {
     const uniqueIds = [...new Set(ids)].filter((id) => this.entries.some((entry) => entry.id === id));
     if (!uniqueIds.length) return;
-    if (!confirm(`Remove ${uniqueIds.length} item${uniqueIds.length === 1 ? '' : 's'} from recording history? Files will not be deleted.`)) return;
+    if (!confirm(`Remove ${uniqueIds.length} item${uniqueIds.length === 1 ? '' : 's'} from recording history? Their in-extension playback copies are deleted; your downloaded and Google Drive files are not.`)) return;
     try {
       for (const id of uniqueIds) {
         const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
@@ -61,6 +63,35 @@ export class RecordingsController {
       const response = await sendToBackground({ type: 'OPEN_RECORDING_HISTORY_FILE', recordingId, fileId });
       if (!response.ok) throw new Error(response.error);
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
+  }
+
+  /**
+   * Opens the playback modal. The player is a modal on this page rather than a
+   * page of its own, so it shares this document's tab — which is what lets
+   * background scope a Drive authorization to `sender.tab.id`.
+   */
+  async play(recordingId: string) {
+    try {
+      this.player?.close();
+      const player = new PlayerController({
+        getManifest: async (id) => {
+          const response = await sendToBackground({ type: 'GET_RECORDING_PLAYBACK_MANIFEST', recordingId: id });
+          return response.ok ? response.manifest : undefined;
+        },
+        prepareDriveSource: async (id, fileId, refresh) => {
+          const response = await sendToBackground(refresh
+            ? { type: 'REFRESH_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId }
+            : { type: 'PREPARE_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId, source: 'drive' });
+          return response.ok ? response.url : undefined;
+        },
+        warn: (...args) => console.warn('[recordings]', ...args),
+      });
+      this.player = player;
+      document.body.append(player.element);
+      await player.open(recordingId);
+    } catch (error) {
+      this.view.showError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private async refresh() {

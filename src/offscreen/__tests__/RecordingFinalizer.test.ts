@@ -469,4 +469,183 @@ describe('RecordingFinalizer', () => {
     expect(summary?.localFallbacks).toEqual([{ stream: 'tab', filename: 'tab.webm', bytes: 4, error: expect.any(String) }]);
     expect(deps.requestSave).not.toHaveBeenCalled();
   });
+
+  /**
+   * ADR-0006: ownership moves from staging into the retained library *before*
+   * the artifact is handed to Downloads, so a failed delivery still leaves a
+   * playable recording.
+   */
+  describe('retention', () => {
+    const retainedFile = () => new File(['retained-bytes'], 'retained.webm', { type: 'video/webm' });
+    const promoted = (key: string) => ({ promote: jest.fn().mockResolvedValue({ key, file: retainedFile() }) });
+
+    it('promotes before requesting the save, and reports where it landed', async () => {
+      const retainedMedia = promoted('library/recording%3A1/recording%3A1%3Atab.webm');
+      deps.retainedMedia = retainedMedia;
+      const tab = { ...makeArtifact('tab.webm'), opfsFilename: 'staging/tab.webm' };
+
+      await finalizer.finalize({
+        artifacts: [{ stream: 'tab', artifact: tab as any }],
+        storageMode: 'local',
+        historyId: 'recording:1',
+      } as any);
+
+      expect(retainedMedia.promote).toHaveBeenCalledWith(
+        'staging/tab.webm', 'recording:1', 'recording:1:tab', 'tab.webm',
+      );
+      expect(deps.requestSave).toHaveBeenCalledWith(expect.objectContaining({
+        retainedKey: 'library/recording%3A1/recording%3A1%3Atab.webm',
+      }));
+      expect(retainedMedia.promote.mock.invocationCallOrder[0])
+        .toBeLessThan(deps.requestSave.mock.invocationCallOrder[0]);
+    });
+
+    it('builds the download URL from the retained File, not the moved-out staging one', async () => {
+      const file = retainedFile();
+      deps.retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/r/x.webm', file }) };
+      const stale = { ...makeArtifact('tab.webm'), opfsFilename: 'staging/tab.webm' };
+
+      await finalizer.finalize({
+        artifacts: [{ stream: 'tab', artifact: stale as any }],
+        storageMode: 'local',
+        historyId: 'recording:1',
+      } as any);
+
+      // Identity, not structural equality: two empty Files compare equal.
+      const passed = (URL.createObjectURL as jest.Mock).mock.calls[0][0];
+      expect(passed).toBe(file);
+      expect(passed).not.toBe(stale.file);
+    });
+
+    it('keys the notes sidecar separately from its media stream', async () => {
+      const retainedMedia = promoted('library/recording%3A1/recording%3A1%3Anotes.vtt');
+      deps.retainedMedia = retainedMedia;
+      const notes = { ...makeArtifact('notes.vtt'), opfsFilename: 'staging/notes.vtt' };
+
+      await finalizer.finalize({
+        artifacts: [{ stream: 'tab', kind: 'notes', artifact: notes as any }],
+        storageMode: 'local',
+        historyId: 'recording:1',
+      } as any);
+
+      expect(retainedMedia.promote).toHaveBeenCalledWith(
+        'staging/notes.vtt', 'recording:1', 'recording:1:notes', 'notes.vtt',
+      );
+    });
+
+    it('delivers without a retained copy when promotion fails, rather than losing the download', async () => {
+      deps.retainedMedia = { promote: jest.fn().mockRejectedValue(new Error('quota')) };
+      const tab = { ...makeArtifact('tab.webm'), opfsFilename: 'staging/tab.webm' };
+
+      await finalizer.finalize({
+        artifacts: [{ stream: 'tab', artifact: tab as any }],
+        storageMode: 'local',
+        historyId: 'recording:1',
+      } as any);
+
+      expect(deps.requestSave).toHaveBeenCalledWith(expect.not.objectContaining({ retainedKey: expect.anything() }));
+      expect(deps.warn).toHaveBeenCalledWith(
+        'Could not retain a playback copy; delivering without one', 'tab.webm', expect.anything(),
+      );
+    });
+
+    it('does not promote when no history row owns the bytes', async () => {
+      // Legacy orphan recovery delivers without a history aggregate; those files
+      // stay temporary and are retired by the existing download-success cleanup.
+      const retainedMedia = promoted('unused');
+      deps.retainedMedia = retainedMedia;
+      const tab = { ...makeArtifact('tab.webm'), opfsFilename: 'staging/tab.webm' };
+
+      await finalizer.finalize({ artifacts: [{ stream: 'tab', artifact: tab as any }], storageMode: 'local' } as any);
+
+      expect(retainedMedia.promote).not.toHaveBeenCalled();
+      expect(deps.requestSave).toHaveBeenCalledWith(expect.not.objectContaining({ retainedKey: expect.anything() }));
+    });
+  });
+
+  /**
+   * ADR-0006 crash boundaries on the Drive path. A Drive failure must leave the
+   * user with *both* a retained playback copy and a Downloads copy; a Drive
+   * success must not consume local disk forever.
+   */
+  describe('Drive delivery boundaries', () => {
+    const withFolder = () => jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    const failUpload = () => jest.spyOn(DriveTarget.prototype, 'upload').mockRejectedValue(new DOMException('network timeout', 'AbortError'));
+    const staged = (name: string) => ({ ...makeArtifact(name), opfsFilename: `staging/${name}` });
+
+    it('promotes the failed artifact before falling back to a local download', async () => {
+      withFolder(); failUpload();
+      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Atab.webm', file: new File(['retained'], 'r.webm') }) };
+      deps.retainedMedia = retainedMedia;
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'tab', artifact: staged('tab.webm') as any }],
+      } as any);
+
+      expect(retainedMedia.promote).toHaveBeenCalledWith('staging/tab.webm', 'recording:1', 'recording:1:tab', 'tab.webm');
+      // Both replicas: the recording stays playable even though Drive lost it.
+      expect(deps.requestSave).toHaveBeenCalledWith(expect.objectContaining({
+        retainedKey: 'library/recording%3A1/recording%3A1%3Atab.webm',
+      }));
+      expect(retainedMedia.promote.mock.invocationCallOrder[0])
+        .toBeLessThan(deps.requestSave.mock.invocationCallOrder[0]);
+    });
+
+    it('does not retain a local copy when the Drive upload succeeds', async () => {
+      withFolder();
+      jest.spyOn(DriveTarget.prototype, 'upload').mockResolvedValue({ id: 'drive-1', webViewLink: 'https://drive.example/1' } as any);
+      const retainedMedia = { promote: jest.fn() };
+      deps.retainedMedia = retainedMedia;
+      const tab = staged('tab.webm');
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'tab', artifact: tab as any }],
+      } as any);
+
+      // There is no reason to consume local disk permanently for every Drive
+      // recording, so the staging artifact is cleaned rather than promoted.
+      expect(retainedMedia.promote).not.toHaveBeenCalled();
+      expect(deps.requestSave).not.toHaveBeenCalled();
+      expect(tab.cleanup).toHaveBeenCalled();
+    });
+
+    it('does not promote on a retry that suppresses the duplicate download', async () => {
+      withFolder(); failUpload();
+      const retainedMedia = { promote: jest.fn() };
+      deps.retainedMedia = retainedMedia;
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        skipLocalFallback: true,
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'tab', artifact: staged('tab.webm') as any }],
+      } as any);
+
+      // The original failure already retained and downloaded it.
+      expect(retainedMedia.promote).not.toHaveBeenCalled();
+      expect(deps.requestSave).not.toHaveBeenCalled();
+    });
+
+    it('still falls back locally when the shared Drive setup dies before any upload', async () => {
+      jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockRejectedValue(new Error('folder lookup failed'));
+      const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Amic.webm', file: new File(['retained'], 'r.webm') }) };
+      deps.retainedMedia = retainedMedia;
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        historyId: 'recording:1',
+        artifacts: [{ stream: 'mic', artifact: staged('mic.webm') as any }],
+      } as any);
+
+      expect(retainedMedia.promote).toHaveBeenCalledWith('staging/mic.webm', 'recording:1', 'recording:1:mic', 'mic.webm');
+      expect(deps.requestSave).toHaveBeenCalledWith(expect.objectContaining({
+        retainedKey: 'library/recording%3A1/recording%3A1%3Amic.webm',
+      }));
+    });
+  });
 });
+

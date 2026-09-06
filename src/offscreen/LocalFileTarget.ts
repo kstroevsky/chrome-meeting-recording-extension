@@ -7,6 +7,7 @@
  */
 
 import type { SealedStorageFile, StorageTarget } from './RecorderEngine';
+import { fileHandleForKey, removeByKey, stagingKey } from './storage/opfsLayout';
 import type { RecordingStream } from '../shared/recording';
 import { debugPerf, nowMs, roundMs } from '../shared/perf';
 
@@ -40,7 +41,7 @@ export class LocalFileTarget implements StorageTarget {
     const startedAt = nowMs();
     try {
       const root = await navigator.storage.getDirectory();
-      const fileHandle = await root.getFileHandle(filename, { create: true });
+      const fileHandle = (await fileHandleForKey(root, stagingKey(filename), { create: true })) as FileSystemFileHandle;
       const writable = await fileHandle.createWritable();
       debugPerf(console.log, 'storage', 'opfs_opened', {
         stream,
@@ -112,7 +113,7 @@ export class LocalFileTarget implements StorageTarget {
       filename: this.filename,
       file,
       mimeType: this.mimeType,
-      opfsFilename: this.filename,
+      opfsFilename: stagingKey(this.filename),
       cleanup: async () => {
         try {
           await this.discardInternal();
@@ -129,8 +130,7 @@ export class LocalFileTarget implements StorageTarget {
   private async discardInternal(): Promise<void> {
     const startedAt = nowMs();
     try {
-      const root = await navigator.storage.getDirectory();
-      await root.removeEntry(this.filename);
+      await removeByKey(await navigator.storage.getDirectory(), stagingKey(this.filename));
     } catch (e: any) {
       if (e?.name !== 'NotFoundError') throw e;
     } finally {

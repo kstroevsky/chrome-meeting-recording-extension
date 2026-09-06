@@ -21,6 +21,7 @@ export type RecordingsViewCallbacks = {
   remove: (id: string) => void;
   removeMany: (ids: string[]) => void;
   openLocal: (recordingId: string, fileId: string) => void;
+  play: (recordingId: string) => void;
   loadMore: () => void;
 };
 
@@ -347,10 +348,15 @@ export class RecordingsView {
     const destination = onDrive ? cloudIcon() : onLocal ? diskIcon() : $('span');
     destination.setAttribute('title', onDrive && onLocal ? 'Google Drive + local disk' : onDrive ? 'Google Drive' : 'Local disk');
     const time = $('span', 'recording-row__meta recording-row__time'); time.textContent = formatTime(entry.createdAt);
+    const play = document.createElement('button');
+    play.className = 'recording-row__play'; play.type = 'button';
+    play.title = 'Play recording'; play.setAttribute('aria-label', `Play ${entry.name}`);
+    play.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M3 1.8l7 4.2-7 4.2z"/></svg>';
+    play.addEventListener('click', (event) => { event.stopPropagation(); this.callbacks.play(entry.id); });
     const remove = document.createElement('button');
     remove.className = 'recording-row__remove'; remove.type = 'button'; remove.title = 'Remove from history'; remove.setAttribute('aria-label', `Remove ${entry.name} from history`); remove.textContent = '×';
     remove.addEventListener('click', (event) => { event.stopPropagation(); this.callbacks.remove(entry.id); });
-    row.append(box, dot, name, notes, duration, size, destination, time, remove);
+    row.append(box, dot, name, notes, duration, size, destination, time, play, remove);
     return row;
   }
 

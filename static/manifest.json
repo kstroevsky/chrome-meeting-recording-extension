@@ -9,6 +9,8 @@
     "tabCapture",
     "offscreen",
     "storage",
+    "unlimitedStorage",
+    "declarativeNetRequestWithHostAccess",
     "tabs",
     "desktopCapture",
     "identity",

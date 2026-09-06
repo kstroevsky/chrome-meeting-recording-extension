@@ -115,6 +115,7 @@ export class UploadManager {
         filename: artifact.filename,
         status: 'uploading',
         bytes: artifact.file.size,
+        ...(artifact.startOffsetMs != null ? { startOffsetMs: artifact.startOffsetMs } : {}),
       })),
       startedAt: this.now(),
     };

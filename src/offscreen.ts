@@ -13,6 +13,7 @@
  *   - Popup state is observational only; uploads continue even if popup closes.
  */
 
+import { RetainedMediaStore } from './offscreen/storage/RetainedMediaStore';
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
 import { addStorageChangedListener, hasLocalStorageArea } from './platform/chrome/storage';
 import { getBuildId } from './shared/build';
@@ -229,8 +230,8 @@ function getPort(): chrome.runtime.Port {
 
 // ─── State helpers ───────────────────────────────────────────────────────────
 
-function requestSave({ historyId, stream, filename, blobUrl, opfsFilename }: import('./offscreen/RecordingFinalizer').LocalSaveRequest) {
-  getPort().postMessage({ type: 'OFFSCREEN_SAVE', historyId: historyId ?? '', stream, filename, blobUrl, opfsFilename });
+function requestSave({ historyId, stream, kind, retainedKey, filename, startOffsetMs, blobUrl, opfsFilename }: import('./offscreen/RecordingFinalizer').LocalSaveRequest) {
+  getPort().postMessage({ type: 'OFFSCREEN_SAVE', historyId: historyId ?? '', stream, ...(kind ? { kind } : {}), ...(retainedKey ? { retainedKey } : {}), filename, ...(startOffsetMs != null ? { startOffsetMs } : {}), blobUrl, opfsFilename });
 }
 
 async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
@@ -310,6 +311,10 @@ const finalizer = new RecordingFinalizer({
   getDriveToken,
   reportWarning: controller.reportWarning,
   pendingUploads: pendingUploadStore,
+  retainedMedia: new RetainedMediaStore({
+    getRoot: () => navigator.storage.getDirectory(),
+    warn: L.warn,
+  }),
 });
 
 // Background Drive-upload jobs (ADR-0004): a stopped recording's upload is detached
