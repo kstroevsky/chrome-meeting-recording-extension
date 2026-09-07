@@ -67,3 +67,24 @@ test.describe('local folders (integration)', () => {
     }
   });
 });
+
+test.describe('local playback storage (integration)', () => {
+  test('reports what the retained library costs and whether it can be evicted', async ({}, testInfo) => {
+    const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
+    try {
+      const page = await harness.context.newPage();
+      await page.goto(`chrome-extension://${harness.extensionId}/settings.html`, {
+        waitUntil: 'domcontentloaded',
+      });
+
+      // A real figure, not the "Checking…" placeholder and not "Unavailable".
+      const usage = page.locator('#storage-usage');
+      await expect(usage).not.toHaveText('Checking…', { timeout: 20_000 });
+      await expect(usage).not.toHaveText('Unavailable');
+      await expect(usage).toContainText(/\d/);
+      await expect(usage.locator('small')).toContainText(/used by this extension|unavailable/i);
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+});
