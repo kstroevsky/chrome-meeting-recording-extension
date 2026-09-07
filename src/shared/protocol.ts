@@ -107,6 +107,8 @@ export type PopupFileRecordingToDestination = {
   presetId: string | null;
 };
 /** Recordings whose bytes are in the library but not yet written to Downloads. */
+/** Storage the retained library occupies, and whether it is safe from eviction. */
+export type PopupGetStorageUsage = { type: 'GET_STORAGE_USAGE' };
 export type PopupListPendingLocalDeliveries = { type: 'LIST_PENDING_LOCAL_DELIVERIES' };
 /** Writes a deferred local recording into the chosen folder; null means Downloads itself. */
 export type PopupDeliverLocalRecording = {
@@ -178,6 +180,7 @@ export type PopupToBg =
   | PopupListRecordingNotations
   | PopupGetPlaybackManifest
   | PopupFileRecordingToDestination
+  | PopupGetStorageUsage
   | PopupListPendingLocalDeliveries
   | PopupDeliverLocalRecording
   | PopupPreparePlaybackSource
@@ -213,6 +216,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupUpdateActiveNotation ? NotationListResult :
   T extends PopupRemoveActiveNotation ? NotationListResult :
   T extends PopupListRecordingNotations ? NotationListResult :
+  T extends PopupGetStorageUsage
+    ? { ok: true; usage: import('../background/storageDurability').StorageUsage } | { ok: false; error: string } :
   T extends PopupListPendingLocalDeliveries
     ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :

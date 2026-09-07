@@ -36,6 +36,7 @@ import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
 import { pendingLocalDeliveries } from './shared/recordingHistory';
+import { ensurePersistentStorage, readStorageUsage } from './background/storageDurability';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
 import { RecordingNotationRepository } from './background/RecordingNotationRepository';
 import { RecordingNotationService } from './background/RecordingNotationService';
@@ -454,7 +455,12 @@ const controller = new RecordingController({ L, offscreen, session, telemetry, n
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
   playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination,
-  listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording, driveAuthLease, telemetry });
+  listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
+  storageUsage: () => readStorageUsage(async () => {
+    const files = await listLibraryFiles(await navigator.storage.getDirectory());
+    return files.reduce((total, file) => total + file.sizeBytes, 0);
+  }),
+  driveAuthLease, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 
@@ -586,6 +592,9 @@ const sessionHydration = (async () => {
   } catch (e) {
     L.warn('Retained-media reconciliation failed (non-fatal):', e);
   }
+
+  // Ask before anything is retained, so the first library file is already safe.
+  await ensurePersistentStorage(L.log, L.warn);
 
   // A folder prompt nobody answered must not cost the user their file. Gated on
   // the library existing so a profile that has never retained anything is not

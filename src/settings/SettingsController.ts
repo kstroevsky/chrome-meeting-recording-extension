@@ -21,6 +21,9 @@ import {
 import { getRecordingFormatCapabilities, type RecordingFormatCapabilities } from '../shared/recordingFormats';
 import { applyThemePreference } from '../shared/theme';
 import { FolderPresetList } from './FolderPresetList';
+import { formatBytes } from '../shared/format';
+import { sendToBackground } from '../shared/messages';
+import { ensurePersistentStorage } from '../background/storageDurability';
 
 export type SettingsElements = {
   anonymousDiagnostics: HTMLInputElement | null;
@@ -43,6 +46,7 @@ export type SettingsElements = {
   localFoldersList?: HTMLElement | null;
   localFolderAdd?: HTMLButtonElement | null;
   localFoldersNote?: HTMLElement | null;
+  storageUsage?: HTMLElement | null;
   micEchoCancellation: HTMLInputElement | null;
   micNoiseSuppression: HTMLInputElement | null;
   micAutoGain: HTMLInputElement | null;
@@ -63,6 +67,41 @@ type SettingsDocument = Document & {
 
 export class SettingsController {
   private readonly formatCapabilities: RecordingFormatCapabilities = getRecordingFormatCapabilities();
+  /**
+   * Reports what the retained library costs, and whether it is safe from
+   * eviction. Read once on open rather than watched: it changes when a
+   * recording is made, not while this page is sitting there.
+   */
+  private async showStorageUsage(): Promise<void> {
+    const target = this.el.storageUsage;
+    if (!target) return;
+    try {
+      // Asked again from a document. The service worker asks at startup, but a
+      // worker is not a browsing context and Chrome may decline it there; this
+      // page is a real one, so it is the better place to be granted.
+      await ensurePersistentStorage(() => {}, () => {});
+      const response = await sendToBackground({ type: 'GET_STORAGE_USAGE' });
+      if (!response.ok) throw new Error(response.error);
+      const { retainedBytes, usageBytes, quotaBytes, persisted } = response.usage;
+      const detail = usageBytes != null && quotaBytes != null
+        ? `${formatBytes(usageBytes)} of ${formatBytes(quotaBytes)} used by this extension in total`
+        : 'Total usage is unavailable in this browser';
+      target.textContent = formatBytes(retainedBytes);
+      const small = document.createElement('small');
+      small.textContent = detail;
+      target.append(small);
+      // Deliberately not surfaced as a warning. Chrome refuses `persist()` for
+      // this extension in every context tried, yet extension origins may be
+      // exempt from eviction through `unlimitedStorage` anyway — so telling the
+      // user their recordings are at risk would be an unverified claim. The
+      // grant is still requested; the state is logged, not shown, until someone
+      // establishes which is true on a real profile.
+      void persisted;
+    } catch {
+      target.textContent = 'Unavailable';
+    }
+  }
+
   /**
    * Two lists, edited in memory and written on save like every other control.
    * Ids are minted once and never reused, so renaming a folder cannot silently
@@ -95,6 +134,7 @@ export class SettingsController {
     this.wireConsoleControls();
     this.driveFolders.wire();
     this.localFolders.wire();
+    void this.showStorageUsage();
 
     try {
       const stored = await loadExtensionSettingsFromStorage();

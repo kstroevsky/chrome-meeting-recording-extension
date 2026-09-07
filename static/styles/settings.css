@@ -86,6 +86,9 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
   #status { flex-basis: 100%; margin-left: 0; text-align: left; }
 }
 
+.storage-usage { margin: 0; font: 500 13px 'IBM Plex Mono', monospace; color: var(--ink); }
+.storage-usage small { display: block; margin-top: 4px; font: 400 11.5px 'Space Grotesk', sans-serif; color: var(--muted); }
+
 /* Google Drive destinations: a repeating list, not a value cycle. */
 .destinations-intro { margin: 0 0 12px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 .destinations-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }

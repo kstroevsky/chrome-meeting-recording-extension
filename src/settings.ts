@@ -33,6 +33,7 @@ const el: SettingsElements = {
   localFoldersList: document.getElementById('local-folders-list'),
   localFolderAdd: document.getElementById('local-folder-add') as HTMLButtonElement | null,
   localFoldersNote: document.getElementById('local-folders-note'),
+  storageUsage: document.getElementById('storage-usage'),
   destinationAdd: document.getElementById('destination-add') as HTMLButtonElement | null,
   destinationsNote: document.getElementById('destinations-note'),
   micEchoCancellation: document.getElementById('mic-echo-cancellation') as HTMLInputElement | null,
