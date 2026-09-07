@@ -34,6 +34,8 @@ export type RpcHandlerDeps = {
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
   retryUpload: (jobId: string) => boolean;
+  /** Reads retained library bytes back so a deferred delivery can be written. */
+  openRetained?: (key: string) => Promise<File | null>;
   /** Cancels an active/queued upload and starts local fallback downloads. */
   cancelUpload: (jobId: string) => boolean;
   acknowledgeUploadState: (jobId: string) => Promise<void>;
@@ -159,6 +161,16 @@ async function handleOffscreenSetPaused(
   return { ok: true };
 }
 
+async function handleOffscreenOpenRetained(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_OPEN_RETAINED' }>,
+  deps: RpcHandlerDeps
+): Promise<{ ok: boolean; blobUrl?: string; error?: string }> {
+  if (typeof msg.key !== 'string' || !msg.key) return { ok: false, error: 'Missing key' };
+  const file = await deps.openRetained?.(msg.key);
+  if (!file) return { ok: false, error: 'Those bytes are no longer in the library' };
+  return { ok: true, blobUrl: URL.createObjectURL(file) };
+}
+
 async function handleOffscreenRetryUpload(
   msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_RETRY_UPLOAD' }>,
   deps: RpcHandlerDeps
@@ -230,6 +242,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_SET_CAMERA_MUTED: (msg) => handleOffscreenSetCameraMuted(msg, deps),
       OFFSCREEN_SET_INPUT_DEVICE: (msg) => handleOffscreenSetInputDevice(msg, deps),
       OFFSCREEN_SET_PAUSED: (msg) => handleOffscreenSetPaused(msg, deps),
+      OFFSCREEN_OPEN_RETAINED: (msg) => handleOffscreenOpenRetained(msg, deps),
       OFFSCREEN_RETRY_UPLOAD: (msg) => handleOffscreenRetryUpload(msg, deps),
       OFFSCREEN_CANCEL_UPLOAD: (msg) => handleOffscreenCancelUpload(msg, deps),
       OFFSCREEN_RENAME_DRIVE_RESOURCES: (msg) => handleOffscreenRenameDriveResources(msg, deps),

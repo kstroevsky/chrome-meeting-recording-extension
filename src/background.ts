@@ -14,6 +14,9 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
+import { DriveDestinationFiler } from './background/DriveDestinationFiler';
+import { loadExtensionSettingsFromStorage } from './shared/settings';
+import { DRIVE_ROOT_FOLDER_NAME } from './offscreen/drive/constants';
 import { DriveArtifactResolver } from './background/DriveArtifactResolver';
 import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
 import { addTabRemovedListener } from './platform/chrome/tabs';
@@ -32,6 +35,8 @@ import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
+import { pendingLocalDeliveries, type RecordingHistoryCursor } from './shared/recordingHistory';
+import { ensurePersistentStorage, readStorageUsage } from './background/storageDurability';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
 import { RecordingNotationRepository } from './background/RecordingNotationRepository';
 import { RecordingNotationService } from './background/RecordingNotationService';
@@ -106,10 +111,17 @@ const driveAuthLease = new DrivePlaybackAuthLeaseManager({
   warn: L.warn,
 });
 /** One authenticated Drive call, shared by metadata and folder listing. */
-const driveJson = async (url: string): Promise<{ status: number; body: any }> => {
+const driveJson = async (url: string, init: RequestInit = {}): Promise<{ status: number; body: any }> => {
   const res = await fetchDriveTokenWithFallback();
   if (!res.ok) throw new Error(res.error);
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${res.token}` } });
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${res.token}`,
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init.headers,
+    },
+  });
   return { status: response.status, body: response.status === 204 ? null : await response.json().catch(() => null) };
 };
 const driveArtifacts = new DriveArtifactResolver({
@@ -130,6 +142,60 @@ const driveArtifacts = new DriveArtifactResolver({
   },
   warn: L.warn,
 });
+const driveFolders = new DriveDestinationFiler({
+  getFolder: async (id) => {
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,name,parents`);
+    return status === 200 ? body : null;
+  },
+  findRootFolder: async (name) => {
+    const query = encodeURIComponent(
+      `name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder'`
+      + " and 'root' in parents and trashed = false");
+    const { status, body } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,parents)&pageSize=1`);
+    return status === 200 ? (body?.files?.[0] ?? null) : null;
+  },
+  createRootFolder: async (name) => {
+    const { status, body } = await driveJson('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' }),
+    });
+    if (status !== 200) throw new Error(`Could not create the destination folder (${status})`);
+    return body;
+  },
+  moveFolder: async (folderId, addParent, removeParents) => {
+    const params = new URLSearchParams({ addParents: addParent, fields: 'id,parents' });
+    if (removeParents.length) params.set('removeParents', removeParents.join(','));
+    const { status } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?${params}`,
+      { method: 'PATCH', body: '{}' });
+    if (status !== 200) throw new Error(`Could not move the recording folder (${status})`);
+  },
+  warn: L.warn,
+});
+
+/**
+ * Files a recording under a destination, or unfiles it back to the built-in
+ * folder. Drive first, history second: a history row claiming a destination the
+ * move never reached would be a lie.
+ */
+const fileRecordingToDestination = async (recordingId: string, presetId: string | null) => {
+  const entry = await historyRepository.get(recordingId);
+  if (!entry || entry.deletedAt) throw new Error('This recording is no longer available');
+  if (!entry.driveFolderId) throw new Error('This recording has no Google Drive folder to move');
+
+  const settings = await loadExtensionSettingsFromStorage();
+  const preset = presetId
+    ? settings.storage.driveFolderPresets.find((candidate) => candidate.id === presetId)
+    : undefined;
+  if (presetId && !preset) throw new Error('That destination no longer exists');
+
+  const result = await driveFolders.file(entry.driveFolderId, preset?.name ?? DRIVE_ROOT_FOLDER_NAME);
+  if (result.status === 'missing') throw new Error('This recording\u2019s folder is no longer in Google Drive');
+  await history.setDriveDestination(recordingId, presetId);
+};
+
 const telemetry = new TelemetryRuntime();
 
 
@@ -307,14 +373,110 @@ const phaseWatchdog = createPhaseWatchdog({
   },
 });
 
-registerSaveHandler(offscreen, L, history, (historyId) => session.runDurationMs(historyId));
+const { deliverDeferred } = registerSaveHandler(
+  offscreen, L, history,
+  (historyId) => session.runDurationMs(historyId),
+  async () => {
+    try {
+      return (await loadExtensionSettingsFromStorage()).storage.localFolderPresets.length;
+    } catch {
+      return 0;
+    }
+  },
+  () => { void scheduleAbandonedDeliverySweep(); },
+);
+
+/**
+ * How long a folder prompt may go unanswered before the recording is written to
+ * the download directory anyway.
+ *
+ * A prompt can be abandoned in a way nothing else notices: the popup was open
+ * when we asked, so we deferred, and then it closed without answering. No
+ * further broadcast is coming, and the startup reconciler runs once per browser
+ * session — so without this the file would wait for a browser restart. Chrome
+ * clamps sub-minute alarms, so the real delay is about a minute; that is a wait,
+ * not a loss, and answering the prompt is always faster.
+ */
+const ABANDONED_DELIVERY_ALARM = 'local-delivery-timeout';
+
+const scheduleAbandonedDeliverySweep = async (): Promise<void> => {
+  try {
+    await chrome.alarms?.create?.(ABANDONED_DELIVERY_ALARM, { delayInMinutes: 0.5 });
+  } catch (error) {
+    L.warn('Could not schedule the local delivery sweep:', error);
+  }
+};
+
+chrome.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm.name === ABANDONED_DELIVERY_ALARM) void deliverAbandonedLocalRecordings();
+});
+
+/** Entries whose bytes are in the library but not yet written to Downloads. */
+const listPendingLocalDeliveries = async (): Promise<{ id: string; name: string }[]> => {
+  // Paged to exhaustion: this is reconciliation, and a recording past an
+  // arbitrary cut-off would simply never be written.
+  const pending: { id: string; name: string }[] = [];
+  let cursor: RecordingHistoryCursor | undefined;
+  for (let page = 0; page < 200; page += 1) {
+    const result = await historyRepository.listPage({ limit: 100, ...(cursor ? { cursor } : {}) });
+    for (const entry of result.entries) {
+      if (pendingLocalDeliveries(entry).length > 0) pending.push({ id: entry.id, name: entry.name });
+    }
+    if (!result.nextCursor) break;
+    cursor = result.nextCursor;
+  }
+  return pending;
+};
+
+const deliverLocalRecording = async (recordingId: string, folderId: string | null): Promise<void> => {
+  const entry = await historyRepository.get(recordingId);
+  if (!entry || entry.deletedAt) throw new Error('This recording is no longer available');
+  let folder: string | undefined;
+  if (folderId) {
+    const settings = await loadExtensionSettingsFromStorage();
+    folder = settings.storage.localFolderPresets.find((preset) => preset.id === folderId)?.name;
+    if (!folder) throw new Error('That folder no longer exists');
+  }
+  const outcomes = await deliverDeferred(entry, folder);
+  // Stamped only when every file actually completed. A failed, interrupted or
+  // still-unsettled download would otherwise leave history claiming a folder
+  // that has nothing in it — and the label is not something the user can check
+  // against the file, because we do not show them the path.
+  const allLanded = outcomes.length > 0 && outcomes.every((outcome) => outcome.status === 'complete');
+  if (allLanded) await history.setLocalFolder(recordingId, folder);
+  else if (outcomes.some((outcome) => outcome.status !== 'complete')) {
+    L.warn(`Local delivery for ${recordingId} did not fully complete:`,
+      outcomes.map((outcome) => outcome.status).join(', '));
+  }
+};
+
+/**
+ * Anything still owed to the download directory is written on startup, with no
+ * folder. A prompt the user never answered must cost them a delay, not a file.
+ */
+const deliverAbandonedLocalRecordings = async (): Promise<void> => {
+  try {
+    for (const pending of await listPendingLocalDeliveries()) {
+      const entry = await historyRepository.get(pending.id);
+      if (entry) await deliverDeferred(entry);
+    }
+  } catch (error) {
+    L.warn('Reconciling deferred local deliveries failed:', error);
+  }
+};
 
 // The recording control plane: every start/stop trigger drives this one seam.
 const controller = new RecordingController({ L, offscreen, session, telemetry, notations });
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
-  playback, playbackLeases, driveArtifacts, driveAuthLease, telemetry });
+  playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination,
+  listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
+  storageUsage: () => readStorageUsage(async () => {
+    const files = await listLibraryFiles(await navigator.storage.getDirectory());
+    return files.reduce((total, file) => total + file.sizeBytes, 0);
+  }),
+  driveAuthLease, telemetry });
 registerRecordingCommands({ L, controller });
 registerRecordingAutoStop({ session, controller });
 
@@ -445,6 +607,20 @@ const sessionHydration = (async () => {
     }
   } catch (e) {
     L.warn('Retained-media reconciliation failed (non-fatal):', e);
+  }
+
+  // Ask before anything is retained, so the first library file is already safe.
+  await ensurePersistentStorage(L.log, L.warn);
+
+  // A folder prompt nobody answered must not cost the user their file. Gated on
+  // the library existing so a profile that has never retained anything is not
+  // made to open the history database just to be told there is nothing to do.
+  try {
+    if (await hasLibraryDirectory(await navigator.storage.getDirectory())) {
+      await deliverAbandonedLocalRecordings();
+    }
+  } catch (e) {
+    L.warn('Reconciling deferred local deliveries failed (non-fatal):', e);
   }
 
   // Session state outlives the worker; the tabs it names may not.

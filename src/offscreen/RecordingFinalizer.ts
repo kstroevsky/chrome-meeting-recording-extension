@@ -72,6 +72,16 @@ export type LocalSaveRequest = RecordingArtifactContext & {
   filename: string;
   /** Where this stream's recorder began, relative to the run (RecordingHistoryFile). */
   startOffsetMs?: number;
+  /**
+   * Hold the download until the user has chosen a folder. Only a plain local
+   * save will defer: a Drive fallback is already past its prompt, and the notes
+   * sidecar is not something anyone files.
+   *
+   * Safe to defer because promotion already happened: the bytes are in the
+   * library, so an unanswered prompt costs a delay, never a recording. The
+   * startup reconciler delivers anything still waiting.
+   */
+  deferDelivery?: boolean;
   blobUrl: string;
   opfsFilename?: string;
 };
@@ -210,6 +220,7 @@ export class RecordingFinalizer {
       ...(retainedKey ? { retainedKey } : {}),
       filename: artifact.filename,
       ...(artifact.startOffsetMs != null ? { startOffsetMs: artifact.startOffsetMs } : {}),
+      ...(reason === 'local' && kind !== 'notes' && retainedKey ? { deferDelivery: true } : {}),
       blobUrl,
       opfsFilename: artifact.opfsFilename,
     });

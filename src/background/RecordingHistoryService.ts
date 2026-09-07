@@ -392,6 +392,27 @@ export class RecordingHistoryService {
     });
   }
 
+  /**
+   * Records which destination a recording is filed under. Null clears it, which
+   * is what "unfiled" means — the recording sits in the built-in folder.
+   */
+  async setDriveDestination(historyId: string, presetId: string | null): Promise<void> {
+    await this.repository.update(historyId, (current) => {
+      if (!current || current.deletedAt) return current;
+      const { driveFolderPresetId: _dropped, ...rest } = current;
+      return presetId ? { ...rest, driveFolderPresetId: presetId } : rest;
+    });
+  }
+
+  /** Records the download sub-folder a recording was actually written into. */
+  async setLocalFolder(historyId: string, folderName: string | undefined): Promise<void> {
+    await this.repository.update(historyId, (current) => {
+      if (!current || current.deletedAt) return current;
+      const { localFolderName: _dropped, ...rest } = current;
+      return folderName ? { ...rest, localFolderName: folderName } : rest;
+    });
+  }
+
   async openLocalFile(recordingId: string, fileId: string): Promise<void> {
     const entry = await this.repository.get(recordingId);
     const file = entry && !entry.deletedAt ? entry.files.find((candidate) => candidate.id === fileId) : undefined;

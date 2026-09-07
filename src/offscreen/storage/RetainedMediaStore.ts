@@ -98,6 +98,11 @@ export class RetainedMediaStore {
     throw new MissingArtifactError(stagingKey, target);
   }
 
+  /** Reads a retained file back; null when it is no longer there. */
+  async read(key: OpfsKey): Promise<File | null> {
+    return await readFileByKey(await this.deps.getRoot(), key);
+  }
+
   /** Deletes a retained file. Used by history/retention only — never by recovery. */
   async remove(key: OpfsKey): Promise<void> {
     await removeByKey(await this.deps.getRoot(), key);

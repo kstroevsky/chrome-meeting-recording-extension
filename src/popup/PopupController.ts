@@ -25,6 +25,7 @@ import { CompletedNamingPrompt } from './history/CompletedNamingPrompt';
 import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
+import type { DriveFolderPreset } from '../shared/settings';
 import { SessionTabsView } from './history/SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
 import type {
@@ -100,6 +101,12 @@ export class PopupController {
   private lastSession?: RecordingStatusView;
   /** Preview rendering must never start Chrome polling or live UI timers. */
   private previewing = false;
+  /** Drive destinations offered when naming; empty until settings load. */
+  private destinations: DriveFolderPreset[] = [];
+  /** Download sub-folders offered when naming a local recording. */
+  private localFolders: DriveFolderPreset[] = [];
+  /** Local recordings whose bytes are retained but not yet written to Downloads. */
+  private pendingLocal: { id: string; name: string }[] = [];
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -107,6 +114,11 @@ export class PopupController {
     this.naming = new CompletedNamingPrompt(this.recordingNameDialog, {
       notify: (message) => this.toast(message),
       rename: (historyId, name) => this.renameRecording(historyId, name),
+      destinations: () => this.destinations,
+      fileTo: (historyId, presetId) => this.fileRecordingToDestination(historyId, presetId),
+      localFolders: () => this.localFolders,
+      pendingLocal: () => this.pendingLocal,
+      deliverLocal: (historyId, folderId) => this.deliverLocalRecording(historyId, folderId),
       applySession: (session) => this.state.applySession(session),
       reveal: (jobId) => this.sessionTabs.select(jobId),
       latest: () => ({ phase: this.lastPhase, session: this.lastSession }),
@@ -134,6 +146,10 @@ export class PopupController {
     });
     this.state = new PopupStateController(el, {
       onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
+      onSettings: (settings) => {
+        this.destinations = settings.storage.driveFolderPresets;
+        this.localFolders = settings.storage.localFolderPresets;
+      },
       onToast: (msg) => this.toast(msg),
       onAlert: (msg) => alert(msg),
     });
@@ -414,6 +430,10 @@ export class PopupController {
       if (msg?.type === 'RECORDING_STATE') {
         this.state.applySession(msg.session);
       }
+      if (msg?.type === 'RECORDING_AWAITING_DELIVERY') {
+        // The bytes are safe in the library; the prompt decides where they land.
+        void this.refreshPendingLocal().then(() => this.naming.queue(this.lastPhase, this.lastSession));
+      }
       if (msg?.type === 'RECORDING_SAVED') {
         this.toast(buildSavedLocallyMessage(msg.filename));
       }
@@ -515,6 +535,36 @@ export class PopupController {
     if (response.ok === false) throw new Error(response.error || 'Could not rename this recording');
     if (response.session) this.state.applySession(response.session);
     return response.entry;
+  }
+
+  /**
+   * Refreshes the queue of recordings still waiting to be written to Downloads.
+   *
+   * Driven by the background's broadcast rather than polled or fetched at open:
+   * the popup is what you press stop in, so it is listening when a recording
+   * starts waiting. One left over from a closed popup is delivered to the
+   * download directory by the startup reconciler instead of being asked about.
+   */
+  private async refreshPendingLocal(): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'LIST_PENDING_LOCAL_DELIVERIES' });
+      this.pendingLocal = response.ok ? response.recordings : [];
+    } catch {
+      this.pendingLocal = [];
+    }
+  }
+
+  private async deliverLocalRecording(recordingId: string, folderId: string | null): Promise<void> {
+    const response = await sendToBackground({ type: 'DELIVER_LOCAL_RECORDING', recordingId, folderId });
+    if (response.ok === false) throw new Error(response.error || 'Could not save this recording');
+    this.pendingLocal = this.pendingLocal.filter((pending) => pending.id !== recordingId);
+  }
+
+  private async fileRecordingToDestination(recordingId: string, presetId: string): Promise<void> {
+    const response = await sendToBackground({
+      type: 'FILE_RECORDING_TO_DESTINATION', recordingId, presetId,
+    });
+    if (response.ok === false) throw new Error(response.error || 'Could not file this recording');
   }
 
   /**

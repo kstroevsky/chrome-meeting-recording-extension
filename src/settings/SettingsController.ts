@@ -9,6 +9,10 @@
 
 import {
   DEFAULT_EXTENSION_SETTINGS,
+  MAX_DRIVE_FOLDER_NAME_LENGTH,
+  MAX_LOCAL_FOLDER_PRESETS,
+  MAX_LOCAL_FOLDER_NAME_LENGTH,
+  MAX_DRIVE_FOLDER_PRESETS,
   loadExtensionSettingsFromStorage,
   resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
@@ -16,6 +20,10 @@ import {
 } from '../shared/settings';
 import { getRecordingFormatCapabilities, type RecordingFormatCapabilities } from '../shared/recordingFormats';
 import { applyThemePreference } from '../shared/theme';
+import { FolderPresetList } from './FolderPresetList';
+import { formatBytes } from '../shared/format';
+import { sendToBackground } from '../shared/messages';
+import { ensurePersistentStorage } from '../background/storageDurability';
 
 export type SettingsElements = {
   anonymousDiagnostics: HTMLInputElement | null;
@@ -32,6 +40,13 @@ export type SettingsElements = {
   tabContentType: HTMLSelectElement | null;
   tabResolutionPreset: HTMLSelectElement | null;
   tabMaxFrameRate: HTMLInputElement | null;
+  destinationsList?: HTMLElement | null;
+  destinationAdd?: HTMLButtonElement | null;
+  destinationsNote?: HTMLElement | null;
+  localFoldersList?: HTMLElement | null;
+  localFolderAdd?: HTMLButtonElement | null;
+  localFoldersNote?: HTMLElement | null;
+  storageUsage?: HTMLElement | null;
   micEchoCancellation: HTMLInputElement | null;
   micNoiseSuppression: HTMLInputElement | null;
   micAutoGain: HTMLInputElement | null;
@@ -52,12 +67,72 @@ type SettingsDocument = Document & {
 
 export class SettingsController {
   private readonly formatCapabilities: RecordingFormatCapabilities = getRecordingFormatCapabilities();
+  /**
+   * Reports what the retained library costs, and whether it is safe from
+   * eviction. Read once on open rather than watched: it changes when a
+   * recording is made, not while this page is sitting there.
+   */
+  private async showStorageUsage(): Promise<void> {
+    const target = this.el.storageUsage;
+    if (!target) return;
+    try {
+      // Asked again from a document. The service worker asks at startup, but a
+      // worker is not a browsing context and Chrome may decline it there; this
+      // page is a real one, so it is the better place to be granted.
+      await ensurePersistentStorage(() => {}, () => {});
+      const response = await sendToBackground({ type: 'GET_STORAGE_USAGE' });
+      if (!response.ok) throw new Error(response.error);
+      const { retainedBytes, usageBytes, quotaBytes, persisted } = response.usage;
+      const detail = usageBytes != null && quotaBytes != null
+        ? `${formatBytes(usageBytes)} of ${formatBytes(quotaBytes)} used by this extension in total`
+        : 'Total usage is unavailable in this browser';
+      target.textContent = formatBytes(retainedBytes);
+      const small = document.createElement('small');
+      small.textContent = detail;
+      target.append(small);
+      // Never surfaced. `unlimitedStorage` is what exempts this extension's
+      // storage from eviction; the StorageManager grant is a different
+      // mechanism and reads false here regardless, so showing it would imply a
+      // risk that does not exist.
+      void persisted;
+    } catch {
+      target.textContent = 'Unavailable';
+    }
+  }
 
-  constructor(private readonly el: SettingsElements) {}
+  /**
+   * Two lists, edited in memory and written on save like every other control.
+   * Ids are minted once and never reused, so renaming a folder cannot silently
+   * re-target the recordings that chose it.
+   */
+  private readonly driveFolders: FolderPresetList;
+  private readonly localFolders: FolderPresetList;
+
+  constructor(private readonly el: SettingsElements) {
+    this.driveFolders = new FolderPresetList({
+      elements: { list: el.destinationsList, add: el.destinationAdd, note: el.destinationsNote },
+      maxPresets: MAX_DRIVE_FOLDER_PRESETS,
+      maxNameLength: MAX_DRIVE_FOLDER_NAME_LENGTH,
+      placeholder: 'e.g. Work meetings',
+      noun: 'Destination',
+      idPrefix: 'dest',
+    });
+    this.localFolders = new FolderPresetList({
+      elements: { list: el.localFoldersList, add: el.localFolderAdd, note: el.localFoldersNote },
+      maxPresets: MAX_LOCAL_FOLDER_PRESETS,
+      maxNameLength: MAX_LOCAL_FOLDER_NAME_LENGTH,
+      placeholder: 'e.g. Therapy 2026',
+      noun: 'Folder',
+      idPrefix: 'local',
+    });
+  }
 
   /** Loads saved settings into the form and wires save/reset + the tooltip controller. */
   async init(): Promise<void> {
     this.wireConsoleControls();
+    this.driveFolders.wire();
+    this.localFolders.wire();
+    void this.showStorageUsage();
 
     try {
       const stored = await loadExtensionSettingsFromStorage();
@@ -107,6 +182,10 @@ export class SettingsController {
   /** Mirrors normalized settings into the current form controls. */
   private applySettings(settings: Readonly<ExtensionSettings>): void {
     const el = this.el;
+    // Repainted here rather than only at load, so "Reset to defaults" actually
+    // clears the lists instead of leaving rows the reset just erased.
+    this.driveFolders.apply(settings.storage.driveFolderPresets);
+    this.localFolders.apply(settings.storage.localFolderPresets);
     if (el.anonymousDiagnostics) el.anonymousDiagnostics.checked = settings.privacy.anonymousDiagnostics;
     if (el.theme) el.theme.value = settings.appearance.theme;
     applyThemePreference(settings.appearance.theme);
@@ -156,6 +235,10 @@ export class SettingsController {
         selfVideoResolutionPreset: el.selfVideoResolutionPreset?.value,
         selfVideoUseAutoResolution: !!el.selfVideoAutoResolution?.checked,
       },
+      storage: {
+        driveFolderPresets: this.driveFolders.read(),
+        localFolderPresets: this.localFolders.read(),
+      },
       professional: {
         selfVideoFrameRate: Number(el.selfVideoFrameRate?.value),
         tabContentType: el.tabContentType?.value,
@@ -169,6 +252,9 @@ export class SettingsController {
       },
     };
   }
+
+
+
 
   /** Disables native and custom-selector options unavailable in this Chromium build. */
   private applyFormatCapabilities(): void {
@@ -418,3 +504,5 @@ export class SettingsController {
     if (this.el.professionalFields) this.el.professionalFields.hidden = !open;
   }
 }
+
+/** Ids only need to be unique within one user's settings. */

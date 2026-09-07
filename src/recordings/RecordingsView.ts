@@ -1,3 +1,5 @@
+import type { DriveFolderPreset } from '../shared/settings';
+import { createListboxSelect, type ListboxSelect } from '../ui/listboxSelect';
 import {
   dayLabel,
   durationOf,
@@ -21,6 +23,7 @@ export type RecordingsViewCallbacks = {
   remove: (id: string) => void;
   removeMany: (ids: string[]) => void;
   openLocal: (recordingId: string, fileId: string) => void;
+  fileTo: (recordingId: string, presetId: string | null) => void;
   play: (recordingId: string) => void;
   loadMore: () => void;
 };
@@ -69,6 +72,9 @@ export class RecordingsView {
     this.noteSummaries = summaries;
   }
   private openId: string | null = null;
+  private destinations: DriveFolderPreset[] = [];
+  /** The open modal's picker, torn down with the modal so its listeners go too. */
+  private destinationListbox: ListboxSelect | null = null;
   private editingId: string | null = null;
 
   constructor(
@@ -107,6 +113,10 @@ export class RecordingsView {
   showError(message = '') { this.error.textContent = message; this.error.hidden = !message; }
 
   private redraw({ focusSearch = false } = {}) {
+    // The picker owns document-level listeners; a redraw discards its element,
+    // so it has to be torn down here rather than only when a new one is built.
+    this.destinationListbox?.destroy();
+    this.destinationListbox = null;
     this.list.replaceChildren();
     this.empty.hidden = this.entries.length > 0;
     this.loadMoreButton.hidden = !this.hasMore;
@@ -360,6 +370,42 @@ export class RecordingsView {
     return row;
   }
 
+  /**
+   * Where this recording is filed. A recording made before destinations existed
+   * simply reads as unfiled — it is in the built-in folder, which is the truth,
+   * rather than being guessed into a destination.
+   */
+  private destinationPicker(entry: RecordingHistoryEntry): HTMLElement {
+    const row = $('div', 'detail-destination');
+    const listbox = createListboxSelect({
+      label: 'Google Drive destination',
+      className: 'detail-destination__select',
+      options: [
+        { value: '', label: 'Google Meet Records (unfiled)' },
+        ...this.destinations.map((preset) => ({ value: preset.id, label: preset.name })),
+      ],
+      value: entry.driveFolderPresetId ?? '',
+      onChange: (value) => {
+        listbox.setDisabled(true);
+        this.callbacks.fileTo(entry.id, value || null);
+      },
+    });
+    this.destinationListbox = listbox;
+    row.append(listbox.root);
+
+    if (!this.destinations.length) {
+      const hint = $('p', 'detail-destination__hint');
+      hint.textContent = 'Add destinations in Settings to sort recordings into your own folders.';
+      row.append(hint);
+    }
+    return row;
+  }
+
+  setDestinations(destinations: DriveFolderPreset[]): void {
+    this.destinations = destinations;
+    if (this.openId) this.redraw();
+  }
+
   private selectionBox(selected: boolean, label: string): HTMLButtonElement {
     const box = document.createElement('button');
     box.className = `selection-box${selected ? ' selection-box--selected' : ''}`;
@@ -415,8 +461,25 @@ export class RecordingsView {
     note.addEventListener('blur', () => {
       if (note.value !== (entry.note ?? '')) this.callbacks.note(entry.id, note.value);
     });
+    body.append(heading, meta, noteLabel, note);
+    // Only a Drive recording can be filed: there is no folder to move otherwise.
+    if (entry.storageMode === 'drive' && entry.driveFolderId) {
+      const destinationLabel = $('div', 'detail-section-label');
+      destinationLabel.textContent = 'DESTINATION';
+      body.append(destinationLabel, this.destinationPicker(entry));
+    } else if (entry.storageMode !== 'drive') {
+      // Stated, not offered: a written download cannot be moved, so this says
+      // where the file went rather than pretending it can still be changed.
+      const destinationLabel = $('div', 'detail-section-label');
+      destinationLabel.textContent = 'SAVED TO';
+      const where = $('p', 'detail-destination__fixed');
+      where.textContent = entry.localFolderName
+        ? `Downloads / ${entry.localFolderName}`
+        : 'Downloads';
+      body.append(destinationLabel, where);
+    }
     const fileLabel = $('div', 'detail-section-label'); fileLabel.textContent = 'FILES';
-    body.append(heading, meta, noteLabel, note, fileLabel);
+    body.append(fileLabel);
     dialog.append(body);
 
     const files = $('ul', 'recording-files');

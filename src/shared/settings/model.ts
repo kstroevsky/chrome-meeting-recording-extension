@@ -19,6 +19,22 @@ export type ResolutionDimensions = {
   height: number;
 };
 
+/**
+ * A user-named Google Drive destination, e.g. "Psychotherapy".
+ *
+ * The `id` exists so a recording can keep pointing at the same destination
+ * after the user renames it — a preset referenced by name would silently
+ * re-target the moment someone fixed a typo.
+ */
+export type FolderPreset = {
+  id: string;
+  /** Trimmed, non-empty, and used verbatim as the folder name. */
+  name: string;
+};
+
+/** @deprecated Use {@link FolderPreset}; kept so existing imports still read well. */
+export type DriveFolderPreset = FolderPreset;
+
 export type ExtensionSettings = {
   privacy: {
     /** Sends bounded anonymous recording diagnostics. No media, names, captions, identifiers, messages, or raw stacks. */
@@ -37,6 +53,20 @@ export type ExtensionSettings = {
     selfVideoResolutionPreset: ResolutionPreset;
     /** Record the camera at the browser/Meet-selected resolution instead of forcing the preset (skips the resize re-rasterization). */
     selfVideoUseAutoResolution: boolean;
+  };
+  storage: {
+    /**
+     * Destinations the user defined. Empty means everything goes to the single
+     * built-in folder, which is the behaviour before presets existed.
+     */
+    driveFolderPresets: FolderPreset[];
+    /**
+     * Sub-folders of the browser's download directory. Separate from the Drive
+     * list because they are different places with different naming rules, and
+     * because a local recording cannot be re-filed after the fact: the folder
+     * is chosen before the bytes are written.
+     */
+    localFolderPresets: FolderPreset[];
   };
   professional: {
     selfVideoFrameRate: number;

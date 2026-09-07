@@ -287,6 +287,92 @@ describe('registerSaveHandler', () => {
     expect(history.setDuration).toHaveBeenCalledWith('recording:1', undefined);
     expect(downloadFile).toHaveBeenCalledTimes(1);
   });
+
+  describe('a delivery deferred while the user picks a folder', () => {
+    const save = (over: Record<string, unknown> = {}) => ({
+      historyId: 'rec-1', stream: 'tab', filename: 'tab.webm',
+      blobUrl: 'blob:1', retainedKey: 'library/rec-1/tab.webm', deferDelivery: true, ...over,
+    });
+
+    it('reports what actually happened, so a caller cannot claim a failed save', async () => {
+      // The whole point: deliver() handles the failure internally, so the only
+      // way a caller learns of it is the returned outcome.
+      (downloadFile as jest.Mock).mockRejectedValueOnce(new Error('disk full'));
+      const { deliverDeferred } = registerSaveHandler(offscreen, L);
+      const entry = {
+        id: 'rec-1',
+        files: [{
+          stream: 'tab' as const, filename: 'tab.webm', delivery: { requested: 'local', status: 'pending' },
+          locations: [{ kind: 'opfs' as const, key: 'library/rec-1/tab.webm', retainedAt: 1 }],
+        }],
+      };
+      offscreen.openRetained = jest.fn(async () => 'blob:9');
+
+      const outcomes = await deliverDeferred(entry as never, 'Therapy');
+      expect(outcomes).toEqual([{ status: 'not-started', error: 'disk full' }]);
+    });
+
+    it('reports a completed delivery as complete', async () => {
+      const { deliverDeferred } = registerSaveHandler(offscreen, L);
+      const entry = {
+        id: 'rec-1',
+        files: [{
+          stream: 'tab' as const, filename: 'tab.webm', delivery: { requested: 'local', status: 'pending' },
+          locations: [{ kind: 'opfs' as const, key: 'library/rec-1/tab.webm', retainedAt: 1 }],
+        }],
+      };
+      offscreen.openRetained = jest.fn(async () => 'blob:9');
+
+      const outcomes = await deliverDeferred(entry as never, 'Therapy');
+      expect(outcomes.map((o) => o.status)).toEqual(['complete']);
+      // And it went into the folder, not the download root.
+      expect(downloadFile).toHaveBeenCalledWith({
+        url: 'blob:9', filename: 'Therapy/tab.webm', saveAs: false,
+      });
+    });
+
+    it('holds the download and reports that someone is being asked', async () => {
+      (broadcastToPopup as jest.Mock).mockResolvedValue(true);
+      const deferred = jest.fn();
+      registerSaveHandler(offscreen, L, undefined, undefined, async () => 2, deferred);
+
+      offscreen.onSaveRequested(save());
+      await flushMicrotasks();
+
+      expect(downloadFile).not.toHaveBeenCalled();
+      expect(broadcastToPopup).toHaveBeenCalledWith({ type: 'RECORDING_AWAITING_DELIVERY', historyId: 'rec-1' });
+      // The library owns the bytes, so the object URL is not needed until the
+      // answer comes; a fresh one is made then.
+      expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1');
+      expect(deferred).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes immediately when the user has defined no folders', async () => {
+      (broadcastToPopup as jest.Mock).mockResolvedValue(true);
+      const deferred = jest.fn();
+      registerSaveHandler(offscreen, L, undefined, undefined, async () => 0, deferred);
+
+      offscreen.onSaveRequested(save());
+      await flushMicrotasks();
+
+      // Nothing to choose between, so nobody is interrupted.
+      expect(downloadFile).toHaveBeenCalledWith({ url: 'blob:1', filename: 'tab.webm', saveAs: false });
+      expect(deferred).not.toHaveBeenCalled();
+    });
+
+    it('writes immediately when every popup is closed', async () => {
+      // Asking a question nobody hears would strand the recording.
+      (broadcastToPopup as jest.Mock).mockResolvedValue(false);
+      const deferred = jest.fn();
+      registerSaveHandler(offscreen, L, undefined, undefined, async () => 2, deferred);
+
+      offscreen.onSaveRequested(save());
+      await flushMicrotasks();
+
+      expect(downloadFile).toHaveBeenCalledWith({ url: 'blob:1', filename: 'tab.webm', saveAs: false });
+      expect(deferred).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('isFreshRecordingStart', () => {
@@ -336,4 +422,5 @@ describe('keep-alive loop', () => {
     jest.advanceTimersByTime(60_000);
     expect(pokeRuntime).toHaveBeenCalledTimes(1);
   });
+
 });

@@ -55,6 +55,13 @@ export type MessageHandlersDeps = {
   playback?: RecordingPlaybackService;
   playbackLeases?: PlaybackLeaseManager;
   driveArtifacts?: DriveArtifactResolver;
+  fileToDestination?: (recordingId: string, presetId: string | null) => Promise<void>;
+  /** Storage the retained library occupies, and whether it is exempt from eviction. */
+  storageUsage?: () => Promise<import('../shared/playback').StorageUsage>;
+  /** Recordings whose bytes are retained but not yet written to the download directory. */
+  listPendingLocal?: () => Promise<{ id: string; name: string }[]>;
+  /** Writes one of those into the chosen local folder; null means the directory itself. */
+  deliverLocal?: (recordingId: string, folderId: string | null) => Promise<void>;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
 };
@@ -74,7 +81,7 @@ function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean 
   return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
 }
 
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, playbackLeases, driveArtifacts, driveAuthLease, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, playbackLeases, driveArtifacts, fileToDestination, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -269,6 +276,27 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
           await playbackLeases.acquire(readerTab, manifest.recordingId, keys);
         }
         sendResponse({ ok: true, manifest });
+        return;
+      }
+      if (msg.type === 'GET_STORAGE_USAGE') {
+        if (!storageUsage) throw new Error('Storage usage is unavailable');
+        sendResponse({ ok: true, usage: await storageUsage() });
+        return;
+      }
+      if (msg.type === 'LIST_PENDING_LOCAL_DELIVERIES') {
+        sendResponse({ ok: true, recordings: (await listPendingLocal?.()) ?? [] });
+        return;
+      }
+      if (msg.type === 'DELIVER_LOCAL_RECORDING') {
+        if (!deliverLocal) throw new Error('Local delivery is unavailable');
+        await deliverLocal(msg.recordingId, msg.folderId);
+        sendResponse({ ok: true });
+        return;
+      }
+      if (msg.type === 'FILE_RECORDING_TO_DESTINATION') {
+        if (!fileToDestination) throw new Error('Drive destinations are unavailable');
+        await fileToDestination(msg.recordingId, msg.presetId);
+        sendResponse({ ok: true });
         return;
       }
       if (msg.type === 'PREPARE_RECORDING_PLAYBACK_SOURCE' || msg.type === 'REFRESH_RECORDING_PLAYBACK_SOURCE') {

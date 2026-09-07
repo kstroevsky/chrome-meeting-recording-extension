@@ -47,7 +47,13 @@ export {
   normalizeRecorderRuntimeSettingsSnapshot,
 } from './normalize';
 
-export { DEFAULT_EXTENSION_SETTINGS } from './defaults';
+export {
+  DEFAULT_EXTENSION_SETTINGS,
+  MAX_DRIVE_FOLDER_NAME_LENGTH,
+  MAX_DRIVE_FOLDER_PRESETS,
+  MAX_LOCAL_FOLDER_NAME_LENGTH,
+  MAX_LOCAL_FOLDER_PRESETS,
+} from './defaults';
 
 export type {
   ExtensionSettings,
@@ -59,6 +65,8 @@ export type {
   ChunkingSettings,
   ResolutionPreset,
   ThemePreference,
+  DriveFolderPreset,
+  FolderPreset,
 } from './model';
 
 export type { VideoRecordingFormat, MicrophoneRecordingFormat, RecordingEncodingProfile, RecordingFormatCapabilities } from '../recordingFormats';

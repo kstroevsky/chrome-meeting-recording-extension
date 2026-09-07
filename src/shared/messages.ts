@@ -51,8 +51,13 @@ export async function sendToContent<T extends PopupToContent>(
  * Errors are intentionally swallowed — Chrome throws "Receiving end does not
  * exist" whenever the popup is closed, which is the common case.
  */
-export async function broadcastToPopup(message: BgToPopup): Promise<void> {
+export async function broadcastToPopup(message: BgToPopup): Promise<boolean> {
   try {
     await sendRuntimeMessage(message);
-  } catch {}
+    return true;
+  } catch {
+    // No receiver: every popup is closed. Callers that only inform can ignore
+    // this; one that is asking a question needs to know nobody was asked.
+    return false;
+  }
 }

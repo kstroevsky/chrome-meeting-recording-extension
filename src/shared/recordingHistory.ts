@@ -69,6 +69,19 @@ export type RecordingHistoryEntry = {
   userNamed?: true;
   /** Persisted per-recording Drive folder metadata for later artifact renames. */
   driveFolderId?: string;
+  /**
+   * Which named destination this recording is filed under (ADR-0006 follow-up).
+   * Absent means unfiled: it is still in the built-in folder, which is also the
+   * only thing a recording made before destinations existed can say.
+   */
+  driveFolderPresetId?: string;
+  /**
+   * The download sub-folder this recording was written into, recorded as a name
+   * rather than a preset id: unlike a Drive folder, a written file cannot be
+   * moved afterwards, so the label must keep saying where it actually went even
+   * if the folder is later renamed or deleted from settings.
+   */
+  localFolderName?: string;
   driveFolderName?: string;
   folderWebViewLink?: string;
   createdAt: number;
@@ -147,6 +160,8 @@ export function normalizeRecordingHistoryEntry(value: unknown): RecordingHistory
     ...(durationMs != null ? { durationMs } : {}),
     ...(candidate.userNamed === true ? { userNamed: true as const } : {}),
     ...(typeof candidate.driveFolderId === 'string' && candidate.driveFolderId.trim() ? { driveFolderId: candidate.driveFolderId.trim() } : {}),
+    ...(typeof candidate.driveFolderPresetId === 'string' && candidate.driveFolderPresetId.trim() ? { driveFolderPresetId: candidate.driveFolderPresetId.trim() } : {}),
+    ...(typeof candidate.localFolderName === 'string' && candidate.localFolderName.trim() ? { localFolderName: candidate.localFolderName.trim() } : {}),
     ...(typeof candidate.driveFolderName === 'string' && candidate.driveFolderName.trim() ? { driveFolderName: candidate.driveFolderName.trim() } : {}),
     ...(typeof candidate.folderWebViewLink === 'string' && candidate.folderWebViewLink.trim() ? { folderWebViewLink: candidate.folderWebViewLink.trim() } : {}),
     createdAt,
@@ -370,4 +385,26 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
   return message.type === 'OPEN_RECORDING_HISTORY_FILE'
     && typeof message.recordingId === 'string' && message.recordingId.length > 0
     && typeof message.fileId === 'string' && message.fileId.length > 0;
+}
+
+/**
+ * True when this artifact still owes the user a file in their download
+ * directory: the library holds the bytes, nothing has been written yet, and no
+ * delivery has been attempted.
+ *
+ * Derived rather than tracked. History is durable, so a recording awaiting a
+ * folder survives a worker eviction, a browser restart, and a prompt nobody
+ * answered — a parallel list in session storage would not.
+ */
+export function awaitsLocalDelivery(file: RecordingHistoryFile): boolean {
+  if (file.kind === 'notes') return false;
+  if (file.delivery.status !== 'pending') return false;
+  if (file.locations.some((location) => location.kind === 'download')) return false;
+  return file.locations.some((location) => location.kind === 'opfs');
+}
+
+/** The media files of an entry that are still owed to the download directory. */
+export function pendingLocalDeliveries(entry: RecordingHistoryEntry): RecordingHistoryFile[] {
+  if (entry.deletedAt) return [];
+  return entry.files.filter(awaitsLocalDelivery);
 }

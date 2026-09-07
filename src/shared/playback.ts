@@ -73,3 +73,15 @@ export function masterTrack(manifest: PlaybackManifest): PlaybackTrack | undefin
 export function isPlayable(manifest: PlaybackManifest): boolean {
   return manifest.tracks.some((track) => track.sources.some(isStreamableSource));
 }
+
+/** What the retained library costs, and what the browser reports about it. */
+export type StorageUsage = {
+  /** Whether a StorageManager persistence grant is held. Not a durability signal
+   *  for an extension: `unlimitedStorage` is what exempts OPFS from eviction. */
+  persisted: boolean;
+  /** Bytes this origin uses across OPFS and IndexedDB; absent if unavailable. */
+  usageBytes?: number;
+  quotaBytes?: number;
+  /** Bytes the retained library holds — what a cleanup would free. */
+  retainedBytes: number;
+};

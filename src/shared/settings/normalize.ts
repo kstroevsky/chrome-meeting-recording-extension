@@ -10,6 +10,10 @@
 import { isRecord } from '../typeGuards';
 import {
   DEFAULT_EXTENSION_SETTINGS,
+  MAX_DRIVE_FOLDER_NAME_LENGTH,
+  MAX_LOCAL_FOLDER_PRESETS,
+  MAX_LOCAL_FOLDER_NAME_LENGTH,
+  MAX_DRIVE_FOLDER_PRESETS,
   LEGACY_CAMERA_FORMAT_TO_PRESET,
   LEGACY_VIDEO_FORMAT_OPTIONS,
   MICROPHONE_RECORDING_FORMAT_OPTIONS,
@@ -23,6 +27,8 @@ import {
 } from './defaults';
 import {
   validateChunkingSettings,
+  validateDriveFolderPresets,
+  validateLocalFolderPresets,
   validateMicrophoneSettings,
   validateSelfVideoProfile,
   validateTabOutput,
@@ -81,6 +87,12 @@ export function cloneSettings(settings: ExtensionSettings): ExtensionSettings {
     privacy: { ...settings.privacy },
     appearance: { ...settings.appearance },
     basic: { ...settings.basic },
+    // Presets are objects, so a shallow section copy would still share them.
+    storage: {
+      ...settings.storage,
+      driveFolderPresets: settings.storage.driveFolderPresets.map((preset) => ({ ...preset })),
+      localFolderPresets: settings.storage.localFolderPresets.map((preset) => ({ ...preset })),
+    },
     professional: { ...settings.professional },
   };
 }
@@ -155,6 +167,7 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
   const privacyCandidate = isRecord(value.privacy) ? value.privacy : {};
   const basicCandidate = isRecord(value.basic) ? value.basic : {};
   const professionalCandidate = isRecord(value.professional) ? value.professional : {};
+  const storageCandidate = isRecord(value.storage) ? value.storage : {};
 
   const appearance: ExtensionSettings['appearance'] = {
     theme: hasAllowedString(appearanceCandidate.theme, THEME_OPTIONS)
@@ -217,7 +230,17 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
     professional.chunkExtendedTimesliceMs = professional.chunkDefaultTimesliceMs;
   }
 
-  return { privacy, appearance, basic, professional };
+  const driveFolderPresets = validateDriveFolderPresets(storageCandidate.driveFolderPresets, {
+    maxPresets: MAX_DRIVE_FOLDER_PRESETS,
+    maxNameLength: MAX_DRIVE_FOLDER_NAME_LENGTH,
+  });
+  const localFolderPresets = validateLocalFolderPresets(storageCandidate.localFolderPresets, {
+    maxPresets: MAX_LOCAL_FOLDER_PRESETS,
+    maxNameLength: MAX_LOCAL_FOLDER_NAME_LENGTH,
+  });
+  const storage: ExtensionSettings['storage'] = { driveFolderPresets, localFolderPresets };
+
+  return { privacy, appearance, basic, storage, professional };
 }
 
 /** Validates a frozen recorder snapshot received over RPC without applying defaults. */

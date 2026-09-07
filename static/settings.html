@@ -135,6 +135,38 @@
         </div>
       </section>
 
+      <section class="settings-section" aria-labelledby="destinations-heading">
+        <h2 id="destinations-heading" class="section-eyebrow">GOOGLE DRIVE DESTINATIONS</h2>
+        <p class="destinations-intro">
+          Every recording uploads to <strong>Google Meet Records</strong> first. Name the
+          destinations you sort them into, and pick one when you name the recording.
+        </p>
+        <div id="destinations-list" class="destinations-list"></div>
+        <button id="destination-add" class="destination-add" type="button">Add destination</button>
+        <p id="destinations-note" class="destinations-note" hidden></p>
+      </section>
+
+      <section class="settings-section" aria-labelledby="local-folders-heading">
+        <h2 id="local-folders-heading" class="section-eyebrow">LOCAL FOLDERS</h2>
+        <p class="destinations-intro">
+          Recordings saved to this computer go to your <strong>downloads folder</strong>. Name the
+          sub-folders you sort them into, and pick one when you name the recording. A local
+          recording is filed as it is written, so this cannot be changed afterwards.
+        </p>
+        <div id="local-folders-list" class="destinations-list"></div>
+        <button id="local-folder-add" class="destination-add" type="button">Add folder</button>
+        <p id="local-folders-note" class="destinations-note" hidden></p>
+      </section>
+
+      <section class="settings-section" aria-labelledby="storage-heading">
+        <h2 id="storage-heading" class="section-eyebrow">LOCAL PLAYBACK STORAGE</h2>
+        <p class="destinations-intro">
+          Recordings the extension keeps so they can be played back here, without
+          re-downloading them.
+        </p>
+        <p id="storage-usage" class="storage-usage">Checking…</p>
+      </section>
+
       <section class="settings-section professional-section" aria-labelledby="professional-heading">
         <h2 id="professional-heading" class="section-eyebrow">PROFESSIONAL</h2>
         <button id="professional-toggle" class="professional-toggle" type="button" aria-expanded="true" aria-controls="professional-fields">

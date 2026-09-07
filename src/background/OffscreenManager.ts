@@ -261,6 +261,21 @@ export class OffscreenManager {
     this.setBadge('idle');
   }
 
+  /**
+   * Re-opens retained library bytes as an object URL. The worker has no
+   * `URL.createObjectURL`, so a delivery that outlived its original URL asks
+   * the offscreen document for a fresh one rather than holding a stale handle.
+   */
+  async openRetained(key: string): Promise<string | undefined> {
+    try {
+      const response = await this.rpc({ type: 'OFFSCREEN_OPEN_RETAINED', key }) as
+        { ok?: boolean; blobUrl?: string } | undefined;
+      return response?.ok ? response.blobUrl : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Asks offscreen to revoke a blob URL and optionally clean up the related OPFS file. */
   revokeBlobUrl(blobUrl: string, opfsFilename?: string) {
     try {
