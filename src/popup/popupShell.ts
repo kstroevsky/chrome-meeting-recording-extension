@@ -3,6 +3,7 @@
 import { createRuntimeTab } from '../platform/chrome/tabs';
 import { isDevBuild } from '../shared/build';
 import type { PopupPreviewShellState } from './popupPreviewState';
+import { bindListbox } from '../ui/listboxSelect';
 
 const byId = <T extends HTMLElement>(doc: Document, id: string): T | null =>
   doc.getElementById(id) as T | null;
@@ -35,62 +36,30 @@ export function wirePopupShell(doc: Document = document): PopupShell {
     popupGalleryButton.addEventListener('click', () => void createRuntimeTab('popup-gallery.html'));
   }
 
-  /** Accessible custom select surfaces keep native controls as their data source. */
-  const wireSelect = (selectId: string, triggerId: string, optionsId: string): void => {
+  /**
+   * The two static dropdowns keep their markup in popup.html; the behaviour is
+   * `ui/listboxSelect`'s, so a keyboard fix lands here and on the destination
+   * pickers at once. Storage mode additionally mirrors the chosen option's icon
+   * into the trigger, which is why it passes onSync.
+   */
+  const wireSelect = (selectId: string, triggerId: string, optionsId: string, withIcon = false): void => {
     const select = byId<HTMLSelectElement>(doc, selectId);
     const trigger = byId<HTMLButtonElement>(doc, triggerId);
-    const options = byId<HTMLElement>(doc, optionsId);
-    if (!select || !trigger || !options) return;
-    const close = () => {
-      options.hidden = true;
-      trigger.setAttribute('aria-expanded', 'false');
-    };
-    const sync = () => {
-      const option = select.selectedOptions[0];
-      const label = trigger.querySelector<HTMLElement>('[data-select-label]');
-      if (label) label.textContent = option?.textContent ?? '';
-      else trigger.textContent = option?.textContent ?? '';
-      if (selectId === 'storage-mode') {
-        const selectedIcon = options.querySelector<SVGElement>(`[role="option"][data-value="${select.value}"] svg`);
-        const currentIcon = trigger.querySelector<SVGElement>('svg');
-        if (selectedIcon && currentIcon) {
-          const icon = selectedIcon.cloneNode(true) as SVGElement;
-          icon.classList.add('select-storage-icon');
-          currentIcon.replaceWith(icon);
-        }
-      }
-      options.querySelectorAll<HTMLButtonElement>('[role="option"]').forEach((item) => {
-        item.setAttribute('aria-selected', String(item.dataset.value === select.value));
-      });
-    };
-    trigger.addEventListener('click', () => {
-      const willOpen = options.hidden;
-      doc.querySelectorAll<HTMLElement>('.select-options').forEach((other) => {
-        if (other === options) return;
-        other.hidden = true;
-        doc.querySelector<HTMLButtonElement>(`[aria-controls="${other.id}"]`)?.setAttribute('aria-expanded', 'false');
-      });
-      options.hidden = !willOpen;
-      trigger.setAttribute('aria-expanded', String(willOpen));
+    const list = byId<HTMLElement>(doc, optionsId);
+    if (!select || !trigger || !list) return;
+    bindListbox({ select, trigger, list, doc }, {
+      onSync: withIcon ? ({ select: source, trigger: button, list: options }) => {
+        const selectedIcon = options.querySelector<SVGElement>(`[role="option"][data-value="${source.value}"] svg`);
+        const currentIcon = button.querySelector<SVGElement>('svg');
+        if (!selectedIcon || !currentIcon) return;
+        const icon = selectedIcon.cloneNode(true) as SVGElement;
+        icon.classList.add('select-storage-icon');
+        currentIcon.replaceWith(icon);
+      } : undefined,
     });
-    options.addEventListener('click', (event) => {
-      const option = (event.target as HTMLElement).closest<HTMLButtonElement>('[role="option"]');
-      if (!option?.dataset.value) return;
-      select.value = option.dataset.value;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      sync();
-      close();
-      trigger.focus();
-    });
-    select.addEventListener('change', sync);
-    doc.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
-    doc.addEventListener('click', (event) => {
-      if (!options.hidden && !options.contains(event.target as Node) && !trigger.contains(event.target as Node)) close();
-    });
-    sync();
   };
 
-  wireSelect('storage-mode', 'storage-mode-trigger', 'storage-mode-options');
+  wireSelect('storage-mode', 'storage-mode-trigger', 'storage-mode-options', true);
   wireSelect('mic-mode', 'mic-mode-trigger', 'mic-mode-options');
 
   const captureToggle = byId<HTMLButtonElement>(doc, 'toggle-capture-setup');

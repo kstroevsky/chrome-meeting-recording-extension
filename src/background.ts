@@ -37,6 +37,7 @@ import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
 import { pendingLocalDeliveries, type RecordingHistoryCursor } from './shared/recordingHistory';
 import { ensurePersistentStorage, readStorageUsage } from './background/storageDurability';
+import { broadcastToPopup } from './shared/messages';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
 import { RecordingNotationRepository } from './background/RecordingNotationRepository';
 import { RecordingNotationService } from './background/RecordingNotationService';
@@ -256,9 +257,7 @@ const session = new RecordingSession(
       L.log('Applying deferred update reload now that work has finished');
       chrome.runtime.reload();
     }
-    void import('./shared/messages').then(({ broadcastToPopup }) =>
-      broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) })
-    );
+    broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) });
   },
   // A note left open when the run ends is sealed at the last recorded position
   // rather than discarded, and marked so a screen can show it ended that way

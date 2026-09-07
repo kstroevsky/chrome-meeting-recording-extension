@@ -79,7 +79,7 @@ describe('ConfirmDialog', () => {
     expect(document.activeElement).toBe(cancelBtn());
   });
 
-  it('traps Tab between the two actions and restores focus to the opener on close', async () => {
+  it('wraps Tab at both edges so focus cannot leave the dialog', async () => {
     const opener = document.createElement('button');
     document.body.appendChild(opener);
     opener.focus();
@@ -87,10 +87,12 @@ describe('ConfirmDialog', () => {
     const answer = dialog.ask(OPTIONS);
     expect(document.activeElement).toBe(cancelBtn());
 
-    pressKey('Tab', { shiftKey: true });
+    // DOM order is confirm then cancel, so cancel is the last stop: Tab there
+    // must come back to the first rather than escape to the page behind.
+    pressKey('Tab');
     expect(document.activeElement).toBe(confirmBtn());
 
-    pressKey('Tab');
+    pressKey('Tab', { shiftKey: true });
     expect(document.activeElement).toBe(cancelBtn());
 
     cancelBtn().click();
