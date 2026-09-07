@@ -382,7 +382,33 @@ const { deliverDeferred } = registerSaveHandler(
       return 0;
     }
   },
+  () => { void scheduleAbandonedDeliverySweep(); },
 );
+
+/**
+ * How long a folder prompt may go unanswered before the recording is written to
+ * the download directory anyway.
+ *
+ * A prompt can be abandoned in a way nothing else notices: the popup was open
+ * when we asked, so we deferred, and then it closed without answering. No
+ * further broadcast is coming, and the startup reconciler runs once per browser
+ * session — so without this the file would wait for a browser restart. Chrome
+ * clamps sub-minute alarms, so the real delay is about a minute; that is a wait,
+ * not a loss, and answering the prompt is always faster.
+ */
+const ABANDONED_DELIVERY_ALARM = 'local-delivery-timeout';
+
+const scheduleAbandonedDeliverySweep = async (): Promise<void> => {
+  try {
+    await chrome.alarms?.create?.(ABANDONED_DELIVERY_ALARM, { delayInMinutes: 0.5 });
+  } catch (error) {
+    L.warn('Could not schedule the local delivery sweep:', error);
+  }
+};
+
+chrome.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm.name === ABANDONED_DELIVERY_ALARM) void deliverAbandonedLocalRecordings();
+});
 
 /** Entries whose bytes are in the library but not yet written to Downloads. */
 const listPendingLocalDeliveries = async (): Promise<{ id: string; name: string }[]> => {
@@ -402,6 +428,9 @@ const deliverLocalRecording = async (recordingId: string, folderId: string | nul
     if (!folder) throw new Error('That folder no longer exists');
   }
   await deliverDeferred(entry, folder);
+  // Recorded after the write, so the label reflects where the file went rather
+  // than where it was asked to go.
+  await history.setLocalFolder(recordingId, folder);
 };
 
 /**

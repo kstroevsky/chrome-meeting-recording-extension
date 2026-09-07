@@ -467,6 +467,16 @@ export class RecordingsView {
       const destinationLabel = $('div', 'detail-section-label');
       destinationLabel.textContent = 'DESTINATION';
       body.append(destinationLabel, this.destinationPicker(entry));
+    } else if (entry.storageMode !== 'drive') {
+      // Stated, not offered: a written download cannot be moved, so this says
+      // where the file went rather than pretending it can still be changed.
+      const destinationLabel = $('div', 'detail-section-label');
+      destinationLabel.textContent = 'SAVED TO';
+      const where = $('p', 'detail-destination__fixed');
+      where.textContent = entry.localFolderName
+        ? `Downloads / ${entry.localFolderName}`
+        : 'Downloads';
+      body.append(destinationLabel, where);
     }
     const fileLabel = $('div', 'detail-section-label'); fileLabel.textContent = 'FILES';
     body.append(fileLabel);

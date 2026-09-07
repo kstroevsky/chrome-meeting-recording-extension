@@ -43,6 +43,8 @@ export function registerSaveHandler(
   runDurationMs?: (historyId: string) => number | undefined,
   /** How many download sub-folders the user has defined; zero means never ask. */
   localFolderCount: () => Promise<number> = async () => 0,
+  /** Called when a delivery starts waiting on a folder prompt. */
+  onDeliveryDeferred: () => void = () => {},
 ) {
   /**
    * Writes one artifact to the download directory and reconciles history with
@@ -164,6 +166,7 @@ export function registerSaveHandler(
         const asked = await broadcastToPopup({ type: 'RECORDING_AWAITING_DELIVERY', historyId });
         if (asked) {
           offscreen.revokeBlobUrl(blobUrl);
+          onDeliveryDeferred();
           return;
         }
       }

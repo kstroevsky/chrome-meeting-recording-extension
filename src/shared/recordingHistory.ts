@@ -75,6 +75,13 @@ export type RecordingHistoryEntry = {
    * only thing a recording made before destinations existed can say.
    */
   driveFolderPresetId?: string;
+  /**
+   * The download sub-folder this recording was written into, recorded as a name
+   * rather than a preset id: unlike a Drive folder, a written file cannot be
+   * moved afterwards, so the label must keep saying where it actually went even
+   * if the folder is later renamed or deleted from settings.
+   */
+  localFolderName?: string;
   driveFolderName?: string;
   folderWebViewLink?: string;
   createdAt: number;
@@ -154,6 +161,7 @@ export function normalizeRecordingHistoryEntry(value: unknown): RecordingHistory
     ...(candidate.userNamed === true ? { userNamed: true as const } : {}),
     ...(typeof candidate.driveFolderId === 'string' && candidate.driveFolderId.trim() ? { driveFolderId: candidate.driveFolderId.trim() } : {}),
     ...(typeof candidate.driveFolderPresetId === 'string' && candidate.driveFolderPresetId.trim() ? { driveFolderPresetId: candidate.driveFolderPresetId.trim() } : {}),
+    ...(typeof candidate.localFolderName === 'string' && candidate.localFolderName.trim() ? { localFolderName: candidate.localFolderName.trim() } : {}),
     ...(typeof candidate.driveFolderName === 'string' && candidate.driveFolderName.trim() ? { driveFolderName: candidate.driveFolderName.trim() } : {}),
     ...(typeof candidate.folderWebViewLink === 'string' && candidate.folderWebViewLink.trim() ? { folderWebViewLink: candidate.folderWebViewLink.trim() } : {}),
     createdAt,
