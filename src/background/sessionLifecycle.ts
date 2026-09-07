@@ -10,6 +10,17 @@ import { pokeRuntime } from '../platform/chrome/runtime';
 import { awaitDownloadSettled, downloadFile } from '../platform/chrome/downloads';
 import type { RecordingStream } from '../shared/recording';
 import { awaitsLocalDelivery, type RecordingHistoryFile } from '../shared/recordingHistory';
+
+/**
+ * What actually happened to one artifact. Reported rather than swallowed,
+ * because the caller stamps "saved to <folder>" onto the recording and that
+ * claim must not outrun a download that failed, stalled, or never began.
+ */
+export type DeliveryOutcome =
+  | { status: 'complete'; downloadId?: number }
+  | { status: 'interrupted'; downloadId?: number }
+  | { status: 'timeout'; downloadId?: number }
+  | { status: 'not-started'; error: string };
 import { isBusyPhase, type RecordingPhase } from '../shared/recording';
 import { broadcastToPopup } from '../shared/messages';
 import type { OffscreenManager } from './OffscreenManager';
@@ -59,7 +70,7 @@ export function registerSaveHandler(
       /** Prefixed onto the filename, creating a sub-folder of the download directory. */
       folder?: string;
     },
-  ): Promise<void> => {
+  ): Promise<DeliveryOutcome> => {
     const { historyId, stream, kind, blobUrl, retainedKey, opfsFilename } = args;
     const resolvedFilename = args.folder ? `${args.folder}/${args.filename}` : args.filename;
     const downloadStartedAt = nowMs();
@@ -85,7 +96,7 @@ export function registerSaveHandler(
       // The download never started: free the in-memory URL but keep the OPFS
       // source so crash recovery can retry it on a later launch.
       offscreen.revokeBlobUrl(blobUrl);
-      return;
+      return { status: 'not-started', error: message };
     }
 
     // Clean up only once the download has *actually* settled. Event-driven, so a
@@ -107,6 +118,7 @@ export function registerSaveHandler(
     }
     // 'timeout': the download may still be writing — leave both the URL and the
     // OPFS file untouched; recovery reclaims the file later if it was saved.
+    return { status: settled, ...(downloadId != null ? { downloadId } : {}) };
   };
 
   offscreen.onSaveRequested = ({ historyId, stream, kind, retainedKey, filename, startOffsetMs, blobUrl, opfsFilename, deferDelivery }) => {
@@ -187,8 +199,8 @@ export function registerSaveHandler(
   const deliverDeferred = async (
     entry: { id: string; files: readonly RecordingHistoryFile[] },
     folder?: string,
-  ): Promise<number> => {
-    let delivered = 0;
+  ): Promise<DeliveryOutcome[]> => {
+    const outcomes: DeliveryOutcome[] = [];
     for (const file of entry.files) {
       if (!awaitsLocalDelivery(file)) continue;
       const retained = file.locations.find((location) => location.kind === 'opfs');
@@ -198,7 +210,7 @@ export function registerSaveHandler(
         L.warn('Deferred delivery skipped: retained bytes are gone', retained.key);
         continue;
       }
-      await deliver({
+      outcomes.push(await deliver({
         historyId: entry.id,
         stream: file.stream,
         ...(file.kind ? { kind: file.kind } : {}),
@@ -206,10 +218,9 @@ export function registerSaveHandler(
         blobUrl,
         retainedKey: retained.key,
         ...(folder ? { folder } : {}),
-      });
-      delivered += 1;
+      }));
     }
-    return delivered;
+    return outcomes;
   };
 
   return { deliverDeferred };

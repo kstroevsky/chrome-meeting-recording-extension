@@ -294,6 +294,43 @@ describe('registerSaveHandler', () => {
       blobUrl: 'blob:1', retainedKey: 'library/rec-1/tab.webm', deferDelivery: true, ...over,
     });
 
+    it('reports what actually happened, so a caller cannot claim a failed save', async () => {
+      // The whole point: deliver() handles the failure internally, so the only
+      // way a caller learns of it is the returned outcome.
+      (downloadFile as jest.Mock).mockRejectedValueOnce(new Error('disk full'));
+      const { deliverDeferred } = registerSaveHandler(offscreen, L);
+      const entry = {
+        id: 'rec-1',
+        files: [{
+          stream: 'tab' as const, filename: 'tab.webm', delivery: { requested: 'local', status: 'pending' },
+          locations: [{ kind: 'opfs' as const, key: 'library/rec-1/tab.webm', retainedAt: 1 }],
+        }],
+      };
+      offscreen.openRetained = jest.fn(async () => 'blob:9');
+
+      const outcomes = await deliverDeferred(entry as never, 'Therapy');
+      expect(outcomes).toEqual([{ status: 'not-started', error: 'disk full' }]);
+    });
+
+    it('reports a completed delivery as complete', async () => {
+      const { deliverDeferred } = registerSaveHandler(offscreen, L);
+      const entry = {
+        id: 'rec-1',
+        files: [{
+          stream: 'tab' as const, filename: 'tab.webm', delivery: { requested: 'local', status: 'pending' },
+          locations: [{ kind: 'opfs' as const, key: 'library/rec-1/tab.webm', retainedAt: 1 }],
+        }],
+      };
+      offscreen.openRetained = jest.fn(async () => 'blob:9');
+
+      const outcomes = await deliverDeferred(entry as never, 'Therapy');
+      expect(outcomes.map((o) => o.status)).toEqual(['complete']);
+      // And it went into the folder, not the download root.
+      expect(downloadFile).toHaveBeenCalledWith({
+        url: 'blob:9', filename: 'Therapy/tab.webm', saveAs: false,
+      });
+    });
+
     it('holds the download and reports that someone is being asked', async () => {
       (broadcastToPopup as jest.Mock).mockResolvedValue(true);
       const deferred = jest.fn();

@@ -35,7 +35,7 @@ import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
-import { pendingLocalDeliveries } from './shared/recordingHistory';
+import { pendingLocalDeliveries, type RecordingHistoryCursor } from './shared/recordingHistory';
 import { ensurePersistentStorage, readStorageUsage } from './background/storageDurability';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
 import { RecordingNotationRepository } from './background/RecordingNotationRepository';
@@ -413,10 +413,19 @@ chrome.alarms?.onAlarm?.addListener((alarm) => {
 
 /** Entries whose bytes are in the library but not yet written to Downloads. */
 const listPendingLocalDeliveries = async (): Promise<{ id: string; name: string }[]> => {
-  const page = await historyRepository.listPage({ limit: 25 });
-  return page.entries
-    .filter((entry) => pendingLocalDeliveries(entry).length > 0)
-    .map((entry) => ({ id: entry.id, name: entry.name }));
+  // Paged to exhaustion: this is reconciliation, and a recording past an
+  // arbitrary cut-off would simply never be written.
+  const pending: { id: string; name: string }[] = [];
+  let cursor: RecordingHistoryCursor | undefined;
+  for (let page = 0; page < 200; page += 1) {
+    const result = await historyRepository.listPage({ limit: 100, ...(cursor ? { cursor } : {}) });
+    for (const entry of result.entries) {
+      if (pendingLocalDeliveries(entry).length > 0) pending.push({ id: entry.id, name: entry.name });
+    }
+    if (!result.nextCursor) break;
+    cursor = result.nextCursor;
+  }
+  return pending;
 };
 
 const deliverLocalRecording = async (recordingId: string, folderId: string | null): Promise<void> => {
@@ -428,10 +437,17 @@ const deliverLocalRecording = async (recordingId: string, folderId: string | nul
     folder = settings.storage.localFolderPresets.find((preset) => preset.id === folderId)?.name;
     if (!folder) throw new Error('That folder no longer exists');
   }
-  await deliverDeferred(entry, folder);
-  // Recorded after the write, so the label reflects where the file went rather
-  // than where it was asked to go.
-  await history.setLocalFolder(recordingId, folder);
+  const outcomes = await deliverDeferred(entry, folder);
+  // Stamped only when every file actually completed. A failed, interrupted or
+  // still-unsettled download would otherwise leave history claiming a folder
+  // that has nothing in it — and the label is not something the user can check
+  // against the file, because we do not show them the path.
+  const allLanded = outcomes.length > 0 && outcomes.every((outcome) => outcome.status === 'complete');
+  if (allLanded) await history.setLocalFolder(recordingId, folder);
+  else if (outcomes.some((outcome) => outcome.status !== 'complete')) {
+    L.warn(`Local delivery for ${recordingId} did not fully complete:`,
+      outcomes.map((outcome) => outcome.status).join(', '));
+  }
 };
 
 /**
