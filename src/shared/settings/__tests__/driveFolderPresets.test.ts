@@ -7,7 +7,7 @@ const preset = (id: string, name: string) => ({ id, name });
 
 describe('drive folder presets', () => {
   it('defaults to none, which is the pre-presets behaviour', () => {
-    expect(normalizeExtensionSettings({}).storage).toEqual({ driveFolderPresets: [] });
+    expect(normalizeExtensionSettings({}).storage).toEqual({ driveFolderPresets: [], localFolderPresets: [] });
   });
 
   it('keeps well-formed destinations in order', () => {

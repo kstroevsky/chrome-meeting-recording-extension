@@ -287,6 +287,55 @@ describe('registerSaveHandler', () => {
     expect(history.setDuration).toHaveBeenCalledWith('recording:1', undefined);
     expect(downloadFile).toHaveBeenCalledTimes(1);
   });
+
+  describe('a delivery deferred while the user picks a folder', () => {
+    const save = (over: Record<string, unknown> = {}) => ({
+      historyId: 'rec-1', stream: 'tab', filename: 'tab.webm',
+      blobUrl: 'blob:1', retainedKey: 'library/rec-1/tab.webm', deferDelivery: true, ...over,
+    });
+
+    it('holds the download and reports that someone is being asked', async () => {
+      (broadcastToPopup as jest.Mock).mockResolvedValue(true);
+      const deferred = jest.fn();
+      registerSaveHandler(offscreen, L, undefined, undefined, async () => 2, deferred);
+
+      offscreen.onSaveRequested(save());
+      await flushMicrotasks();
+
+      expect(downloadFile).not.toHaveBeenCalled();
+      expect(broadcastToPopup).toHaveBeenCalledWith({ type: 'RECORDING_AWAITING_DELIVERY', historyId: 'rec-1' });
+      // The library owns the bytes, so the object URL is not needed until the
+      // answer comes; a fresh one is made then.
+      expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1');
+      expect(deferred).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes immediately when the user has defined no folders', async () => {
+      (broadcastToPopup as jest.Mock).mockResolvedValue(true);
+      const deferred = jest.fn();
+      registerSaveHandler(offscreen, L, undefined, undefined, async () => 0, deferred);
+
+      offscreen.onSaveRequested(save());
+      await flushMicrotasks();
+
+      // Nothing to choose between, so nobody is interrupted.
+      expect(downloadFile).toHaveBeenCalledWith({ url: 'blob:1', filename: 'tab.webm', saveAs: false });
+      expect(deferred).not.toHaveBeenCalled();
+    });
+
+    it('writes immediately when every popup is closed', async () => {
+      // Asking a question nobody hears would strand the recording.
+      (broadcastToPopup as jest.Mock).mockResolvedValue(false);
+      const deferred = jest.fn();
+      registerSaveHandler(offscreen, L, undefined, undefined, async () => 2, deferred);
+
+      offscreen.onSaveRequested(save());
+      await flushMicrotasks();
+
+      expect(downloadFile).toHaveBeenCalledWith({ url: 'blob:1', filename: 'tab.webm', saveAs: false });
+      expect(deferred).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('isFreshRecordingStart', () => {
@@ -336,4 +385,5 @@ describe('keep-alive loop', () => {
     jest.advanceTimersByTime(60_000);
     expect(pokeRuntime).toHaveBeenCalledTimes(1);
   });
+
 });
