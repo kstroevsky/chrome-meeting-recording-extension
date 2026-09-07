@@ -1,32 +1,37 @@
 /**
  * @file background/storageDurability.ts
  *
- * Makes the retained library durable, and reports what it costs.
+ * Reports what the retained library costs.
  *
- * `unlimitedStorage` lifts the quota; it does not stop eviction. Without a
- * persistence grant the origin is "best-effort", and Chrome may clear it under
- * storage pressure — which would quietly delete the recordings ADR-0006 calls
- * retained. Asking for the grant is the difference between a library and a
- * cache that has not been cleared yet.
+ * Durability is already handled, by the `unlimitedStorage` permission in the
+ * manifest: for an extension that exempts storage from both quota limits and
+ * storage-pressure eviction, and Chrome's permission reference names the Origin
+ * Private File System among the mechanisms it covers. So the library is not at
+ * risk of being cleared under disk pressure, and nothing here needs to make it
+ * safe.
+ *
+ * `navigator.storage.persisted()` reports something else — the web
+ * StorageManager grant — and it reads false for this extension in every context
+ * tried. That is not a durability signal here, and must not be presented as
+ * one. It is surfaced only as a diagnostic.
+ *
+ * What `unlimitedStorage` does *not* cover: uninstalling the extension, the
+ * user clearing site data, profile loss, disk failure. The library is retained
+ * storage, not a backup.
  */
 
-export type StorageUsage = {
-  /** True once the origin is exempt from eviction under storage pressure. */
-  persisted: boolean;
-  /** Bytes this origin uses, across OPFS and IndexedDB; undefined if unavailable. */
-  usageBytes?: number;
-  quotaBytes?: number;
-  /** Bytes held by the retained library specifically — what a cleanup would free. */
-  retainedBytes: number;
-};
+import type { StorageUsage } from '../shared/playback';
+
+export type { StorageUsage };
 
 /**
- * Requests persistence once, and reports the result.
+ * Asks for the StorageManager grant as belt-and-braces, and reports whether it
+ * was given.
  *
- * Chrome decides on its own signals; an extension with `unlimitedStorage` is
- * usually granted without a prompt, but that is its choice, not a guarantee, so
- * a refusal is logged rather than treated as an error. Re-asking after a grant
- * is pointless, hence the `persisted()` check first.
+ * Not load-bearing: `unlimitedStorage` already exempts this extension's storage
+ * from eviction. A refusal is therefore unremarkable and is logged quietly
+ * rather than warned about — an earlier version of this file treated a refusal
+ * as "recordings may be evicted", which was wrong.
  */
 export async function ensurePersistentStorage(
   log: (...args: unknown[]) => void,
@@ -36,8 +41,11 @@ export async function ensurePersistentStorage(
     if (!navigator.storage?.persist) return false;
     if (await navigator.storage.persisted?.()) return true;
     const granted = await navigator.storage.persist();
-    if (granted) log('Storage is persistent: retained recordings are exempt from eviction');
-    else warn('Storage persistence was refused; retained recordings may be evicted under pressure');
+    // Eviction safety comes from `unlimitedStorage`, so neither outcome is a
+    // problem worth a warning.
+    log(granted
+      ? 'StorageManager persistence granted'
+      : 'StorageManager persistence not granted; unlimitedStorage still exempts extension storage');
     return granted;
   } catch (error) {
     warn('Could not request storage persistence:', error);

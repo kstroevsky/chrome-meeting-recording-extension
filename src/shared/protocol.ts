@@ -217,7 +217,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupRemoveActiveNotation ? NotationListResult :
   T extends PopupListRecordingNotations ? NotationListResult :
   T extends PopupGetStorageUsage
-    ? { ok: true; usage: import('../background/storageDurability').StorageUsage } | { ok: false; error: string } :
+    ? { ok: true; usage: import('./playback').StorageUsage } | { ok: false; error: string } :
   T extends PopupListPendingLocalDeliveries
     ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :

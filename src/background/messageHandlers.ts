@@ -57,7 +57,7 @@ export type MessageHandlersDeps = {
   driveArtifacts?: DriveArtifactResolver;
   fileToDestination?: (recordingId: string, presetId: string | null) => Promise<void>;
   /** Storage the retained library occupies, and whether it is exempt from eviction. */
-  storageUsage?: () => Promise<import('./storageDurability').StorageUsage>;
+  storageUsage?: () => Promise<import('../shared/playback').StorageUsage>;
   /** Recordings whose bytes are retained but not yet written to the download directory. */
   listPendingLocal?: () => Promise<{ id: string; name: string }[]>;
   /** Writes one of those into the chosen local folder; null means the directory itself. */

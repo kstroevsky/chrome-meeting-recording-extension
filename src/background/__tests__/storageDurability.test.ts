@@ -21,14 +21,16 @@ describe('ensurePersistentStorage', () => {
     withStorage({ persisted: async () => false, persist });
     await expect(ensurePersistentStorage(log, warn)).resolves.toBe(true);
     expect(persist).toHaveBeenCalledTimes(1);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('exempt from eviction'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('persistence granted'));
   });
 
-  it('warns rather than throws when the browser refuses', async () => {
-    // Chrome decides on its own signals; a refusal is a fact to report, not a bug.
+  it('does not warn when the grant is refused, because it is not what protects us', async () => {
+    // `unlimitedStorage` exempts extension storage from eviction; the
+    // StorageManager grant is a separate mechanism and reads false regardless.
     withStorage({ persisted: async () => false, persist: async () => false });
     await expect(ensurePersistentStorage(log, warn)).resolves.toBe(false);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('may be evicted'));
+    expect(warn).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('unlimitedStorage still exempts'));
   });
 
   it('survives a browser with no storage manager at all', async () => {

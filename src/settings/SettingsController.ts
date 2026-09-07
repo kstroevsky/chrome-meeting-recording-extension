@@ -90,12 +90,10 @@ export class SettingsController {
       const small = document.createElement('small');
       small.textContent = detail;
       target.append(small);
-      // Deliberately not surfaced as a warning. Chrome refuses `persist()` for
-      // this extension in every context tried, yet extension origins may be
-      // exempt from eviction through `unlimitedStorage` anyway — so telling the
-      // user their recordings are at risk would be an unverified claim. The
-      // grant is still requested; the state is logged, not shown, until someone
-      // establishes which is true on a real profile.
+      // Never surfaced. `unlimitedStorage` is what exempts this extension's
+      // storage from eviction; the StorageManager grant is a different
+      // mechanism and reads false here regardless, so showing it would imply a
+      // risk that does not exist.
       void persisted;
     } catch {
       target.textContent = 'Unavailable';
