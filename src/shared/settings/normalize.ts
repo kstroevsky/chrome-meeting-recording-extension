@@ -91,6 +91,7 @@ export function cloneSettings(settings: ExtensionSettings): ExtensionSettings {
     storage: {
       ...settings.storage,
       driveFolderPresets: settings.storage.driveFolderPresets.map((preset) => ({ ...preset })),
+      localFolderPresets: settings.storage.localFolderPresets.map((preset) => ({ ...preset })),
     },
     professional: { ...settings.professional },
   };
