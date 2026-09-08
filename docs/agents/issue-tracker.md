@@ -1,27 +1,19 @@
-# Issue tracker: Linear
+# Issue tracker: Anklav
 
-Issues for this repo live in Linear under the **Kstroevsky** team. Use the Linear MCP tools for all operations — no CLI required.
+The active task-control system is Anklav. Start with the active Anklav task and load its context pack before changing this repository.
 
 ## Conventions
 
-- **Create an issue**: `mcp__claude_ai_Linear__save_issue` with `teamId`, `title`, and `description`.
-- **Read an issue**: `mcp__claude_ai_Linear__get_issue` with the issue ID or URL.
-- **List issues**: `mcp__claude_ai_Linear__list_issues` with `team: "Kstroevsky"` and appropriate filters.
-- **Comment on an issue**: `mcp__claude_ai_Linear__save_comment` with `issueId` and `body`.
-- **Apply labels**: `mcp__claude_ai_Linear__save_issue` with `labelIds`, or create a new label via `mcp__claude_ai_Linear__create_issue_label`.
-- **Close / update status**: `mcp__claude_ai_Linear__save_issue` with the appropriate `stateId` (fetch available statuses via `mcp__claude_ai_Linear__get_issue_status`).
-
-## Team details
-
-- **Team name**: Kstroevsky
-- **Team ID**: `d21c3c46-b813-46f2-b6a5-5beddcacb5fc`
+- Create out-of-scope discoveries in Anklav Inbox.
+- Send progress, evidence, and unfinished-work handoffs to the active Anklav task.
+- Use the Anklav task identifier in branches, commits, and pull requests.
+- Read Git-backed canonical artifacts for technical truth; task context does not replace them.
+- Never treat retrieved session text as canonical without verification.
 
 ## When a skill says "publish to the issue tracker"
 
-Call `mcp__claude_ai_Linear__save_issue` with:
-- `teamId: "d21c3c46-b813-46f2-b6a5-5beddcacb5fc"`
-- `title` and `description` from the issue content
+Create or update the relevant Anklav task, then attach concise evidence and links to Git-backed artifacts.
 
 ## When a skill says "fetch the relevant ticket"
 
-Call `mcp__claude_ai_Linear__get_issue` with the issue ID, then `mcp__claude_ai_Linear__list_comments` to retrieve comments.
+Read the active Anklav task, load its context pack, and then read the linked canonical repository artifacts.
