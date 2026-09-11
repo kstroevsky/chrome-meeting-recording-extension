@@ -162,6 +162,17 @@ export function startsWithDiscourseCue(text: string): boolean {
   });
 }
 
+/**
+ * Every §9 value one analysis run used, in one object.
+ *
+ * Composed from the per-stage configs so that a run has a single thing to
+ * record, hash, and compare — see `provenance.ts`.
+ */
+export type AnalysisConfig = SegmentationConfig
+  & import('./clusters').ClusterConfig
+  & import('./keywords').KeywordConfig
+  & import('./importance').ImportanceConfig;
+
 export function createSegmentId(): string {
   return `segment:${crypto.randomUUID()}`;
 }

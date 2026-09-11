@@ -69,6 +69,27 @@ export function updateCentroid(centroid: Embedding, n: number, x: Embedding): Em
 }
 
 /**
+ * Combines two centroids into the centroid of their union, weighted by how many
+ * members each already summarizes.
+ *
+ * What CLU-06's merge sweep needs: folding *Redis incident #1* into *Redis
+ * incident #2* must land where the combined members actually sit, not halfway
+ * between two means of very different sizes. Like {@link updateCentroid}, it
+ * never re-reads a member.
+ */
+export function mergeCentroids(a: Embedding, na: number, b: Embedding, nb: number): Embedding {
+  if (a.length !== b.length) {
+    throw new Error(`Cannot merge centroids of different widths: ${a.length} vs ${b.length}`);
+  }
+  if (na < 0 || nb < 0 || na + nb === 0) {
+    throw new Error(`Cannot merge centroids summarizing ${na} and ${nb} members`);
+  }
+  const merged = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i += 1) merged[i] = (na * a[i] + nb * b[i]) / (na + nb);
+  return merged;
+}
+
+/**
  * The mean of a set of embeddings — a topic's centroid over its segments
  * (IMP-02), and the way a merged cluster recomputes its own.
  */
