@@ -2,8 +2,8 @@
  * @file background/recordingHistoryDatabase.ts
  *
  * Owns the `recording-history` IndexedDB connection and schema for every
- * repository that reads it. Two repositories now share this database — history
- * entries and notations — and a database has exactly one version, so the
+ * repository that reads it. Three repositories now share this database — history
+ * entries, notations and transcripts — and a database has exactly one version, so the
  * version number and the `onupgradeneeded` that satisfies it must live in one
  * place. A repository that declared its own version would downgrade-block the
  * other on open.
@@ -16,11 +16,15 @@
 import { normalizeRecordingHistoryEntry, type RecordingHistoryEntry } from '../shared/recordingHistory';
 
 const DATABASE_NAME = 'recording-history';
-/** v3 → v4 adds the `notations` store (ADR-0005). */
-const DATABASE_VERSION = 4;
+/**
+ * v3 → v4 adds the `notations` store (ADR-0005).
+ * v4 → v5 adds the `transcripts` store (ADR-0007).
+ */
+const DATABASE_VERSION = 5;
 
 export const RECORDINGS_STORE = 'recordings';
 export const NOTATIONS_STORE = 'notations';
+export const TRANSCRIPTS_STORE = 'transcripts';
 export const CREATED_AT_ID_INDEX = 'createdAtId';
 export const ACTIVE_CREATED_AT_ID_INDEX = 'activeCreatedAtId';
 
@@ -96,6 +100,12 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
   // so a mark can be written before the history row it belongs to exists.
   if (!database.objectStoreNames.contains(NOTATIONS_STORE)) {
     database.createObjectStore(NOTATIONS_STORE, { keyPath: 'recordingId' });
+  }
+
+  // Transcripts key the same way and for the same reason: captions are committed
+  // while the call is still running, long before finalize creates the row.
+  if (!database.objectStoreNames.contains(TRANSCRIPTS_STORE)) {
+    database.createObjectStore(TRANSCRIPTS_STORE, { keyPath: 'recordingId' });
   }
 }
 
