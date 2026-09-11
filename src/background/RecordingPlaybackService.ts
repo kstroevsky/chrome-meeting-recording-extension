@@ -9,13 +9,15 @@
  * the service worker.
  */
 
-import type { PlaybackManifest, PlaybackSource, PlaybackTrack } from '../shared/playback';
+import type { PlaybackManifest, PlaybackSource, PlaybackTrack, TranscriptStatus } from '../shared/playback';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 import type { RecordingNotation } from '../shared/notations';
 
 export type RecordingPlaybackServiceDeps = {
   getEntry: (recordingId: string) => Promise<RecordingHistoryEntry | undefined>;
   listNotations: (recordingId: string) => Promise<RecordingNotation[]>;
+  /** Drives the player's rail. See `RecordingTranscriptService.status`. */
+  transcriptStatus: (recordingId: string) => Promise<TranscriptStatus>;
 };
 
 export class RecordingPlaybackService {
@@ -41,8 +43,7 @@ export class RecordingPlaybackService {
       recordingId: entry.id,
       title: entry.name,
       createdAt: entry.createdAt,
-      // No transcription pipeline exists yet, so the rail never renders today.
-      transcriptStatus: 'none',
+      transcriptStatus: await this.deps.transcriptStatus(recordingId),
       ...(entry.durationMs != null ? { durationMs: entry.durationMs } : {}),
       notations: await this.deps.listNotations(recordingId),
       tracks: media.map(toTrack).sort(byStreamOrder),

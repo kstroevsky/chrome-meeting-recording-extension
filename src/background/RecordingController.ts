@@ -27,6 +27,8 @@ import { isStoppablePhase, parseRunConfig, toStatusView, type RecordingInputDevi
 import type { OffscreenManager } from './OffscreenManager';
 import type { RecordingSession } from './RecordingSession';
 import type { RecordingNotationService } from './RecordingNotationService';
+import type { RecordingTranscriptService } from './RecordingTranscriptService';
+import type { RecordingTranscriptCapture } from './RecordingTranscriptCapture';
 import type { TelemetryRuntime } from './TelemetryRuntime';
 import { createTelemetryId } from '../shared/telemetry';
 import { hasExportableNotations, toWebVtt } from '../shared/notationExport';
@@ -37,6 +39,8 @@ export type RecordingControllerDeps = {
   session: RecordingSession;
   telemetry?: TelemetryRuntime;
   notations?: RecordingNotationService;
+  transcripts?: RecordingTranscriptService;
+  transcriptCapture?: RecordingTranscriptCapture;
 };
 
 export type StartRecordingMessage = {
@@ -62,13 +66,17 @@ export class RecordingController {
   private readonly session: RecordingSession;
   private readonly telemetry?: TelemetryRuntime;
   private readonly notations?: RecordingNotationService;
+  private readonly transcripts?: RecordingTranscriptService;
+  private readonly transcriptCapture?: RecordingTranscriptCapture;
 
-  constructor({ L, offscreen, session, telemetry, notations }: RecordingControllerDeps) {
+  constructor({ L, offscreen, session, telemetry, notations, transcripts, transcriptCapture }: RecordingControllerDeps) {
     this.L = L;
     this.offscreen = offscreen;
     this.session = session;
     this.telemetry = telemetry;
     this.notations = notations;
+    this.transcripts = transcripts;
+    this.transcriptCapture = transcriptCapture;
   }
 
   /**
@@ -192,6 +200,16 @@ export class RecordingController {
     // complete by the time it rides the stop RPC (ADR-0005).
     this.session.markStopping(interruption);
     this.L.log('Stopping recording:', reason);
+    // markStopping has closed the run's last recorded span, so this is the
+    // cutoff. Drain the caption buffer against it *now*: Meet keeps refining a
+    // caption after the recorder stops, and a refinement that arrives later
+    // represents speech the file does not contain (ADR-0007). Awaited for the
+    // same reason the notes sidecar is — it has to reflect the run, not a
+    // moment somewhere after it.
+    if (historyId) {
+      await this.transcriptCapture?.flushAtBoundary(historyId)
+        .catch((error) => this.L.warn('Could not flush captions at the stop boundary:', error));
+    }
     const notesSidecar = await this.buildNotesSidecar(historyId);
 
     try {
@@ -230,6 +248,8 @@ export class RecordingController {
     if (historyId) {
       await this.notations?.removeAll(historyId)
         .catch((error) => this.L.warn('Discarding recording notations failed:', error));
+      await this.transcripts?.removeAll(historyId)
+        .catch((error) => this.L.warn('Discarding recording transcript failed:', error));
     }
 
     try {
@@ -390,6 +410,13 @@ export class RecordingController {
       });
       if (!r?.ok) return this.fail(r?.error || 'Pause failed in offscreen');
       this.session.setPaused(paused);
+      // Close the caption buffer on the pause boundary, so a sentence spoken
+      // across it arrives as two utterances that each land in real media rather
+      // than one that spans a gap the file does not contain (ADR-0007).
+      if (paused && snapshot.historyId) {
+        void this.transcriptCapture?.flushAtBoundary(snapshot.historyId)
+          .catch((error) => this.L.warn('Could not flush captions at the pause boundary:', error));
+      }
       return this.ok();
     } catch (e: any) {
       return this.fail(`SET_PAUSED failed: ${e?.message || e}`);

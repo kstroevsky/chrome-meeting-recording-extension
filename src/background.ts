@@ -19,7 +19,7 @@ import { loadExtensionSettingsFromStorage } from './shared/settings';
 import { DRIVE_ROOT_FOLDER_NAME } from './offscreen/drive/constants';
 import { DriveArtifactResolver } from './background/DriveArtifactResolver';
 import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
-import { addTabRemovedListener } from './platform/chrome/tabs';
+import { addTabRemovedListener, sendTabMessage } from './platform/chrome/tabs';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
 import { DrivePlaybackAuthLeaseManager } from './background/DrivePlaybackAuthLeaseManager';
 import { RecordingPlaybackService } from './background/RecordingPlaybackService';
@@ -41,6 +41,9 @@ import { broadcastToPopup } from './shared/messages';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
 import { RecordingNotationRepository } from './background/RecordingNotationRepository';
 import { RecordingNotationService } from './background/RecordingNotationService';
+import { RecordingTranscriptRepository } from './background/RecordingTranscriptRepository';
+import { RecordingTranscriptService } from './background/RecordingTranscriptService';
+import { RecordingTranscriptCapture } from './background/RecordingTranscriptCapture';
 import { RecordingHistoryService } from './background/RecordingHistoryService';
 import { openDownloadedFile } from './platform/chrome/downloads';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
@@ -67,6 +70,7 @@ const offscreen = new OffscreenManager();
 // Notations are their own aggregate in the same database (ADR-0005), so they
 // are constructed first: history delegates its dependent cleanup to them.
 const notations = new RecordingNotationService(new RecordingNotationRepository());
+const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository());
 const historyRepository = new RecordingHistoryRepository();
 const LEASE_STORAGE_KEY = 'playbackLeases';
 const deleteRetainedKeys = async (keys: string[]) => {
@@ -87,7 +91,11 @@ const history = new RecordingHistoryService(
     await offscreen.ensureReady();
     return await offscreen.rpc({ type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES', resources });
   },
-  (id) => notations.removeAll(id),
+  async (id) => {
+    // Every derived aggregate goes with the recording it describes.
+    await notations.removeAll(id);
+    await transcripts.removeAll(id).catch((error) => L.warn('Could not remove recording transcript:', error));
+  },
   async (keys, historyId) => {
     // The tombstone already stands. If a player is reading these bytes, the
     // deletion waits for it rather than pulling the file out mid-frame.
@@ -101,6 +109,7 @@ const history = new RecordingHistoryService(
 const playback = new RecordingPlaybackService({
   getEntry: (id) => historyRepository.get(id),
   listNotations: (id) => notations.list(id),
+  transcriptStatus: (id) => transcripts.status(id),
 });
 const driveAuthLease = new DrivePlaybackAuthLeaseManager({
   // The extension's existing Drive auth, not a second OAuth system.
@@ -216,6 +225,15 @@ let previousPhase: RecordingPhase = 'idle';
 let pendingReload = false;
 
 const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), L.warn);
+const transcriptCapture = new RecordingTranscriptCapture({
+  transcripts,
+  activeHistoryId: () => session.getSnapshot().historyId,
+  activeRunId: () => session.getSnapshot().epoch,
+  recordedRangeAt: (startWallMs, endWallMs) => session.recordedRangeAt(startWallMs, endWallMs),
+  sendToTab: (tabId, message) => sendTabMessage(tabId, message),
+  warn: L.warn,
+});
+
 const session = new RecordingSession(
   async (snapshot) => {
     try {
@@ -250,6 +268,11 @@ const session = new RecordingSession(
     // not mistaken for a fresh start.
     if (sessionHydrated && isFreshRecordingStart(previousPhase, snapshot.phase)) {
       perfDebugStore.clear();
+      // Ask the meeting tab to start shipping committed captions. Best-effort:
+      // a captured tab with no content script is the ordinary non-Meet case.
+      if (snapshot.targetTabId != null && snapshot.epoch != null) {
+        void transcriptCapture.arm(snapshot.targetTabId, snapshot.epoch);
+      }
     }
     previousPhase = snapshot.phase;
     perfDebugStore.setPhase(snapshot.phase);
@@ -265,8 +288,13 @@ const session = new RecordingSession(
   (historyId, durationMs) => {
     void notations.closeOpenSpans(historyId, durationMs)
       .catch((error) => L.warn('Could not close open notations for the finished run:', error));
+    // Sweep whatever the meeting tab still holds while it is reachable, then
+    // stop it pushing. Best-effort for the same reason.
+    void transcriptCapture.finish(historyId)
+      .catch((error) => L.warn('Could not finish transcript capture for the run:', error));
   }
 );
+
 
 // Wire offscreen -> background save requests and session phase updates.
 offscreen.onStateChanged = (msg) => {
@@ -465,10 +493,11 @@ const deliverAbandonedLocalRecordings = async (): Promise<void> => {
 };
 
 // The recording control plane: every start/stop trigger drives this one seam.
-const controller = new RecordingController({ L, offscreen, session, telemetry, notations });
+const controller = new RecordingController({ L, offscreen, session, telemetry, notations, transcripts, transcriptCapture });
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
+  transcripts, transcriptCapture,
   playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination,
   listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
   storageUsage: () => readStorageUsage(async () => {
