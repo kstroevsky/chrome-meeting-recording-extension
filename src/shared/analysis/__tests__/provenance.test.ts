@@ -19,6 +19,7 @@ const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance 
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: 'abc1234',
   embeddingDimensions: 384,
+  embeddingDtype: 'q8',
   configHash: hashAnalysisConfig(CONFIG),
   ...over,
 });
@@ -35,7 +36,10 @@ describe('hashAnalysisConfig', () => {
     expect(hashAnalysisConfig(reordered)).toBe(hashAnalysisConfig(CONFIG));
   });
 
-  it('changes when any §9 value changes', () => {
+  it('changes when any output-affecting AnalysisConfig value changes', () => {
+    // Deliberately not "every §9 value": the embedding dtype is its own
+    // provenance field, and the throughput target is an acceptance target that
+    // does not determine what the analysis says.
     const baseline = hashAnalysisConfig(CONFIG);
     for (const key of Object.keys(CONFIG) as (keyof AnalysisConfig)[]) {
       const changed = { ...CONFIG, [key]: (CONFIG[key] as number) + 1 };
@@ -63,6 +67,12 @@ describe('isStale', () => {
     expect(isStale(provenance({ embeddingModelRevision: 'def5678' }), provenance())).toBe(true);
     // Re-quantizing or swapping the model can change the width.
     expect(isStale(provenance({ embeddingDimensions: 768 }), provenance())).toBe(true);
+  });
+
+  it('rejects a result produced at a different quantization', () => {
+    // Same model, same revision, different dtype: the vectors move, so every
+    // boundary and cluster derived from them may too.
+    expect(isStale(provenance({ embeddingDtype: 'fp16' }), provenance())).toBe(true);
   });
 
   it('rejects a result computed under different §9 values', () => {

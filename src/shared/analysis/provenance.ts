@@ -20,6 +20,13 @@
 import type { AnalysisConfig } from './types';
 
 /**
+ * The quantizations Transformers.js can load. EMB-04 puts FP16, INT8/Q8 and Q4
+ * in scope; the rest are listed because the spike may benchmark them and a
+ * provenance record has to be able to name what actually ran.
+ */
+export type EmbeddingDtype = 'fp32' | 'fp16' | 'q8' | 'int8' | 'uint8' | 'q4' | 'q4f16' | 'bnb4';
+
+/**
  * The deterministic pipeline's own version.
  *
  * Bump whenever a stage's *behaviour* changes in a way that would make an
@@ -36,12 +43,30 @@ export type AnalysisProvenance = {
   embeddingModelRevision: string;
   /** 384 for `multilingual-e5-small` (EMB-03); recorded because it can change with the model. */
   embeddingDimensions: number;
-  /** Digest of every §9 value the run used. See {@link hashAnalysisConfig}. */
+  /**
+   * The quantization the vectors were produced at.
+   *
+   * Belongs here rather than in {@link hashAnalysisConfig} because it is a
+   * property of the artifact, not of the pipeline's configuration — and it
+   * matters: re-quantizing the same model at the same revision moves the
+   * vectors, which moves boundaries, clusters and every score derived from them.
+   */
+  embeddingDtype: EmbeddingDtype;
+  /**
+   * Digest of the output-affecting values in {@link AnalysisConfig}. See
+   * {@link hashAnalysisConfig}.
+   *
+   * Not every §9 open contract is in here. `AnalysisConfig` carries the
+   * segmentation, clustering, keyword and MMR values — the ones that change the
+   * result. The embedding dtype is its own field above, and the throughput
+   * target is deliberately absent: it is an acceptance target, not a condition
+   * that determines what the analysis says.
+   */
   configHash: string;
 };
 
 /**
- * A stable digest of the configuration a run used.
+ * A stable digest of the output-affecting configuration a run used.
  *
  * Only has to answer "is this the same configuration as before?", so it is a
  * plain FNV-1a over the config's canonical form rather than a cryptographic
@@ -61,6 +86,7 @@ export function isStale(stored: AnalysisProvenance, current: AnalysisProvenance)
     || stored.embeddingModel !== current.embeddingModel
     || stored.embeddingModelRevision !== current.embeddingModelRevision
     || stored.embeddingDimensions !== current.embeddingDimensions
+    || stored.embeddingDtype !== current.embeddingDtype
     || stored.configHash !== current.configHash;
 }
 

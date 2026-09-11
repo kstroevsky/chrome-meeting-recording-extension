@@ -13,6 +13,7 @@ const {
   applyTargetToManifest,
 } = require('./scripts/lib/manifestTargets.cjs')
 const { telemetryHostPermission } = require('./scripts/lib/telemetryEndpoint.cjs')
+const { ANALYSIS_MODEL, modelCacheDir } = require('./scripts/lib/analysisModel.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
@@ -160,6 +161,7 @@ module.exports = (_env, argv) => {
       background: './src/background.ts',
       offscreen: './src/offscreen.ts',
       opfsWorker: './src/offscreen/storage/opfsWorker.ts',
+      analysisWorker: './src/offscreen/analysis/analysisWorker.ts',
       micsetup: './src/micsetup.ts',
       camsetup: './src/camsetup.ts',
       settings: './src/settings.ts',
@@ -169,13 +171,23 @@ module.exports = (_env, argv) => {
       path: path.resolve(__dirname, outputDir),
       filename: '[name].js'
     },
-    resolve: { extensions: ['.ts', '.js'] },
+    // `.mjs` for @huggingface/transformers, which ships ESM under that extension.
+    resolve: { extensions: ['.ts', '.js', '.mjs'] },
     module: {
       rules: [
         {
           test: /\.ts$/,
           use: 'ts-loader',
           exclude: /node_modules/
+        },
+        {
+          // ONNX Runtime reaches for its own `.wasm` through `import.meta.url`.
+          // The worker points ORT at the packaged copies in `ort/` instead
+          // (`wasmPaths`), so letting webpack emit a second, hashed copy would
+          // ship 22.5 MB nobody loads.
+          test: /\.wasm$/,
+          type: 'asset/resource',
+          generator: { emit: false },
         }
       ]
     },
@@ -225,6 +237,25 @@ module.exports = (_env, argv) => {
           // Finder metadata is ignored by git but can still exist locally; never
           // ship it inside the extension package.
           { from: PUBLIC_DIR, to: '.', noErrorOnMissing: true, globOptions: { ignore: ['**/.DS_Store', '**/._*'] } },
+          // ADR-0007: the embedding model is extension-owned. Materialized and
+          // SHA-256 verified by `scripts/fetch-analysis-model.mjs` before the
+          // build; analysis never reaches the network.
+          { from: modelCacheDir(), to: `models/${ANALYSIS_MODEL.id}` },
+          // ONNX Runtime's WASM binaries, copied from the version
+          // @huggingface/transformers resolved. Not an independent dependency:
+          // two ORT versions would be worse than a path that breaks loudly.
+          //
+          // Only the two builds this extension can actually reach are packaged.
+          // `jsep` backs WebGPU and `ort-wasm-simd-threaded` the CPU fallback —
+          // the two rungs of RES-06's ladder. `asyncify` and `jspi` are
+          // alternative async strategies we do not select, and at 22.5 MB and
+          // 13.9 MB they are not worth shipping on the chance that we might.
+          {
+            from: path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
+            to: 'ort',
+            globOptions: { ignore: ['**/*.map'] },
+            filter: (resourcePath) => /ort-wasm-simd-threaded(\.jsep)?\.(wasm|mjs)$/.test(resourcePath),
+          },
         ]
       })
     ]

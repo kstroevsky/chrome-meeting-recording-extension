@@ -84,6 +84,7 @@
         "webpack-cli": "^6.0.1"
     },
     "dependencies": {
+        "@huggingface/transformers": "^4.2.0",
         "webm-duration-fix": "^1.0.4"
     }
 }
