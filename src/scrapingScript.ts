@@ -18,6 +18,11 @@
  *   chrome.runtime.onMessage: GET_TRANSCRIPT, RESET_TRANSCRIPT
  *   window.getTranscript(), window.resetTranscript() (dev convenience only)
  *
+ * Public API exposed to Background:
+ *   chrome.runtime.onMessage: SET_TRANSCRIPT_CAPTURE, GET_TRANSCRIPT_UTTERANCES
+ *   Pushes TRANSCRIPT_UTTERANCES while armed, so a transcript survives this tab
+ *   closing mid-call (ADR-0007 Decision 1).
+ *
  * @see src/shared/protocol.ts  — GET_TRANSCRIPT / RESET_TRANSCRIPT types
  * @see src/shared/timeouts.ts  — CAPTION_GRACE_MS constant
  */
@@ -25,7 +30,7 @@
 import { GoogleMeetAdapter } from './content/GoogleMeetAdapter';
 import type { MeetingProviderAdapter } from './content/MeetingProviderAdapter';
 import { trySendRuntimeMessage } from './platform/chrome/runtime';
-import { isPopupToContentMessage } from './shared/protocol';
+import { isPopupToContentMessage, type TranscriptCaptureState } from './shared/protocol';
 import {
   configurePerfRuntime,
   logPerf,
@@ -34,6 +39,7 @@ import {
   type PerfEventEntry,
 } from './shared/perf';
 import { CaptionBuffer } from './content/captionBuffer';
+import type { CaptionUtterance } from './shared/transcript';
 import { MeetingEndDetector, type MeetingEndedPayload } from './content/MeetingEndDetector';
 import { TelemetryAccumulator, type TelemetrySink, type TelemetrySnapshot } from './shared/telemetry';
 import { addStorageChangedListener } from './platform/chrome/storage';
@@ -102,7 +108,16 @@ type ObservedCaptionBlock = {
 };
 
 class TranscriptCollector {
-  private readonly buffer = new CaptionBuffer();
+  /**
+   * Off until background arms it. A Meet call with captions on commits an
+   * utterance every few seconds, and pushing those unconditionally would keep
+   * the service worker awake for every call whether or not anything is being
+   * recorded.
+   */
+  private capturingRunId: number | null = null;
+  private readonly buffer = new CaptionBuffer({
+    onCommit: (utterance) => this.pushUtterances([utterance]),
+  });
   private captionObserver: MutationObserver | null = null;
   private regionObserver: MutationObserver | null = null;
   private regionParentObserver: MutationObserver | null = null;
@@ -119,6 +134,43 @@ class TranscriptCollector {
     this.observeMeetingLifecycle();
     this.exposeWindowApi();
     this.exposeMessageApi();
+    // This script may have loaded *into* a run already in progress — a Meet
+    // reload or navigation mid-recording — in which case the arming message
+    // went to the previous instance. Ask rather than stay silent until the run
+    // ends.
+    void this.resumeCaptureIfActive();
+  }
+
+  /** Pushes committed utterances, tagged with the run they belong to. */
+  private pushUtterances(utterances: CaptionUtterance[]) {
+    if (this.capturingRunId == null || !utterances.length) return;
+    void trySendRuntimeMessage({
+      type: 'TRANSCRIPT_UTTERANCES',
+      runId: this.capturingRunId,
+      utterances,
+    });
+  }
+
+  /**
+   * Arms or disarms shipping. Arming also flushes whatever is already
+   * buffered, which closes the race between the last caption committed before
+   * the arming message and the message itself. Background de-duplicates, so a
+   * re-sent utterance costs nothing.
+   */
+  private setCapturing(runId: number | null) {
+    const changed = this.capturingRunId !== runId;
+    this.capturingRunId = runId;
+    if (runId != null && changed) this.pushUtterances(this.buffer.getUtterances());
+  }
+
+  private async resumeCaptureIfActive() {
+    try {
+      const state = await chrome.runtime.sendMessage({ type: 'GET_TRANSCRIPT_CAPTURE_STATE' });
+      const active = (state as TranscriptCaptureState | undefined);
+      if (active?.active && typeof active.runId === 'number') this.setCapturing(active.runId);
+    } catch {
+      // No background to answer — nothing is recording, so nothing to resume.
+    }
   }
 
   getTranscriptText(): string { return this.buffer.getTranscriptText(); }
@@ -288,6 +340,15 @@ class TranscriptCollector {
       }
       if (msg.type === 'GET_CAPTION_STATE') {
         sendResponse({ captionsActive: this.areCaptionsActive() });
+        return true;
+      }
+      if (msg.type === 'SET_TRANSCRIPT_CAPTURE') {
+        this.setCapturing(msg.active === true && typeof msg.runId === 'number' ? msg.runId : null);
+        sendResponse({ ok: true });
+        return true;
+      }
+      if (msg.type === 'GET_TRANSCRIPT_UTTERANCES') {
+        sendResponse({ utterances: this.buffer.getUtterances() });
         return true;
       }
       return false;
