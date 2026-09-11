@@ -18,6 +18,7 @@ import {
   type UploadJob,
   type UploadSummary,
 } from '../shared/recording';
+import { MAX_RECORDED_SPANS, type RecordedSpan } from '../shared/recordingTypes';
 import type { OffscreenPhaseUpdate } from '../shared/protocol';
 import { createRecordingHistoryId } from '../shared/recordingHistory';
 
@@ -124,6 +125,8 @@ export class RecordingSession {
       warnings: undefined,
       // Fencing token (ADR-0003): a fresh, strictly-increasing epoch per run.
       epoch: (this.snapshot.epoch ?? 0) + 1,
+      // The previous run's span ledger is not this run's timeline.
+      recordedSpans: undefined,
       // Background uploads outlive the run that spawned them (ADR-0004): carry any
       // still-uploading jobs into the new recording so starting one never drops them,
       // while pruning finished tabs so the list can't grow without bound.
@@ -185,6 +188,11 @@ export class RecordingSession {
       warnings,
       // Preserved across idle so the next run's epoch stays strictly increasing.
       epoch: this.snapshot.epoch,
+      // The span ledger outlives its run too (ADR-0007): the transcript sweep
+      // runs *after* the session is idle, and without the ledger it would have
+      // no way to place the words the run's last seconds produced. Reset by the
+      // next `start()`, not by going idle.
+      recordedSpans: closeOpenSpan(this.snapshot.recordedSpans, Date.now()),
       // Background upload jobs are phase-independent (ADR-0004): an idle session
       // can still have uploads draining from the recording that just ended.
       uploadJobs: this.snapshot.uploadJobs,
@@ -273,11 +281,17 @@ export class RecordingSession {
    */
   setPaused(paused: boolean): RecordingSessionSnapshot {
     const now = Date.now();
+    const recordedMs = paused ? this.elapsedRecordedMs(now) : (this.snapshot.recordedMs ?? 0);
     this.snapshot = {
       ...this.snapshot,
       paused: paused || undefined,
-      recordedMs: paused ? this.elapsedRecordedMs(now) : this.snapshot.recordedMs,
+      recordedMs,
       runningSince: paused ? undefined : (this.snapshot.runningSince ?? now),
+      // A paused span is never written into the media, so the ledger closes
+      // here and the resumed span reopens at the banked media offset.
+      recordedSpans: paused
+        ? closeOpenSpan(this.snapshot.recordedSpans, now)
+        : openSpan(this.snapshot.recordedSpans, now, recordedMs),
       updatedAt: now,
     };
     return this.commit();
@@ -291,6 +305,86 @@ export class RecordingSession {
    */
   currentRecordedMs(now: number = Date.now()): number {
     return this.elapsedRecordedMs(now);
+  }
+
+  /**
+   * Media-relative position for a *past* wall-clock instant, or `undefined`
+   * when that instant is not in the produced file.
+   *
+   * Unlike {@link currentRecordedMs}, which reads the clock now, this projects
+   * a remembered moment — a caption committed seconds ago in another context —
+   * through the run's span ledger. It therefore keeps working after the run has
+   * ended, which is exactly when the transcript sweep needs it, and across
+   * pauses, whose spans are absent from the ledger and so map to nothing.
+   *
+   * Returns `undefined` rather than clamping for anything outside a span:
+   * before the run, after it, or inside a paused stretch. Clamping would map
+   * those to a real offset and seek to words that are not there.
+   */
+  recordedMsAt(wallClockMs: number, now: number = Date.now()): number | undefined {
+    if (!Number.isFinite(wallClockMs)) return undefined;
+    const spans = this.snapshot.recordedSpans;
+    // A run already in flight when this ledger shipped has no spans; fall back
+    // to the live single-span reading so an upgrade mid-recording still maps.
+    if (!spans?.length) return this.legacyRecordedMsAt(wallClockMs);
+
+    const span = spans.find((candidate) => withinSpan(candidate, wallClockMs, now));
+    return span ? span.mediaStartMs + (wallClockMs - span.wallStartMs) : undefined;
+  }
+
+  /**
+   * Projects a wall-clock *range* — an utterance's spoken span — onto the media
+   * timeline, or `undefined` when it cannot be placed honestly.
+   *
+   * A range whose end lies past its span is **always** refused, whether the gap
+   * is a pause or the end of the run.
+   *
+   * `endWallMs` is when the caption's text was last *observed to change*, so an
+   * end beyond the span means words arrived after the recorder had stopped
+   * writing. Truncating the timestamp would leave those words in the text,
+   * anchored to media that does not contain them — attributing post-resume, or
+   * post-stop, speech to what came before. No word-level timing exists to say
+   * where the text divides, so the caller drops it and counts it.
+   *
+   * There is nothing to truncate in the ordinary case: an utterance that simply
+   * *committed* after the cutoff, having stopped changing before it, ends
+   * inside its span and maps whole. Commit time is not part of this range.
+   *
+   * Refusal should be rare: the caption buffer is drained at both boundaries —
+   * when a run pauses and when it stops — so an utterance normally closes on
+   * the boundary and anything after it belongs to the next span or to no
+   * recording at all. This is the backstop for when that drain does not land: a
+   * closed tab, or a caption that changed in the gap before the message arrived.
+   */
+  recordedRangeAt(
+    startWallMs: number,
+    endWallMs: number,
+    now: number = Date.now(),
+  ): { tStartMs: number; tEndMs: number } | undefined {
+    const tStartMs = this.recordedMsAt(startWallMs, now);
+    if (tStartMs == null) return undefined;
+
+    const spans = this.snapshot.recordedSpans;
+    const span = spans?.find((candidate) => withinSpan(candidate, startWallMs, now));
+    if (!span) {
+      // Legacy single-span path: an end that does not map collapses to a point.
+      const tEndMs = this.recordedMsAt(endWallMs, now);
+      return { tStartMs, tEndMs: Math.max(tStartMs, tEndMs ?? tStartMs) };
+    }
+
+    const spanEndWallMs = span.wallEndMs ?? now;
+    if (endWallMs > spanEndWallMs) return undefined;
+
+    // A backwards end is malformed input, not ambiguity: collapse it to a point.
+    const boundedEndWallMs = Math.max(endWallMs, startWallMs);
+    return { tStartMs, tEndMs: span.mediaStartMs + (boundedEndWallMs - span.wallStartMs) };
+  }
+
+  /** The pre-ledger reading: correct only for the currently running span. */
+  private legacyRecordedMsAt(wallClockMs: number): number | undefined {
+    const { runningSince } = this.snapshot;
+    if (runningSince == null || wallClockMs < runningSince) return undefined;
+    return (this.snapshot.recordedMs ?? 0) + (wallClockMs - runningSince);
   }
 
   /**
@@ -334,13 +428,24 @@ export class RecordingSession {
    * freeze the running span (bank it, stop the clock) for every other phase. Keyed
    * on the *derived* phase, compared against the current (pre-update) phase.
    */
-  private nextTimer(newPhase: RecordingSessionSnapshot['phase'], now: number): Pick<RecordingSessionSnapshot, 'recordedMs' | 'runningSince'> {
+  private nextTimer(
+    newPhase: RecordingSessionSnapshot['phase'],
+    now: number,
+  ): Pick<RecordingSessionSnapshot, 'recordedMs' | 'runningSince' | 'recordedSpans'> {
     if (newPhase === 'recording') {
       return this.snapshot.phase === 'recording'
-        ? { recordedMs: this.snapshot.recordedMs, runningSince: this.snapshot.runningSince }
-        : { recordedMs: 0, runningSince: now };
+        ? {
+          recordedMs: this.snapshot.recordedMs,
+          runningSince: this.snapshot.runningSince,
+          recordedSpans: this.snapshot.recordedSpans,
+        }
+        : { recordedMs: 0, runningSince: now, recordedSpans: openSpan(undefined, now, 0) };
     }
-    return { recordedMs: this.elapsedRecordedMs(now), runningSince: undefined };
+    return {
+      recordedMs: this.elapsedRecordedMs(now),
+      runningSince: undefined,
+      recordedSpans: closeOpenSpan(this.snapshot.recordedSpans, now),
+    };
   }
 
   /**
@@ -443,4 +548,33 @@ export class RecordingSession {
     this.onChanged?.(snapshot);
     return snapshot;
   }
+}
+
+/** True when a wall-clock instant falls inside a recorded span. */
+function withinSpan(span: RecordedSpan, wallClockMs: number, now: number): boolean {
+  if (wallClockMs < span.wallStartMs) return false;
+  // An open span reaches only as far as the present; it cannot contain a future.
+  return wallClockMs <= (span.wallEndMs ?? now);
+}
+
+/** Closes the ledger's open span, if any. Idempotent. */
+function closeOpenSpan(spans: RecordedSpan[] | undefined, now: number): RecordedSpan[] | undefined {
+  if (!spans?.length) return spans;
+  const last = spans[spans.length - 1];
+  if (last.wallEndMs != null) return spans;
+  return [...spans.slice(0, -1), { ...last, wallEndMs: Math.max(last.wallStartMs, now) }];
+}
+
+/**
+ * Opens a span at the given media offset. A no-op when one is already open, so
+ * a redundant resume cannot fragment the ledger; drops the append at the bound
+ * rather than growing without limit, which degrades to unmapped words instead
+ * of wrong ones.
+ */
+function openSpan(spans: RecordedSpan[] | undefined, now: number, mediaStartMs: number): RecordedSpan[] {
+  const current = spans ?? [];
+  const last = current[current.length - 1];
+  if (last && last.wallEndMs == null) return current;
+  if (current.length >= MAX_RECORDED_SPANS) return current;
+  return [...current, { wallStartMs: now, mediaStartMs }];
 }
