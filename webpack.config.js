@@ -161,7 +161,13 @@ module.exports = (_env, argv) => {
       background: './src/background.ts',
       offscreen: './src/offscreen.ts',
       opfsWorker: './src/offscreen/storage/opfsWorker.ts',
-      analysisWorker: './src/offscreen/analysis/analysisWorker.ts',
+      // A worker has no `document`, so it cannot use webpack's default
+      // JSONP chunk loading. @huggingface/transformers splits its ONNX backends
+      // into async chunks, so this entry needs the worker-native loader.
+      analysisWorker: {
+        import: './src/offscreen/analysis/analysisWorker.ts',
+        chunkLoading: 'import-scripts',
+      },
       micsetup: './src/micsetup.ts',
       camsetup: './src/camsetup.ts',
       settings: './src/settings.ts',
@@ -169,7 +175,12 @@ module.exports = (_env, argv) => {
     },
     output: {
       path: path.resolve(__dirname, outputDir),
-      filename: '[name].js'
+      filename: '[name].js',
+      // Explicit, because the default ('auto') derives the path from
+      // `document.currentScript` — which does not exist in a worker and throws
+      // at module scope. In an extension, '/' is the package root, where every
+      // bundle and chunk already lives.
+      publicPath: '/',
     },
     // `.mjs` for @huggingface/transformers, which ships ESM under that extension.
     resolve: { extensions: ['.ts', '.js', '.mjs'] },
@@ -245,16 +256,17 @@ module.exports = (_env, argv) => {
           // @huggingface/transformers resolved. Not an independent dependency:
           // two ORT versions would be worse than a path that breaks loudly.
           //
-          // Only the two builds this extension can actually reach are packaged.
-          // `jsep` backs WebGPU and `ort-wasm-simd-threaded` the CPU fallback —
-          // the two rungs of RES-06's ladder. `asyncify` and `jspi` are
-          // alternative async strategies we do not select, and at 22.5 MB and
-          // 13.9 MB they are not worth shipping on the chance that we might.
+          // All four builds ship. An earlier attempt packaged only `jsep` and
+          // the plain build, reasoning that they were the two rungs of RES-06's
+          // ladder; ORT then asked for `asyncify` at runtime and failed. Which
+          // variant it selects is its own decision, made from the features it
+          // detects, so trimming this set is a measurement to make against a
+          // working build — not an inference to draw from the file names.
           {
             from: path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
             to: 'ort',
             globOptions: { ignore: ['**/*.map'] },
-            filter: (resourcePath) => /ort-wasm-simd-threaded(\.jsep)?\.(wasm|mjs)$/.test(resourcePath),
+            filter: (resourcePath) => /\.(wasm|mjs)$/.test(resourcePath),
           },
         ]
       })

@@ -41,6 +41,8 @@ export type AnalysisWorkerOpened = {
   /** The backend that actually loaded, which may not be the one requested. */
   device: EmbeddingDevice;
   dimensions: number;
+  /** The quantization that loaded, for `AnalysisProvenance`. */
+  dtype: EmbeddingDtype;
   loadMs: number;
 };
 

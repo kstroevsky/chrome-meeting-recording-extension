@@ -17,6 +17,8 @@
  */
 
 import { env, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
+import { toEncoderInput } from '../../shared/analysis/encoderInput';
+import type { EmbeddingDtype } from '../../shared/analysis/provenance';
 import type {
   AnalysisWorkerOpen,
   AnalysisWorkerRequest,
@@ -38,6 +40,7 @@ const ctx = self as unknown as {
 let extractor: FeatureExtractionPipeline | undefined;
 let dimensions = 0;
 let activeDevice: EmbeddingDevice = 'wasm';
+let activeDtype: EmbeddingDtype = 'q8';
 
 function post(message: AnalysisWorkerResponse, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
@@ -53,8 +56,11 @@ function configure(request: AnalysisWorkerOpen): void {
   const onnx = env.backends?.onnx;
   if (onnx?.wasm) {
     onnx.wasm.wasmPaths = request.wasmBaseUrl;
-    // Threaded ORT needs SharedArrayBuffer, which needs cross-origin isolation
-    // that extension pages do not have. One thread is the honest setting.
+    // Threaded ORT needs SharedArrayBuffer, which needs cross-origin isolation.
+    // An extension *can* opt into that with `cross_origin_embedder_policy` and
+    // `cross_origin_opener_policy`; this one currently does not, so the WASM
+    // fallback is single-threaded. If that proves too slow, COOP/COEP is its
+    // own optimization spike rather than a rider on this one.
     onnx.wasm.numThreads = 1;
   }
 }
@@ -83,13 +89,17 @@ async function load(request: AnalysisWorkerOpen): Promise<void> {
   }
   if (!extractor) throw lastError instanceof Error ? lastError : new Error(String(lastError));
 
-  const probe = await embed(['probe']);
+  activeDtype = request.dtype;
+  const probe = await embed([toEncoderInput('probe')]);
   dimensions = probe.dimensions;
   post({
     type: 'OPENED',
     seq: request.seq,
+    // Reported, never inferred from timing: a caller must be able to tell which
+    // rung of the ladder actually loaded (RES-06, RES-08).
     device: activeDevice,
     dimensions,
+    dtype: activeDtype,
     loadMs: Math.round(performance.now() - started),
   });
 }
@@ -113,7 +123,7 @@ ctx.onmessage = (event: MessageEvent<AnalysisWorkerRequest>) => {
         return;
       }
       const started = performance.now();
-      const { data, count, dimensions: width } = await embed(request.texts);
+      const { data, count, dimensions: width } = await embed(request.texts.map(toEncoderInput));
       post({
         type: 'EMBEDDED',
         seq: request.seq,
