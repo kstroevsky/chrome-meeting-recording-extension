@@ -4,12 +4,13 @@
  * The embedding engine: a dedicated Worker owned by the offscreen document
  * (ADR-0007 Decision 5, HOST-01), mirroring `opfsWorker`.
  *
- * **It cannot reach the network, by construction.** ADR-0007's artifact
- * amendment makes the model an extension-owned resource, and `allowRemoteModels
- * = false` turns that from a convention into an enforced one: a misconfigured
- * path fails loudly here rather than quietly fetching from a CDN. Everything it
- * loads — model, tokenizer, config, ONNX Runtime WASM — is a
- * `chrome-extension://` URL handed to it by its parent.
+ * **The analysis path has no network dependency.** Stated precisely, because
+ * the stronger-sounding claim is not true: a worker still has `fetch`. What is
+ * enforced is that everything this path loads — model, tokenizer, config, ONNX
+ * Runtime WASM — is a `chrome-extension://` URL handed in by its parent, with
+ * `allowRemoteModels = false` so a misconfigured path fails loudly instead of
+ * quietly reaching a CDN. `tests/e2e/analysis-embedding.spec.ts` confirms it
+ * from the outside by blocking all outbound HTTP(S) and still getting vectors.
  *
  * Hand-rolled promise-per-seq protocol, like `opfsWorker`, rather than a
  * library: one more dependency in a worker that already carries an ML runtime
@@ -73,25 +74,34 @@ async function load(request: AnalysisWorkerOpen): Promise<void> {
   let lastError: unknown;
 
   for (const device of attempts) {
+    let candidate: FeatureExtractionPipeline | undefined;
     try {
-      extractor = await pipeline('feature-extraction', request.modelId, {
+      candidate = await pipeline('feature-extraction', request.modelId, {
         device,
         dtype: request.dtype,
       }) as FeatureExtractionPipeline;
+
+      // Probe inside the attempt, not after it. A backend can initialize and
+      // then fail on its first inference — a driver that advertises WebGPU but
+      // cannot run this graph — and a probe outside the loop would report that
+      // as a hard failure instead of falling through to WASM.
+      const probe = await candidate([toEncoderInput('probe')], { pooling: 'mean', normalize: true });
+
+      extractor = candidate;
       activeDevice = device;
+      dimensions = (probe.dims as number[])[1];
       lastError = undefined;
       break;
     } catch (error) {
       // A machine without WebGPU is an ordinary tier, not a fault (RES-06,
-      // RES-08): fall through to WASM and report which one actually loaded.
+      // RES-08): release whatever was half-built and fall through to WASM.
+      await candidate?.dispose?.().catch(() => {});
       lastError = error;
     }
   }
   if (!extractor) throw lastError instanceof Error ? lastError : new Error(String(lastError));
 
   activeDtype = request.dtype;
-  const probe = await embed([toEncoderInput('probe')]);
-  dimensions = probe.dimensions;
   post({
     type: 'OPENED',
     seq: request.seq,
