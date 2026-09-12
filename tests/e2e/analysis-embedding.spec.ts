@@ -1,10 +1,19 @@
 /**
- * ADR-0007 step 4A — the platform spike, as an executable acceptance test.
+ * ADR-0007 step 4A — **production extension-page embedding runtime proof**.
  *
- * Proves that the packaged embedding stack actually runs inside a built MV3
- * extension: Transformers.js and ONNX Runtime, loading a Q8 `multilingual-e5-small`
- * from `chrome-extension://` resources, under the real `extension_pages` CSP,
- * in a real offscreen document, with the network blocked.
+ * Proves that the packaged embedding stack runs inside a built MV3 extension:
+ * Transformers.js and ONNX Runtime, loading a Q8 `multilingual-e5-small` from
+ * `chrome-extension://` resources, under the real `extension_pages` CSP, in a
+ * worker spawned from an extension page, with all outbound HTTP(S) blocked.
+ *
+ * **What this does not prove.** The page here is `offscreen.html` opened as an
+ * ordinary extension tab, not a document created through `chrome.offscreen`.
+ * That exercises the same origin, the same CSP and the same packaged resources,
+ * so every runtime assumption above is genuinely tested — but the ownership and
+ * lifecycle claim in HOST-01, that the worker is owned by the offscreen
+ * document, is not. That is completed by an integration test once
+ * `EmbeddingWorkerClient` is wired into the real offscreen host (step 6), and
+ * is deliberately kept out of this spike.
  *
  * The network block is the part that makes the claim worth anything.
  * `allowRemoteModels = false` proves Transformers.js will not *fall back* to a
@@ -38,13 +47,13 @@ const SENTENCES = [
 ];
 
 /**
- * Drives the worker protocol from inside a real offscreen document.
+ * Drives the worker protocol from inside an extension page.
  *
  * The page resolves the extension URLs and hands them in, because the worker is
  * a plain computation environment that is told where its artifacts are rather
  * than one that reaches for `chrome.runtime.getURL()` itself.
  */
-async function embedInOffscreen(
+async function embedInExtensionPage(
   harness: ExtensionHarness,
   device: 'webgpu' | 'wasm',
 ): Promise<EmbedOutcome> {
@@ -106,7 +115,7 @@ function l2(vector: number[]): number {
   return Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
 }
 
-test.describe('packaged embedding worker (ADR-0007 4A)', () => {
+test.describe('packaged embedding runtime, extension page (ADR-0007 4A)', () => {
   let harness: ExtensionHarness;
   const attempted: string[] = [];
 
@@ -133,7 +142,7 @@ test.describe('packaged embedding worker (ADR-0007 4A)', () => {
   for (const requested of ['webgpu', 'wasm'] as const) {
     test(`embeds two sentences with the network blocked (requested: ${requested})`, async () => {
       attempted.length = 0;
-      const result = await embedInOffscreen(harness, requested);
+      const result = await embedInExtensionPage(harness, requested);
 
       expect(result.error ?? '').toBe('');
       expect(result.ok).toBe(true);
@@ -169,8 +178,8 @@ test.describe('packaged embedding worker (ADR-0007 4A)', () => {
   }
 
   test('produces the same vector for the same input', async () => {
-    const first = await embedInOffscreen(harness, 'wasm');
-    const second = await embedInOffscreen(harness, 'wasm');
+    const first = await embedInExtensionPage(harness, 'wasm');
+    const second = await embedInExtensionPage(harness, 'wasm');
 
     expect(first.ok && second.ok).toBe(true);
     const dot = first.vectors![0].reduce((sum, v, i) => sum + v * second.vectors![0][i], 0);
