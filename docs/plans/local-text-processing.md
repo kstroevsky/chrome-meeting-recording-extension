@@ -181,20 +181,24 @@ Topics attach to the **recordings page and the player modal**, which is where a 
 
 ## 9. Values the payload does not fix
 
-The payload fixes a lot exactly — 0.82, `C_new = (nC + x)/(n + 1)`, the 0.70/0.10/0.10/0.10 blend, the 0.30/0.25/0.20/0.15/0.10 ranking, batch 32, 384 dimensions — and those are carried verbatim. It does **not** fix the following, and this plan deliberately does not invent them. Each is frozen from the §10 spike and recorded in the ADR, which is the approved contract rather than a guess made now:
+The payload fixes a lot exactly — 0.82, `C_new = (nC + x)/(n + 1)`, the 0.70/0.10/0.10/0.10 blend, the 0.30/0.25/0.20/0.15/0.10 ranking, batch 32, 384 dimensions — and those are carried verbatim. It does **not** fix the following, and this plan deliberately does not invent them.
 
-| Open contract | Where it bites |
-|---|---|
-| Window size and stride for contextual windows | EMB-06 gives only the 300–800 count for 3 hours |
-| Local-peak rule for boundary detection (width, prominence) | SEG-04 gives an illustrative series, no rule |
-| `longPause` threshold in ms | SEG-05 names the term only |
-| `speakerPatternChange` definition | SEG-05 names the term only |
-| Micro-cluster **merge** threshold, and "periodically" | CLU-04's 0.82 is the *assignment* threshold; CLU-06 gives neither |
-| Definitions of `novelty`, `keyword_distinctiveness`, `recurrence` | IMP-03 fixes the weights, not the terms |
-| MMR lambda | IMP-05 names MMR only |
-| Default dtype among FP16 / INT8-Q8 / Q4 | EMB-04 gives the set, not the choice |
-| Minimum segment length | Unstated; needed to stop 20-second topics |
-| Embedding throughput target | Set from the spike's measurement, per house measure-first practice |
+**Two different kinds of question, settled two different ways.** A GPU benchmark can tell you what a dtype costs; it cannot tell you whether a merge threshold of 0.93 groups a conversation's topics better than 0.96. Freezing the second kind from a throughput run would smuggle guessing back in through the door this section exists to close. So each value names the lane that settles it: **4A** the platform spike, **4B** quality calibration over a corpus of meetings with known boundaries and known recurrence (§10).
+
+| Open contract | Settled by | Where it bites |
+|---|---|---|
+| ~~Default dtype among FP16 / INT8-Q8 / Q4~~ | — | **Frozen: `q8`.** FP16 is 21× faster on WebGPU but does not load on WASM at all, so FP16-only contradicts RES-08 |
+| ~~Embedding throughput target~~ | — | **Baseline frozen: 4.4 windows/sec** (181 s for three hours). A regression *gate* still needs run-to-run variance — step 9, not a blocker |
+| ~~Whether `'wasm-unsafe-eval'` is required~~ | — | **Closed.** Not an open contract: MV3's default CSP disables WASM and this directive is how it is enabled. Declared in the manifest (BLD-07) |
+| ~~Which ONNX Runtime WASM variants must be packaged~~ | — | **All four ship.** `asyncify`+`jsep` suffices on one machine (−26.2 MB) but ORT selects by feature detection; re-measure across real targets before trimming |
+| Window size and stride for contextual windows | **4B** | EMB-06 gives only the 300–800 count for 3 hours |
+| Local-peak rule for boundary detection (width, prominence) | **4B** | SEG-04 gives an illustrative series, no rule |
+| `longPause` threshold in ms | **4B** | SEG-05 names the term only |
+| `speakerPatternChange` definition | **4B** | SEG-05 names the term only; currently a provisional Jaccard distance |
+| Micro-cluster **merge** threshold, and "periodically" | **4B** | CLU-04's 0.82 is the *assignment* threshold; CLU-06 gives neither |
+| Definitions of `novelty`, `keyword_distinctiveness`, `recurrence` | **4B** | IMP-03 fixes the weights, not the terms; all three are provisional today |
+| MMR lambda | **4B** | IMP-05 names MMR only |
+| Minimum segment length | **4B** | Unstated; needed to stop 20-second topics |
 
 ---
 
@@ -205,7 +209,13 @@ Risk-ordered, one phase at a time, each independently green. The order exists to
 1. ~~**ADR-0007.**~~ **Done** — `docs/adr/0007-topics-are-derived-from-a-persisted-transcript.md`, `Status: Proposed` until its spike runs. The spikes themselves are step 4 below.
 2. ~~**Phase 0 — transcript aggregate.**~~ **Done** (§3). `transcriptStatus` is real; captions persist as media-relative segments.
 3. ~~**Pipeline stages.**~~ **Done** (§5) — `src/shared/analysis/`: windows, boundaries, peaks, segments, online clusters, c-TF-IDF labels, importance with MMR. Pure functions against a stub encoder; no GPU, no model, no network. Every §9 value is a required config field with no default anywhere.
-4. **Spike: the smallest real embedding worker, in a production build.** Transformers.js + ONNX Runtime loading a **packaged** quantized `multilingual-e5-small` inside an offscreen-owned Worker, producing one 384-dim vector. Establishes: whether `'wasm-unsafe-eval'` is actually required (BLD-07 — add nothing speculatively), the packaged size delta, the `ts-loader` build-time delta, throughput over a real 3-hour transcript's worth of windows, peak memory, and the WebGPU→WASM fallback delta. Exit criterion (conjunctive): it runs in a production build, **and** §9's open contracts are frozen from its numbers into ADR-0007, **and** ADR-0007 moves to `Accepted`.
+4. ~~**4A — Platform spike.**~~ **Done** — ADR-0007 is `Accepted`. Frozen: dtype `q8`, throughput baseline 4.4 windows/sec, `'wasm-unsafe-eval'` declared, all four ORT variants packaged, 104.6 MB release ZIP. Original scope follows.
+
+   **4A — Platform spike.** The smallest real embedding worker, in a production build: `@huggingface/transformers` + ONNX Runtime loading a **packaged** Q8 `multilingual-e5-small` inside an offscreen-owned Worker, with remote model resolution disabled, producing one 384-dimension normalized vector from two sentences and issuing no network request. Then force WebGPU unavailable and prove the WASM path. Only then run the 300–800-window workload. Establishes and freezes: whether `'wasm-unsafe-eval'` is required at all (BLD-07), the default packaged dtype, packaged size, initialization time, batch throughput, peak memory, the WebGPU/WASM delta, and the `ts-loader` build-time delta. Exit criterion (conjunctive): it runs in a production build, **and** §9's *platform* values are frozen into ADR-0007, **and** ADR-0007 moves to `Accepted`.
+
+   Q8 is the baseline rather than Q4, because this model's published exports do not order the way the names suggest: the INT8 export is ≈118 MB while plain `q4` is ≈399 MB and `q4f16` ≈205 MB. FP16 (≈235 MB) is the WebGPU challenger. The spike may load several; the extension packages exactly one.
+
+   **4B — Quality calibration.** Run the deterministic pipeline over a small corpus of real and synthetic meetings with known topic boundaries and known recurrence, and freeze §9's *semantic* values from how well the output matches: window size and stride, the peak rule, `longPauseMs`, `minSegmentMs`, the merge threshold and period, MMR lambda, and the provisional definitions of `speakerPatternChange`, `novelty`, `keyword_distinctiveness` and `recurrence`. Needs 4A only for a real encoder; needs no GPU benchmark, and a GPU benchmark could not answer any of it.
 5. **Build seams.** §7 — only what step 4 proved: webpack worker entry and asset copying, worker tsconfig, and any CSP the spike demonstrated. No weights-origin define, no host permission, no production-build check for either (BLD-02/BLD-03 superseded).
 6. **Embedding engine.** `EmbeddingWorkerClient` + `analysisWorker`, WebGPU/WASM ladder, batch 32. Exit criterion: 384-dim vectors out, WASM fallback exercised by forcing the latch.
 7. **Analysis job and results.** `AnalysisManager` + durable outbox + ack + `closeForUpdate` refusal + the `analyses` store, every row carrying `AnalysisProvenance` (PROV-01). Exit criterion: kill the service worker mid-analysis and have the job complete and report; a stored result computed under different conditions is recognized as stale.
@@ -225,7 +235,7 @@ Steps 5 and 6 are large and mechanical enough to be worth handing to Codex with 
 5. **Durability:** kill the service worker mid-analysis; the job completes in offscreen, replays its terminal state on reconnect, and the sealed recording is never touched. Attempt an extension update mid-analysis; `closeForUpdate()` refuses.
 6. **Tiering:** force the `unsupported` latch and confirm WASM embeddings still produce topics with a visible warning — RES-08's claim that topic organization works on every tier.
 7. **Non-English call:** confirm graceful degradation of the English-only cue terms rather than failure.
-8. **Production build:** `npm run build` with the weights origin unset must fail the production check.
+8. **Production build:** the built package contains the pinned model, tokenizer, config and ONNX Runtime WASM as `chrome-extension://` resources; the manifest declares **no model host permission**; and an analysis run issues **no network request** (BLD-06). The last is assertable rather than observable — Transformers.js is configured with remote model resolution disabled, so a run that tried would fail rather than silently reach the network.
 
 ---
 
@@ -397,7 +407,7 @@ Every normative signal in the source payload maps to exactly one ID. `active` = 
 - **BLD-04** `active` *(amended by D-13)* — `static/manifest.json` gains `content_security_policy.extension_pages` carrying `'wasm-unsafe-eval'`. Added only if the spike proves it necessary, never speculatively (BLD-07).
 - **BLD-05** `active` — webpack gains `experiments.asyncWebAssembly`, a `.wasm` rule, `.mjs` in `resolve.extensions`, and worker-safe chunk output; the worker gets its own tsconfig with `WebWorker` in `lib`.
 - **BLD-06** `active` *(added by D-13)* — Embedding artifacts are **extension-owned**. All executable runtime artifacts, tokenizer and configuration, the model graph and the quantized weights ship in the extension package and load from `chrome-extension://` resources. Analysis performs no network fetch. A later ADR may externalize cryptographically pinned **raw tensor data only**; remotely supplied executable model graphs or runtime code are out of scope.
-- **BLD-07** `active` *(added by D-13)* — Any CSP allowance is established by running the smallest real embedding worker in a production build, and only what that run proves necessary is added. Nothing is enabled speculatively.
+- **BLD-07** `active` *(amended by D-15)* — `'wasm-unsafe-eval'` in `content_security_policy.extension_pages` is **required, not open**: Chrome's default extension CSP disables WebAssembly, and MV3 documents this directive as the way to enable it. The spike's job is to prove the packaged Transformers.js/ORT stack *works under* that CSP, not to decide whether the directive is needed. Any allowance beyond it is still established by a real run, never presumed.
 
 ### PROV — provenance of a stored analysis *(added by D-13)*
 
@@ -434,6 +444,8 @@ Closed-world. Every requirement not named here is `NO_CHANGE` from the source pa
 | D-06 | ADD | BLD-01, BLD-04, BLD-05 | Codebase fact: default MV3 CSP, WASM experiments off, `.mjs` unresolvable. Required for BLD-01's packaged engine to run at all. |
 | D-07 | MOVE | MODEL-02, MODEL-03 | Naming conformance to the repository glossary (`docs/agents/domain.md` rule 3). No semantic change. |
 | D-08 | AMEND | §3 prose only; TX-01 and TX-04 unchanged | Implementation finding (2026-09-11): `CaptionBuffer` emits `CaptionUtterance` (wall clock, fields `startWallMs`/`endWallMs`), not `TranscriptSegment` (media-relative, `tStartMs`/`tEndMs`). One type carrying two time bases would mean a field whose meaning depends on which side of a message boundary reads it. `TranscriptSegment`'s shape is Plan B §B0 verbatim and TX-04's media-relative guarantee is strengthened, not weakened. |
+| D-15 | AMEND | BLD-07; §9 prose | Author review (2026-09-12). `'wasm-unsafe-eval'` is closed, not open: Chrome's default extension CSP disables WebAssembly and MV3 documents this directive as the way to enable it, so the manifest declares it and the spike proves the packaged stack runs under it. Corrects an over-strong claim about threading: an extension *can* opt into cross-origin isolation via COOP/COEP; this one does not, so the WASM fallback is single-threaded by choice, and COOP/COEP is a separate optimization spike if WASM proves too slow. Strengthens the no-network proof from configuration to configuration **plus** a run with all http(s) aborted. |
+| D-14 | AMEND | PROV-01; §9 and §11.8 prose | Author review (2026-09-12). `AnalysisProvenance` gains `embeddingDtype`: re-quantizing the same model at the same revision moves the vectors and therefore every boundary and cluster derived from them. The throughput target stays out — an acceptance target, not a condition on the result. §9 splits its open contracts into what a platform spike can settle (4A) and what needs quality calibration against known-good conversations (4B); freezing the latter from a throughput run would reintroduce guessing. §11.8's weights-origin check is replaced, having contradicted D-13. |
 | D-13 | SUPERSEDE + ADD | Supersedes BLD-02, BLD-03, STO-01, STO-02, STO-03; amends BLD-04, PRIV-01; adds BLD-06, BLD-07, PROV-01, PROV-02 | Author decision (2026-09-12): bundle the complete embedding model with the extension for v1. An ONNX file carries a computational graph, not just floats, so fetching and executing one sits awkwardly under MV3's self-contained-logic rule regardless of who serves it — self-hosting does not change what the artifact *is*. Removes the downloader, cache, integrity and failure machinery before the model has even been benchmarked. CSP allowances are proven by the spike, never presumed. Provenance is persisted because the provisional terms and §9 values will change. |
 | D-12 | ADD | KW-01; amends UI-01, UI-02 | Author decision (2026-09-12): fix the universal-term label problem outside c-TF-IDF. The formula is unchanged and keeps every term for scoring and search; display labels drop terms occurring in every topic, which is a statement about discrimination rather than about English — no stopword dictionary, no new threshold. |
 | D-11 | AMEND | §3 prose only; TX-04 strengthened | Author review (2026-09-11). The stop is the same boundary as a pause: Meet refines a caption after the recorder stops, so `stop()` drains the tab at `markStopping()` and the overrun rule becomes uniform — any range ending past its span is refused, never truncated. Records the invariant that the final drain and sweep must not admit refinements representing speech first observed after the cutoff, and states precisely that a segment is temporally anchored to real media but its text is **not** a word-level alignment — which topic analysis must not assume. |

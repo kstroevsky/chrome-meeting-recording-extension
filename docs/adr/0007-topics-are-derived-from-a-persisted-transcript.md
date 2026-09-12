@@ -1,6 +1,6 @@
 # ADR-0007 — Topics are derived from a persisted transcript, and local inference runs in the data plane
 
-- **Status:** Proposed — both spikes in "Validation" are defined but have not run
+- **Status:** Accepted — 4A ran and passed; its frozen values are in "4A closed" below. 4B calibration has not run.
 - **Date:** 2026-09-11
 
 ## Context
@@ -35,11 +35,11 @@ Four questions had to be answered before any code.
 
 ## Validation
 
-This ADR rests on two platform assumptions. Neither has been measured. **Both must run and pass before anything is built on them**, and this ADR stays `Proposed` until they do.
+This ADR rests on two platform assumptions. **Both must run and pass before anything is built on them**, and this ADR stays `Proposed` until they do.
 
-1. **Packaged inference under MV3 CSP — NOT RUN.** Load Transformers.js + ONNX Runtime Web inside an offscreen-owned Worker under the new CSP, with packaged `.wasm` and a weight fetch from a self-hosted origin, and produce a 384-dimension embedding. Records: that the WASM instantiates under `'wasm-unsafe-eval'`, that no remote code is executed, that the WebGPU path and the WASM fallback both reach a vector, and the packaged bundle-size delta.
+1. **Packaged inference under MV3 CSP — RUN, PASSED.** See the 4A amendment below: both backends produce 384-dimension normalized vectors from packaged resources with all outbound HTTP(S) blocked. The weight-fetch half of this assumption was superseded before it ran — the artifact amendment packages the model instead.
 
-2. **Embedding throughput at realistic scale — NOT RUN.** Embed a real three-hour transcript's worth of contextual windows at batch size 32. Records: wall-clock throughput, peak memory, the WebGPU-to-WASM delta, and behaviour on a machine with no WebGPU.
+2. **Embedding throughput at realistic scale — RUN, PASSED.** Embed a real three-hour transcript's worth of contextual windows at the production batch size of 32, with a realistic token-length distribution rather than repetitions of one short string. Records: load time, total embedding time, windows/sec, p50/p95 batch latency, the backend that ran, process RSS and JS heap, and the WebGPU-to-WASM delta. Q8 and FP16 are compared as **separate builds**, on package size, throughput, and embedding agreement on a multilingual sample.
 
 **Exit criterion (conjunctive):** both spikes run and pass, *and* every open contract in `docs/plans/local-text-processing.md` §9 is frozen from spike 2's measurements into this ADR. Those values — window size and stride, the local-peak rule, the `longPause` threshold, the `speakerPatternChange` definition, the micro-cluster merge threshold and period, the definitions of `novelty` / `keyword_distinctiveness` / `recurrence`, the MMR lambda, the default dtype, the minimum segment length, and the throughput target — are deliberately not guessed now. The plan fixes every value its source payload fixed (the `> 0.82` assignment threshold, `C_new = (n·C + x) / (n + 1)`, the 0.70/0.10/0.10/0.10 boundary blend, the 0.30/0.25/0.20/0.15/0.10 ranking, batch 32, 384 dimensions) and invents none that it did not.
 
@@ -143,3 +143,146 @@ EXTENSION PACKAGE                    NETWORK
 - The package grows by the size of a quantized `multilingual-e5-small` plus the ONNX Runtime WASM. Measuring that, and the `ts-loader` build-time cost, is part of the spike rather than an assumption.
 
 **CSP is proven, not presumed.** Transformers.js and ONNX Runtime commonly need their packaged WASM to be executable, which under MV3 means `'wasm-unsafe-eval'` in `content_security_policy.extension_pages`. That allowance is **not** to be added speculatively. The spike runs the smallest real embedding worker in a production build and adds only what that run demonstrates is required — and if it turns out not to be required, the manifest keeps its current absence of a custom CSP, which is the better outcome for store review.
+
+## 4A platform spike — RUN, PASSED (2026-09-12)
+
+`tests/e2e/analysis-embedding.spec.ts`, against a built extension loaded unpacked, with **every http(s) request aborted** for the duration.
+
+The no-network claim rests on two independent things, because either alone is weak. `allowRemoteModels = false` with `localModelPath` and `wasmPaths` pointed at `chrome-extension://` resources proves Transformers.js will not *fall back* to a remote model; it proves nothing about what any dependency might fetch. Aborting all outbound http(s) and still getting vectors closes that gap. Both hold.
+
+| | requested `webgpu` | requested `wasm` |
+| --- | --- | --- |
+| backend that ran | **webgpu** | **wasm** |
+| model load | 3,439 ms | 1,474 ms |
+| embed, 2 sentences | 326 ms | 78 ms |
+| network requests | 0 | 0 |
+
+Vectors are 384-dimension, finite, L2-normalized to within 1e-3, distinct for distinct inputs, and reproducible across worker instances. The worker *reports* which backend ran rather than leaving it to be inferred from timing.
+
+WASM beating WebGPU at two sentences is expected — per-call GPU overhead has nothing to amortize over — and is exactly why the throughput target must be measured at the 300–800-window scale rather than extrapolated from this run.
+
+**Three integration facts this established, none of which were guessable.**
+
+1. **The worker needs worker-native chunk loading.** webpack's `web` target derives its public path from `document.currentScript` and loads chunks by injecting `<script>`; a worker has no `document`, and the bundle threw `ReferenceError: document is not defined` at module scope. Fixed with an explicit `output.publicPath: '/'` — in an extension that is the package root — and `chunkLoading: 'import-scripts'` on the `analysisWorker` entry. `opfsWorker` never hit this because it has no async chunks; `@huggingface/transformers` splits its ONNX backends into them.
+2. **ORT's WASM variant cannot be inferred from its file names.** An earlier attempt packaged only `jsep` (WebGPU) and the plain build, reasoning they were RES-06's two rungs. ORT then requested `ort-wasm-simd-threaded.asyncify.mjs` and failed with "no available backend found". All four variants now ship; which are genuinely reachable is a measurement to make against a working build, not an inference from names.
+3. **The `import.meta` build warning is harmless on this path.** `transformers.web.js` does `Object(import.meta).url` for a base URL we override anyway. The module evaluates and produces embeddings, which is the only evidence that settles it — and is why this was left to the run rather than to speculative webpack surgery.
+
+**Package cost, measured.** 228 MB unpacked; **104.6 MB as the release ZIP**, which is what the store receives. `dist/models` 129 MB (113 MB Q8 ONNX + 17 MB tokenizer), `dist/ort` 90 MB across four WASM variants. Trimming ORT is the obvious first reduction, and it is now a measurement rather than a guess.
+
+**Threading.** `numThreads = 1`. Threaded ORT needs `SharedArrayBuffer` and therefore cross-origin isolation, which an extension *can* opt into with `cross_origin_embedder_policy` / `cross_origin_opener_policy`. This extension does not, so the WASM fallback is single-threaded by choice. If WASM throughput proves unacceptable at scale, COOP/COEP is its own spike rather than a rider on this one.
+
+**Still open for 4A:** throughput, peak memory and the WebGPU/WASM delta at the 300–800-window workload; the default packaged dtype (Q8 vs FP16); and which ORT variants can be dropped. ADR-0007 stays `Proposed` until those are recorded here.
+
+## 4A throughput at realistic scale — RUN (2026-09-12)
+
+`tests/e2e/analysis-embedding-bench.spec.ts`, 800 windows (EMB-06's upper reference for three hours) at batch 32 (EMB-07), Q8, over a corpus with a realistic length spread — mean 31.3 words per window, p50 37, p90 59, max 74, including short backchannels and non-English text. Model loaded once; batches timed individually. Apple Silicon, headless Chromium.
+
+| | WebGPU | WASM |
+| --- | --- | --- |
+| adapter | `apple / metal-3` | — |
+| model load | 2,431 ms | 1,548 ms |
+| total, 800 windows | 180,659 ms | 183,908 ms |
+| throughput | 4.4 windows/sec | 4.4 windows/sec |
+| batch latency p50 | 7,082 ms | 7,564 ms |
+| batch latency p95 | 8,323 ms | 8,102 ms |
+| browser RSS delta | ~64 MB | noise (−82 MB) |
+
+**Corrected 2026-09-12 — read with the dtype comparison below: the limitation is Q8's, not WebGPU's. FP16 on the same adapter runs 21× faster.**
+
+**WebGPU delivers no measurable speedup over single-threaded WASM here, on real hardware.** The adapter is a genuine Metal 3 device, not a software fallback, so this is not a headless artifact. Three readings, and the benchmark cannot distinguish them: the Q8 graph's integer operators may not be accelerated and are emulated or dequantized per-op; ORT's JSEP path may be falling back operator-by-operator while still reporting `webgpu`; or per-call overhead dominates at this model size. FP16 is the dtype Hugging Face documents for WebGPU, which makes the Q8-vs-FP16 comparison the next measurement rather than an optional one.
+
+**Absolute cost.** Three hours of conversation takes ~3 minutes to embed. That is acceptable for post-hoc analysis, which is what D-01 scoped this to, and it would not be acceptable for the live-arrival variant deferred in §12 — worth recording before anyone reconsiders that deferral.
+
+**Memory.** JS heap is 4–7 MB and meaningless here: the work is in the worker's WASM linear memory and ORT's native allocations. Browser-tree RSS moves ~64 MB on the WebGPU run and is pure noise on the WASM one, so it is a weak floor rather than a measurement. **GPU allocation is not captured by either number** — no API available in this context exposes it. An earlier version of this benchmark matched processes by name and reported 10 GB, having swept in every unrelated Chrome on the machine; it now matches the harness's throwaway `--user-data-dir`.
+
+**Still open for 4A:** Q8 vs FP16 as separate builds (package size, throughput, and embedding agreement on a multilingual sample); whether any ORT variant can be dropped; and the resulting frozen dtype and throughput target.
+
+## 4A dtype comparison, Q8 vs FP16 — RUN (2026-09-12)
+
+Measured as **separate builds**, each packaging exactly one ONNX export (`ANALYSIS_DTYPE` selects it; the fetcher verifies only that export, and webpack copies only that one).
+
+| | Q8 | FP16 |
+| --- | --- | --- |
+| release ZIP | **104.6 MB** | **233.9 MB** |
+| unpacked | 228 MB | 340 MB |
+| loads on WebGPU | yes | yes |
+| loads on WASM | yes | **no — fails at session creation** |
+| throughput, WebGPU | 4.4 windows/sec | **92.6 windows/sec** |
+| throughput, WASM | 4.4 windows/sec | n/a |
+| 800 windows (≈3 h) | 181 s | **8.6 s** |
+| batch p50 / p95, WebGPU | 7,082 / 8,323 ms | 338 / 526 ms |
+| browser RSS delta | ~64 MB | ~449 MB |
+
+**FP16 on WebGPU is 21× faster than Q8 on WebGPU, on the same adapter.** This corrects the reading of the throughput section above: WebGPU was not failing to accelerate — it was failing to accelerate *Q8*, whose integer operators evidently get emulated. With the dtype it is documented for, the GPU path is exactly the step change the architecture assumed.
+
+**FP16 does not run on WASM at all.** Not slowly — it fails at session creation:
+
+```
+Can't create a session. ERROR_CODE: 1
+graph_utils.cc:30 GetIndexFromName … itr != node_args.end() was false
+Attempting to get index by a name which does not exist:
+InsertedPrecisionFreeCast_/encoder/layer.11/output/LayerNorm/Constant_output_0
+```
+
+An ORT graph-fusion pass on the CPU provider referencing a node arg the FP16 export does not carry. So **packaging FP16 alone would leave every machine without WebGPU with no embedding path whatsoever**, which contradicts RES-08 — topic organization must keep working on all tiers.
+
+**The two dtypes do not produce the same vectors.** Sampled on the *same* backend, so this isolates quantization from device: per-sentence cosine agreement min 0.9907, p10 0.9919, mean 0.9944; top-5 nearest-neighbour overlap min 0.60, p10 0.80, **mean 0.85**. The cosines look reassuring and the neighbour overlap is the number that matters: roughly one in seven neighbour relationships reorders, and neighbour order is precisely what clustering consumes. The least-agreeing items are short backchannels and single sentences whose neighbours are genuinely close together — where small drift reorders a tie.
+
+**Consequence for sequencing: the dtype must be frozen before 4B, not after.** Calibrating `mergeThreshold`, the peak rule and MMR lambda against one dtype's neighbour structure and then shipping the other would invalidate the calibration. `AnalysisProvenance.embeddingDtype` already makes stored results distinguishable across such a change (D-14), but calibration effort is not recoverable that way.
+
+**Three options, and the choice is a product decision rather than a technical one.**
+
+- **Q8 only.** 104.6 MB, works on every tier, ~3 minutes for a three-hour recording. Simplest: one dtype, one calibration, RES-08 satisfied trivially.
+- **FP16 only.** Rejected — no WASM tier at all, contradicting RES-08.
+- **Both.** ~338 MB ZIP, FP16 on WebGPU and Q8 on WASM. This is literally RES-07's tier table, and the per-tier capability difference it anticipates. Costs a doubled package and two calibrations, since the tiers would produce different neighbour structures.
+
+**Still open for 4A:** the dtype decision above, and whether any ORT variant can be dropped.
+
+## 4A closed — frozen values (2026-09-12)
+
+**Packaged dtype: Q8.** FP16's 21× WebGPU speedup is real and tempting, but it does not load on WASM at all, so FP16-only contradicts RES-08 and shipping both doubles the package *and* forces two calibrations against two different neighbour structures. Analysis is post-hoc background work under D-01, where ~3 minutes for a three-hour recording is affordable; one dtype and one calibration are worth more than 170 seconds saved on a job nobody is watching.
+
+Reversible by design rather than by luck: `AnalysisProvenance.embeddingDtype` already makes results computed under one dtype distinguishable from the other (D-14), and `ANALYSIS_DTYPE` builds either. The cost of revisiting is re-running 4B, not re-architecting.
+
+**The deciding assumption, stated so it can be challenged:** topics are computed when a recording *stops*, not when someone *opens* it. If that inverts — if a user opens a three-hour recording and waits for analysis — three minutes of spinner is not affordable and this decision should be reopened in favour of FP16-on-WebGPU with a Q8 WASM fallback.
+
+**Throughput baseline: 4.4 windows/sec** (Q8, 800 windows, batch 32, Apple Silicon, WebGPU and WASM alike), which is 181 s for EMB-06's three-hour reference. Recorded as a *baseline*, not yet as a regression gate: a gate needs run-to-run variance, and these are single runs. Establishing that variance is a step-9 hardening task, not a 4A blocker.
+
+**ONNX Runtime variants: all four ship.** Measured: `asyncify` + `jsep` alone passes the runtime proof on both backends, which would save 26.2 MB. Not adopted. ORT selects its variant from *detected features*, and this was measured on one machine and one Chromium — a browser with JS Promise Integration available could select `jspi`, and the earlier failure in this ADR is exactly what inferring this set from names costs. `ORT_VARIANTS` exists so the trim can be re-measured across real targets; until it is, 26.2 MB is cheaper than a tier that cannot embed.
+
+**Final package: 104.6 MB release ZIP**, 228 MB unpacked.
+
+**Resolved §9 platform contracts:** dtype → `q8`; throughput → baseline above; `'wasm-unsafe-eval'` → required and declared (closed, not open); ORT variant set → all four, pending multi-target measurement.
+
+4A is complete. 4B — semantic calibration of the remaining §9 values against conversations with known boundaries and known recurrence — has not run, and is now unblocked by a frozen encoder.
+
+## 4B calibration, first pass — two findings, one blocking (2026-09-12)
+
+Method: five synthetic meetings with known topic blocks and deliberate recurrence (`tests/e2e/helpers/calibrationCorpus.ts`), embedded once with the frozen Q8 encoder (`analysis-calibration-dump.spec.ts`), then 8,100 configurations scored offline against ground truth (`scripts/calibrate-analysis.ts`). Boundary F1 allows ±1 window of slack; clustering is scored pairwise, so a pipeline that never reunites a recurring subject scores badly however clean its boundaries are.
+
+**Stated limit of this corpus.** Generated topics are lexically cleaner than real ones, so values tuned here run confident and will likely need loosening against real transcripts. It is a starting region, not a final answer.
+
+### Finding 1 — windows must be disjoint. Fixed.
+
+Boundary F1 rose from **0.767 to 0.892** by changing nothing but the window stride.
+
+SEG-02 compares "the previous 3–5 utterances" with "the next 3–5" — two spans that share nothing. This implementation had unified the boundary-comparison span with the contextual embedding window and then given it a stride shorter than its size, so neighbouring windows overlapped. A window straddling a boundary shared most of its content with both sides, and the change signal was smeared away. Measured on the overlapping shape, adjacent windows *within* a topic sat at cosine p50 0.954 and adjacent windows *across a true boundary* at 0.946 — a difference of 0.008, which is no signal at all.
+
+The first calibration grid contained no disjoint shape, so it measured only degrees of smearing. Best shape is now **4 utterances, stride 4**.
+
+### Finding 2 — CLU-04's 0.82 assignment threshold is inoperative for this encoder. Blocking.
+
+Segment-centroid cosines, measured on the best shape against ground truth:
+
+| | min | p25 | p50 | p75 | max |
+| --- | --- | --- | --- | --- | --- |
+| same true topic | 0.885 | 0.924 | 0.950 | 0.953 | 0.969 |
+| **different** true topic | **0.861** | 0.877 | 0.898 | 0.914 | 0.933 |
+
+**Every genuinely different topic pair scores above 0.82 — 27 of 27.** The lowest is 0.861. So "join the current cluster when `cosine > 0.82`" evaluates to "always join": every meeting collapses to a single cluster, and the merge sweep has nothing left to do. That is why the merge threshold showed *no* effect across 8,100 configurations — it was never reached.
+
+This is not a tuning miss. `multilingual-e5-small` compresses cosine into a narrow high band, as E5-family models do; an absolute threshold chosen without reference to a specific encoder cannot land in it. The usable separation for this encoder is around **0.92**, where the two distributions cross.
+
+**Why this is not being changed here.** CLU-04 is recorded in the plan's ledger as an exact contract — "Threshold **0.82** is the stated value" — and the `lossless-plan-evolution` discipline forbids amending an exact contract without authorization. The source payload is genuinely ambiguous on the point: 0.82 appears inside an illustrative passage ("Imagine the current topic has … number of segments = 14", "If: `s > 0.82` for example"), and this plan's own first ledger draft called it "the stated example value" before a later edit tightened it. Whether it was ever intended as a frozen contract is the author's to say.
+
+Clustering calibration is blocked until it is resolved. Boundary detection is not, and its values are ready to freeze.
