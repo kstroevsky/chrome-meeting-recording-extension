@@ -41,6 +41,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'ADD_RECORDING_NOTATION',
   'UPDATE_RECORDING_NOTATION',
   'REMOVE_RECORDING_NOTATION',
+  'GET_RECORDING_TRANSCRIPT',
 ] as const;
 
 /** The subset of popup commands validated by `isRecordingHistoryMessage`. */
@@ -66,6 +67,11 @@ export const RECORDING_NOTATION_MESSAGE_TYPES = [
   'REMOVE_RECORDING_NOTATION',
 ] as const;
 
+/** The subset of popup commands validated by `isRecordingTranscriptMessage`. */
+export const RECORDING_TRANSCRIPT_MESSAGE_TYPES = [
+  'GET_RECORDING_TRANSCRIPT',
+] as const;
+
 /**
  * Popup commands whose failures answer `{ ok: false, error }` and must **not**
  * fail the recording session. Everything else is a capture command whose
@@ -75,16 +81,25 @@ export const RECORDING_NOTATION_MESSAGE_TYPES = [
 export const NON_SESSION_RESPONSE_MESSAGE_TYPES = [
   ...RECORDING_HISTORY_MESSAGE_TYPES,
   ...RECORDING_NOTATION_MESSAGE_TYPES,
+  ...RECORDING_TRANSCRIPT_MESSAGE_TYPES,
 ] as const;
 
+/**
+ * Extension -> content script. Named for its original sender; background also
+ * uses this channel (`RESET_TRANSCRIPT`, and the transcript-capture pair below).
+ */
 export const POPUP_TO_CONTENT_MESSAGE_TYPES = [
   'GET_TRANSCRIPT',
   'RESET_TRANSCRIPT',
   'GET_CAPTION_STATE',
+  'SET_TRANSCRIPT_CAPTURE',
+  'GET_TRANSCRIPT_UTTERANCES',
 ] as const;
 
 export const CONTENT_TO_BG_MESSAGE_TYPES = [
   'MEETING_ENDED',
+  'TRANSCRIPT_UTTERANCES',
+  'GET_TRANSCRIPT_CAPTURE_STATE',
 ] as const;
 
 export const OFFSCREEN_TO_BG_MESSAGE_TYPES = [

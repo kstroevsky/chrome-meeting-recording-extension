@@ -17,3 +17,5 @@ coverage/
 docs/brand/
 .playwright-cli/
 graphify-out/
+# Build-time model artifacts (ADR-0007): fetched, verified, never committed
+.cache/

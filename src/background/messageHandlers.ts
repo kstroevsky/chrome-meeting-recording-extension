@@ -15,6 +15,8 @@ import { handleMeetingEndedMessage } from './recordingAutoStop';
 import {
   isE2EDriveFetchMessage,
   isMeetingEndedMessage,
+  isTranscriptUtterancesMessage,
+  isTranscriptCaptureStateRequest,
   isPerfEventMessage,
   isPopupToBgMessage,
   type CommandResult,
@@ -35,6 +37,8 @@ import {
   RECORDING_NOTATION_MESSAGE_TYPES,
 } from '../shared/protocolMessageTypes';
 import type { RecordingNotationService } from './RecordingNotationService';
+import type { RecordingTranscriptService } from './RecordingTranscriptService';
+import type { RecordingTranscriptCapture } from './RecordingTranscriptCapture';
 
 const includes = (types: readonly string[], type: string) => types.includes(type);
 
@@ -52,6 +56,8 @@ export type MessageHandlersDeps = {
   cpuSampler?: CpuSampler | null;
   history?: RecordingHistoryService;
   notations?: RecordingNotationService;
+  transcripts?: RecordingTranscriptService;
+  transcriptCapture?: RecordingTranscriptCapture;
   playback?: RecordingPlaybackService;
   playbackLeases?: PlaybackLeaseManager;
   driveArtifacts?: DriveArtifactResolver;
@@ -81,7 +87,7 @@ function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean 
   return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
 }
 
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, playback, playbackLeases, driveArtifacts, fileToDestination, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -152,6 +158,21 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
         });
       }
       sendResponse({ ok: true });
+      return false;
+    }
+
+    if (isTranscriptUtterancesMessage(msg)) {
+      // Fire-and-forget state transfer: the meeting tab does not wait, and a
+      // transcript failure must never reach the capture session.
+      void transcriptCapture?.receive(msg.runId, msg.utterances)
+        .catch((error) => L.warn('Could not record pushed caption utterances:', error));
+      return false;
+    }
+
+    if (isTranscriptCaptureStateRequest(msg)) {
+      // A content script that loaded mid-run asking whether it should be
+      // shipping captions. Answering keeps the rest of that run incremental.
+      sendResponse(transcriptCapture?.captureState() ?? { active: false });
       return false;
     }
 
@@ -348,6 +369,11 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
         });
         sendResponse({ ok: true, url });
         return;
+      }
+      if (msg.type === 'GET_RECORDING_TRANSCRIPT') {
+        if (!transcripts) throw new Error('Recording transcripts are unavailable');
+        const transcript = await transcripts.get(msg.recordingId);
+        sendResponse({ ok: true, ...(transcript ? { transcript } : {}) }); return;
       }
       if (msg.type === 'LIST_RECORDING_NOTATIONS') {
         if (!notations) throw new Error('Recording notations are unavailable');

@@ -30,8 +30,9 @@
         "npm": ">=10"
     },
     "scripts": {
-        "dev": "webpack --mode=development",
-        "build": "webpack --mode=production",
+        "analysis:model": "node scripts/fetch-analysis-model.mjs",
+    "dev": "npm run analysis:model && webpack --mode=development",
+        "build": "npm run analysis:model && webpack --mode=production",
         "build:edge": "webpack --mode=production --env target=edge",
         "build:brave": "webpack --mode=production --env target=brave",
         "build:opera": "webpack --mode=production --env target=opera",
@@ -39,7 +40,7 @@
         "preversion": "npm run typecheck && npm run test:unit",
         "check:version": "node scripts/check-version-monotonic.mjs",
         "release:build": "npm run check:version && npm run build && npm run test:production-guards",
-        "build:e2e:mock": "webpack --mode=development --env e2eMockCapture=1 --env e2eMockDrive=1 --env outputPath=dist-e2e",
+        "build:e2e:mock": "npm run analysis:model && webpack --mode=development --env e2eMockCapture=1 --env e2eMockDrive=1 --env outputPath=dist-e2e",
         "watch": "webpack --mode=development --watch",
         "popup:gallery": "webpack --mode=development && node scripts/serve-popup-gallery.mjs",
         "test": "npm run test:unit",
@@ -47,7 +48,7 @@
         "test:unit:jest": "jest --runInBand --watchman=false --testPathIgnorePatterns=/tests/e2e/",
         "test:unit:node": "node --test tests/scripts/*.test.mjs",
         "test:e2e": "npm run test:e2e:mock",
-        "test:e2e:mock": "npm run build:e2e:mock && playwright test --config=playwright.config.ts --grep-invert \"@perf-(full|endurance|hardware|contention)\"",
+        "test:e2e:mock": "npm run build:e2e:mock && playwright test --config=playwright.config.ts --grep-invert \"@perf-(full|endurance|hardware|contention)|@analysis-bench\"",
         "test:e2e:perf:smoke": "npm run build:e2e:mock && playwright test --config=playwright.config.ts --grep \"@perf-smoke\"",
         "test:e2e:perf:contention": "npm run build:e2e:mock && playwright test --config=playwright.config.ts --grep \"@perf-contention\"",
         "test:e2e:perf:full": "npm run build:e2e:mock && playwright test --config=playwright.config.ts --grep \"@perf-(smoke|full)\"",
@@ -84,6 +85,7 @@
         "webpack-cli": "^6.0.1"
     },
     "dependencies": {
+        "@huggingface/transformers": "4.2.0",
         "webm-duration-fix": "^1.0.4"
     }
 }

@@ -1,5 +1,6 @@
 /** ADR-0006 §11: the manifest carries capabilities, never bytes. */
 import { RecordingPlaybackService } from '../RecordingPlaybackService';
+import type { TranscriptStatus } from '../../shared/playback';
 import { isPlayable, masterTrack } from '../../shared/playback';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
@@ -20,12 +21,26 @@ const file = (id: string, stream: 'tab' | 'mic' | 'self-video', over: Record<str
     id, stream, filename: `${stream}.webm`, destination: 'drive', status: 'available', ...over,
   } as never);
 
-const make = (e?: RecordingHistoryEntry, notations: unknown[] = []) => new RecordingPlaybackService({
+const make = (
+  e?: RecordingHistoryEntry,
+  notations: unknown[] = [],
+  transcriptStatus: TranscriptStatus = 'none',
+) => new RecordingPlaybackService({
   getEntry: jest.fn(async () => e),
   listNotations: jest.fn(async () => notations as never),
+  transcriptStatus: jest.fn(async () => transcriptStatus),
 });
 
 describe('RecordingPlaybackService.getManifest', () => {
+  it('reports the recording\'s real transcript state on the manifest', async () => {
+    // The rail is data-driven, not flag-driven (ADR-0006): a recording with a
+    // stored transcript says so, one without says `none`.
+    await expect(make(entry(), [], 'ready').getManifest('rec:1'))
+      .resolves.toHaveProperty('transcriptStatus', 'ready');
+    await expect(make(entry(), [], 'none').getManifest('rec:1'))
+      .resolves.toHaveProperty('transcriptStatus', 'none');
+  });
+
   it('builds a manifest with tracks in tab, mic, self-video order', async () => {
     const service = make(entry({
       files: [file('r1:mic', 'mic'), file('r1:self', 'self-video'), file('r1:tab', 'tab')],
