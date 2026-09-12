@@ -251,22 +251,39 @@ module.exports = (_env, argv) => {
           // ADR-0007: the embedding model is extension-owned. Materialized and
           // SHA-256 verified by `scripts/fetch-analysis-model.mjs` before the
           // build; analysis never reaches the network.
-          { from: modelCacheDir(), to: `models/${ANALYSIS_MODEL.id}` },
+          // Exactly one ONNX export ships. The cache may hold several — 4A
+          // measures Q8 and FP16 as separate builds — so everything under
+          // `onnx/` except the selected one is filtered out here.
+          {
+            from: modelCacheDir(),
+            to: `models/${ANALYSIS_MODEL.id}`,
+            filter: (resourcePath) => {
+              const relative = path.relative(modelCacheDir(), resourcePath).split(path.sep).join('/')
+              return !relative.startsWith('onnx/') || relative === ANALYSIS_MODEL.onnxPath
+            },
+          },
           // ONNX Runtime's WASM binaries, copied from the version
           // @huggingface/transformers resolved. Not an independent dependency:
           // two ORT versions would be worse than a path that breaks loudly.
           //
-          // All four builds ship. An earlier attempt packaged only `jsep` and
-          // the plain build, reasoning that they were the two rungs of RES-06's
-          // ladder; ORT then asked for `asyncify` at runtime and failed. Which
-          // variant it selects is its own decision, made from the features it
-          // detects, so trimming this set is a measurement to make against a
-          // working build — not an inference to draw from the file names.
+          // Which variants ORT selects is its own decision, made from the
+          // features it detects — an earlier attempt inferred the set from the
+          // file names, packaged only `jsep` and the plain build, and failed at
+          // runtime asking for `asyncify`. `ORT_VARIANTS` exists so the set can
+          // be narrowed by measurement against a working build instead.
           {
             from: path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
             to: 'ort',
             globOptions: { ignore: ['**/*.map'] },
-            filter: (resourcePath) => /\.(wasm|mjs)$/.test(resourcePath),
+            filter: (resourcePath) => {
+              if (!/\.(wasm|mjs)$/.test(resourcePath)) return false
+              const allow = process.env.ORT_VARIANTS
+              if (!allow) return true
+              const name = path.basename(resourcePath)
+              return allow.split(',').some((v) => name === `ort-wasm-simd-threaded.${v}`.replace(/\.$/, '')
+                || name.startsWith(`ort-wasm-simd-threaded.${v}.`)
+                || (v === 'base' && /^ort-wasm-simd-threaded\.(wasm|mjs)$/.test(name)))
+            },
           },
         ]
       })

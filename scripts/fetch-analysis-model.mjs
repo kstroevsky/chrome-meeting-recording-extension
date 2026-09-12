@@ -27,26 +27,43 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * The packaged artifact set.
+ * Shared artifacts, and the one ONNX export a build packages.
  *
- * Q8 is the baseline: this model's exports do not order the way the names
- * suggest — the INT8 export is ~118 MB while plain `q4` is ~399 MB and `q4f16`
- * ~205 MB, and FP16 is ~235 MB. The extension packages exactly one dtype; 4A
- * chooses which.
+ * This model's exports do not order the way the names suggest — the INT8 export
+ * is ~118 MB while plain `q4` is ~399 MB and `q4f16` ~205 MB. The extension
+ * packages exactly **one** dtype; 4A chooses which by measuring both as
+ * separate builds. `ANALYSIS_DTYPE` selects it; Q8 is the baseline.
  */
 export const ANALYSIS_MODEL = {
   id: 'Xenova/multilingual-e5-small',
   revision: '761b726dd34fb83930e26aab4e9ac3899aa1fa78',
-  dtype: 'q8',
   dimensions: 384,
-  files: [
+  shared: [
     { path: 'config.json', bytes: 658, sha256: 'cb99455288675345e1a4f411438d5d0adbba5fbd3a67ea4fb03c015433b996c1' },
     { path: 'tokenizer.json', bytes: 17_082_730, sha256: '0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39' },
     { path: 'tokenizer_config.json', bytes: 443, sha256: 'a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b' },
     { path: 'special_tokens_map.json', bytes: 167, sha256: 'd05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7' },
-    { path: 'onnx/model_quantized.onnx', bytes: 118_308_185, sha256: 'f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193' },
   ],
+  /** Transformers.js resolves a dtype to one of these filenames. */
+  onnx: {
+    q8: { path: 'onnx/model_quantized.onnx', bytes: 118_308_185, sha256: 'f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193' },
+    fp16: { path: 'onnx/model_fp16.onnx', bytes: 235_336_732, sha256: '0e0fe349c99ea21c6f3aa273af21f7fb753c1e1174ef1647032029c2be3251c3' },
+  },
 };
+
+/** The dtype this build packages. */
+export function selectedDtype() {
+  const dtype = process.env.ANALYSIS_DTYPE ?? 'q8';
+  if (!(dtype in ANALYSIS_MODEL.onnx)) {
+    throw new Error(`Unknown ANALYSIS_DTYPE '${dtype}'; known: ${Object.keys(ANALYSIS_MODEL.onnx).join(', ')}`);
+  }
+  return dtype;
+}
+
+/** Shared artifacts plus the selected export — what one build materializes. */
+export function selectedFiles() {
+  return [...ANALYSIS_MODEL.shared, ANALYSIS_MODEL.onnx[selectedDtype()]];
+}
 
 export function modelCacheDir() {
   return join(ROOT, '.cache', 'analysis-model', ANALYSIS_MODEL.revision);
@@ -81,7 +98,7 @@ async function materialize({ verifyOnly = false } = {}) {
   const dir = modelCacheDir();
   const results = [];
 
-  for (const file of ANALYSIS_MODEL.files) {
+  for (const file of selectedFiles()) {
     const target = join(dir, file.path);
     let body = await readCached(file);
     let source = 'cache';
@@ -115,7 +132,7 @@ async function materialize({ verifyOnly = false } = {}) {
 
 async function main() {
   const args = new Set(process.argv.slice(2));
-  console.log(`${ANALYSIS_MODEL.id}@${ANALYSIS_MODEL.revision} → ${modelCacheDir()}`);
+  console.log(`${ANALYSIS_MODEL.id}@${ANALYSIS_MODEL.revision} [${selectedDtype()}] → ${modelCacheDir()}`);
 
   const results = await materialize({ verifyOnly: args.has('--verify') });
 

@@ -19,7 +19,14 @@ function readManifest() {
     if (!match) throw new Error(`analysisModel: could not read \`${name}\` from ${SOURCE}`)
     return match[1]
   }
-  return { id: field('id'), revision: field('revision'), dtype: field('dtype') }
+
+  const dtype = process.env.ANALYSIS_DTYPE || 'q8'
+  // The ONNX filename for this dtype, read from the same manifest so the build
+  // and the fetcher can never disagree about which export was verified.
+  const entry = source.match(new RegExp(`\\b${dtype}:\\s*\\{\\s*path:\\s*'([^']+)'`))
+  if (!entry) throw new Error(`analysisModel: no ONNX export pinned for ANALYSIS_DTYPE '${dtype}'`)
+
+  return { id: field('id'), revision: field('revision'), dtype, onnxPath: entry[1] }
 }
 
 const ANALYSIS_MODEL = readManifest()
