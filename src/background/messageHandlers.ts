@@ -38,6 +38,7 @@ import {
 } from '../shared/protocolMessageTypes';
 import type { RecordingNotationService } from './RecordingNotationService';
 import type { RecordingTranscriptService } from './RecordingTranscriptService';
+import type { RecordingAnalysisService } from './RecordingAnalysisService';
 import type { RecordingTranscriptCapture } from './RecordingTranscriptCapture';
 
 const includes = (types: readonly string[], type: string) => types.includes(type);
@@ -57,6 +58,7 @@ export type MessageHandlersDeps = {
   history?: RecordingHistoryService;
   notations?: RecordingNotationService;
   transcripts?: RecordingTranscriptService;
+  analyses?: RecordingAnalysisService;
   transcriptCapture?: RecordingTranscriptCapture;
   playback?: RecordingPlaybackService;
   playbackLeases?: PlaybackLeaseManager;
@@ -87,7 +89,7 @@ function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean 
   return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
 }
 
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, analyses, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -265,6 +267,13 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
       if (msg.type === 'LIST_RECORDING_NOTATION_SUMMARIES') {
         if (!notations) throw new Error('Recording notations are unavailable');
         sendResponse({ ok: true, summaries: await notations.summaries(msg.recordingIds) }); return;
+      }
+      if (msg.type === 'LIST_RECORDING_TOPIC_SUMMARIES') {
+        // Answered as empty rather than as an error when analysis is not wired
+        // up: the library is fully usable without a TOPICS column, and an error
+        // here would make the page look broken over an optional digest.
+        sendResponse({ ok: true, summaries: analyses ? await analyses.topicSummaries(msg.recordingIds) : {} });
+        return;
       }
       if (msg.type === 'UPDATE_ACTIVE_NOTATION' || msg.type === 'REMOVE_ACTIVE_NOTATION') {
         if (!notations) throw new Error('Recording notations are unavailable');
