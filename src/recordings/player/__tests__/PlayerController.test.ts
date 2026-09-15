@@ -12,6 +12,7 @@ const manifest = (sources: PlaybackSource[], extra: Partial<PlaybackManifest> = 
   createdAt: 0,
   transcriptStatus: 'none',
   notations: [],
+  topics: [],
   tracks: [{
     fileId: 'r1:tab', stream: 'tab', filename: 'tab.webm', mimeType: 'video/webm',
     captureStartOffsetMs: 0, sources,
