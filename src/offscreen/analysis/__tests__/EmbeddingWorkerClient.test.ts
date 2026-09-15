@@ -117,9 +117,12 @@ describe('EmbeddingWorkerClient', () => {
     const client = await promise;
 
     expect(client.info.device).toBe('wasm');
-    // RES-06: a downgrade is surfaced, never taken silently.
+    // RES-06: which rung ran is surfaced, never inferred.
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('wasm');
+    // But it must not promise a slowdown: the benchmark found the two backends
+    // within each other's variance on Apple Metal-3.
+    expect(warnings[0]).not.toMatch(/slow/i);
   });
 
   it('stays silent when the requested backend is the one that loaded', async () => {

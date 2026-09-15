@@ -121,10 +121,14 @@ export class EmbeddingWorkerClient {
     try {
       const opened = await openHandshake(worker, config, requested, deps.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS);
       if (opened.device !== requested) {
-        // Not a fault — a machine without WebGPU is an ordinary tier — but the
-        // user is about to wait considerably longer, so say so (RES-06).
+        // Reported because a caller must be able to tell which rung ran
+        // (RES-06), *not* as a performance warning. The 2026-09-15 benchmark
+        // measured WebGPU and WASM within each other's variance on Apple
+        // Metal-3 — 5.37 against 5.23 windows/sec — with WebGPU the slower of
+        // the two to load. Promising "it will be slower" would be wrong there,
+        // and we have no measurement for the user's actual machine.
         deps.reportWarning?.(
-          `Topic analysis is running on ${opened.device} rather than ${requested}; it will be slower but produces the same topics.`,
+          `Topic analysis is running on ${opened.device} rather than ${requested}. It produces the same topics.`,
         );
       }
       return new EmbeddingWorkerClient(worker, deps, opened);
