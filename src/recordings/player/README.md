@@ -33,6 +33,20 @@ Sources are preference-ordered by the manifest, and a miss falls through to the 
 - **`el.duration` is `Infinity` on a retained copy.** The WebM duration fix produces a new in-memory Blob that goes to Downloads and Drive; the bytes left in OPFS keep the unfixed header. The player takes its total from the manifest's recorded duration instead — which is the better source anyway, because it is pause-aware ([ADR-0005](../../../docs/adr/0005-notations-are-a-separate-timecoded-aggregate.md)) and a container duration is not.
 - **Bare letters must never fire while a field has focus.** That single rule is what makes the rest of the map safe as unmodified single keys; see `playerKeymap.ts`.
 
+## Topics
+
+A finished recording that has been analysed (ADR-0007) carries `manifest.topics`, and the player shows them two ways: a **band under the scrubber**, one stripe per span, and a **TOPICS popover** listing each topic once with its total minutes. `T` / `⇧T` walks them the way `N` / `⇧N` walks notes.
+
+The distinction that shapes all of it:
+
+> **A topic is global; a span is temporal.** A call that returns to Redis after twenty minutes of hiring is *one* topic with *two* spans.
+
+So the band draws spans and the list draws topics, a topic's `23 min` is the **sum** of its spans rather than last-minus-first, and a shade is keyed to the topic so the stripe at 05:00 and the stripe at 31:00 are visibly the same subject. Four shades cycle; past four, two topics share one and the label disambiguates — the band was never the identifier.
+
+Everything topic-shaped disappears when `topics` is empty, which covers never-analysed, still-running and stale-under-new-settings alike. All three mean "nothing to show", and a `TOPICS 0` trigger would promise otherwise.
+
+The manifest carries no vectors. Centroids and segment embeddings stay in the `analyses` store for the deferred retrieval work; the player needs words and offsets.
+
 ## Synchronization
 
 One clock, `PlaybackClock`, with the tab track as master. Correction is deliberately reluctant — seeking an element is *audible*, so a stream of micro-seeks sounds worse than the drift it fixes:
@@ -65,9 +79,10 @@ The Drive retry is **exactly once per open**. A retry loop against a genuinely d
 | `PlayerView.ts` | The modal DOM (design card `f12`) |
 | `PlaybackClock.ts` | Master/auxiliary synchronization and drift bands |
 | `playbackSource.ts` | One track → a URL a media element can take |
-| `playerFormat.ts` | Clock text, note-mark placement, seek fraction |
+| `playerFormat.ts` | Clock text, note-mark and topic-band placement, seek fraction |
 | `playerKeymap.ts` | The `f19` map, resolved as data |
 | `playerTracks.ts` | What FILES and the volume popup are lists of |
+| `playerTopics.ts` | What TOPICS is a list of |
 
 ## Testing notes
 

@@ -27,6 +27,20 @@
   /* NOTES column (f1): the count chip, and the dash for a recording with none. */
   --note-chip: #efe9df;
   --note-dash: #cabfa8;
+  /*
+   * TOPICS (ADR-0007 §8). Four shades a topic keeps across every span it
+   * occupies, so a subject the conversation returns to looks like the same
+   * subject. Warm and deliberately *not* the accent red, which stays reserved
+   * for danger — the same rule that keeps --focus off it.
+   *
+   * Defined once rather than per theme: these paint on the video stage, which
+   * is dark regardless of the page theme, and the menu dots read on both
+   * grounds. A token that does not vary should not be restated three times.
+   */
+  --topic-0: #c9a227;
+  --topic-1: #a8734a;
+  --topic-2: #7f8f6a;
+  --topic-3: #b08fa0;
   --drive-icon: #5f8b6e;
   --local-icon: #9c8f78;
   --selection: #f3ede1;
@@ -252,6 +266,19 @@ button { -webkit-font-smoothing: antialiased; }
 .player__mark { position: absolute; top: 0; height: 100%; border-radius: 2px; background: var(--detail); cursor: pointer; }
 .player__mark--unnamed { background: rgba(250, 248, 244, .5); }
 .player__playhead { position: absolute; top: -4px; width: 4px; height: 13px; margin-left: -2px; border-radius: 2px; background: #faf8f4; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+/*
+ * Topic band: its own 3px strip under the rail, inside the existing 16px hit
+ * zone. Under rather than over, because progress and note marks are what the
+ * user is scrubbing by — a topic is context for the scrub, not the target of it.
+ */
+.player__topics-band { position: absolute; left: 0; right: 0; top: calc(100% + 1.5px); height: 3px; }
+.player__topics-band[hidden] { display: none; }
+.player__topic-span { position: absolute; top: 0; height: 100%; border-radius: 1.5px; cursor: pointer; opacity: .85; }
+.player__topic-span:hover { opacity: 1; }
+.player__topic-span--0 { background: var(--topic-0); }
+.player__topic-span--1 { background: var(--topic-1); }
+.player__topic-span--2 { background: var(--topic-2); }
+.player__topic-span--3 { background: var(--topic-3); }
 
 .player__controls { position: absolute; left: 12px; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; }
 .player__play { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: #faf8f4; color: #1c1a17; cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
@@ -283,6 +310,17 @@ button { -webkit-font-smoothing: antialiased; }
 .player__file--on .player__file-check { border-color: var(--detail); background: var(--detail); }
 .player__file-label { flex: 1; font-size: 12.5px; color: var(--body); }
 .player__file-format { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .12em; color: var(--faint); }
+.player__menu--topics { min-width: 260px; max-height: 320px; overflow-y: auto; }
+.player__topic { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
+.player__topic:hover { background: var(--field); }
+.player__topic-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; }
+.player__topic-dot--0 { background: var(--topic-0); }
+.player__topic-dot--1 { background: var(--topic-1); }
+.player__topic-dot--2 { background: var(--topic-2); }
+.player__topic-dot--3 { background: var(--topic-3); }
+/* Keywords wrap rather than truncate: the label is the only name a topic has. */
+.player__topic-label { flex: 1; font-size: 12.5px; line-height: 1.35; color: var(--body); overflow-wrap: anywhere; }
+.player__topic-meta { flex-shrink: 0; align-self: flex-start; padding-top: 1px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .04em; color: var(--faint); white-space: nowrap; }
 .player__menu--volume { display: flex; gap: 14px; padding: 10px 12px; min-width: 0; }
 .player__fader { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .player__fader-level { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .1em; color: var(--muted); }

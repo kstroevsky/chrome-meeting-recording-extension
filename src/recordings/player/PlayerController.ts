@@ -13,7 +13,7 @@ import { isStreamableSource, masterTrack, type PlaybackManifest, type PlaybackTr
 import { resolveTrackSource, type SourceResolverDeps } from './playbackSource';
 import { PlayerView } from './PlayerView';
 import { PlaybackClock } from './PlaybackClock';
-import { adjacentNoteStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
+import { adjacentMarkStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
 import { clockOffsetMs, describeTracks, toggleShown } from './playerTracks';
 
 export type PlayerControllerDeps = {
@@ -113,7 +113,16 @@ export class PlayerController {
       }
       case 'note': {
         const starts = (this.manifest?.notations ?? []).map((note) => note.tStartMs);
-        const target = adjacentNoteStart(starts, video.currentTime * 1000, action.direction);
+        const target = adjacentMarkStart(starts, video.currentTime * 1000, action.direction);
+        if (target != null) this.seek(target);
+        return;
+      }
+      case 'topic': {
+        // Every span's start, not one per topic: walking by subject means
+        // stopping where the conversation *returned* to one, too (MODEL-04).
+        const starts = (this.manifest?.topics ?? [])
+          .flatMap((topic) => topic.spans.map((span) => span.tStartMs));
+        const target = adjacentMarkStart(starts, video.currentTime * 1000, action.direction);
         if (target != null) this.seek(target);
         return;
       }
