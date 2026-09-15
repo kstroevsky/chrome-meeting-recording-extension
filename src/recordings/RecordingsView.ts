@@ -15,6 +15,7 @@ import {
 } from './recordingsFormat';
 import { checkIcon, cloudIcon, diskIcon, editIcon } from './recordingsIcons';
 import type { RecordingNotationSummary } from '../shared/notations';
+import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 
 export type RecordingsViewCallbacks = {
@@ -69,6 +70,8 @@ export class RecordingsView {
   private selected = new Set<string>();
   /** Note counts + searchable note text per recording (ADR-0005). */
   private noteSummaries: Record<string, RecordingNotationSummary> = {};
+  /** Topic keywords per recording, for the column and the search (ADR-0007). */
+  private topicSummaries: Record<string, RecordingTopicSummary> = {};
 
   /**
    * Supplies the notes digest for the loaded page. Repainting is the caller's
@@ -76,6 +79,14 @@ export class RecordingsView {
    */
   setNoteSummaries(summaries: Record<string, RecordingNotationSummary>): void {
     this.noteSummaries = summaries;
+  }
+
+  /**
+   * Supplies the topics digest for the loaded page, on the same terms as the
+   * notes one: arriving late is normal, and the table is complete without it.
+   */
+  setTopicSummaries(summaries: Record<string, RecordingTopicSummary>): void {
+    this.topicSummaries = summaries;
   }
   private openId: string | null = null;
   private destinations: DriveFolderPreset[] = [];
@@ -176,14 +187,16 @@ export class RecordingsView {
     // While searching, the count is only useful next to what it was drawn from,
     // and saying where the match came from is the point of the split below (f2).
     total.textContent = this.query.trim()
-      ? `${visibleCount} OF ${this.entries.length} · IN NAMES AND NOTES`
+      ? `${visibleCount} OF ${this.entries.length} · IN NAMES, NOTES AND TOPICS`
       : `${visibleCount} RECORDING${visibleCount === 1 ? '' : 'S'}`;
   }
 
   private visibleEntries(): RecordingHistoryEntry[] {
     const query = this.query.trim().toLocaleLowerCase();
     const filtered = this.entries.filter((entry) => !query
-      || `${entry.name} ${entry.note ?? ''} ${this.noteSummaries[entry.id]?.search ?? ''}`
+      // Topic keywords join the same haystack as the title and the notes, so
+      // "redis" finds a call nobody thought to name after it (ADR-0007 §8).
+      || `${entry.name} ${entry.note ?? ''} ${this.noteSummaries[entry.id]?.search ?? ''} ${this.topicSummaries[entry.id]?.search ?? ''}`
         .toLocaleLowerCase().includes(query));
     return [...filtered].sort((left, right) => {
       if (this.sort === 'time-desc') return right.createdAt - left.createdAt;
@@ -203,7 +216,7 @@ export class RecordingsView {
     search.className = 'recording-search';
     search.type = 'search';
     search.value = this.query;
-    search.placeholder = 'Search name or note…';
+    search.placeholder = 'Search name, note or topic…';
     search.setAttribute('aria-label', 'Search recordings');
     // Repainting the table costs about 24µs a row, so a burst of keystrokes is
     // collapsed into one repaint. The count is not debounced: it is one text

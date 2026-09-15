@@ -24,6 +24,7 @@ function makeView() {
     render: jest.fn(),
     showError: jest.fn(),
     setNoteSummaries: jest.fn(),
+    setTopicSummaries: jest.fn(),
   } as unknown as RecordingsView;
 }
 
@@ -42,6 +43,7 @@ function respond(handlers: Record<string, unknown[]>) {
     const queue = queues[message.type];
     if (queue?.length) return queue.shift() as any;
     if (message.type === 'LIST_RECORDING_NOTATION_SUMMARIES') return { ok: true, summaries: {} } as any;
+    if (message.type === 'LIST_RECORDING_TOPIC_SUMMARIES') return { ok: true, summaries: {} } as any;
     throw new Error(`unexpected message: ${message.type}`);
   });
 }
@@ -117,5 +119,43 @@ describe('RecordingsController', () => {
     await expect(controller.init()).resolves.toBeUndefined();
     expect((view.render as jest.Mock)).toHaveBeenCalledWith([entry('one')], false);
     expect(view.setNoteSummaries).not.toHaveBeenCalled();
+  });
+
+  it('reads the topics digest for the loaded page and hands it to the view', async () => {
+    const view = makeView();
+    const controller = new RecordingsController(view);
+    respond({
+      LIST_RECORDING_HISTORY: [{ ok: true, entries: [entry('one'), entry('two', 2)] }],
+      LIST_RECORDING_TOPIC_SUMMARIES: [
+        { ok: true, summaries: { one: { keywords: ['redis', 'pool'], search: 'redis pool', topicCount: 1 } } },
+      ],
+    });
+
+    await controller.init();
+
+    // One read for the whole page, alongside the notes digest rather than instead of it.
+    const digest = send.mock.calls
+      .map(([message]) => message as { type: string; recordingIds?: string[] })
+      .filter((message) => message.type === 'LIST_RECORDING_TOPIC_SUMMARIES');
+    expect(digest).toHaveLength(1);
+    expect(digest[0].recordingIds).toEqual(['one', 'two']);
+    expect(view.setTopicSummaries).toHaveBeenCalledWith({
+      one: { keywords: ['redis', 'pool'], search: 'redis pool', topicCount: 1 },
+    });
+    expect(view.setNoteSummaries).toHaveBeenCalled();
+  });
+
+  it('still lists the recordings when the topics digest cannot be read', async () => {
+    const view = makeView();
+    const controller = new RecordingsController(view);
+    respond({
+      LIST_RECORDING_HISTORY: [{ ok: true, entries: [entry('one')] }],
+      LIST_RECORDING_TOPIC_SUMMARIES: [{ ok: false, error: 'analysis is unavailable' }],
+    });
+
+    await controller.init();
+
+    expect(view.setTopicSummaries).not.toHaveBeenCalled();
+    expect(view.render).toHaveBeenCalledWith([entry('one')], false);
   });
 });

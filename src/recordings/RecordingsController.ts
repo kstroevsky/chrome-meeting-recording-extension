@@ -130,6 +130,7 @@ export class RecordingsController {
     this.view.showError();
     this.render();
     void this.refreshNoteSummaries();
+    void this.refreshTopicSummaries();
   }
 
   async loadMore() {
@@ -144,6 +145,7 @@ export class RecordingsController {
       this.view.showError();
       this.render();
       void this.refreshNoteSummaries();
+      void this.refreshTopicSummaries();
     } catch (error) {
       this.view.showError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -170,6 +172,24 @@ export class RecordingsController {
       this.render();
     } catch {
       // Leave the column empty; the recordings themselves still list.
+    }
+  }
+
+  /**
+   * Reads the topics digest for the loaded page, exactly as the notes one is
+   * read and for the same reason: it makes the table searchable by subject, and
+   * a recording is still findable by name without it.
+   */
+  private async refreshTopicSummaries(): Promise<void> {
+    const recordingIds = this.entries.map((entry) => entry.id);
+    if (!recordingIds.length) return;
+    try {
+      const response = await sendToBackground({ type: 'LIST_RECORDING_TOPIC_SUMMARIES', recordingIds });
+      if (!response.ok) return;
+      this.view.setTopicSummaries(response.summaries);
+      this.render();
+    } catch {
+      // Same as notes: a missing digest costs search reach, not the list.
     }
   }
 }
