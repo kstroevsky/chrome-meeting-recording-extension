@@ -205,10 +205,20 @@ export function startsWithDiscourseCue(text: string): boolean {
  * Composed from the per-stage configs so that a run has a single thing to
  * record, hash, and compare — see `provenance.ts`.
  */
+/**
+ * Every §9 value one analysis run used, in one object.
+ *
+ * **`ImportanceConfig` is deliberately absent.** Its only member is `mmrLambda`,
+ * which only `selectRepresentative` reads — and nothing in the production
+ * pipeline calls that yet, because no surface has been designed that shows
+ * representative excerpts. Carrying it here would put a value in the config
+ * hash that cannot change any output, so changing it would invalidate every
+ * stored analysis and recompute them all to identical results. IMP-05 is
+ * deferred until representatives have a consumer; see the plan's D-20.
+ */
 export type AnalysisConfig = SegmentationConfig
   & import('./clusters').ClusterConfig
-  & import('./keywords').KeywordConfig
-  & import('./importance').ImportanceConfig;
+  & import('./keywords').KeywordConfig;
 
 export function createSegmentId(): string {
   return `segment:${crypto.randomUUID()}`;

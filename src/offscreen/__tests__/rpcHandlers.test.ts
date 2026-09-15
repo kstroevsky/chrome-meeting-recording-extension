@@ -498,7 +498,6 @@ describe('topic analysis commands (ADR-0007)', () => {
     mergeThreshold: 0.95,
     mergeEverySegments: 12,
     keywordsPerTopic: 4,
-    mmrLambda: 0.7,
   };
   const transcript = [{ tStartMs: 0, tEndMs: 2_000, speaker: 'Ada', text: 'the redis pool is saturated' }];
 

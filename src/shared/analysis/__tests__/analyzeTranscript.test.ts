@@ -26,7 +26,6 @@ const CONFIG: AnalysisConfig = {
   mergeThreshold: 0.95,
   mergeEverySegments: 12,
   keywordsPerTopic: 3,
-  mmrLambda: 0.6,
 };
 
 /** Builds a transcript from a schedule of `[subject, utterances]` blocks. */

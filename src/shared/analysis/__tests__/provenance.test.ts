@@ -1,3 +1,4 @@
+import { CANDIDATE_ANALYSIS_CONFIG } from '../candidateConfig';
 import { PIPELINE_VERSION, hashAnalysisConfig, isStale, type AnalysisProvenance } from '../provenance';
 import type { AnalysisConfig } from '../types';
 
@@ -12,7 +13,6 @@ const CONFIG: AnalysisConfig = {
   mergeThreshold: 0.95,
   mergeEverySegments: 25,
   keywordsPerTopic: 4,
-  mmrLambda: 0.6,
 };
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
@@ -58,8 +58,8 @@ describe('hashAnalysisConfig', () => {
   });
 
   it('distinguishes values that stringify alike', () => {
-    expect(hashAnalysisConfig({ ...CONFIG, mmrLambda: 0.6 }))
-      .not.toBe(hashAnalysisConfig({ ...CONFIG, mmrLambda: 0.61 }));
+    expect(hashAnalysisConfig({ ...CONFIG, keywordsPerTopic: 3 }))
+      .not.toBe(hashAnalysisConfig({ ...CONFIG, keywordsPerTopic: 4 }));
   });
 });
 
@@ -95,5 +95,17 @@ describe('isStale', () => {
     // the version is the only thing that can mark those results stale.
     const redefined = provenance({ pipelineVersion: PIPELINE_VERSION + 1 });
     expect(isStale(provenance(), redefined)).toBe(true);
+  });
+
+  it('hashes nothing that cannot change the analysis (D-20)', () => {
+    // The guarantee is structural, not defensive: `hashAnalysisConfig`
+    // canonicalizes whatever object it is handed, so what matters is that the
+    // *shipped* configuration carries no inert value. `mmrLambda` is the one
+    // that used to — `selectRepresentative` is its only reader and nothing in
+    // the pipeline calls it, so changing it would have invalidated every stored
+    // analysis and recomputed them all to identical results.
+    expect(Object.keys(CANDIDATE_ANALYSIS_CONFIG)).not.toContain('mmrLambda');
+    expect(hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG))
+      .toBe(hashAnalysisConfig({ ...CANDIDATE_ANALYSIS_CONFIG }));
   });
 });

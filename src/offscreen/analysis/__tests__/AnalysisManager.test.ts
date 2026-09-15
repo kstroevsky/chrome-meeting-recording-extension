@@ -16,7 +16,6 @@ const CONFIG: AnalysisConfig = {
   mergeThreshold: 0.95,
   mergeEverySegments: 12,
   keywordsPerTopic: 3,
-  mmrLambda: 0.6,
 };
 
 const SUBJECTS: Record<string, number> = { redis: 0, berlin: 90, hiring: 180 };

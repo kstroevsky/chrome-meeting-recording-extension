@@ -57,6 +57,8 @@ function harness(options: {
   saveThrows?: Error;
 } = {}) {
   const rows = new Map<string, StoredAnalysis>();
+  /** Mutable "conditions right now", so a test can change them mid-run. */
+  const current = { provenance: PROVENANCE };
   if (options.stored) rows.set('rec_1', options.stored);
 
   const calls: { analyze: unknown[]; cancel: string[]; ack: string[] } = { analyze: [], cancel: [], ack: [] };
@@ -81,7 +83,7 @@ function harness(options: {
       },
       remove: async (id) => { rows.delete(id); },
     },
-    () => PROVENANCE,
+    () => current.provenance,
   );
 
   const changed: AnalysisJob[] = [];
@@ -94,7 +96,7 @@ function harness(options: {
     now: () => 5_000,
   });
 
-  return { coordinator, calls, rows, changed };
+  return { coordinator, calls, rows, changed, current, analyses };
 }
 
 describe('RecordingAnalysisCoordinator', () => {
@@ -162,6 +164,34 @@ describe('RecordingAnalysisCoordinator', () => {
     const h = harness({ transcript: TRANSCRIPT, ensureReadyThrows: new Error('Offscreen ready timed out') });
     await expect(h.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'failed', error: 'Offscreen ready timed out' });
+  });
+
+  it('acknowledges a job that ended without a result, so its outbox row drains', async () => {
+    // The P0 this pins: the outbox is drained by acknowledgement and by nothing
+    // else. `failed`, `canceled` and `unsupported` never reach `handleResult`,
+    // so without an ack here their `analysisJobState:` keys replay on every
+    // reconnect for the life of the profile.
+    for (const status of ['failed', 'canceled', 'unsupported'] as const) {
+      const h = harness({ transcript: TRANSCRIPT });
+      h.coordinator.handleJobState({ ...JOB, status, error: 'whatever' });
+      expect(h.calls.ack).toEqual(['ana_1']);
+    }
+  });
+
+  it('does not acknowledge a completed job until its result is stored', async () => {
+    const h = harness({ transcript: TRANSCRIPT });
+    h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+
+    // `completed` defers to handleResult, which waits for the row to land.
+    expect(h.calls.ack).toEqual([]);
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+    expect(h.calls.ack).toEqual(['ana_1']);
+  });
+
+  it('does not acknowledge a job that is still running', () => {
+    const h = harness({ transcript: TRANSCRIPT });
+    h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
+    expect(h.calls.ack).toEqual([]);
   });
 
   it('releases the recording when a job ends without delivering anything', async () => {
@@ -261,5 +291,64 @@ describe('RecordingAnalysisCoordinator', () => {
     await expect(h.coordinator.cancel('rec_1')).resolves.toBe(true);
     expect(h.calls.cancel).toEqual(['ana_1']);
     await expect(h.coordinator.cancel('rec_2')).resolves.toBe(false);
+  });
+
+  describe('provenance describes the run, not the moment it was saved', () => {
+    it('stamps the conditions captured when the job was enqueued', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.analyze('rec_1');
+
+      // The configuration changes while the analysis is still computing.
+      h.current.provenance = { ...PROVENANCE, configHash: 'deadbeef' };
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+
+      // The row says what actually produced it, so it reads as stale against
+      // the new configuration rather than masquerading as current.
+      expect(h.rows.get('rec_1')!.provenance.configHash).toBe(PROVENANCE.configHash);
+      expect(await h.analyses.get('rec_1')).toBeUndefined();
+      expect((await h.analyses.state('rec_1')).status).toBe('stale');
+    });
+
+    it('falls back to current conditions for a job it no longer remembers', async () => {
+      // A service-worker restart loses the in-memory map; falling back to
+      // current conditions is what the old code always did, so no worse.
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+      expect(h.rows.get('rec_1')!.provenance).toEqual(PROVENANCE);
+    });
+  });
+
+  describe('a deleted recording', () => {
+    it('cancels a running analysis and removes what is stored', async () => {
+      const h = harness({ transcript: TRANSCRIPT, stored: { ...RESULT, provenance: PROVENANCE, completedAt: 1 } });
+      await h.coordinator.analyze('rec_1', { force: true });
+
+      await h.coordinator.purge('rec_1');
+
+      expect(h.calls.cancel).toEqual(['ana_1']);
+      expect(h.rows.has('rec_1')).toBe(false);
+    });
+
+    it('refuses a result that arrives after the recording is gone', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.analyze('rec_1');
+      await h.coordinator.purge('rec_1');
+
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+
+      // Not stored — a row for a deleted recording would never be cleaned up.
+      expect(h.rows.has('rec_1')).toBe(false);
+      // But acknowledged, so the data plane stops holding it.
+      expect(h.calls.ack).toContain('ana_1');
+    });
+
+    it('accepts results again once the recording is analysed afresh', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.purge('rec_1');
+      await h.coordinator.analyze('rec_1');
+
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+      expect(h.rows.has('rec_1')).toBe(true);
+    });
   });
 });

@@ -57,8 +57,16 @@ export const CANDIDATE_ANALYSIS_CONFIG: AnalysisConfig = {
   // the longest it shows.
   keywordsPerTopic: 4,
 
-  // Not from 4B either — MMR lambda was never calibrated. This is the classic
-  // Carbonell & Goldstein default, held until excerpt selection is evaluated
-  // against real passages rather than assumed.
-  mmrLambda: 0.7,
 };
+
+/**
+ * MMR's trade-off between a passage's own importance and how much it repeats
+ * one already chosen. Never calibrated, and — more to the point — **not yet
+ * used**: `selectRepresentative` is implemented and tested but has no consumer
+ * in the production pipeline, so this is not part of {@link AnalysisConfig} and
+ * therefore not part of the provenance hash. See the plan's D-20.
+ *
+ * The classic Carbonell & Goldstein default, held here so the value is not
+ * re-invented when excerpt selection acquires a surface.
+ */
+export const UNCALIBRATED_MMR_LAMBDA = 0.7;
