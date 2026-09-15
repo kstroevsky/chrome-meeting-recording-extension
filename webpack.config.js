@@ -217,6 +217,14 @@ module.exports = (_env, argv) => {
         '__WEB_OAUTH_CLIENT_ID__': JSON.stringify(webOauthClientId),
         '__WEB_OAUTH_CLIENT_SECRET__': JSON.stringify(webOauthClientSecret),
         '__TELEMETRY_ENDPOINT__': JSON.stringify(telemetryEndpoint),
+        // The model this build actually packaged. Defined rather than written
+        // in TypeScript so an analysis can never record provenance for a model
+        // or quantization other than the one on disk beside it (ADR-0007).
+        '__ANALYSIS_MODEL__': JSON.stringify({
+          id: ANALYSIS_MODEL.id,
+          revision: ANALYSIS_MODEL.revision,
+          dtype: ANALYSIS_MODEL.dtype,
+        }),
         'process.env.NODE_ENV': JSON.stringify(mode),
       }),
       // Stamp the per-compilation content hash into every entry bundle as

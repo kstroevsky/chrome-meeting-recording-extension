@@ -9,3 +9,9 @@ declare const __WEB_OAUTH_CLIENT_ID__: string | undefined;
 declare const __WEB_OAUTH_CLIENT_SECRET__: string | undefined;
 /** Exact HTTPS telemetry ingestion endpoint injected by webpack. */
 declare const __TELEMETRY_ENDPOINT__: string;
+/**
+ * The embedding model this build packaged, injected by webpack from the same
+ * manifest the fetcher verified. Read through `analysisEngineConfig()` rather
+ * than directly, so a context without the define (a unit test) still works.
+ */
+declare const __ANALYSIS_MODEL__: { id: string; revision: string; dtype: string } | undefined;
