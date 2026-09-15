@@ -39,6 +39,16 @@ export type RpcHandlerDeps = {
   /** Cancels an active/queued upload and starts local fallback downloads. */
   cancelUpload: (jobId: string) => boolean;
   acknowledgeUploadState: (jobId: string) => Promise<void>;
+  /** Queues topic analysis for a recording; returns the new job's id (HOST-01). */
+  analyzeTranscript?: (
+    historyId: string,
+    transcript: import('../shared/transcript').TranscriptSegment[],
+    config: import('../shared/analysis/types').AnalysisConfig,
+  ) => string;
+  /** Aborts a queued/running analysis; false when it is no longer active. */
+  cancelAnalysis?: (jobId: string) => boolean;
+  /** Releases a completed analysis the background has now persisted (HOST-03). */
+  acknowledgeAnalysisState?: (jobId: string) => Promise<void>;
   renameDriveResources?: (resources: DriveRenameResource[]) => Promise<DriveRenameResource[]>;
   pushState: (
     phase: RecordingPhase,
@@ -206,6 +216,32 @@ async function handleOffscreenRenameDriveResources(
   }
 }
 
+async function handleOffscreenAnalyzeTranscript(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_ANALYZE_TRANSCRIPT' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+  if (!deps.analyzeTranscript) return { ok: false, error: 'Topic analysis is unavailable' };
+  if (typeof msg.historyId !== 'string' || !msg.historyId) return { ok: false, error: 'Missing historyId' };
+  if (!Array.isArray(msg.transcript)) return { ok: false, error: 'Missing transcript' };
+  if (!msg.config || typeof msg.config !== 'object') return { ok: false, error: 'Missing analysis configuration' };
+  try {
+    return { ok: true, jobId: deps.analyzeTranscript(msg.historyId, msg.transcript, msg.config) };
+  } catch (error) {
+    // A rejected config (an out-of-range window, say) is a caller error, not a
+    // session failure: answer it rather than throwing into the RPC server.
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleOffscreenCancelAnalysis(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_CANCEL_ANALYSIS' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: boolean; error?: string }> {
+  if (typeof msg.jobId !== 'string') return { ok: false, error: 'Missing jobId' };
+  const canceled = deps.cancelAnalysis?.(msg.jobId) ?? false;
+  return canceled ? { ok: true } : { ok: false, error: 'Analysis is no longer active' };
+}
+
 async function handleRevokeBlobUrl(
   msg: Extract<BgToOffscreenOneWay, { type: 'REVOKE_BLOB_URL' }>,
   deps: RpcHandlerDeps
@@ -230,6 +266,13 @@ async function handleAcknowledgeUploadState(
   if (typeof msg.jobId === 'string' && msg.jobId) await deps.acknowledgeUploadState(msg.jobId);
 }
 
+async function handleAcknowledgeAnalysisState(
+  msg: Extract<BgToOffscreenOneWay, { type: 'OFFSCREEN_ACK_ANALYSIS_STATE' }>,
+  deps: RpcHandlerDeps,
+): Promise<void> {
+  if (typeof msg.jobId === 'string' && msg.jobId) await deps.acknowledgeAnalysisState?.(msg.jobId);
+}
+
 /** Registers RPC and one-way port handlers for background -> offscreen commands. */
 export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps) {
   createPortRpcServer(
@@ -248,6 +291,9 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_RENAME_DRIVE_RESOURCES: (msg) => handleOffscreenRenameDriveResources(msg, deps),
       REVOKE_BLOB_URL:   (msg) => handleRevokeBlobUrl(msg, deps),
       OFFSCREEN_ACK_UPLOAD_STATE: (msg) => handleAcknowledgeUploadState(msg, deps),
+      OFFSCREEN_ANALYZE_TRANSCRIPT: (msg) => handleOffscreenAnalyzeTranscript(msg, deps),
+      OFFSCREEN_CANCEL_ANALYSIS: (msg) => handleOffscreenCancelAnalysis(msg, deps),
+      OFFSCREEN_ACK_ANALYSIS_STATE: (msg) => handleAcknowledgeAnalysisState(msg, deps),
     },
     (reqId, payload) => respond(deps.getPort, reqId, payload),
     deps.error

@@ -27,6 +27,12 @@ import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { UploadManager } from './offscreen/UploadManager';
 import { createChromePendingUploadStore } from './offscreen/drive/PendingUploadStore';
 import { createChromeUploadJobStateOutbox } from './offscreen/drive/UploadJobStateOutbox';
+import { AnalysisManager } from './offscreen/analysis/AnalysisManager';
+import { EmbeddingWorkerClient } from './offscreen/analysis/EmbeddingWorkerClient';
+import { analysisEngineConfig, spawnAnalysisWorker } from './offscreen/analysis/engineConfig';
+import { createChromeAnalysisJobStateOutbox } from './offscreen/analysis/AnalysisJobStateOutbox';
+import { toWireAnalysis } from './shared/analysis/storedAnalysis';
+import { isTerminalAnalysisJob } from './shared/analysis/job';
 import { renameDriveResources } from './offscreen/drive/DriveMetadataRenamer';
 import { resumePendingDriveUploadsWithChrome } from './offscreen/drive/resumePendingUploads';
 import { recoverOrphanRecordingsWithChrome } from './offscreen/storage/recoverOrphanRecordings';
@@ -201,6 +207,14 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     openRetained: (key: string) => retainedMediaStore.read(key),
     cancelUpload: (jobId) => uploadManager.cancel(jobId),
     acknowledgeUploadState: (jobId) => uploadJobStateOutbox.remove(jobId),
+    analyzeTranscript: (historyId, transcript, config) => analysisManager.enqueue(historyId, transcript, config),
+    cancelAnalysis: (jobId) => analysisManager.cancel(jobId),
+    acknowledgeAnalysisState: async (jobId) => {
+      // Two things are released by one ack: the durable state entry, and the
+      // in-memory result the background has now taken ownership of.
+      analysisManager.acknowledge(jobId);
+      await analysisJobStateOutbox.remove(jobId);
+    },
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
     pushState: controller.pushState,
     log: L.log,
@@ -227,6 +241,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   });
   L.log('READY signaled via Port');
   void replayUploadStates(port);
+  void replayAnalysisStates(port);
   return port;
 }
 
@@ -331,6 +346,75 @@ const uploadManager = new UploadManager({
   // five-minute, 128 MB in-memory budget.
   readRetained: (key) => retainedMediaStore.read(key),
 });
+
+// Topic analysis (ADR-0007): a long data-plane job whose control plane can be
+// terminated under it, so it takes the same durable shape uploads do —
+// reported as it moves, terminal state held in an outbox until background acks.
+const analysisJobStateOutbox = createChromeAnalysisJobStateOutbox();
+
+const analysisManager = new AnalysisManager({
+  openEngine: () => EmbeddingWorkerClient.create(
+    analysisEngineConfig((path) => chrome.runtime.getURL(path)),
+    {
+      spawn: () => spawnAnalysisWorker((path) => chrome.runtime.getURL(path)),
+      reportWarning: controller.reportWarning,
+    },
+  ),
+  report: reportAnalysisJob,
+  deliver: deliverAnalysisResult,
+  warn: L.warn,
+  isUnsupported: () => EmbeddingWorkerClient.unsupported,
+});
+
+async function reportAnalysisJob(job: import('./shared/analysis/job').AnalysisJob): Promise<void> {
+  if (isTerminalAnalysisJob(job)) {
+    try {
+      await analysisJobStateOutbox.put(job);
+    } catch (error) {
+      L.warn('Could not persist terminal analysis state for replay', job.id, describeRuntimeError(error));
+    }
+  }
+  try {
+    getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_STATE', job });
+  } catch (error) {
+    // The outbox entry stands and is replayed when a later port connects.
+    L.warn('Could not send analysis state to background', job.id, describeRuntimeError(error));
+  }
+}
+
+/**
+ * Hands a finished analysis to the control plane, which owns `recording-history`.
+ *
+ * Fire-and-forget on the wire but not in bookkeeping: the manager keeps the
+ * result until an `OFFSCREEN_ACK_ANALYSIS_STATE` comes back, so a post that
+ * lands in a dead port is retried on reconnect rather than lost.
+ */
+async function deliverAnalysisResult(
+  job: import('./shared/analysis/job').AnalysisJob,
+  result: import('./shared/analysis/analyzeTranscript').AnalysisResult,
+): Promise<void> {
+  getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result) });
+}
+
+async function replayAnalysisStates(port: chrome.runtime.Port): Promise<void> {
+  let terminal: import('./shared/analysis/job').AnalysisJob[] = [];
+  try {
+    terminal = await analysisJobStateOutbox.list();
+  } catch (error) {
+    L.warn('Could not load terminal analysis state outbox', describeRuntimeError(error));
+  }
+  const byId = new Map(analysisManager.activeJobs().map((job) => [job.id, job]));
+  for (const job of terminal) byId.set(job.id, job);
+  for (const job of byId.values()) {
+    try {
+      port.postMessage({ type: 'OFFSCREEN_ANALYSIS_STATE', job });
+    } catch {
+      return;
+    }
+  }
+  // State replayed; now re-offer any result the background never took.
+  await analysisManager.redeliver();
+}
 
 const engine = new RecorderEngine({
   log: L.log,
