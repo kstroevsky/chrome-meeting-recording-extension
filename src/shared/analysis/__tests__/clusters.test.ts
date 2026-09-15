@@ -14,6 +14,8 @@ const segment = (deg: number, tStartMs = (seq += 1) * 10_000): TemporalSegment =
   tStartMs,
   tEndMs: tStartMs + 9_000,
   embedding: at(deg),
+  startWindow: seq - 1,
+  endWindow: seq,
 });
 
 const CONFIG = { assignmentThreshold: 0.82, mergeThreshold: 0.95, mergeEverySegments: 100 };

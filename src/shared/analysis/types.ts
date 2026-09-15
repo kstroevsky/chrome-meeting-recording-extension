@@ -68,6 +68,16 @@ export type ConversationSegment = {
   embedding: Embedding;
   /** The topic this segment was assigned to. */
   localTopicId: string;
+  /**
+   * The contextual windows this segment covers, as a half-open index range.
+   *
+   * Carried because a topic has to be readable back into *words*: c-TF-IDF
+   * pools a topic's text to label it (UI-02), and importance ranks its
+   * passages — neither is reachable from timecodes alone. Offsets locate a
+   * segment on the media; these locate it in the transcript.
+   */
+  startWindow: number;
+  endWindow: number;
 };
 
 /**

@@ -101,5 +101,7 @@ function toSegment(
     tStartMs: windows[run.from].tStartMs,
     tEndMs: windows[run.to - 1].tEndMs,
     embedding: meanCentroid(embeddings.slice(run.from, run.to)),
+    startWindow: run.from,
+    endWindow: run.to,
   };
 }
