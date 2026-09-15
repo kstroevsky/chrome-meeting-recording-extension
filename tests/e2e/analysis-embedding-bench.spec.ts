@@ -27,6 +27,35 @@ const WINDOWS = Number(process.env.BENCH_WINDOWS ?? 800);
 /** EMB-07, exact contract. */
 const BATCH = 32;
 
+/**
+ * The regression floor, in windows/sec — plan §9's "embedding throughput
+ * target", set from measurement rather than chosen.
+ *
+ * Four runs on 2026-09-15 (Apple Metal-3, Q8, 800 windows, batch 32):
+ *
+ * | run | webgpu | wasm |
+ * | --- | --- | --- |
+ * | 1 | 5.4 | 5.6 |
+ * | 2 | 5.4 | 5.2 |
+ * | 3 | 5.3 | 4.9 |
+ * | 4 | 5.2 | 5.1 |
+ *
+ * WebGPU 5.2–5.4 (mean 5.33), WASM 4.9–5.6 (mean 5.20). WASM is the noisier of
+ * the two — CPU contention rather than the model — and the two backends are
+ * within each other's variance on this hardware.
+ *
+ * **This is a tripwire, not a target.** Set at roughly 30% below the slowest
+ * observation, so it catches a real regression — a lost SIMD path, an
+ * accidental batch-size change, a dtype swap — while tolerating a loaded CI
+ * machine that happens to be sharing cores. A floor placed at the observed
+ * value would flake on the first busy afternoon and get deleted, which is worse
+ * than no floor at all.
+ *
+ * Any machine this runs on that is genuinely slower than this is telling us
+ * something worth knowing, which is the point.
+ */
+const MIN_WINDOWS_PER_SEC = 3.5;
+
 type BatchRun = {
   device: string;
   dtype: string;
@@ -164,6 +193,14 @@ test.describe('embedding throughput at realistic scale (ADR-0007 4A) @analysis-b
 
       expect(run.dimensions).toBe(384);
       expect(run.batchMs.length).toBe(Math.ceil(WINDOWS / BATCH));
+
+      const windowsPerSec = WINDOWS / (run.totalEmbedMs / 1000);
+      expect(
+        windowsPerSec,
+        `${run.device} embedded ${windowsPerSec.toFixed(1)} windows/sec, below the ${MIN_WINDOWS_PER_SEC} floor. `
+        + 'Either this machine is heavily loaded, or something in the packaged runtime regressed — '
+        + 'check the ORT variant list, the dtype, and EMB-07\'s batch size.',
+      ).toBeGreaterThan(MIN_WINDOWS_PER_SEC);
 
       const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
       // eslint-disable-next-line no-console
