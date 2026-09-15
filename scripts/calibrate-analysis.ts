@@ -54,7 +54,7 @@ function boundaryF1(detected: number[], truth: number[]): number {
  * This is what measures *recurrence* — a pipeline that never merges scores well
  * on boundaries and badly here, because the two Redis stretches end up apart.
  */
-function clusterF1(assigned: string[], truth: string[]): number {
+function clusterScores(assigned: string[], truth: string[]): { precision: number; recall: number; f1: number } {
   let tp = 0, fp = 0, fn = 0;
   for (let i = 0; i < truth.length; i += 1) {
     for (let j = i + 1; j < truth.length; j += 1) {
@@ -65,9 +65,15 @@ function clusterF1(assigned: string[], truth: string[]): number {
       else if (!same && shouldBe) fn += 1;
     }
   }
+  // Precision falls when unrelated topics are folded together; recall falls
+  // when a recurring subject is left split. They are not symmetric in cost:
+  // an over-tight assignment threshold over-splits, and the merge sweep can
+  // still repair that — an over-loose one contaminates a cluster and nothing
+  // downstream can undo it. So precision is the tie-breaker below.
   const precision = tp + fp ? tp / (tp + fp) : 1;
   const recall = tp + fn ? tp / (tp + fn) : 1;
-  return precision + recall ? (2 * precision * recall) / (precision + recall) : 0;
+  const f1 = precision + recall ? (2 * precision * recall) / (precision + recall) : 0;
+  return { precision, recall, f1 };
 }
 
 const GRID = {
@@ -75,13 +81,24 @@ const GRID = {
   peakMinProminence: [0.02, 0.05, 0.08, 0.12],
   longPauseMs: [3_000, 5_000, 8_000],
   minSegmentMs: [15_000, 30_000, 60_000],
-  // Measured on this encoder: same-topic window pairs sit at p50 0.919 and
-  // different-topic at p50 0.835, so anything below ~0.9 merges everything.
-  mergeThreshold: [0.93, 0.95, 0.965, 0.975, 0.985],
+  // Searched across the band this encoder actually occupies, not around the
+  // payload's illustrative 0.82 — every observed cross-topic segment pair sat
+  // above 0.861, so 0.82 joins everything (ADR-0007 4B, D-16). Assignment and
+  // merge are calibrated *jointly*: they are two halves of one behaviour.
+  assignmentThreshold: [0.88, 0.91, 0.93, 0.95, 0.97],
+  mergeThreshold: [0.88, 0.92, 0.95, 0.97, 0.98],
   mergeEverySegments: [4, 12, 1_000],
 };
 
-type Result = { config: Record<string, number>; shape: Shape; boundary: number; cluster: number; score: number };
+type Result = {
+  config: Record<string, number>;
+  shape: Shape;
+  boundary: number;
+  cluster: number;
+  clusterPrecision: number;
+  clusterRecall: number;
+  score: number;
+};
 const results: Result[] = [];
 
 for (const shape of corpus.cases[0].shapes.map((s) => s.shape)) {
@@ -89,10 +106,13 @@ for (const shape of corpus.cases[0].shapes.map((s) => s.shape)) {
   for (const peakMinProminence of GRID.peakMinProminence)
   for (const longPauseMs of GRID.longPauseMs)
   for (const minSegmentMs of GRID.minSegmentMs)
+  for (const assignmentThreshold of GRID.assignmentThreshold)
   for (const mergeThreshold of GRID.mergeThreshold)
   for (const mergeEverySegments of GRID.mergeEverySegments) {
     let boundaryTotal = 0;
     let clusterTotal = 0;
+    let precisionTotal = 0;
+    let recallTotal = 0;
 
     for (const testCase of corpus.cases) {
       const entry = testCase.shapes.find((s) =>
@@ -109,7 +129,9 @@ for (const shape of corpus.cases[0].shapes.map((s) => s.shape)) {
       boundaryTotal += boundaryF1(peaks.map((p) => p.index), truthBoundaries);
 
       const segments = buildConversationSegments(windows, embeddings, peaks, { minSegmentMs });
-      const { segments: assigned } = clusterSegments(segments, { mergeThreshold, mergeEverySegments });
+      const { segments: assigned } = clusterSegments(segments, {
+        assignmentThreshold, mergeThreshold, mergeEverySegments,
+      });
 
       // Score clustering at window resolution, so long segments weigh more.
       const assignedPerWindow: string[] = [];
@@ -122,16 +144,24 @@ for (const shape of corpus.cases[0].shapes.map((s) => s.shape)) {
           }
         }
       }
-      clusterTotal += clusterF1(assignedPerWindow, truthPerWindow);
+      const scored = clusterScores(assignedPerWindow, truthPerWindow);
+      clusterTotal += scored.f1;
+      precisionTotal += scored.precision;
+      recallTotal += scored.recall;
     }
 
     const boundary = boundaryTotal / corpus.cases.length;
     const cluster = clusterTotal / corpus.cases.length;
     results.push({
-      config: { peakNeighbourhood, peakMinProminence, longPauseMs, minSegmentMs, mergeThreshold, mergeEverySegments },
+      config: {
+        peakNeighbourhood, peakMinProminence, longPauseMs, minSegmentMs,
+        assignmentThreshold, mergeThreshold, mergeEverySegments,
+      },
       shape,
       boundary,
       cluster,
+      clusterPrecision: precisionTotal / corpus.cases.length,
+      clusterRecall: recallTotal / corpus.cases.length,
       // Equal weight: a pipeline that finds boundaries but cannot recognize a
       // recurring subject is no more useful than the reverse.
       score: (boundary + cluster) / 2,
@@ -139,17 +169,26 @@ for (const shape of corpus.cases[0].shapes.map((s) => s.shape)) {
   }
 }
 
-results.sort((a, b) => b.score - a.score);
+// Rank by score, but break near-ties toward precision: two configurations that
+// score alike are not equally safe, because over-splitting is repairable and
+// contamination is not.
+results.sort((a, b) => (Math.abs(b.score - a.score) > 0.002
+  ? b.score - a.score
+  : b.clusterPrecision - a.clusterPrecision));
 console.log(`\ncorpus: ${corpus.cases.length} meetings, dtype ${corpus.dtype}, ${results.length} configurations\n`);
-console.log('  rank  score  bound  clust  win/stride  peak(n,prom)  pause   minSeg  merge(thr,every)');
-for (const r of results.slice(0, 10)) {
+console.log('  rank  score  bound  clustF1  cPrec  cRec   win/str  peak(n,prom)  pause  minSeg  assign  merge  every');
+for (const r of results.slice(0, 12)) {
   const c = r.config;
   console.log(
-    `  ${String(results.indexOf(r) + 1).padStart(4)}  ${r.score.toFixed(3)}  ${r.boundary.toFixed(3)}  ${r.cluster.toFixed(3)}`
-    + `  ${r.shape.windowUtterances}/${r.shape.windowStride}`.padEnd(12)
+    `  ${String(results.indexOf(r) + 1).padStart(4)}  ${r.score.toFixed(3)}  ${r.boundary.toFixed(3)}`
+    + `  ${r.cluster.toFixed(3)}`.padEnd(9)
+    + `  ${r.clusterPrecision.toFixed(3)}  ${r.clusterRecall.toFixed(3)}`
+    + `  ${r.shape.windowUtterances}/${r.shape.windowStride}`.padEnd(9)
     + `  ${c.peakNeighbourhood},${c.peakMinProminence}`.padEnd(14)
-    + `  ${c.longPauseMs / 1000}s`.padEnd(8)
+    + `  ${c.longPauseMs / 1000}s`.padEnd(7)
     + `  ${c.minSegmentMs / 1000}s`.padEnd(8)
-    + `  ${c.mergeThreshold},${c.mergeEverySegments}`,
+    + `  ${c.assignmentThreshold}`.padEnd(8)
+    + `  ${c.mergeThreshold}`.padEnd(7)
+    + `  ${c.mergeEverySegments}`,
   );
 }

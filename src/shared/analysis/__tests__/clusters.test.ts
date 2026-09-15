@@ -1,4 +1,4 @@
-import { CLUSTER_ASSIGNMENT_THRESHOLD, clusterSegments, mergeClusters } from '../clusters';
+import { PAYLOAD_ASSIGNMENT_THRESHOLD, clusterSegments, mergeClusters } from '../clusters';
 import { cosine } from '../vector';
 import type { TemporalSegment } from '../types';
 
@@ -16,22 +16,50 @@ const segment = (deg: number, tStartMs = (seq += 1) * 10_000): TemporalSegment =
   embedding: at(deg),
 });
 
-const CONFIG = { mergeThreshold: 0.95, mergeEverySegments: 100 };
+const CONFIG = { assignmentThreshold: 0.82, mergeThreshold: 0.95, mergeEverySegments: 100 };
 
 beforeEach(() => { seq = 0; });
 
 describe('the assignment threshold', () => {
-  it('is the payload’s exact 0.82', () => {
-    expect(CLUSTER_ASSIGNMENT_THRESHOLD).toBe(0.82);
+  it('keeps the payload’s illustrative 0.82 for provenance, unused', () => {
+    // Measured inoperative for this encoder (ADR-0007 4B): all 27 genuinely
+    // different topic pairs scored above it, the lowest at 0.861. Kept so the
+    // plan’s CLU-04 and the code still name the same number.
+    expect(PAYLOAD_ASSIGNMENT_THRESHOLD).toBe(0.82);
   });
 
   it('keeps a segment whose similarity is above it, and splits at or below', () => {
-    // 30° apart is cos ≈ 0.866, above the bar; 40° is ≈ 0.766, below it.
-    expect(cosine(at(0), at(30))).toBeGreaterThan(CLUSTER_ASSIGNMENT_THRESHOLD);
-    expect(cosine(at(0), at(40))).toBeLessThan(CLUSTER_ASSIGNMENT_THRESHOLD);
+    // 30° apart is cos ≈ 0.866, above a 0.82 bar; 40° is ≈ 0.766, below it.
+    expect(cosine(at(0), at(30))).toBeGreaterThan(CONFIG.assignmentThreshold);
+    expect(cosine(at(0), at(40))).toBeLessThan(CONFIG.assignmentThreshold);
 
     expect(clusterSegments([segment(0), segment(30)], CONFIG).clusters).toHaveLength(1);
     expect(clusterSegments([segment(0), segment(40)], CONFIG).clusters).toHaveLength(2);
+  });
+
+  it('is configuration, so a tighter encoder can be given a tighter bar', () => {
+    const pair = [segment(0), segment(20)];
+    expect(clusterSegments(pair, { ...CONFIG, assignmentThreshold: 0.9 }).clusters).toHaveLength(1);
+    expect(clusterSegments(pair, { ...CONFIG, assignmentThreshold: 0.95 }).clusters).toHaveLength(2);
+  });
+
+  it('over-splitting stays recoverable, over-joining does not', () => {
+    // Too tight a bar splits two subjects apart, and the merge sweep reunites
+    // them — the error is recoverable.
+    const pair = [segment(0), segment(20)];
+    expect(clusterSegments(pair, { ...CONFIG, assignmentThreshold: 0.95, mergeThreshold: 0.9 }).clusters)
+      .toHaveLength(1);
+
+    // Too loose a bar folds them together at assignment, and nothing
+    // downstream can separate them again: there is no split operation.
+    const joined = clusterSegments(pair, { ...CONFIG, assignmentThreshold: 0.5, mergeThreshold: 0.999 });
+    expect(joined.clusters).toHaveLength(1);
+    expect(joined.clusters[0].n).toBe(2);
+  });
+
+  it('refuses a threshold outside the cosine range', () => {
+    expect(() => clusterSegments([segment(0)], { ...CONFIG, assignmentThreshold: 1.5 }))
+      .toThrow(/assignment threshold/);
   });
 });
 
@@ -83,7 +111,7 @@ describe('clusterSegments', () => {
   });
 
   it('sweeps periodically as well as at the end', () => {
-    const everySegment = { mergeThreshold: 0.95, mergeEverySegments: 1 };
+    const everySegment = { assignmentThreshold: 0.82, mergeThreshold: 0.95, mergeEverySegments: 1 };
     const { clusters, segments } = clusterSegments(
       [segment(0), segment(90), segment(0), segment(90)],
       everySegment,
@@ -99,7 +127,7 @@ describe('clusterSegments', () => {
     // that follows must be measured against that surviving centroid.
     const { clusters } = clusterSegments(
       [segment(0), segment(90), segment(0), segment(3)],
-      { mergeThreshold: 0.95, mergeEverySegments: 3 },
+      { assignmentThreshold: 0.82, mergeThreshold: 0.95, mergeEverySegments: 3 },
     );
     expect(clusters).toHaveLength(2);
     const berlin = clusters.find((cluster) => cluster.segmentIds.length === 3);
@@ -127,7 +155,7 @@ describe('mergeClusters', () => {
     const assignment = new Map([['s1', 'a'], ['s2', 'b'], ['s3', 'c']]);
     const merged = mergeClusters(
       [clusterOf('a', 0, 2, ['s1']), clusterOf('b', 4, 3, ['s2']), clusterOf('c', 8, 1, ['s3'])],
-      { mergeThreshold: 0.98, mergeEverySegments: 100 },
+      { assignmentThreshold: 0.82, mergeThreshold: 0.98, mergeEverySegments: 100 },
       assignment,
     );
 
@@ -142,7 +170,7 @@ describe('mergeClusters', () => {
     const assignment = new Map([['s1', 'a'], ['s2', 'b']]);
     const merged = mergeClusters(
       [clusterOf('a', 0, 1, ['s1']), clusterOf('b', 90, 1, ['s2'])],
-      { mergeThreshold: 0.95, mergeEverySegments: 100 },
+      { assignmentThreshold: 0.82, mergeThreshold: 0.95, mergeEverySegments: 100 },
       assignment,
     );
     expect(merged).toHaveLength(2);
@@ -155,7 +183,7 @@ describe('mergeClusters', () => {
     const assignment = new Map([['s1', 'a'], ['s2', 'b'], ['s3', 'c']]);
     const merged = mergeClusters(
       [clusterOf('a', 0, 1, ['s1']), clusterOf('b', 8, 1, ['s2']), clusterOf('c', 16, 1, ['s3'])],
-      { mergeThreshold: 0.95, mergeEverySegments: 100 },
+      { assignmentThreshold: 0.82, mergeThreshold: 0.95, mergeEverySegments: 100 },
       assignment,
     );
     expect(merged).toHaveLength(1);
@@ -167,7 +195,7 @@ describe('mergeClusters', () => {
     const assignment = new Map([['s1', 'a'], ['s2', 'b']]);
     const [merged] = mergeClusters(
       [clusterOf('a', 0, 9, ['s1']), clusterOf('b', 10, 1, ['s2'])],
-      { mergeThreshold: 0.9, mergeEverySegments: 100 },
+      { assignmentThreshold: 0.82, mergeThreshold: 0.9, mergeEverySegments: 100 },
       assignment,
     );
     // Nine segments at 0° and one at 10° sits much nearer 0° than 5°.

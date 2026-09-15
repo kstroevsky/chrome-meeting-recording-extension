@@ -286,3 +286,48 @@ This is not a tuning miss. `multilingual-e5-small` compresses cosine into a narr
 **Why this is not being changed here.** CLU-04 is recorded in the plan's ledger as an exact contract — "Threshold **0.82** is the stated value" — and the `lossless-plan-evolution` discipline forbids amending an exact contract without authorization. The source payload is genuinely ambiguous on the point: 0.82 appears inside an illustrative passage ("Imagine the current topic has … number of segments = 14", "If: `s > 0.82` for example"), and this plan's own first ledger draft called it "the stated example value" before a later edit tightened it. Whether it was ever intended as a frozen contract is the author's to say.
 
 Clustering calibration is blocked until it is resolved. Boundary detection is not, and its values are ready to freeze.
+
+## 4B calibration, second pass — CLU-04 amended, candidates chosen (2026-09-12)
+
+The assignment threshold moved into `ClusterConfig` on the author's authorization (plan D-16) and was searched jointly with the merge threshold across 40,500 configurations. **Cluster F1 rose from 0.585 — flat across every configuration, because the merge stage was unreachable — to 0.749.**
+
+Best: **4 utterances / stride 4, peak neighbourhood 2, prominence 0.05, `minSegmentMs` 15 s, assignment 0.93, merge 0.95, merge period 12.** Boundary F1 0.892, cluster F1 0.749 (precision 0.718, recall 0.796), and the produced cluster count matches ground truth exactly (2.8 vs 2.8 per meeting).
+
+**The operating curve, since precision was the thing to watch:**
+
+| assignment | merge | cluster F1 | precision | recall | clusters / true |
+| --- | --- | --- | --- | --- | --- |
+| 0.91 | 0.95 | 0.706 | 0.602 | 0.951 | 2.0 / 2.8 |
+| **0.93** | **0.95** | **0.749** | 0.718 | 0.796 | **2.8 / 2.8** |
+| 0.95 | 0.95 | 0.696 | 0.726 | 0.675 | 3.2 / 2.8 |
+| 0.97 | 0.95 | 0.696 | 0.726 | 0.675 | 3.2 / 2.8 |
+
+Raising assignment past 0.95 changes nothing: same-topic segment centroids top out at 0.969, so beyond that everything splits on contact and the merge sweep does all the work. The prefer-over-splitting rule was applied and did **not** select 0.95 here — it breaks *near-ties*, and 0.749 against 0.696 is not a tie. At 0.93 the pipeline still leans slightly toward joining (recall above precision), which is the direction worth watching on real data.
+
+**`longPauseMs` has no measured effect.** 3 s, 5 s and 8 s produce identical results everywhere in the grid. Either the synthetic corpus's pauses are not discriminative or the 0.10 weight cannot move a peak on its own. Not resolved; carried as a candidate at 3 s with the caveat attached.
+
+**MMR lambda is not calibrated.** The harness scores boundaries and clustering only; the importance stage has no ground truth in this corpus. It remains open.
+
+### What this corpus does and does not establish
+
+**Established.** Overlapping boundary contexts are wrong for this implementation; 0.82 is unusable with this encoder; the merge stage was previously unreachable; and the mechanics of recurrence and short-topic handling work.
+
+**Suggested only.** Every value below is a *candidate default*, not a frozen contract. Synthetic topic blocks underrepresent interruptions, weak transitions, callbacks, mixed-topic turns and vocabulary overlap — exactly the cases that decide a threshold. Real dialogue will most likely require loosening rather than tightening.
+
+| | status |
+| --- | --- |
+| 4 utterances / stride 4 | strong structural result |
+| assignment 0.82 rejected | definitive for this encoder |
+| peak neighbourhood 2, prominence 0.05 | candidate default |
+| `longPauseMs` 3,000 | candidate default, no measured effect |
+| `minSegmentMs` 15,000 | candidate default |
+| assignment 0.93, merge 0.95, period 12 | candidate region |
+| MMR lambda | not calibrated |
+
+### On the boundary-context invariant
+
+Stated precisely, because the loose version would be wrong: **the two semantic contexts compared across one candidate boundary must not share utterances.** That is what SEG-02's "previous 3–5" versus "next 3–5" describes. It is *not* a rule that contextual windows must always be disjoint.
+
+Using 4-utterance blocks at stride 4 for both segmentation and clustering satisfies it by construction and is a reasonable v1 simplification, with one consequence worth recording: **boundary resolution is quantized to those block boundaries.** A later higher-resolution detector — sliding a disjoint pair of contexts across every utterance position — remains open and is not prohibited by this result.
+
+**Next:** validate the candidate configuration against a small set of hand-labelled real conversations before any of it is called frozen.

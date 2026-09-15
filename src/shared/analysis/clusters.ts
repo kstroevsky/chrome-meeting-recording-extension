@@ -24,17 +24,42 @@ import { cosine, mergeCentroids } from './vector';
 import { createTopicId, type ConversationSegment, type Embedding, type TemporalSegment } from './types';
 
 /**
- * Cosine similarity at or below which a segment does not belong to the current
- * cluster (CLU-04). Exact contract from the source payload — the rule is
- * `s > 0.82`, so 0.82 itself opens a new cluster.
+ * The assignment threshold as the source payload wrote it (CLU-04).
+ *
+ * Retained for provenance, **not used**: ADR-0007's 4B calibration measured
+ * this encoder and found every genuinely different topic pair scoring above it
+ * — 27 of 27, the lowest at 0.861 — so `cosine > 0.82` evaluates to "always
+ * join" and every conversation collapses to one cluster. E5-family models
+ * compress cosine into a narrow high band, and an absolute threshold chosen
+ * without reference to a particular encoder cannot land in it.
+ *
+ * The payload presented it illustratively ("Imagine the current topic has …
+ * number of segments = 14", "If: `s > 0.82` for example"), so it moves to
+ * {@link ClusterConfig.assignmentThreshold} as a §9 open contract rather than
+ * standing as a frozen value. See the plan's D-16.
  */
-export const CLUSTER_ASSIGNMENT_THRESHOLD = 0.82;
+export const PAYLOAD_ASSIGNMENT_THRESHOLD = 0.82;
 
 export type ClusterConfig = {
   /**
+   * Cosine similarity a segment must **exceed** to join the current cluster
+   * rather than open a new one (CLU-04, as amended by D-16).
+   *
+   * Model- and calibration-specific: embedding models differ in how they spread
+   * similarity, so this is calibrated *jointly* with {@link mergeThreshold}
+   * rather than chosen once. It compares a segment to a centroid; the merge
+   * threshold compares two centroids.
+   *
+   * **Set it too high and the cost is recoverable; too low and it is not.** An
+   * over-tight bar makes extra micro-clusters, which the periodic merge sweep
+   * can still reunite. An over-loose one folds two subjects into one cluster,
+   * and this pipeline has no split operation to undo that. Prefer over-splitting
+   * when two candidate values score alike.
+   */
+  assignmentThreshold: number;
+  /**
    * Cosine similarity between two cluster *centroids* at or above which they
-   * are the same subject. Distinct from {@link CLUSTER_ASSIGNMENT_THRESHOLD},
-   * which compares a segment to a centroid. Open contract (§9).
+   * are the same subject. Open contract (§9).
    */
   mergeThreshold: number;
   /**
@@ -75,7 +100,7 @@ export function clusterSegments(segments: TemporalSegment[], config: ClusterConf
   let sinceSweep = 0;
 
   for (const segment of segments) {
-    if (current && cosine(segment.embedding, current.centroid) > CLUSTER_ASSIGNMENT_THRESHOLD) {
+    if (current && cosine(segment.embedding, current.centroid) > config.assignmentThreshold) {
       current.centroid = foldIn(current, segment.embedding);
       current.n += 1;
       current.segmentIds.push(segment.id);
@@ -164,6 +189,9 @@ function foldIn(cluster: MicroCluster, x: Embedding): Embedding {
 }
 
 function assertConfig(config: ClusterConfig): void {
+  if (!(config.assignmentThreshold > -1 && config.assignmentThreshold <= 1)) {
+    throw new Error(`An assignment threshold must be a cosine similarity in (-1, 1], not ${config.assignmentThreshold}`);
+  }
   if (!(config.mergeThreshold > -1 && config.mergeThreshold <= 1)) {
     throw new Error(`A merge threshold must be a cosine similarity in (-1, 1], not ${config.mergeThreshold}`);
   }

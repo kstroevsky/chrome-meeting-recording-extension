@@ -8,6 +8,7 @@ const CONFIG: AnalysisConfig = {
   peakNeighbourhood: 2,
   peakMinProminence: 0.2,
   minSegmentMs: 30_000,
+  assignmentThreshold: 0.93,
   mergeThreshold: 0.95,
   mergeEverySegments: 25,
   keywordsPerTopic: 4,
@@ -45,6 +46,15 @@ describe('hashAnalysisConfig', () => {
       const changed = { ...CONFIG, [key]: (CONFIG[key] as number) + 1 };
       expect(hashAnalysisConfig(changed)).not.toBe(baseline);
     }
+  });
+
+  it('covers a value added to AnalysisConfig later, without being told about it', () => {
+    // `assignmentThreshold` moved into ClusterConfig after this hash existed
+    // (D-16). Because AnalysisConfig is composed from the stage configs, it
+    // reached the digest on its own — a calibration change cannot silently
+    // leave old results looking current.
+    expect(hashAnalysisConfig({ ...CONFIG, assignmentThreshold: 0.95 }))
+      .not.toBe(hashAnalysisConfig(CONFIG));
   });
 
   it('distinguishes values that stringify alike', () => {
