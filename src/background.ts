@@ -44,6 +44,12 @@ import { RecordingNotationService } from './background/RecordingNotationService'
 import { RecordingTranscriptRepository } from './background/RecordingTranscriptRepository';
 import { RecordingTranscriptService } from './background/RecordingTranscriptService';
 import { RecordingTranscriptCapture } from './background/RecordingTranscriptCapture';
+import { RecordingAnalysisRepository } from './background/RecordingAnalysisRepository';
+import { RecordingAnalysisService } from './background/RecordingAnalysisService';
+import { RecordingAnalysisCoordinator } from './background/RecordingAnalysisCoordinator';
+import { CANDIDATE_ANALYSIS_CONFIG } from './shared/analysis/candidateConfig';
+import { hashAnalysisConfig, PIPELINE_VERSION } from './shared/analysis/provenance';
+import { packagedModel } from './shared/analysis/packagedModel';
 import { RecordingHistoryService } from './background/RecordingHistoryService';
 import { openDownloadedFile } from './platform/chrome/downloads';
 import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
@@ -71,6 +77,33 @@ const offscreen = new OffscreenManager();
 // are constructed first: history delegates its dependent cleanup to them.
 const notations = new RecordingNotationService(new RecordingNotationRepository());
 const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository());
+// Topic analysis (ADR-0007). Provenance is assembled here, from the model the
+// build actually packaged and the configuration a fresh run would use, so a
+// stored result produced under different conditions reads as stale (D-14).
+const analyses = new RecordingAnalysisService(new RecordingAnalysisRepository(), () => {
+  const model = packagedModel();
+  return {
+    pipelineVersion: PIPELINE_VERSION,
+    embeddingModel: model.id,
+    embeddingModelRevision: model.revision,
+    // EMB-03. Recorded rather than asked of the worker, which may not be running.
+    embeddingDimensions: 384,
+    embeddingDtype: model.dtype,
+    configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
+  };
+});
+const analysisCoordinator = new RecordingAnalysisCoordinator({
+  dataPlane: offscreen,
+  analyses,
+  readTranscript: (historyId) => transcripts.get(historyId),
+  config: () => CANDIDATE_ANALYSIS_CONFIG,
+});
+offscreen.onAnalysisJobChanged = (job) => analysisCoordinator.handleJobState(job);
+offscreen.onAnalysisResult = (job, analysis) => {
+  void analysisCoordinator.handleResult(job, analysis).catch((error) => {
+    L.warn('Could not handle an analysis result', job.historyId, error);
+  });
+};
 const historyRepository = new RecordingHistoryRepository();
 const LEASE_STORAGE_KEY = 'playbackLeases';
 const deleteRetainedKeys = async (keys: string[]) => {
@@ -110,6 +143,9 @@ const playback = new RecordingPlaybackService({
   getEntry: (id) => historyRepository.get(id),
   listNotations: (id) => notations.list(id),
   transcriptStatus: (id) => transcripts.status(id),
+  // `get` returns nothing for a stale result as well as an absent one, which is
+  // what the player wants: topics from another configuration are not topics.
+  analysis: (id) => analyses.get(id),
 });
 const driveAuthLease = new DrivePlaybackAuthLeaseManager({
   // The extension's existing Drive auth, not a second OAuth system.
@@ -291,6 +327,17 @@ const session = new RecordingSession(
     // Sweep whatever the meeting tab still holds while it is reachable, then
     // stop it pushing. Best-effort for the same reason.
     void transcriptCapture.finish(historyId)
+      // Analysis runs over the *finished* transcript (D-01), so it is queued
+      // after the final sweep rather than beside it — starting earlier would
+      // analyse a transcript missing its last minutes. Best-effort like the
+      // rest of this transition: a recording whose analysis never starts is
+      // still a complete recording, and the surface offers a re-run.
+      .then(() => analysisCoordinator.analyze(historyId))
+      .then((started) => {
+        if (!started.ok && started.reason !== 'no-transcript') {
+          L.warn(`Topic analysis did not start for ${historyId}: ${started.reason}`, started.error ?? '');
+        }
+      })
       .catch((error) => L.warn('Could not finish transcript capture for the run:', error));
   }
 );
@@ -497,7 +544,7 @@ const controller = new RecordingController({ L, offscreen, session, telemetry, n
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
-  transcripts, transcriptCapture,
+  transcripts, analyses, transcriptCapture,
   playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination,
   listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
   storageUsage: () => readStorageUsage(async () => {

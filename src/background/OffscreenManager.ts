@@ -26,8 +26,16 @@ import { isOffscreenToBgMessage } from '../shared/protocol';
 export type OffscreenStateListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_STATE' }>) => void;
 export type OffscreenSaveListener = (msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>) => void;
 export type OffscreenUploadListener = (job: UploadJob, telemetryRunId?: string, telemetrySnapshot?: import('../shared/telemetry').TelemetrySnapshot) => void;
+/** An analysis job moved; carries state only, never the result (ADR-0007). */
+export type OffscreenAnalysisListener = (job: AnalysisJob) => void;
+/** An analysis finished and its result is on the wire, awaiting persistence. */
+export type OffscreenAnalysisResultListener = (job: AnalysisJob, analysis: WireAnalysis) => void;
 import { TIMEOUTS } from '../shared/timeouts';
 import { isBusyPhase, isStoppablePhase, normalizePhase, type RecordingPhase, type UploadJob } from '../shared/recording';
+import type { AnalysisJob } from '../shared/analysis/job';
+import type { WireAnalysis } from '../shared/analysis/storedAnalysis';
+import type { AnalysisConfig } from '../shared/analysis/types';
+import type { TranscriptSegment } from '../shared/transcript';
 
 const L = makeLogger('background');
 const RECORDER_TAB_CLEANUP_DELAY_MS = 15_000;
@@ -52,6 +60,15 @@ export class OffscreenManager {
    *  "busy" — defers update-teardown / recorder-tab cleanup — while a decoupled
    *  upload drains, even though the recording phase is idle. */
   private readonly activeUploadJobs = new Set<string>();
+  public onAnalysisJobChanged?: OffscreenAnalysisListener;
+  public onAnalysisResult?: OffscreenAnalysisResultListener;
+  /**
+   * Ids of analysis jobs still running (HOST-04). Held for the same reason
+   * `activeUploadJobs` is: an analysis outlives the recording phase, so an
+   * extension update arriving at an idle phase must still not tear the
+   * offscreen document down underneath one.
+   */
+  private readonly activeAnalysisJobs = new Set<string>();
 
   private readonly rpcClient = createPortRpcClient(() => this.port, { timeoutMs: TIMEOUTS.RPC_MS });
 
@@ -225,8 +242,12 @@ export class OffscreenManager {
    */
   async closeForUpdate(): Promise<boolean> {
     // ADR-0004: a decoupled upload keeps the runtime busy even at an idle phase,
-    // so an update can never tear down the offscreen mid-upload.
-    if (isBusyPhase(this.lastKnownPhase) || this.activeUploadJobs.size > 0) {
+    // so an update can never tear down the offscreen mid-upload. HOST-04 adds
+    // analysis to the same rule — an analysis killed midway loses every minute
+    // of compute it had done, and its held result with it.
+    if (isBusyPhase(this.lastKnownPhase)
+      || this.activeUploadJobs.size > 0
+      || this.activeAnalysisJobs.size > 0) {
       L.log('Update arrived during active work; deferring offscreen refresh');
       return false;
     }
@@ -390,8 +411,57 @@ export class OffscreenManager {
       return;
     }
 
+    if (msg.type === 'OFFSCREEN_ANALYSIS_STATE') {
+      if (msg.job.status === 'analyzing') this.activeAnalysisJobs.add(msg.job.id);
+      else this.activeAnalysisJobs.delete(msg.job.id);
+      if (this.activeAnalysisJobs.size > 0) this.cancelRecorderTabCleanup();
+      this.onAnalysisJobChanged?.(msg.job);
+      return;
+    }
+
+    if (msg.type === 'OFFSCREEN_ANALYSIS_RESULT') {
+      this.onAnalysisResult?.(msg.job, msg.analysis);
+      return;
+    }
+
     if (msg.type === 'OFFSCREEN_SAVE') {
       this.onSaveRequested?.(msg);
+    }
+  }
+
+  /** Seeds analysis liveness after a reconnect, from replayed job state. */
+  hydrateAnalysisJobs(jobs: AnalysisJob[] | undefined): void {
+    this.activeAnalysisJobs.clear();
+    for (const job of jobs ?? []) {
+      if (job.status === 'analyzing') this.activeAnalysisJobs.add(job.id);
+    }
+  }
+
+  /** True while any analysis job is running; the HOST-04 "busy" check. */
+  hasActiveAnalysisJobs(): boolean {
+    return this.activeAnalysisJobs.size > 0;
+  }
+
+  /** Queues topic analysis in the data plane; resolves with the new job's id. */
+  async analyzeTranscript(
+    historyId: string,
+    transcript: TranscriptSegment[],
+    config: AnalysisConfig,
+  ): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+    return this.rpc({ type: 'OFFSCREEN_ANALYZE_TRANSCRIPT', historyId, transcript, config });
+  }
+
+  /** Aborts a running analysis; it stops at the next batch boundary. */
+  async cancelAnalysis(jobId: string): Promise<{ ok: boolean; error?: string }> {
+    return this.rpc({ type: 'OFFSCREEN_CANCEL_ANALYSIS', jobId });
+  }
+
+  /** Tells the data plane its completed analysis is persisted and may be released. */
+  acknowledgeAnalysisState(jobId: string): void {
+    try {
+      this.port?.postMessage({ type: 'OFFSCREEN_ACK_ANALYSIS_STATE', jobId });
+    } catch {
+      // A dropped ack is harmless: the outbox replays and we acknowledge again.
     }
   }
 
