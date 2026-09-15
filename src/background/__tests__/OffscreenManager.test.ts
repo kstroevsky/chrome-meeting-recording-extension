@@ -300,4 +300,91 @@ describe('OffscreenManager', () => {
       expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('topic analysis jobs (ADR-0007)', () => {
+    const analysisJob = (id: string, status: string) => ({
+      id,
+      historyId: 'rec_1',
+      status,
+      progress: status === 'analyzing' ? 0.4 : 1,
+      startedAt: 1,
+    });
+
+    function connect() {
+      manager.attachPort(mockPort);
+      return mockPort.onMessage.addListener.mock.calls[0][0] as (m: unknown) => void;
+    }
+
+    it('forwards analysis state to the analysis listener', () => {
+      const onAnalysisJobChanged = jest.fn();
+      manager.onAnalysisJobChanged = onAnalysisJobChanged;
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+
+      expect(onAnalysisJobChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'a1', historyId: 'rec_1', status: 'analyzing' }),
+      );
+    });
+
+    it('forwards a delivered result separately from the state that announced it', () => {
+      const onAnalysisResult = jest.fn();
+      manager.onAnalysisResult = onAnalysisResult;
+      const listener = connect();
+
+      const analysis = { segments: [], topics: [], utteranceCount: 12 };
+      listener({ type: 'OFFSCREEN_ANALYSIS_RESULT', job: analysisJob('a1', 'completed'), analysis });
+
+      expect(onAnalysisResult).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'a1' }),
+        analysis,
+      );
+    });
+
+    it('refuses an update while an analysis is running, then frees once it settles (HOST-04)', async () => {
+      const closeDocumentSpy = jest
+        .spyOn(chrome.offscreen, 'closeDocument')
+        .mockImplementation(async () => {});
+      manager.hydratePhase('idle'); // analysis outlives the recording phase
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+      await expect(manager.closeForUpdate()).resolves.toBe(false);
+      expect(closeDocumentSpy).not.toHaveBeenCalled();
+
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'completed') });
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      await expect(manager.closeForUpdate()).resolves.toBe(true);
+      expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('frees the update path for every way an analysis can stop', async () => {
+      jest.spyOn(chrome.offscreen, 'closeDocument').mockImplementation(async () => {});
+      manager.hydratePhase('idle');
+      const listener = connect();
+
+      for (const status of ['failed', 'canceled', 'unsupported']) {
+        listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+        expect(manager.hasActiveAnalysisJobs()).toBe(true);
+        listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', status) });
+        expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      }
+    });
+
+    it('seeds liveness from replayed jobs after a reconnect', () => {
+      manager.hydrateAnalysisJobs([
+        analysisJob('a1', 'analyzing') as never,
+        analysisJob('a2', 'completed') as never,
+      ]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+
+      manager.hydrateAnalysisJobs([analysisJob('a2', 'completed') as never]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
+    });
+
+    it('acknowledges without throwing when the port is gone', () => {
+      expect(() => manager.acknowledgeAnalysisState('a1')).not.toThrow();
+    });
+  });
 });
