@@ -284,10 +284,15 @@ module.exports = (_env, argv) => {
             to: 'ort',
             globOptions: { ignore: ['**/*.map'] },
             filter: (resourcePath) => {
-              if (!/\.(wasm|mjs)$/.test(resourcePath)) return false
+              const name = path.basename(resourcePath)
+              // Only what ORT fetches at runtime. `wasmPaths` resolves
+              // `ort-wasm-simd-threaded[.variant].{wasm,mjs}` and nothing else;
+              // the package's own `ort.*.mjs` entry points are build-time
+              // imports webpack has already inlined into `analysisWorker.js`,
+              // so copying them shipped ~16 MB no URL could ever reach.
+              if (!/^ort-wasm-simd-threaded[.a-z]*\.(wasm|mjs)$/.test(name)) return false
               const allow = process.env.ORT_VARIANTS
               if (!allow) return true
-              const name = path.basename(resourcePath)
               return allow.split(',').some((v) => name === `ort-wasm-simd-threaded.${v}`.replace(/\.$/, '')
                 || name.startsWith(`ort-wasm-simd-threaded.${v}.`)
                 || (v === 'base' && /^ort-wasm-simd-threaded\.(wasm|mjs)$/.test(name)))

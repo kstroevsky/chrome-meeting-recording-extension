@@ -331,3 +331,83 @@ Stated precisely, because the loose version would be wrong: **the two semantic c
 Using 4-utterance blocks at stride 4 for both segmentation and clustering satisfies it by construction and is a reasonable v1 simplification, with one consequence worth recording: **boundary resolution is quantized to those block boundaries.** A later higher-resolution detector — sliding a disjoint pair of contexts across every utterance position — remains open and is not prohibited by this result.
 
 **Next:** validate the candidate configuration against a small set of hand-labelled real conversations before any of it is called frozen.
+
+## Amendment, 2026-09-15 — hardening measurements
+
+Step 9 of the plan. Four things were measured rather than assumed.
+
+### The package carried 16 MB nothing could load
+
+`dist/ort` was 90 MB. Only **73 MB** of that is the four `ort-wasm-simd-threaded.*.wasm` variants; the rest was ONNX Runtime's own package entry points — `ort.all.mjs`, `ort.webgl.mjs`, `ort.mjs` and a dozen more — copied because the CopyPlugin filter admitted every `.wasm` and `.mjs` unless `ORT_VARIANTS` was set.
+
+Those are **build-time** imports. Webpack has already inlined the one the worker imports into `analysisWorker.js`, and `wasmPaths` only ever resolves `ort-wasm-simd-threaded[.variant].{wasm,mjs}`. Verified directly: the built worker contains zero references to any `ort.*.mjs` filename, and constructs only `ort-wasm-simd-threaded.*` names.
+
+The filter now requires that prefix always. Package: **229 MB → 213 MB**, `dist/ort` 90 MB → 74 MB.
+
+**This is not the variant trim, which stays declined.** All four `.wasm` variants still ship. Dropping `jspi` and the base build would save a further ~26 MB and was measured sufficient *on one machine* — not enough evidence to risk a tier we cannot see. The 16 MB removed here is provably unreachable, which is a different claim.
+
+**RUN, PASSED.** `tests/e2e/analysis-embedding.spec.ts` against the trimmed build: WebGPU load 2,621 ms / embed 174 ms; WASM load 1,346 ms / embed 72 ms; identical vectors for identical input; all outbound HTTP(S) blocked throughout.
+
+### Build cost (plan §7's open risk)
+
+| | wall | CPU |
+| --- | --- | --- |
+| `tsc --noEmit` (`skipLibCheck: true`) | 3.7 s | 7.4 s |
+| `tsc --noEmit --skipLibCheck false` | 5.6 s | 12.1 s, **and fails** |
+| full `webpack --mode=development`, cold | 10.3 s | 16.4 s |
+| same, warm | 10.8 s | 16.6 s |
+
+Not material: type-checking is roughly a third of a build that takes ten seconds, so `transpileOnly` buys nothing worth the loss of checking. **§7's risk is closed.**
+
+The second row is the more important result. Without `skipLibCheck` the build does not merely slow down, it *fails* — inside `@huggingface/transformers`' own `.d.ts`, on a tuple mismatch in code we do not own. So `skipLibCheck: true` is a **requirement** of this dependency, not a speed optimization, and it remains scoped to declaration files: our own code and our use of those declarations stay fully checked.
+
+### Quota
+
+An analysis that cannot be stored is now **discarded and acknowledged**, not retried forever. `QuotaExceededError` (and Firefox's `NS_ERROR_DOM_QUOTA_REACHED`) is distinguished from a transient failure, which still holds the acknowledgement so the data plane re-offers the result on reconnect.
+
+Affordable only because an analysis is *derived*: the transcript survives, so the recording reads as un-analysed and can be run again once space exists. Holding would pin megabytes of vectors in the offscreen document for the session and re-offer them on every reconnect. Upload bytes are never dropped this way, which is the distinction ADR-0004 turns on.
+
+### Multilingual
+
+The pipeline runs end to end over Russian and Ukrainian transcripts and labels its topics in the language spoken. Tokenization is Unicode-aware, the Cyrillic word boundary holds (`кстатиь` does not match the cue `кстати`), c-TF-IDF drops a ubiquitous term in Cyrillic as in English, and a language outside the cue list degrades to a `0.70/0.10/0.10/0.00` blend rather than failing.
+
+**One limitation found and not fixed.** `tokenize` splits on non-letter/non-number, so a script without spaces — Japanese, Chinese — collapses to a single term and c-TF-IDF labels become useless. Embeddings are unaffected, so topics are still found, segmented and seekable; only their *names* degrade. A segmenter is the fix and is out of scope.
+
+**Still outstanding:** all of this uses a stub encoder over synthetic transcripts. The real-conversation validation the 4B section asks for is still blocked on a transcript of an actual Russian or Ukrainian call, which Meet captions cannot produce.
+
+### Throughput variance, and a claim we had to withdraw
+
+Four runs, Apple Metal-3, Q8, 800 windows at batch 32 — EMB-06's upper reference for a three-hour conversation:
+
+| run | webgpu w/s | wasm w/s |
+| --- | --- | --- |
+| 1 | 5.4 | 5.6 |
+| 2 | 5.4 | 5.2 |
+| 3 | 5.3 | 4.9 |
+| 4 | 5.2 | 5.1 |
+| **mean** | **5.33** | **5.20** |
+
+Plan §9's last open contract is closed with a **3.5 windows/sec regression floor**, asserted in the bench. Deliberately a tripwire rather than a target: ~30% below the slowest observation, so it catches a lost SIMD path, an accidental batch-size change or a dtype swap, while tolerating a loaded machine. A floor set at the observed value would flake on the first busy afternoon and get deleted, which is worse than no floor.
+
+A three-hour recording therefore analyses in **about two and a half minutes**, which comfortably justifies the deferred trigger: nobody waits on it.
+
+Worth noting rather than quietly overwriting: 4A froze a **4.4 windows/sec** baseline, and every run here beat it by roughly 20%. Nothing in the packaged runtime changed that would explain a speed-up — the 16 MB removed above was never loaded — so the likeliest explanation is machine state during the original run. The frozen baseline stands as the recorded 4A result; the floor is set below both.
+
+**The claim we withdrew.** `EmbeddingWorkerClient` warned that a WASM fallback "will be slower". On this hardware that is false — the two backends sit inside each other's variance, and WebGPU is the *slower* of the two to load (≈2.3 s against ≈1.4 s). Q8 quantized operators appear not to benefit from ORT's WebGPU backend the way an FP16 model would.
+
+The warning now reports which backend ran and promises nothing about speed. The ladder itself is unchanged: this is one GPU family, and a discrete GPU may well behave differently — which is exactly why the honest thing is to report what happened rather than predict what it means.
+
+RES-08's claim holds and is now measured: **topic organization works on every tier**, and on this one the tiers are indistinguishable.
+
+### Durability, proven against a real service worker
+
+**RUN, PASSED** — `tests/e2e/analysis-durability.spec.ts`, three consecutive runs (~40 s each).
+
+A recording is started, ~400 utterances are seeded through `TRANSCRIPT_UTTERANCES` (the content script's own channel, in one batch rather than four hundred caption grace windows), the recording is stopped so analysis queues, and the MV3 service worker is killed via CDP `ServiceWorker.stopAllWorkers` while ~100 windows are still embedding. The analysis then appears on the playback manifest without a second run, and no `analysisJobState:` key is left behind.
+
+**The two guards matter more than the assertion.** A durability test that kills nothing, or kills something after the work already finished, passes just as green as a real one:
+
+1. *Was it in flight?* The manifest is asserted to carry **no** topics immediately before the kill. The first draft of this test would have passed without it.
+2. *Did it actually die?* `Target.getTargets` is polled until no `service_worker` target remains. The obvious choice — Playwright's `context.on('serviceworker')` — is **wrong here**: Chrome reuses the same target id when an extension worker restarts, so the event never fires a second time. That guard reported zero restarts on a run where the worker had genuinely been terminated and had come back, which is exactly the false negative worth recording.
+
+What this does not cover: an extension update arriving mid-analysis. `closeForUpdate()`'s refusal is unit-tested from both directions in `OffscreenManager.test.ts`; there is no harness seam for driving a real update, and inventing one for a single assertion was not worth it.
