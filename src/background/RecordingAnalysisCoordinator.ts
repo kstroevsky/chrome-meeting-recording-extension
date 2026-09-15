@@ -137,10 +137,41 @@ export class RecordingAnalysisCoordinator {
     try {
       await this.deps.analyses.save(job.historyId, result, this.deps.now?.());
     } catch (error) {
-      // Storage failed; hold the ack so the result is re-offered on reconnect.
-      L.warn('Could not store an analysis result', job.historyId, error);
+      if (!isQuotaExceeded(error)) {
+        // Transient — a transaction aborted under another write, say. Hold the
+        // ack so the data plane re-offers the result on the next reconnect.
+        L.warn('Could not store an analysis result', job.historyId, error);
+        return;
+      }
+      // Out of space, which retrying cannot fix. Acknowledge anyway: holding
+      // would pin a few megabytes of vectors in the offscreen document for the
+      // rest of the session and re-offer them on every reconnect, forever.
+      //
+      // Affordable precisely because an analysis is *derived* — the transcript
+      // is still there, so the recording simply reads as un-analysed and can be
+      // run again once the user frees space. Upload bytes could never be
+      // dropped this way, which is why they are not.
+      L.warn(
+        `Discarding the analysis for ${job.historyId}: storage is full. `
+        + 'The recording is unaffected and can be analysed again after freeing space.',
+      );
+      this.deps.dataPlane.acknowledgeAnalysisState(job.id);
       return;
     }
     this.deps.dataPlane.acknowledgeAnalysisState(job.id);
   }
+}
+
+/**
+ * Whether a storage failure was "no space left" rather than something a retry
+ * could clear.
+ *
+ * Checked by `name` rather than `instanceof DOMException`: the value that
+ * reaches here has crossed a repository boundary and, in the test harness, is
+ * not always a real `DOMException`. The name is the part every implementation
+ * agrees on.
+ */
+function isQuotaExceeded(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED';
 }

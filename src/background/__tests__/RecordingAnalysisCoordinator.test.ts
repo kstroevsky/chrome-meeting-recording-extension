@@ -204,12 +204,43 @@ describe('RecordingAnalysisCoordinator', () => {
     expect(h.calls.ack).toEqual(['ana_1']);
   });
 
-  it('holds the acknowledgement when storage fails, so the result is re-offered', async () => {
-    const h = harness({ transcript: TRANSCRIPT, saveThrows: new Error('QuotaExceededError') });
+  it('holds the acknowledgement when a transient storage failure could clear', async () => {
+    const aborted = Object.assign(new Error('transaction aborted'), { name: 'AbortError' });
+    const h = harness({ transcript: TRANSCRIPT, saveThrows: aborted });
     await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
 
     expect(h.rows.has('rec_1')).toBe(false);
     expect(h.calls.ack).toEqual([]);
+  });
+
+  it('gives up and acknowledges when storage is full, rather than retrying forever', async () => {
+    const full = Object.assign(new Error('the quota has been exceeded'), { name: 'QuotaExceededError' });
+    const h = harness({ transcript: TRANSCRIPT, saveThrows: full });
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+
+    expect(h.rows.has('rec_1')).toBe(false);
+    // Retrying cannot make space, and holding would pin the vectors in the
+    // offscreen document for the session. The analysis is re-derivable.
+    expect(h.calls.ack).toEqual(['ana_1']);
+  });
+
+  it('treats the Firefox spelling of a full disk the same way', async () => {
+    const full = Object.assign(new Error('quota reached'), { name: 'NS_ERROR_DOM_QUOTA_REACHED' });
+    const h = harness({ transcript: TRANSCRIPT, saveThrows: full });
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+
+    expect(h.calls.ack).toEqual(['ana_1']);
+  });
+
+  it('leaves the recording analysable again after a full disk', async () => {
+    const full = Object.assign(new Error('full'), { name: 'QuotaExceededError' });
+    const h = harness({ transcript: TRANSCRIPT, saveThrows: full });
+    await h.coordinator.analyze('rec_1');
+    h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+
+    // Nothing stored, nothing locked: a re-run is the recovery path.
+    await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: true, jobId: 'ana_1' });
   });
 
   it('drops an incoherent result but still acknowledges it', async () => {
