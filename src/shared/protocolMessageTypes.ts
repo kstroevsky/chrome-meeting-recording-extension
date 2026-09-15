@@ -42,6 +42,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'UPDATE_RECORDING_NOTATION',
   'REMOVE_RECORDING_NOTATION',
   'GET_RECORDING_TRANSCRIPT',
+  'LIST_RECORDING_TOPIC_SUMMARIES',
 ] as const;
 
 /** The subset of popup commands validated by `isRecordingHistoryMessage`. */
@@ -73,6 +74,15 @@ export const RECORDING_TRANSCRIPT_MESSAGE_TYPES = [
 ] as const;
 
 /**
+ * Topic-analysis reads (ADR-0007). Their own list rather than folded into the
+ * transcript's: they answer from a different aggregate, and a failure in either
+ * must stay a `{ ok: false }` answer instead of a session failure.
+ */
+export const RECORDING_ANALYSIS_MESSAGE_TYPES = [
+  'LIST_RECORDING_TOPIC_SUMMARIES',
+] as const;
+
+/**
  * Popup commands whose failures answer `{ ok: false, error }` and must **not**
  * fail the recording session. Everything else is a capture command whose
  * failure *is* a session failure, so a data-plane message that is missing here
@@ -82,6 +92,7 @@ export const NON_SESSION_RESPONSE_MESSAGE_TYPES = [
   ...RECORDING_HISTORY_MESSAGE_TYPES,
   ...RECORDING_NOTATION_MESSAGE_TYPES,
   ...RECORDING_TRANSCRIPT_MESSAGE_TYPES,
+  ...RECORDING_ANALYSIS_MESSAGE_TYPES,
 ] as const;
 
 /**
@@ -106,6 +117,8 @@ export const OFFSCREEN_TO_BG_MESSAGE_TYPES = [
   'OFFSCREEN_READY',
   'OFFSCREEN_STATE',
   'OFFSCREEN_UPLOAD_STATE',
+  'OFFSCREEN_ANALYSIS_STATE',
+  'OFFSCREEN_ANALYSIS_RESULT',
   'OFFSCREEN_SAVE',
   'TELEMETRY_SNAPSHOT',
   'TELEMETRY_FLUSH',

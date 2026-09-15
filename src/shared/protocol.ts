@@ -151,6 +151,8 @@ export type PopupAddRecordingNotation = {
   text: string;
 };
 export type PopupListRecordingNotationSummaries = { type: 'LIST_RECORDING_NOTATION_SUMMARIES'; recordingIds: string[] };
+/** Topic digests for a page of the library, so keywords fold into its search (ADR-0007 §8). */
+export type PopupListRecordingTopicSummaries = { type: 'LIST_RECORDING_TOPIC_SUMMARIES'; recordingIds: string[] };
 export type PopupUpdateRecordingNotation = {
   type: 'UPDATE_RECORDING_NOTATION';
   recordingId: string;
@@ -195,6 +197,7 @@ export type PopupToBg =
   | PopupPreparePlaybackSource
   | PopupRefreshPlaybackSource
   | PopupListRecordingNotationSummaries
+  | PopupListRecordingTopicSummaries
   | PopupAddRecordingNotation
   | PopupUpdateRecordingNotation
   | PopupRemoveRecordingNotation
@@ -238,6 +241,9 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupRefreshPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupListRecordingNotationSummaries ?
     { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
+  T extends PopupListRecordingTopicSummaries ?
+    { ok: true; summaries: Record<string, import('./analysis/storedAnalysis').RecordingTopicSummary> }
+    | { ok: false; error: string } :
   T extends PopupAddRecordingNotation ? NotationResult :
   T extends PopupUpdateRecordingNotation ? NotationListResult :
   T extends PopupRemoveRecordingNotation ? NotationListResult :
@@ -390,12 +396,27 @@ export type BgToOffscreenRpc =
   | RpcRequest<{
       type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES';
       resources: Array<{ id: string; name: string }>;
-    }>;
+    }>
+  /**
+   * Queues topic analysis for one recording (HOST-01). Background reads the
+   * transcript and supplies it here rather than having the data plane reach
+   * into `recording-history`, which background alone writes.
+   */
+  | RpcRequest<{
+      type: 'OFFSCREEN_ANALYZE_TRANSCRIPT';
+      historyId: string;
+      transcript: import('./transcript').TranscriptSegment[];
+      /** Every §9 value the run must use; see `shared/analysis/types`. */
+      config: import('./analysis/types').AnalysisConfig;
+    }>
+  | RpcRequest<{ type: 'OFFSCREEN_CANCEL_ANALYSIS'; jobId: string }>;
 
 export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string }
   /** Background persisted a terminal upload outcome and history state. */
-  | { type: 'OFFSCREEN_ACK_UPLOAD_STATE'; jobId: string };
+  | { type: 'OFFSCREEN_ACK_UPLOAD_STATE'; jobId: string }
+  /** Background persisted a completed analysis; the data plane may release it. */
+  | { type: 'OFFSCREEN_ACK_ANALYSIS_STATE'; jobId: string };
 
 export type BgToOffscreenRuntime =
   | { type: 'OFFSCREEN_CONNECT' };
@@ -405,6 +426,17 @@ export type OffscreenToBg =
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
   | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
+  | { type: 'OFFSCREEN_ANALYSIS_STATE'; job: import('./analysis/job').AnalysisJob }
+  /**
+   * A completed analysis, on its way to the `analyses` store. Separate from the
+   * state message because the state is small enough to replay freely and this
+   * is not: sending megabytes of vectors on every progress tick would be absurd.
+   */
+  | {
+      type: 'OFFSCREEN_ANALYSIS_RESULT';
+      job: import('./analysis/job').AnalysisJob;
+      analysis: import('./analysis/storedAnalysis').WireAnalysis;
+    }
   | { type: 'TELEMETRY_SNAPSHOT'; snapshot: import('./telemetry').TelemetrySnapshot; critical?: boolean }
   | { type: 'TELEMETRY_FLUSH'; snapshot: import('./telemetry').TelemetrySnapshot; reason: 'incident' | 'recording_complete' | 'upload_complete' };
 
