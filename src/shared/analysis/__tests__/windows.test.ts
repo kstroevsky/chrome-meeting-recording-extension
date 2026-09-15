@@ -27,6 +27,23 @@ describe('startsWithDiscourseCue', () => {
     expect(startsWithDiscourseCue('movingonward we deploy')).toBe(false);
     expect(startsWithDiscourseCue('anywayside')).toBe(false);
   });
+
+  it('matches Russian and Ukrainian cues (D-18)', () => {
+    expect(startsWithDiscourseCue('кстати, про redis')).toBe(true);
+    expect(startsWithDiscourseCue('Идём дальше')).toBe(true);
+    expect(startsWithDiscourseCue('до речі, щодо релізу')).toBe(true);
+    expect(startsWithDiscourseCue('Наступне питання')).toBe(true);
+  });
+
+  it('applies the word boundary to Cyrillic too', () => {
+    // An ASCII-only boundary class would treat "ь" as a break and match here.
+    expect(startsWithDiscourseCue('кстатиь про redis')).toBe(false);
+    expect(startsWithDiscourseCue('загаломний підхід')).toBe(false);
+  });
+
+  it('still ignores a non-English cue buried mid-sentence', () => {
+    expect(startsWithDiscourseCue('мы обсудим это кстати позже')).toBe(false);
+  });
 });
 
 describe('buildContextWindows', () => {

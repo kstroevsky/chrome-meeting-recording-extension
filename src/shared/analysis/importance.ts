@@ -30,19 +30,21 @@ export const IMPORTANCE_WEIGHTS = {
 } as const;
 
 /**
- * Phrases that mark a passage as consequential (IMP-04). Exact contract.
+ * Phrases that mark a passage as consequential (IMP-04, extended by D-18).
  *
  * The payload writes these with trailing ellipses — `"I think we should..."` —
  * denoting what the speaker goes on to say, so the phrase is what is matched.
  * Unlike SEG-06's cues, which open a turn, these carry weight wherever they
  * fall in a passage, so they are matched anywhere after a word boundary.
  *
- * English only, like SEG-06, while the encoder is multilingual: on a
- * non-English call this term contributes nothing and the blend degrades to
- * 0.30/0.25/0.20/0.15/0.00 rather than failing. IMP-07 replaces these with a
- * tiny classifier eventually, and is deferred.
+ * Extended beyond English for the reason given on {@link DISCOURSE_CUES}: an
+ * English-only set contributes zero on essentially every call for a Russian- or
+ * Ukrainian-speaking user, making 0.30/0.25/0.20/0.15/0.00 the rule rather than
+ * the exception. The English members are the payload's, unchanged. IMP-07
+ * replaces all of this with a tiny classifier eventually, and is deferred.
  */
 export const DISCOURSE_SIGNALS = [
+  // English — the payload's exact set.
   'i think we should',
   "let's do",
   'the reason is',
@@ -51,6 +53,26 @@ export const DISCOURSE_SIGNALS = [
   'it turned out',
   "i'll",
   'we agreed',
+  // Russian.
+  'думаю, нам нужно',
+  'думаю нам нужно',
+  'давайте сделаем',
+  'причина в том',
+  'мы обнаружили',
+  'проблема в том',
+  'оказалось',
+  'я сделаю',
+  'мы договорились',
+  // Ukrainian.
+  'думаю, нам треба',
+  'думаю нам треба',
+  'давайте зробимо',
+  'причина в тому',
+  'ми виявили',
+  'проблема в тому',
+  'виявилося',
+  'я зроблю',
+  'ми домовилися',
 ] as const;
 
 /** One candidate excerpt: a stretch of conversation with its embedding. */
@@ -136,7 +158,8 @@ export function discourseSignal(passage: Passage): number {
     let from = text.indexOf(phrase);
     while (from !== -1) {
       const before = from === 0 ? '' : text.charAt(from - 1);
-      if (before === '' || !/[a-z0-9]/.test(before)) return true;
+      // Unicode-aware, for the same reason as `startsWithDiscourseCue`.
+      if (before === '' || !/[\p{Letter}\p{Number}]/u.test(before)) return true;
       from = text.indexOf(phrase, from + 1);
     }
     return false;

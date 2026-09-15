@@ -101,24 +101,49 @@ export const BOUNDARY_WEIGHTS = {
 } as const;
 
 /**
- * Discourse cues that mark a topic change (SEG-06). Exact contract.
+ * Discourse cues that mark a topic change (SEG-06, extended by D-18).
  *
- * The payload writes the last as `"speaking of..."`; the ellipsis denotes the
- * continuation a speaker goes on to say, not literal characters in a caption,
- * so the phrase is what is matched.
+ * The payload writes the last English one as `"speaking of..."`; the ellipsis
+ * denotes the continuation a speaker goes on to say, not literal characters in
+ * a caption, so the phrase is what is matched.
  *
- * Known limitation, recorded rather than hidden: these are English only, while
- * the encoder is deliberately multilingual (EMB-03). On a non-English call this
- * term contributes nothing and the blend degrades to 0.70/0.10/0.10/0.00 rather
- * than failing.
+ * **Why this is no longer English-only.** The encoder is deliberately
+ * multilingual (EMB-03), and this project's own primary languages are Russian
+ * and Ukrainian. An English-only set does not degrade gracefully for such a
+ * user — it contributes zero on essentially every call, so the boundary blend
+ * runs 0.70/0.10/0.10/0.00 as the rule rather than the exception. The English
+ * members are the payload's, unchanged; the rest extend the same idea.
+ *
+ * Still a known limit: a language absent from this list contributes nothing,
+ * and the blend degrades rather than failing.
  */
 export const DISCOURSE_CUES = [
+  // English — the payload's exact set.
   'anyway',
   'by the way',
   'next question',
   'moving on',
   'another thing',
   'speaking of',
+  // Russian.
+  'кстати',
+  'к слову',
+  'в общем',
+  'следующий вопрос',
+  'идём дальше',
+  'идем дальше',
+  'ещё одно',
+  'еще одно',
+  'возвращаясь к',
+  // Ukrainian.
+  'до речі',
+  'до слова',
+  'загалом',
+  'наступне питання',
+  'йдемо далі',
+  'рухаємось далі',
+  'ще одне',
+  'повертаючись до',
 ] as const;
 
 /**
@@ -158,7 +183,9 @@ export function startsWithDiscourseCue(text: string): boolean {
   return DISCOURSE_CUES.some((cue) => {
     if (!opening.startsWith(cue)) return false;
     const next = opening.charAt(cue.length);
-    return next === '' || !/[a-z0-9]/.test(next);
+    // Unicode-aware: an ASCII-only class would treat every Cyrillic letter as a
+    // word boundary, so "кстатиь" would match the cue "кстати".
+    return next === '' || !/[\p{Letter}\p{Number}]/u.test(next);
   });
 }
 

@@ -84,6 +84,18 @@ describe('the individual terms', () => {
     expect(discourseSignal(passage(0, 'bewe agreed'))).toBe(0);
   });
 
+  it('spots Russian and Ukrainian markers (D-18)', () => {
+    expect(discourseSignal(passage(0, 'думаю, нам нужно увеличить лимит'))).toBe(1);
+    expect(discourseSignal(passage(0, 'в итоге проблема в том, что пул переполнен'))).toBe(1);
+    expect(discourseSignal(passage(0, 'ми домовилися відкласти реліз'))).toBe(1);
+    expect(discourseSignal(passage(0, 'просто обычный разговор без решений'))).toBe(0);
+  });
+
+  it('applies the word boundary to Cyrillic too', () => {
+    // An ASCII-only boundary class would let "н" count as a break here.
+    expect(discourseSignal(passage(0, 'неоказалось'))).toBe(0);
+  });
+
   it('covers every phrase IMP-04 lists', () => {
     for (const phrase of DISCOURSE_SIGNALS) {
       expect(discourseSignal(passage(0, `and then ${phrase} something`))).toBe(1);
