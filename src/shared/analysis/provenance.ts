@@ -32,8 +32,17 @@ export type EmbeddingDtype = 'fp32' | 'fp16' | 'q8' | 'int8' | 'uint8' | 'q4' | 
  * Bump whenever a stage's *behaviour* changes in a way that would make an
  * earlier result different — a provisional term redefined, a stage reordered,
  * a contract corrected. Not for refactors that cannot change an output.
+ *
+ * Unreleased changes still bump it. An unshipped version costs nothing, and a
+ * development profile holding rows from an earlier build is exactly where a
+ * stale result would otherwise be mistaken for a current one.
+ *
+ * | version | change |
+ * | --- | --- |
+ * | 1 | initial pipeline |
+ * | 2 | tail window covers only the remainder (D-22); topic importance ranks against the cluster centroid (D-23) |
  */
-export const PIPELINE_VERSION = 1;
+export const PIPELINE_VERSION = 2;
 
 export type AnalysisProvenance = {
   pipelineVersion: number;
@@ -63,6 +72,22 @@ export type AnalysisProvenance = {
    * that determines what the analysis says.
    */
   configHash: string;
+  /**
+   * The backend that actually produced the vectors — **diagnostic only**, and
+   * deliberately absent from {@link isStale}.
+   *
+   * Recorded because the claim that WebGPU and WASM produce the same topics is
+   * unverified: they agree on vectors to within floating-point noise, but the
+   * assignment and merge thresholds are decision boundaries a pair can sit on.
+   * Not compared, because comparing it would recompute every analysis whenever
+   * a machine changes tier, over a difference nobody has shown exists. If a
+   * backend-agreement run over the calibration corpus ever shows divergence,
+   * this is what lets stored rows be told apart.
+   *
+   * Optional: the control plane captures provenance at enqueue, before any
+   * backend has loaded, and the data plane stamps this on with the result.
+   */
+  embeddingDevice?: 'webgpu' | 'wasm';
 };
 
 /**

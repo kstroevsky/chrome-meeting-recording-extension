@@ -1,27 +1,38 @@
 /**
  * @file offscreen/analysis/AnalysisJobStateOutbox.ts
  *
- * Durable terminal-state outbox for analysis jobs (HOST-03), mirroring
- * `UploadJobStateOutbox` exactly — including the one-key-per-job layout, which
- * is there to avoid a read-modify-write race between two jobs settling at once.
+ * Durable terminal-state outbox for analysis jobs (HOST-03).
  *
  * **Why this exists at all.** The offscreen document outlives the service
- * worker, so a job can finish while nothing is listening. Without the outbox
- * the result would be computed, stored, and then silently never announced —
- * the surface would show "analyzing" until the next run. An entry is written
+ * worker, so a job can finish while nothing is listening. An entry is written
  * before delivery is attempted and removed only after the background
  * acknowledges it, so the only failure mode left is announcing twice, which is
  * idempotent.
+ *
+ * **Why IndexedDB and not `chrome.storage.local`.** An offscreen document's
+ * `chrome` object exposes `runtime` and nothing else — measured, not assumed:
+ * `chrome.storage` is simply absent there. The first version of this outbox
+ * used `chrome.storage.local`, so every write threw, was swallowed as a
+ * warning, and the outbox silently held nothing. IndexedDB belongs to the
+ * extension *origin*, which the offscreen document, the service worker and
+ * extension pages all share — so it is both writable here and readable by
+ * everything that needs to see it.
+ *
+ * It is a database of its own rather than a store in `recording-history`,
+ * because background is that database's only writer and this is not
+ * background.
+ *
+ * One key per job, as before, so two jobs settling at once cannot race each
+ * other through a read-modify-write.
  */
 
-import {
-  getAllLocalStorageValues,
-  removeLocalStorageValues,
-  setLocalStorageValues,
-} from '../../platform/chrome/storage';
 import { isTerminalAnalysisJob, normalizeAnalysisJob, type AnalysisJob } from '../../shared/analysis/job';
 
 const TERMINAL_ANALYSIS_STATE_PREFIX = 'analysisJobState:';
+
+export const ANALYSIS_OUTBOX_DATABASE = 'analysis-job-outbox';
+const ANALYSIS_OUTBOX_STORE = 'jobs';
+const ANALYSIS_OUTBOX_VERSION = 1;
 
 export interface AnalysisJobStateStorageArea {
   getAll(): Promise<Record<string, unknown>>;
@@ -55,10 +66,115 @@ export class AnalysisJobStateOutbox {
   }
 }
 
-export function createChromeAnalysisJobStateOutbox(): AnalysisJobStateOutbox {
-  return new AnalysisJobStateOutbox({
-    getAll: () => getAllLocalStorageValues(),
-    set: (items) => setLocalStorageValues(items),
-    remove: (key) => removeLocalStorageValues(key),
-  });
+/**
+ * An outbox storage area over IndexedDB.
+ *
+ * When `indexedDB` does not exist at all, every operation succeeds and holds
+ * nothing. That is a deliberate choice about what a missing store means:
+ * there is then no durable row for an in-memory result to be inconsistent
+ * with, so acknowledging must still release the result — whereas a store that
+ * exists and *fails* is transient, and the caller holds on and retries.
+ */
+export function createIndexedDbAnalysisJobStateArea(
+  factory: IDBFactory | undefined = typeof indexedDB === 'undefined' ? undefined : indexedDB,
+): AnalysisJobStateStorageArea {
+  if (!factory) {
+    return { getAll: async () => ({}), set: async () => {}, remove: async () => {} };
+  }
+
+  let opening: Promise<IDBDatabase> | null = null;
+  const open = (): Promise<IDBDatabase> => {
+    opening ??= new Promise<IDBDatabase>((resolve, reject) => {
+      const request = factory.open(ANALYSIS_OUTBOX_DATABASE, ANALYSIS_OUTBOX_VERSION);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(ANALYSIS_OUTBOX_STORE)) {
+          request.result.createObjectStore(ANALYSIS_OUTBOX_STORE);
+        }
+      };
+      request.onsuccess = () => {
+        const database = request.result;
+        // Another context upgrading must not be blocked by a long-lived handle.
+        database.onversionchange = () => {
+          database.close();
+          opening = null;
+        };
+        resolve(database);
+      };
+      request.onerror = () => {
+        opening = null;
+        reject(request.error ?? new Error('Could not open the analysis outbox'));
+      };
+    });
+    return opening;
+  };
+
+  const run = async (
+    mode: IDBTransactionMode,
+    body: (store: IDBObjectStore) => void,
+  ): Promise<void> => {
+    const database = await open();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_OUTBOX_STORE, mode);
+      body(transaction.objectStore(ANALYSIS_OUTBOX_STORE));
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error ?? new Error('Analysis outbox transaction aborted'));
+      transaction.onerror = () => reject(transaction.error ?? new Error('Analysis outbox transaction failed'));
+    });
+  };
+
+  return {
+    async getAll() {
+      const entries: Record<string, unknown> = {};
+      await run('readonly', (store) => {
+        const cursor = store.openCursor();
+        cursor.onsuccess = () => {
+          const current = cursor.result;
+          if (!current) return;
+          entries[String(current.key)] = current.value;
+          current.continue();
+        };
+      });
+      return entries;
+    },
+    async set(items) {
+      await run('readwrite', (store) => {
+        for (const [key, value] of Object.entries(items)) store.put(value, key);
+      });
+    },
+    async remove(key) {
+      // Deleting an absent key succeeds, so an acknowledgement replayed after a
+      // reconnect is harmless.
+      await run('readwrite', (store) => { store.delete(key); });
+    },
+  };
+}
+
+/**
+ * Applies a background acknowledgement: releases the durable row, then the
+ * in-memory result — **in that order**.
+ *
+ * If the row cannot be removed, the result must survive with it. A `completed`
+ * row replayed with no result behind it would be reported as a lost result and
+ * the whole analysis recomputed; keeping both means the next reconnect simply
+ * redelivers and is acknowledged again. Returns whether the job was released.
+ */
+export async function acknowledgeAnalysisJob(
+  outbox: Pick<AnalysisJobStateOutbox, 'remove'>,
+  held: { acknowledge(jobId: string): void },
+  jobId: string,
+  warn?: (...args: unknown[]) => void,
+): Promise<boolean> {
+  try {
+    await outbox.remove(jobId);
+  } catch (error) {
+    warn?.('Could not release an acknowledged analysis state; keeping its result for redelivery', jobId, error);
+    return false;
+  }
+  held.acknowledge(jobId);
+  return true;
+}
+
+/** The outbox the offscreen document uses. */
+export function createAnalysisJobStateOutbox(): AnalysisJobStateOutbox {
+  return new AnalysisJobStateOutbox(createIndexedDbAnalysisJobStateArea());
 }

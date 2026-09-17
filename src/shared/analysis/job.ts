@@ -42,6 +42,13 @@ export type AnalysisJob = {
   device?: 'webgpu' | 'wasm';
   /** Set on `failed` and `unsupported`: why, in words a user could read. */
   error?: string;
+  /**
+   * Set on a `failed` job whose analysis *had* completed, but whose result was
+   * lost because the offscreen document holding it restarted before background
+   * acknowledged it. The outbox row survived; the payload could not. Safe to
+   * re-run — nothing about the recording is wrong.
+   */
+  lostResult?: true;
   startedAt: number;
   /** Set once the job reaches a terminal status. */
   finishedAt?: number;
@@ -90,6 +97,7 @@ export function normalizeAnalysisJob(value: unknown): AnalysisJob | undefined {
   if (segmentCount != null) job.segmentCount = segmentCount;
   if (raw.device === 'webgpu' || raw.device === 'wasm') job.device = raw.device;
   if (typeof raw.error === 'string' && raw.error.trim()) job.error = raw.error;
+  if (raw.lostResult === true) job.lostResult = true;
   const finishedAt = typeof raw.finishedAt === 'number' && Number.isFinite(raw.finishedAt) ? raw.finishedAt : undefined;
   if (finishedAt != null) job.finishedAt = finishedAt;
   return job;

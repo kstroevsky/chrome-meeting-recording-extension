@@ -44,7 +44,10 @@ export type RpcHandlerDeps = {
     historyId: string,
     transcript: import('../shared/transcript').TranscriptSegment[],
     config: import('../shared/analysis/types').AnalysisConfig,
+    provenance: import('../shared/analysis/provenance').AnalysisProvenance,
   ) => string;
+  /** Ids of every job still making the data plane busy, held results included. */
+  listAnalysisWork?: () => string[];
   /** Aborts a queued/running analysis; false when it is no longer active. */
   cancelAnalysis?: (jobId: string) => boolean;
   /** Releases a completed analysis the background has now persisted (HOST-03). */
@@ -224,13 +227,24 @@ async function handleOffscreenAnalyzeTranscript(
   if (typeof msg.historyId !== 'string' || !msg.historyId) return { ok: false, error: 'Missing historyId' };
   if (!Array.isArray(msg.transcript)) return { ok: false, error: 'Missing transcript' };
   if (!msg.config || typeof msg.config !== 'object') return { ok: false, error: 'Missing analysis configuration' };
+  // Refused rather than defaulted: a run without its enqueue-time provenance
+  // would come back unable to say what produced it.
+  if (!msg.provenance || typeof msg.provenance !== 'object') return { ok: false, error: 'Missing analysis provenance' };
   try {
-    return { ok: true, jobId: deps.analyzeTranscript(msg.historyId, msg.transcript, msg.config) };
+    return { ok: true, jobId: deps.analyzeTranscript(msg.historyId, msg.transcript, msg.config, msg.provenance) };
   } catch (error) {
     // A rejected config (an out-of-range window, say) is a caller error, not a
     // session failure: answer it rather than throwing into the RPC server.
     return { ok: false, error: describeRuntimeError(error) };
   }
+}
+
+async function handleOffscreenListAnalysisWork(
+  deps: RpcHandlerDeps,
+): Promise<{ ok: boolean; jobIds?: string[]; error?: string }> {
+  // A runtime with no analysis manager has no analysis work, which is an
+  // answer rather than an error: the caller is deciding whether it may reload.
+  return { ok: true, jobIds: deps.listAnalysisWork?.() ?? [] };
 }
 
 async function handleOffscreenCancelAnalysis(
@@ -293,6 +307,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_ACK_UPLOAD_STATE: (msg) => handleAcknowledgeUploadState(msg, deps),
       OFFSCREEN_ANALYZE_TRANSCRIPT: (msg) => handleOffscreenAnalyzeTranscript(msg, deps),
       OFFSCREEN_CANCEL_ANALYSIS: (msg) => handleOffscreenCancelAnalysis(msg, deps),
+      OFFSCREEN_LIST_ANALYSIS_WORK: () => handleOffscreenListAnalysisWork(deps),
       OFFSCREEN_ACK_ANALYSIS_STATE: (msg) => handleAcknowledgeAnalysisState(msg, deps),
     },
     (reqId, payload) => respond(deps.getPort, reqId, payload),

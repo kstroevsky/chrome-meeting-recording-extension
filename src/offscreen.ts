@@ -30,7 +30,7 @@ import { createChromeUploadJobStateOutbox } from './offscreen/drive/UploadJobSta
 import { AnalysisManager } from './offscreen/analysis/AnalysisManager';
 import { EmbeddingWorkerClient } from './offscreen/analysis/EmbeddingWorkerClient';
 import { analysisEngineConfig, spawnAnalysisWorker } from './offscreen/analysis/engineConfig';
-import { createChromeAnalysisJobStateOutbox } from './offscreen/analysis/AnalysisJobStateOutbox';
+import { acknowledgeAnalysisJob, createAnalysisJobStateOutbox } from './offscreen/analysis/AnalysisJobStateOutbox';
 import { toWireAnalysis } from './shared/analysis/storedAnalysis';
 import { isTerminalAnalysisJob } from './shared/analysis/job';
 import { renameDriveResources } from './offscreen/drive/DriveMetadataRenamer';
@@ -207,13 +207,13 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     openRetained: (key: string) => retainedMediaStore.read(key),
     cancelUpload: (jobId) => uploadManager.cancel(jobId),
     acknowledgeUploadState: (jobId) => uploadJobStateOutbox.remove(jobId),
-    analyzeTranscript: (historyId, transcript, config) => analysisManager.enqueue(historyId, transcript, config),
+    analyzeTranscript: (historyId, transcript, config, provenance) =>
+      analysisManager.enqueue(historyId, transcript, config, provenance),
     cancelAnalysis: (jobId) => analysisManager.cancel(jobId),
+    listAnalysisWork: () => analysisManager.busyJobs().map((job) => job.id),
+    // Durable row first, then the held result — see `acknowledgeAnalysisJob`.
     acknowledgeAnalysisState: async (jobId) => {
-      // Two things are released by one ack: the durable state entry, and the
-      // in-memory result the background has now taken ownership of.
-      analysisManager.acknowledge(jobId);
-      await analysisJobStateOutbox.remove(jobId);
+      await acknowledgeAnalysisJob(analysisJobStateOutbox, analysisManager, jobId, L.warn);
     },
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
     pushState: controller.pushState,
@@ -350,7 +350,7 @@ const uploadManager = new UploadManager({
 // Topic analysis (ADR-0007): a long data-plane job whose control plane can be
 // terminated under it, so it takes the same durable shape uploads do —
 // reported as it moves, terminal state held in an outbox until background acks.
-const analysisJobStateOutbox = createChromeAnalysisJobStateOutbox();
+const analysisJobStateOutbox = createAnalysisJobStateOutbox();
 
 const analysisManager = new AnalysisManager({
   openEngine: () => EmbeddingWorkerClient.create(
@@ -392,8 +392,9 @@ async function reportAnalysisJob(job: import('./shared/analysis/job').AnalysisJo
 async function deliverAnalysisResult(
   job: import('./shared/analysis/job').AnalysisJob,
   result: import('./shared/analysis/analyzeTranscript').AnalysisResult,
+  provenance: import('./shared/analysis/provenance').AnalysisProvenance,
 ): Promise<void> {
-  getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result) });
+  getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result), provenance });
 }
 
 async function replayAnalysisStates(port: chrome.runtime.Port): Promise<void> {
@@ -403,8 +404,28 @@ async function replayAnalysisStates(port: chrome.runtime.Port): Promise<void> {
   } catch (error) {
     L.warn('Could not load terminal analysis state outbox', describeRuntimeError(error));
   }
-  const byId = new Map(analysisManager.activeJobs().map((job) => [job.id, job]));
-  for (const job of terminal) byId.set(job.id, job);
+  // Everything this document is still responsible for, held results included —
+  // a result whose outbox write failed exists only here, and must still be
+  // announced.
+  const byId = new Map(analysisManager.busyJobs().map((job) => [job.id, job]));
+  for (const job of terminal) {
+    if (byId.has(job.id)) continue;
+    if (job.status === 'completed' && !analysisManager.holdsResult(job.id)) {
+      // A durable `completed` row with no payload: the document that computed
+      // it has since restarted. Announcing it as completed would make the
+      // control plane wait forever for a result that cannot arrive — and hold
+      // back every update while it waited. Reported as lost instead, which
+      // background acknowledges and re-runs from the transcript.
+      byId.set(job.id, {
+        ...job,
+        status: 'failed',
+        lostResult: true,
+        error: 'The analysis finished, but its result was lost when the offscreen document restarted.',
+      });
+      continue;
+    }
+    byId.set(job.id, job);
+  }
   for (const job of byId.values()) {
     try {
       port.postMessage({ type: 'OFFSCREEN_ANALYSIS_STATE', job });

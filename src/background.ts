@@ -96,13 +96,24 @@ const analysisCoordinator = new RecordingAnalysisCoordinator({
   dataPlane: offscreen,
   analyses,
   readTranscript: (historyId) => transcripts.get(historyId),
+  // The tombstone `RecordingHistoryService.remove` writes before any dependent
+  // cleanup — durable, so it still fences a late result after this worker is
+  // gone. An absent row is deliberately *not* deleted: see the dep's docs.
+  isRecordingDeleted: async (historyId) => Boolean((await historyRepository.get(historyId))?.deletedAt),
   config: () => CANDIDATE_ANALYSIS_CONFIG,
 });
-offscreen.onAnalysisJobChanged = (job) => analysisCoordinator.handleJobState(job);
-offscreen.onAnalysisResult = (job, analysis) => {
-  void analysisCoordinator.handleResult(job, analysis).catch((error) => {
-    L.warn('Could not handle an analysis result', job.historyId, error);
-  });
+offscreen.onAnalysisJobChanged = (job) => {
+  analysisCoordinator.handleJobState(job);
+  // A job starting needs keep-alive; one ending without a result has just been
+  // acknowledged and may have been the last thing holding a reload back.
+  syncCriticalWork();
+};
+offscreen.onAnalysisResult = (job, analysis, provenance) => {
+  void analysisCoordinator.handleResult(job, analysis, provenance)
+    .catch((error) => L.warn('Could not handle an analysis result', job.historyId, error))
+    // Persisting and acknowledging a result is the moment analysis stops being
+    // critical work, and nothing in the session will notice it.
+    .finally(() => syncCriticalWork());
 };
 const historyRepository = new RecordingHistoryRepository();
 const LEASE_STORAGE_KEY = 'playbackLeases';
@@ -267,6 +278,49 @@ let previousPhase: RecordingPhase = 'idle';
 // Set when an extension update arrives mid-recording; applied once work finishes.
 let pendingReload = false;
 
+/**
+ * Work an extension reload would destroy, in one place.
+ *
+ * Three kinds, each of which lives partly or wholly in the offscreen document
+ * and dies with it: a capture, a detached upload (ADR-0004), and a topic
+ * analysis — including one that has **finished computing but not yet been
+ * acknowledged**, whose only copy is in offscreen memory (ADR-0007, HOST-04).
+ *
+ * Every decision that could tear the runtime down — applying an update,
+ * deferring one, keeping the worker alive — reads this rather than restating
+ * the list, because the previous restatements were how analysis got left out.
+ */
+function hasCriticalWork(snapshot = session.getSnapshot()): boolean {
+  return isBusyPhase(snapshot.phase)
+    || hasUploadsInFlight(snapshot.uploadJobs)
+    || offscreen.hasActiveAnalysisJobs();
+}
+
+/**
+ * Re-evaluates the worker's lifetime after any change to critical work.
+ *
+ * Keep-alive matters for analysis as much as for uploads, and not only for
+ * progress: Chrome installs a pending update by itself when the service worker
+ * unloads, which would take the offscreen document — and a held analysis —
+ * with it. A worker kept alive is a worker whose update we still control.
+ *
+ * Called from the session observer *and* from analysis transitions, because an
+ * analysis finishing changes nothing in `RecordingSession`: a deferred reload
+ * waiting only on the session would never fire once analysis was the last
+ * thing holding it back.
+ */
+function syncCriticalWork(snapshot = session.getSnapshot()): void {
+  if (hasCriticalWork(snapshot)) {
+    startKeepAlive();
+    return;
+  }
+  stopKeepAlive();
+  if (pendingReload) {
+    L.log('Applying deferred update reload now that work has finished');
+    chrome.runtime.reload();
+  }
+}
+
 const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), L.warn);
 const transcriptCapture = new RecordingTranscriptCapture({
   transcripts,
@@ -293,13 +347,6 @@ const session = new RecordingSession(
     // Liveness backstop: (re)arm/clear the phase watchdog on every transition,
     // including the rehydrated one after a service-worker restart (ADR-0003).
     phaseWatchdog.observe(snapshot);
-    // ADR-0004: keep the worker alive while a decoupled upload drains so its
-    // OFFSCREEN_UPLOAD_STATE progress keeps reaching (and persisting on) the session.
-    if (isBusyPhase(snapshot.phase) || hasUploadsInFlight(snapshot.uploadJobs)) {
-      startKeepAlive();
-    } else {
-      stopKeepAlive();
-    }
     offscreen.hydratePhase(snapshot.phase);
     // The manager may be recreated during a service-worker restart; treating an
     // absent hand-off as an empty seed keeps persistence authoritative until the
@@ -319,10 +366,10 @@ const session = new RecordingSession(
     }
     previousPhase = snapshot.phase;
     perfDebugStore.setPhase(snapshot.phase);
-    if (!isBusyPhase(snapshot.phase) && !hasUploadsInFlight(snapshot.uploadJobs) && pendingReload) {
-      L.log('Applying deferred update reload now that work has finished');
-      chrome.runtime.reload();
-    }
+    // ADR-0004 and ADR-0007: keep-alive and any deferred reload both follow
+    // the one definition of critical work. Evaluated after the upload hand-off
+    // above so upload liveness is current when it is read.
+    syncCriticalWork(snapshot);
     broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) });
   },
   // A note left open when the run ends is sealed at the last recorded position
@@ -587,15 +634,36 @@ chrome.runtime.onSuspend?.addListener(async () => {
 
 // Apply downloaded updates promptly, without interrupting an active recording.
 chrome.runtime.onUpdateAvailable?.addListener(() => {
-  void sessionHydration.then(() => {
-    const snapshot = session.getSnapshot();
-    if (!isBusyPhase(snapshot.phase) && !hasUploadsInFlight(snapshot.uploadJobs)) {
-      L.log('Update available; reloading to apply');
-      chrome.runtime.reload();
-    } else {
+  void sessionHydration.then(async () => {
+    if (hasCriticalWork()) {
       L.log('Update available; deferring reload until current work finishes');
       pendingReload = true;
+      syncCriticalWork();
+      return;
     }
+    // Idle as far as this worker knows — but its view of analysis is memory,
+    // empty after a restart until the offscreen document reconnects and
+    // replays. Asking the data plane directly closes that window: an update
+    // arriving seconds after a worker restart must not reload over an analysis
+    // nobody has re-announced yet.
+    try {
+      await offscreen.refreshAnalysisWork();
+    } catch (error) {
+      // Not knowing is not the same as knowing nothing is running. Deferred;
+      // failing any later trigger, Chrome installs the update itself once this
+      // worker goes idle, which is the pre-existing fallback.
+      L.warn('Could not confirm analysis state before applying an update; deferring', error);
+      pendingReload = true;
+      return;
+    }
+    if (hasCriticalWork()) {
+      L.log('Update available; deferring reload until the running analysis finishes');
+      pendingReload = true;
+      syncCriticalWork();
+      return;
+    }
+    L.log('Update available; reloading to apply');
+    chrome.runtime.reload();
   });
 });
 
@@ -650,6 +718,12 @@ const sessionHydration = (async () => {
       L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
       startKeepAlive();
+    } else if (await offscreen.refreshAnalysisWork().catch(() => false)) {
+      // An analysis the previous worker instance was waiting on. Reconnecting
+      // now, rather than on the offscreen document's own backoff (up to 30 s),
+      // is what gets a held result persisted promptly.
+      L.log('SW restarted while an analysis was active — re-attaching offscreen');
+      syncCriticalWork();
     }
   } catch (e) {
     L.warn('Session re-hydration failed (non-fatal):', e);

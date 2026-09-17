@@ -408,8 +408,22 @@ export type BgToOffscreenRpc =
       transcript: import('./transcript').TranscriptSegment[];
       /** Every §9 value the run must use; see `shared/analysis/types`. */
       config: import('./analysis/types').AnalysisConfig;
+      /**
+       * The conditions this run is being started under, captured by the control
+       * plane at enqueue. Carried with the job and returned with its result, so
+       * what is persisted describes the run that produced it even if the
+       * service worker that started it is long gone.
+       */
+      provenance: import('./analysis/provenance').AnalysisProvenance;
     }>
-  | RpcRequest<{ type: 'OFFSCREEN_CANCEL_ANALYSIS'; jobId: string }>;
+  | RpcRequest<{ type: 'OFFSCREEN_CANCEL_ANALYSIS'; jobId: string }>
+  /**
+   * Every analysis job the data plane still considers unfinished — queued,
+   * running, or holding a result nobody has acknowledged. Background asks this
+   * rather than trusting its own memory before anything that could destroy
+   * the offscreen document.
+   */
+  | RpcRequest<{ type: 'OFFSCREEN_LIST_ANALYSIS_WORK' }>;
 
 export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string }
@@ -436,6 +450,8 @@ export type OffscreenToBg =
       type: 'OFFSCREEN_ANALYSIS_RESULT';
       job: import('./analysis/job').AnalysisJob;
       analysis: import('./analysis/storedAnalysis').WireAnalysis;
+      /** The enqueue-time provenance, with the backend that actually ran stamped on. */
+      provenance: import('./analysis/provenance').AnalysisProvenance;
     }
   | { type: 'TELEMETRY_SNAPSHOT'; snapshot: import('./telemetry').TelemetrySnapshot; critical?: boolean }
   | { type: 'TELEMETRY_FLUSH'; snapshot: import('./telemetry').TelemetrySnapshot; reason: 'incident' | 'recording_complete' | 'upload_complete' };

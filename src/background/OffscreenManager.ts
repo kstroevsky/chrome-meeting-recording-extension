@@ -29,12 +29,17 @@ export type OffscreenUploadListener = (job: UploadJob, telemetryRunId?: string, 
 /** An analysis job moved; carries state only, never the result (ADR-0007). */
 export type OffscreenAnalysisListener = (job: AnalysisJob) => void;
 /** An analysis finished and its result is on the wire, awaiting persistence. */
-export type OffscreenAnalysisResultListener = (job: AnalysisJob, analysis: WireAnalysis) => void;
+export type OffscreenAnalysisResultListener = (
+  job: AnalysisJob,
+  analysis: WireAnalysis,
+  provenance?: AnalysisProvenance,
+) => void;
 import { TIMEOUTS } from '../shared/timeouts';
 import { isBusyPhase, isStoppablePhase, normalizePhase, type RecordingPhase, type UploadJob } from '../shared/recording';
 import type { AnalysisJob } from '../shared/analysis/job';
 import type { WireAnalysis } from '../shared/analysis/storedAnalysis';
 import type { AnalysisConfig } from '../shared/analysis/types';
+import type { AnalysisProvenance } from '../shared/analysis/provenance';
 import type { TranscriptSegment } from '../shared/transcript';
 
 const L = makeLogger('background');
@@ -430,7 +435,7 @@ export class OffscreenManager {
     }
 
     if (msg.type === 'OFFSCREEN_ANALYSIS_RESULT') {
-      this.onAnalysisResult?.(msg.job, msg.analysis);
+      this.onAnalysisResult?.(msg.job, msg.analysis, msg.provenance);
       return;
     }
 
@@ -449,8 +454,36 @@ export class OffscreenManager {
     }
   }
 
-  /** True while any analysis job is running; the HOST-04 "busy" check. */
+  /** True while any analysis job is running or holding an unacknowledged result (HOST-04). */
   hasActiveAnalysisJobs(): boolean {
+    return this.activeAnalysisJobs.size > 0;
+  }
+
+  /**
+   * Replaces the in-memory view of analysis work with the data plane's own,
+   * and answers whether any exists.
+   *
+   * Needed because `activeAnalysisJobs` is service-worker memory: after a
+   * restart it is empty until the offscreen document reconnects on its own
+   * backoff and replays. A decision that could destroy the document — an
+   * update — must not be taken on that empty set.
+   *
+   * No document means no analysis can exist, so nothing is created just to
+   * ask. A document that exists is reconnected and asked directly; it is the
+   * only party that knows about a result held in its memory.
+   */
+  async refreshAnalysisWork(): Promise<boolean> {
+    if (this.recorderTabId == null && !(await this.hasOffscreenContext())) {
+      this.activeAnalysisJobs.clear();
+      return false;
+    }
+    await this.ensureReady();
+    const response = await this.rpc<{ ok: boolean; jobIds?: string[] }>({ type: 'OFFSCREEN_LIST_ANALYSIS_WORK' });
+    if (!response?.ok || !Array.isArray(response.jobIds)) {
+      throw new Error('The offscreen document did not report its analysis work');
+    }
+    this.activeAnalysisJobs.clear();
+    for (const jobId of response.jobIds) this.activeAnalysisJobs.add(jobId);
     return this.activeAnalysisJobs.size > 0;
   }
 
@@ -459,8 +492,9 @@ export class OffscreenManager {
     historyId: string,
     transcript: TranscriptSegment[],
     config: AnalysisConfig,
+    provenance: AnalysisProvenance,
   ): Promise<{ ok: boolean; jobId?: string; error?: string }> {
-    return this.rpc({ type: 'OFFSCREEN_ANALYZE_TRANSCRIPT', historyId, transcript, config });
+    return this.rpc({ type: 'OFFSCREEN_ANALYZE_TRANSCRIPT', historyId, transcript, config, provenance });
   }
 
   /** Aborts a running analysis; it stops at the next batch boundary. */

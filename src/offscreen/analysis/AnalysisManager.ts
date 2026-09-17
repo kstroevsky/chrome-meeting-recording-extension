@@ -29,6 +29,7 @@
 
 import { analyzeTranscript, type AnalysisResult } from '../../shared/analysis/analyzeTranscript';
 import type { AnalysisJob } from '../../shared/analysis/job';
+import type { AnalysisProvenance } from '../../shared/analysis/provenance';
 import type { AnalysisConfig } from '../../shared/analysis/types';
 import type { TranscriptSegment } from '../../shared/transcript';
 import type { EmbeddingWorkerClient } from './EmbeddingWorkerClient';
@@ -47,7 +48,7 @@ export type AnalysisManagerDeps = {
    * Resolves once the background has taken ownership; a rejection leaves the
    * result held here for the next replay.
    */
-  deliver: (job: AnalysisJob, result: AnalysisResult) => Promise<void>;
+  deliver: (job: AnalysisJob, result: AnalysisResult, provenance: AnalysisProvenance) => Promise<void>;
   now?: () => number;
   genId?: () => string;
   warn?: (...args: unknown[]) => void;
@@ -59,8 +60,12 @@ type AnalysisTask = {
   job: AnalysisJob;
   transcript: TranscriptSegment[];
   config: AnalysisConfig;
+  /** What the control plane captured at enqueue; returned with the result. */
+  provenance: AnalysisProvenance;
   controller: AbortController;
 };
+
+type HeldResult = { job: AnalysisJob; result: AnalysisResult; provenance: AnalysisProvenance };
 
 export class AnalysisManager {
   private readonly now: () => number;
@@ -68,7 +73,7 @@ export class AnalysisManager {
   private readonly pending: AnalysisTask[] = [];
   private readonly tasks = new Map<string, AnalysisTask>();
   /** Completed results awaiting a background ack; see the file docblock. */
-  private readonly undelivered = new Map<string, { job: AnalysisJob; result: AnalysisResult }>();
+  private readonly undelivered = new Map<string, HeldResult>();
   private engine: EmbeddingWorkerClient | null = null;
   private active = 0;
   private seq = 0;
@@ -85,7 +90,12 @@ export class AnalysisManager {
    * show the run before the model has finished loading — which on a cold WASM
    * machine is the longest part of it.
    */
-  enqueue(historyId: string, transcript: TranscriptSegment[], config: AnalysisConfig): string {
+  enqueue(
+    historyId: string,
+    transcript: TranscriptSegment[],
+    config: AnalysisConfig,
+    provenance: AnalysisProvenance,
+  ): string {
     const job: AnalysisJob = {
       id: this.genId(),
       historyId,
@@ -93,7 +103,7 @@ export class AnalysisManager {
       progress: 0,
       startedAt: this.now(),
     };
-    const task: AnalysisTask = { job, transcript, config, controller: new AbortController() };
+    const task: AnalysisTask = { job, transcript, config, provenance, controller: new AbortController() };
     this.pending.push(task);
     this.tasks.set(job.id, task);
     void this.emit(job);
@@ -128,9 +138,30 @@ export class AnalysisManager {
     return this.undelivered.size;
   }
 
-  /** In-flight jobs, for replay after a background reconnect. */
+  /** Queued and running jobs. */
   activeJobs(): AnalysisJob[] {
     return [...this.tasks.values()].map((task) => ({ ...task.job }));
+  }
+
+  /**
+   * Every job that still makes this document busy — queued, running, **and**
+   * completed with a result nobody has acknowledged.
+   *
+   * What replay and the busy query must use. `activeJobs` alone omits a held
+   * result, and a held result whose outbox write also failed would then be
+   * invisible to a reconnecting background: present in memory, announced
+   * nowhere, and destroyed by the next update.
+   */
+  busyJobs(): AnalysisJob[] {
+    return [
+      ...this.activeJobs(),
+      ...[...this.undelivered.values()].map((held) => ({ ...held.job })),
+    ];
+  }
+
+  /** Whether a completed job's result is still held here. */
+  holdsResult(jobId: string): boolean {
+    return this.undelivered.has(jobId);
   }
 
   /**
@@ -142,7 +173,7 @@ export class AnalysisManager {
   async redeliver(): Promise<void> {
     for (const [jobId, held] of [...this.undelivered]) {
       try {
-        await this.deps.deliver(held.job, held.result);
+        await this.deps.deliver(held.job, held.result, held.provenance);
         // Deliberately **not** deleted here. `deliver` is a `postMessage`: it
         // resolves when the message left, which says nothing about whether the
         // background persisted anything. Releasing on a successful send loses
@@ -223,7 +254,13 @@ export class AnalysisManager {
       task.job = completed;
       // Held before reporting, so a terminal state can never reach the
       // background without its payload being available to follow it.
-      this.undelivered.set(completed.id, { job: completed, result });
+      this.undelivered.set(completed.id, {
+        job: completed,
+        result,
+        // The backend is only known now, so it is stamped here onto the
+        // conditions the control plane captured before the run began.
+        provenance: { ...task.provenance, embeddingDevice: engine.info.device },
+      });
       await this.emit(completed);
       await this.redeliver();
     } catch (error) {

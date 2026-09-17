@@ -81,7 +81,17 @@ function normalizeProvenance(value: unknown): AnalysisProvenance | undefined {
     embeddingDimensions,
     embeddingDtype: c.embeddingDtype as AnalysisProvenance['embeddingDtype'],
     configHash: c.configHash,
+    ...(c.embeddingDevice === 'webgpu' || c.embeddingDevice === 'wasm' ? { embeddingDevice: c.embeddingDevice } : {}),
   };
+}
+
+/**
+ * Decodes provenance that crossed the port with a result, or `undefined` when
+ * it is not usable — in which case the control plane falls back rather than
+ * persisting conditions it cannot read.
+ */
+export function fromWireProvenance(value: unknown): AnalysisProvenance | undefined {
+  return normalizeProvenance(value);
 }
 
 function normalizeSegment(value: unknown): ConversationSegment | undefined {
