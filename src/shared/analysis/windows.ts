@@ -24,15 +24,24 @@ export type WindowConfig = Pick<SegmentationConfig, 'windowUtterances' | 'window
 /**
  * Builds the contextual windows for a transcript.
  *
- * Windows overlap when the stride is shorter than the window, which is the
- * point: adjacent windows share context, so the cosine change between them
- * reflects a shift in subject rather than the accident of where a window
- * happened to start.
+ * **Adjacent windows must not share utterances.** ADR-0007's 4B calibration
+ * established this the hard way: an earlier build let the boundary contexts
+ * overlap, and the shared text smeared the very signal they exist to measure —
+ * adjacent within-topic windows scored 0.954 against 0.946 across a real
+ * boundary. Making them disjoint took boundary F1 from 0.767 to 0.892. The
+ * calibrated configuration therefore runs stride **equal to** the window.
+ *
+ * A shorter stride remains expressible, because SEG-02 describes the contexts
+ * compared across a boundary rather than the windows themselves, and a future
+ * higher-resolution detector may want to slide a disjoint *pair* across every
+ * position. But nothing should reach for it casually: with the current
+ * detector, overlap is the failure mode above.
  *
  * Every utterance lands in at least one window. A transcript shorter than one
  * window still yields a single window covering it, and a trailing remainder the
- * stride would otherwise skip gets a final window of its own — a conversation
- * must not lose its last few turns to arithmetic.
+ * stride would otherwise skip gets a **short** window of its own — a
+ * conversation must not lose its last few turns to arithmetic, and must not
+ * gain a duplicated tail either.
  */
 export function buildContextWindows(
   segments: TranscriptSegment[],
@@ -57,11 +66,20 @@ export function buildContextWindows(
     windows.push(toWindow(segments, start, Math.min(start + windowUtterances, segments.length)));
   }
 
-  // The stride can step past the tail without covering it. One more window,
-  // anchored at the end, rather than dropping the conversation's last turns.
+  // The stride can step past the tail without covering it. Cover exactly the
+  // remainder — `[covered, end)` — rather than anchoring a full-size window at
+  // `length - windowUtterances`, which is what this used to do and which
+  // overlapped its predecessor by `windowUtterances - remainder` utterances.
+  // At the calibrated 4/4 over ten turns that produced [0,4) [4,8) [6,10): two
+  // shared utterances between the last pair, reintroducing exactly the smearing
+  // 4B had just eliminated.
+  //
+  // The tail is therefore shorter than SEG-02's 3–5 when the remainder is, and
+  // that is the right trade: a thin final window costs one boundary a little
+  // context, while a duplicated one corrupts the comparison either side of it.
   const covered = windows[windows.length - 1]?.endIndex ?? 0;
   if (covered < segments.length) {
-    windows.push(toWindow(segments, Math.max(0, segments.length - windowUtterances), segments.length));
+    windows.push(toWindow(segments, covered, segments.length));
   }
   return windows;
 }

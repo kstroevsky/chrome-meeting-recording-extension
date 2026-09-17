@@ -52,14 +52,20 @@ describe('buildContextWindows', () => {
     expect(windows.map((w) => [w.startIndex, w.endIndex])).toEqual([[0, 3], [2, 5], [4, 7]]);
   });
 
-  it('overlaps windows so a boundary score reflects subject, not window placement', () => {
+  it('honours a stride shorter than the window, which overlaps them', () => {
+    // Expressible, and not what the calibrated configuration uses: 4B found
+    // overlapping boundary contexts smear the signal. See the disjointness
+    // suite below.
     const windows = buildContextWindows(transcript(5), { windowUtterances: 3, windowStride: 1 });
     expect(windows.map((w) => w.startIndex)).toEqual([0, 1, 2]);
   });
 
   it('covers a trailing remainder the stride would otherwise skip', () => {
     // 8 utterances, window 3, stride 3 → [0,3) [3,6) leaves 6 and 7 uncovered.
+    // The tail covers exactly [6,8) — short rather than a full window anchored
+    // at 5, which would have duplicated utterance 5.
     const windows = buildContextWindows(transcript(8), { windowUtterances: 3, windowStride: 3 });
+    expect(windows[windows.length - 1].startIndex).toBe(6);
     expect(windows[windows.length - 1].endIndex).toBe(8);
     // Every utterance appears in at least one window.
     const covered = new Set<number>();
@@ -114,5 +120,53 @@ describe('buildContextWindows', () => {
       .toThrow(/stride/);
     expect(() => buildContextWindows(transcript(9), { windowUtterances: 3, windowStride: 4 }))
       .toThrow(/stride/);
+  });
+
+  describe('the disjointness invariant (ADR-0007 4B)', () => {
+    const utterances = (count: number) => Array.from({ length: count }, (_, i) => ({
+      tStartMs: i * 1_000,
+      tEndMs: i * 1_000 + 900,
+      speaker: i % 2 ? 'Ada' : 'Grace',
+      text: `turn number ${i} about the pool`,
+    }));
+
+    /** Any pair of adjacent windows sharing an utterance. */
+    const overlaps = (windows: Array<{ startIndex: number; endIndex: number }>) =>
+      windows.filter((window, i) => i > 0 && window.startIndex < windows[i - 1].endIndex);
+
+    it('never overlaps the tail window with its predecessor at 4/4', () => {
+      // The regression: 10 turns used to produce [0,4) [4,8) [6,10) — the last
+      // pair sharing two utterances, which is the smearing 4B eliminated.
+      const windows = buildContextWindows(utterances(10), { windowUtterances: 4, windowStride: 4 });
+      expect(windows.map((w) => [w.startIndex, w.endIndex])).toEqual([[0, 4], [4, 8], [8, 10]]);
+      expect(overlaps(windows)).toEqual([]);
+    });
+
+    it('stays disjoint and gapless at every remainder', () => {
+      for (let count = 1; count <= 40; count += 1) {
+        const windows = buildContextWindows(utterances(count), { windowUtterances: 4, windowStride: 4 });
+        expect(overlaps(windows)).toEqual([]);
+        // And still covers the conversation: no turn is dropped to arithmetic.
+        expect(windows[0].startIndex).toBe(0);
+        expect(windows[windows.length - 1].endIndex).toBe(count);
+        for (let i = 1; i < windows.length; i += 1) {
+          expect(windows[i].startIndex).toBe(windows[i - 1].endIndex);
+        }
+      }
+    });
+
+    it('lets the tail be shorter than SEG-02 rather than duplicating context', () => {
+      const windows = buildContextWindows(utterances(9), { windowUtterances: 4, windowStride: 4 });
+      const tail = windows[windows.length - 1];
+      expect(tail.endIndex - tail.startIndex).toBe(1);
+      expect(overlaps(windows)).toEqual([]);
+    });
+
+    it('still overlaps when a stride shorter than the window is asked for', () => {
+      // Expressible on purpose — a future higher-resolution detector may slide a
+      // disjoint *pair* — but not what the calibrated configuration uses.
+      const windows = buildContextWindows(utterances(12), { windowUtterances: 4, windowStride: 2 });
+      expect(overlaps(windows).length).toBeGreaterThan(0);
+    });
   });
 });
