@@ -95,7 +95,7 @@ export async function analyzeTranscript(
       centroid: cluster.centroid,
       segments: cluster.segmentIds,
       keywords,
-      importance: topicImportance(cluster.id, cluster.segmentIds, byId, windows, embeddings, keywords),
+      importance: topicImportance(cluster.id, cluster.centroid, cluster.segmentIds, byId, windows, embeddings, keywords),
     };
   });
 
@@ -135,8 +135,24 @@ async function encodeAll(
  * importance for *passages*. Averaging is the reading that keeps a long, dull
  * stretch from outranking a short, consequential one purely on length.
  */
+/**
+ * A topic's standing, as the mean importance of the passages it covers.
+ *
+ * **The centroid is the cluster's, not any one segment's.** IMP-02 is explicit:
+ * importance is measured against the centroid over a topic's segment
+ * embeddings. Ranking against the first segment's embedding instead — which
+ * this did — quietly scores a topic by how much it resembles its own opening,
+ * and is worst exactly where global topics earn their keep: for a subject the
+ * conversation returns to, the later stretches are penalised for differing from
+ * the first, which is the thing the centroid exists to average away.
+ *
+ * The mean rather than the sum is our own choice, and IMP-03 does not cover it:
+ * summing would let a long dull stretch outrank a short consequential one on
+ * length alone.
+ */
 function topicImportance(
   topicId: string,
+  centroid: Embedding,
   segmentIds: string[],
   byId: Map<string, import('./types').ConversationSegment>,
   windows: ContextWindow[],
@@ -159,8 +175,6 @@ function topicImportance(
   }
   if (!passages.length) return 0;
 
-  const centroid = byId.get(segmentIds[0])?.embedding;
-  if (!centroid) return 0;
   const ranked = rankPassages(passages, { centroid, keywords });
   return ranked.reduce((sum, passage) => sum + passage.importance, 0) / ranked.length;
 }

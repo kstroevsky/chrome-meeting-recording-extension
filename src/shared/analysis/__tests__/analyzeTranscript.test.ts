@@ -160,3 +160,79 @@ describe('analyzeTranscript', () => {
       .rejects.toThrow(/returned \d+ vectors for \d+ windows/);
   });
 });
+
+describe('topic importance ranks against the cluster centroid (IMP-02)', () => {
+  /**
+   * The bug this pins: importance used to rank a topic's passages against the
+   * **first segment's embedding** rather than the cluster centroid. That scores
+   * a topic by how much it resembles its own opening, and is worst exactly
+   * where global topics earn their keep — for a subject the conversation
+   * returns to, the later stretches are penalised for differing from the first.
+   *
+   * The invariant is **order independence**: the same two stretches of one
+   * subject must score the same whichever came first, because the centroid is
+   * the same set either way. Ranking against `segments[0]` makes the answer
+   * depend on transcript order.
+   *
+   * Two fixture properties are load-bearing, and both were arrived at by
+   * finding weaker versions that passed with the bug still in place:
+   *
+   *  - the stretches must be **unequal in size**, or the mean similarity to
+   *    either endpoint is identical by symmetry and the bug hides;
+   *  - they must be **far enough apart** that the 0.30 similarity term moves
+   *    the 0.30/0.25/0.20/0.15/0.10 blend measurably.
+   *
+   * With the bug, this fixture reads 0.5168 one way and 0.4817 the other.
+   */
+  const leaning = (deg: number) => {
+    const rad = (deg * Math.PI) / 180;
+    return Float32Array.from([Math.cos(rad), Math.sin(rad)]);
+  };
+
+  const encodeLeaning = async (texts: string[]): Promise<Float32Array[]> => texts.map((text) => {
+    if (text.includes('early')) return leaning(0);
+    if (text.includes('late')) return leaning(40);
+    return leaning(140);
+  });
+
+  const runOf = (schedule: Array<[string, number]>): TranscriptSegment[] => {
+    const segments: TranscriptSegment[] = [];
+    let clock = 0;
+    for (const [tag, count] of schedule) {
+      for (let i = 0; i < count; i += 1) {
+        segments.push({ tStartMs: clock, tEndMs: clock + 2_000, speaker: 'Ada', text: `${tag} pool timeout ${i}` });
+        clock += 3_000;
+      }
+    }
+    return segments;
+  };
+
+  it('gives the same importance whichever stretch of a topic came first', async () => {
+    // Thresholds loose enough for two distant stretches to reunite, and a merge
+    // period short enough for the sweep to run on a fixture this size.
+    const config = {
+      ...CONFIG,
+      assignmentThreshold: 0.6,
+      mergeThreshold: 0.6,
+      mergeEverySegments: 2,
+      minSegmentMs: 1_000,
+    };
+    const sizes: Record<string, number> = { early: 24, late: 8 };
+
+    const analyse = async (first: 'early' | 'late', second: 'early' | 'late') =>
+      analyzeTranscript(runOf([[first, sizes[first]], ['other', 12], [second, sizes[second]]]), config, encodeLeaning);
+
+    const forward = await analyse('early', 'late');
+    const reversed = await analyse('late', 'early');
+
+    const recurring = (result: { topics: Array<{ segments: string[]; importance: number }> }) =>
+      [...result.topics].sort((a, b) => b.segments.length - a.segments.length)[0];
+
+    const a = recurring(forward);
+    const b = recurring(reversed);
+    // The fixture has to actually produce a recurrent topic, or it proves nothing.
+    expect(a.segments.length).toBe(2);
+    expect(b.segments.length).toBe(2);
+    expect(a.importance).toBeCloseTo(b.importance, 6);
+  });
+});
