@@ -375,7 +375,15 @@ const session = new RecordingSession(
   // A note left open when the run ends is sealed at the last recorded position
   // rather than discarded, and marked so a screen can show it ended that way
   // (ADR-0005). Best-effort: failing to seal must not disturb the transition.
-  (historyId, durationMs) => {
+  (historyId, durationMs, ending) => {
+    if (ending === 'discarded') {
+      // Nothing about a discarded run is kept, so nothing is swept or analysed
+      // for it — the discard path removes its notes and transcript itself, and
+      // a sweep or an analysis racing that removal would re-create them.
+      void transcriptCapture.abandon()
+        .catch((error) => L.warn('Could not disarm transcript capture for the discarded run:', error));
+      return;
+    }
     void notations.closeOpenSpans(historyId, durationMs)
       .catch((error) => L.warn('Could not close open notations for the finished run:', error));
     // Sweep whatever the meeting tab still holds while it is reachable, then

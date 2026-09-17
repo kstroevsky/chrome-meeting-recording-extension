@@ -31,9 +31,16 @@ Four questions had to be answered before any code.
 
 **4. The pipeline is deterministic; a generative model is a deferred labelling layer.** Encode with a small multilingual embedding model, detect boundaries by cosine change, cluster online by centroid, rank by weighted vector arithmetic, label with c-TF-IDF. All five stages are pure functions over vectors, unit-testable against a stub encoder with no GPU, no model download and no network. A local LLM sits *above* this and is out of scope (see `docs/plans/local-text-processing.md` §12).
 
-**5. Local inference runs in a dedicated Worker owned by the offscreen document, orchestrated by background.** Background stays the control plane and owns job state; the offscreen document is the data plane and outlives service-worker termination. Durability is a direct mirror of ADR-0004's upload jobs, because the failure mode is identical — long work in the data plane whose owner in the control plane can be killed at any moment: a per-job durable outbox in `chrome.storage.local`, released only on background ack, replayed on reconnect, and `OffscreenManager.closeForUpdate()` refusing while a job is active exactly as it already refuses for `activeUploadJobs`.
+**5. Local inference runs in a dedicated Worker owned by the offscreen document, orchestrated by background.** Background stays the control plane and owns job state; the offscreen document is the data plane and outlives service-worker termination. Durability mirrors ADR-0004's upload jobs, because the failure mode is identical — long work in the data plane whose owner in the control plane can be killed at any moment:
 
-**6. Engine code is packaged; only weights are fetched, from an origin we control, and they cache outside ADR-0006's namespace.** Transformers.js and ONNX Runtime Web — including its `.wasm` binaries — ship inside the extension, with `ort.env.wasm.wasmPaths` pointed at `chrome.runtime.getURL(...)`; this is MV3's remote-code rule and Plan B §B2's stance. Weights are self-hosted and reach `host_permissions` through a build-time define, reusing the `telemetryHostPermission()` pattern. They cache in the **Cache API** — unused in this repo until now, which is the point: model bytes stay entirely out of the OPFS `staging/` ÷ `library/` namespace that ADR-0006 governs, so ADR-0006 needs no amendment. This requires adding `content_security_policy.extension_pages` with `'wasm-unsafe-eval'`, which is store-review-visible.
+- a per-job durable outbox in **IndexedDB** (`analysis-job-outbox`) — an offscreen document has no `chrome.storage` — replayed on reconnect;
+- a completed result held in offscreen memory until background has **stored** it and acknowledged it, never merely sent it; on acknowledgement the durable row goes first;
+- one definition of critical work — capture, uploads, and analysis including a held result — gating `closeForUpdate()`, `onUpdateAvailable`, the deferred reload, and the service-worker keep-alive;
+- the history tombstone as the durable fence against a result arriving for a deleted recording.
+
+*(As amended 2026-09-15 and 2026-09-17; the original wording is preserved under "Superseded text".)*
+
+**6. Everything the engine needs is packaged; nothing is fetched.** Transformers.js, ONNX Runtime Web and its `.wasm` binaries, the tokenizer and configuration, and the quantized model graph all ship inside the extension and load from `chrome-extension://` resources, with `wasmPaths` pointed at them and remote model resolution disabled. There is therefore no weights origin, no host permission, and no model cache — the package *is* the cache, and ADR-0006's OPFS namespace is untouched. `content_security_policy.extension_pages` carries `'wasm-unsafe-eval'`, which is required for WebAssembly under MV3 and is store-review-visible. *(As amended by the 2026-09-12 artifact decision; the original wording is preserved under "Superseded text".)*
 
 ## Validation
 
@@ -43,7 +50,7 @@ This ADR rests on two platform assumptions. **Both must run and pass before anyt
 
 2. **Embedding throughput at realistic scale — RUN, PASSED.** Embed a real three-hour transcript's worth of contextual windows at the production batch size of 32, with a realistic token-length distribution rather than repetitions of one short string. Records: load time, total embedding time, windows/sec, p50/p95 batch latency, the backend that ran, process RSS and JS heap, and the WebGPU-to-WASM delta. Q8 and FP16 are compared as **separate builds**, on package size, throughput, and embedding agreement on a multilingual sample.
 
-**Exit criterion (conjunctive):** both spikes run and pass, *and* every open contract in `docs/plans/local-text-processing.md` §9 is frozen from spike 2's measurements into this ADR. Those values — window size and stride, the local-peak rule, the `longPause` threshold, the `speakerPatternChange` definition, the micro-cluster merge threshold and period, the definitions of `novelty` / `keyword_distinctiveness` / `recurrence`, the MMR lambda, the default dtype, the minimum segment length, and the throughput target — are deliberately not guessed now. The plan fixes every value its source payload fixed (the `> 0.82` assignment threshold, `C_new = (n·C + x) / (n + 1)`, the 0.70/0.10/0.10/0.10 boundary blend, the 0.30/0.25/0.20/0.15/0.10 ranking, batch 32, 384 dimensions) and invents none that it did not.
+**Exit criterion (conjunctive):** both spikes run and pass, *and* every open contract in `docs/plans/local-text-processing.md` §9 is frozen from spike 2's measurements into this ADR. Those values — window size and stride, the local-peak rule, the `longPause` threshold, the `speakerPatternChange` definition, the micro-cluster merge threshold and period, the definitions of `novelty` / `keyword_distinctiveness` / `recurrence`, the MMR lambda, the default dtype, the minimum segment length, and the throughput target — are deliberately not guessed now. The plan fixes every value its source payload fixed (`C_new = (n·C + x) / (n + 1)`, the 0.70/0.10/0.10/0.10 boundary blend, the 0.30/0.25/0.20/0.15/0.10 ranking, batch 32, 384 dimensions) and invents none that it did not. *(Current as of 2026-09-17. The payload's `> 0.82` was on this list until 4B showed it illustrative and inoperative for this encoder — plan D-16. MMR lambda has left the list of values to freeze, because nothing consumes it — D-20. The throughput target is frozen as a reference-machine floor.)*
 
 ## Alternatives considered
 
@@ -65,13 +72,17 @@ This ADR rests on two platform assumptions. **Both must run and pass before anyt
 
 ## Consequences
 
-- The transcript stops being a tab-local artifact. `PlaybackManifest.transcriptStatus` becomes real, and the player rail that `src/recordings/player/PlayerView.ts` documents as "not built" gains a reason to exist.
-- The `recording-history` database gains stores and a version bump; the upgrade stays presence-driven and idempotent, as it already is.
-- The extension gains a `content_security_policy` key for the first time. This is visible to store review and should be expected to draw a question about `'wasm-unsafe-eval'`.
-- The extension gains its first substantial runtime dependency. `ts-loader` runs without `transpileOnly`, so full type-checking on every build will get slower; measure the delta rather than silently switching.
-- Captions are the only transcript source, so recordings without Meet captions have no topics. This is a coverage gap that Plan B closes, not a defect of this design.
-- The discourse-cue and discourse-signal term sets are English-only while the encoder is deliberately multilingual. On a non-English call those terms contribute nothing and the boundary blend degrades to 0.70/0.10/0.10/0.00 rather than failing. Known asymmetry, recorded here so it is not rediscovered as a bug.
-- Window embeddings are retained (~1.2 MB per recording) rather than discarded after clustering, because they are what makes cross-session retrieval cheap later. Discarding them would forfeit the "reusable computational memory" claim the architecture rests on.
+*Current as of 2026-09-17. The consequences as first written are preserved under "Superseded text".*
+
+- The transcript stops being a tab-local artifact. `PlaybackManifest.transcriptStatus` is real, and the player shows topics from `PlaybackManifest.topics`.
+- The `recording-history` database gains `transcripts` and `analyses` stores (v6); the upgrade stays presence-driven and idempotent. The analysis outbox is a separate small database, so background remains `recording-history`'s only writer.
+- The extension gains a `content_security_policy` key for the first time. It is visible to store review and should be expected to draw a question about `'wasm-unsafe-eval'`.
+- The package grows by the model and its runtime: ~118 MB of Q8 weights, ~16 MB of tokenizer, ~74 MB of ONNX Runtime WASM variants.
+- `skipLibCheck: true` is a **requirement** of `@huggingface/transformers`, whose own declarations fail to type-check; type-checking remains a third of a ten-second build, so `transpileOnly` stays off.
+- Captions are the only transcript source, so recordings without Meet captions have no topics — including every Russian and Ukrainian call, since Meet does not caption them usefully. The product needs Plan B for those; calibration does not.
+- Discourse cues and signals cover English, Russian and Ukrainian. A language outside the list degrades the boundary blend to 0.70/0.10/0.10/0.00 rather than failing. Scripts without word spacing (CJK) produce useless c-TF-IDF labels, though their topics are still found.
+- **Segment** embeddings and topic centroids are retained, not per-window embeddings: retrieval resolves topic → segment and re-embeds a segment's windows on demand. ARCH-08's reusable memory holds at segment grain, ~2.4 MB per three-hour recording.
+- The backend that produced an analysis is recorded but not compared: WebGPU and WASM are indistinguishable in throughput on the reference machine, and their topic agreement near the calibrated thresholds is unmeasured.
 - Nothing in this decision requires a GPU. Topic organization works on every hardware tier; only the sophistication of interpretation would change if a generative layer is added later.
 
 ## The wall-to-media projection is a span ledger (2026-09-11)
@@ -460,3 +471,63 @@ The 3.5 windows/sec floor is reframed as a **reference-machine tripwire**, expli
 ### And one correction to our own sequencing
 
 We had said real 4B calibration was blocked on Plan B's STT. That was wrong, and conflated two things. The *product* needs STT for Russian and Ukrainian recordings. **Calibration needs only real conversational text with hand-labelled boundaries** — obtainable from any offline transcription tool, converted to fixture `TranscriptSegment[]`, embedded once with the packaged Q8 encoder and replayed through the same offline grid. Plan B is a product decision, not a calibration prerequisite.
+
+## Amendment, 2026-09-17 — second review, and a platform fact we had wrong
+
+### An offscreen document has no `chrome.storage`
+
+Measured with CDP against the built extension: the offscreen document's `chrome` object has exactly `csi`, `loadTimes` and `runtime`. **The analysis outbox had never stored anything.** Every `put` threw and was caught as a warning, so HOST-03's durability existed only on paper — and the first durability E2E's "no outbox rows left behind" check passed because there never were any.
+
+It surfaced only because this round's own fix made it visible. Removing the durable row before releasing the held result is correct, but against a store that always throws it meant the result was **never** released, so every later update would have been refused indefinitely. The new post-completion E2E caught that before it shipped.
+
+The outbox now lives in IndexedDB, which belongs to the extension origin and is shared by the offscreen document, the service worker and extension pages. **`UploadJobStateOutbox` (ADR-0004, already on `main`) has the same defect**, as does anything else in the offscreen document that assumes `chrome.storage`; that is outside this ADR and is recorded here so it is not lost.
+
+### The lifecycle corrections
+
+- **Every reload path now honours analysis.** `onUpdateAvailable` and the deferred reload checked only capture and uploads, so an idle session reloaded straight over a running analysis. All of them now read one definition of critical work, a deferred reload is re-evaluated when analysis settles (which changes nothing in `RecordingSession`), and before applying an update the data plane is asked directly — background's own view is empty after a restart. The worker is kept alive during analysis too: Chrome installs a pending update by itself when the service worker unloads.
+- **`completed` holds the recording** until its result is stored or discarded, so a second run cannot start while the first result is still in flight.
+- **The deletion fence is the tombstone**, not service-worker memory. An absent history row is deliberately *not* treated as deleted: analysis is queued at `markStopping`, before finalize creates the row, so a short recording's result can legitimately arrive first.
+- **A result lost with its offscreen document is re-run.** A `completed` row replayed with nothing behind it is reported as a lost result instead of leaving background waiting for it forever.
+- **Provenance travels with the job** and returns with the result, with the backend stamped on as a diagnostic that staleness does not compare.
+- **`PIPELINE_VERSION` is 2**, for the tail-window and centroid corrections, which changed outputs without changing a threshold.
+- **A discarded run is not swept or analysed.** Found while tracing the fence: discard fires the same run-finished hook as stop, so the final transcript sweep raced the discard's removal and could re-create the transcript, and analysis then ran on it. The run now announces whether it is being kept.
+
+### The post-completion window, proven — **RUN, PASSED**
+
+`tests/e2e/analysis-durability.spec.ts`, second test. Killing the worker at the right instant turned out to be a race that could not be won reliably: a worker revived by the data plane's port stores and acknowledges a result in tens of milliseconds. So the window is **held open** instead. The control page keeps a `readwrite` transaction on `analyses` alive, IndexedDB queues background's write behind it, and the worker is killed while blocked — result delivered, not stored, not acknowledged.
+
+The assertion that matters is *how* the analysis comes back, because the lost-result path now recovers a dropped result by recomputing it:
+
+| | recovery after the kill | original analysis |
+| --- | --- | --- |
+| fixed | **545 ms** — redelivered | 27.7 s |
+| release-on-delivery re-inserted | **26.7 s** — recomputed; test fails | 27.6 s |
+
+The mutated run also proves the lost-result recovery end to end.
+
+## Superseded text
+
+Preserved verbatim, because the reasoning behind a replaced decision is part of the record.
+
+**5. Local inference runs in a dedicated Worker owned by the offscreen document, orchestrated by background.** Background stays the control plane and owns job state; the offscreen document is the data plane and outlives service-worker termination. Durability is a direct mirror of ADR-0004's upload jobs, because the failure mode is identical — long work in the data plane whose owner in the control plane can be killed at any moment: a per-job durable outbox in `chrome.storage.local`, released only on background ack, replayed on reconnect, and `OffscreenManager.closeForUpdate()` refusing while a job is active exactly as it already refuses for `activeUploadJobs`.
+
+---
+
+**6. Engine code is packaged; only weights are fetched, from an origin we control, and they cache outside ADR-0006's namespace.** Transformers.js and ONNX Runtime Web — including its `.wasm` binaries — ship inside the extension, with `ort.env.wasm.wasmPaths` pointed at `chrome.runtime.getURL(...)`; this is MV3's remote-code rule and Plan B §B2's stance. Weights are self-hosted and reach `host_permissions` through a build-time define, reusing the `telemetryHostPermission()` pattern. They cache in the **Cache API** — unused in this repo until now, which is the point: model bytes stay entirely out of the OPFS `staging/` ÷ `library/` namespace that ADR-0006 governs, so ADR-0006 needs no amendment. This requires adding `content_security_policy.extension_pages` with `'wasm-unsafe-eval'`, which is store-review-visible.
+
+---
+
+The plan fixes every value its source payload fixed (the `> 0.82` assignment threshold, `C_new = (n·C + x) / (n + 1)`, the 0.70/0.10/0.10/0.10 boundary blend, the 0.30/0.25/0.20/0.15/0.10 ranking, batch 32, 384 dimensions) and invents none that it did not.
+
+---
+
+**Consequences, as first written:**
+
+- The transcript stops being a tab-local artifact. `PlaybackManifest.transcriptStatus` becomes real, and the player rail that `src/recordings/player/PlayerView.ts` documents as "not built" gains a reason to exist.
+- The `recording-history` database gains stores and a version bump; the upgrade stays presence-driven and idempotent, as it already is.
+- The extension gains a `content_security_policy` key for the first time. This is visible to store review and should be expected to draw a question about `'wasm-unsafe-eval'`.
+- The extension gains its first substantial runtime dependency. `ts-loader` runs without `transpileOnly`, so full type-checking on every build will get slower; measure the delta rather than silently switching.
+- Captions are the only transcript source, so recordings without Meet captions have no topics. This is a coverage gap that Plan B closes, not a defect of this design.
+- The discourse-cue and discourse-signal term sets are English-only while the encoder is deliberately multilingual. On a non-English call those terms contribute nothing and the boundary blend degrades to 0.70/0.10/0.10/0.00 rather than failing. Known asymmetry, recorded here so it is not rediscovered as a bug.
+- Window embeddings are retained (~1.2 MB per recording) rather than discarded after clustering, because they are what makes cross-session retrieval cheap later. Discarding them would forfeit the "reusable computational memory" claim the architecture rests on.
+- Nothing in this decision requires a GPU. Topic organization works on every hardware tier; only the sophistication of interpretation would change if a generative layer is added later.

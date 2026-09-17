@@ -57,6 +57,8 @@ export class RecordingTranscriptCapture {
    * `targetTabId` — so asking it at sweep time finds nothing to sweep.
    */
   private armedTabId?: number;
+  /** The run most recently discarded; its late pushes are dropped. See {@link abandon}. */
+  private abandonedRunId?: number;
 
   constructor(private readonly deps: RecordingTranscriptCaptureDeps) {}
 
@@ -112,6 +114,25 @@ export class RecordingTranscriptCapture {
     await this.setCapture(tabId, null);
   }
 
+  /**
+   * Disarms the tab **without** sweeping it, and refuses anything the run
+   * still pushes — for a discarded recording.
+   *
+   * `finish` is wrong there: its sweep *appends* to the transcript, and it runs
+   * concurrently with the discard removing that transcript, so the words could
+   * land after the removal and re-create a transcript for a recording that no
+   * longer exists. Pushes already in flight can do the same, because the run's
+   * history id stays live until the session reaches idle; remembering the
+   * abandoned run is what stops them.
+   */
+  async abandon(): Promise<void> {
+    this.abandonedRunId = this.deps.activeRunId();
+    const tabId = this.armedTabId;
+    this.armedTabId = undefined;
+    if (tabId == null) return;
+    await this.setCapture(tabId, null);
+  }
+
   /** Drains everything the tab has committed and stores what maps. */
   private async sweep(historyId: string, tabId: number): Promise<void> {
     try {
@@ -134,6 +155,9 @@ export class RecordingTranscriptCapture {
     // A push that survived a stop/start boundary belongs to the run that ended,
     // whose words are already swept. Filing them under this run would corrupt it.
     if (runId !== this.deps.activeRunId()) return;
+    // The run was discarded; its history id is still live until idle, so the
+    // check above would otherwise let these through.
+    if (runId === this.abandonedRunId) return;
     await this.store(historyId, utterances);
   }
 

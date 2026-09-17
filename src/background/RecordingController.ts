@@ -240,7 +240,9 @@ export class RecordingController {
       return this.fail('Discard requested but no recording session is active');
     }
     const { historyId } = this.session.getSnapshot();
-    this.session.markStopping();
+    // Announced as discarded, so nothing queued off the end of the run — the
+    // transcript's final sweep, a topic analysis — is done for it.
+    this.session.markStopping(undefined, 'discarded');
     this.L.log('Discarding recording:', reason);
 
     // A discarded run leaves no recording behind, so its marks must not outlive

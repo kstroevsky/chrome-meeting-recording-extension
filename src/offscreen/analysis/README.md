@@ -36,12 +36,14 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 
 ## Key invariants and gotchas
 
+- **An offscreen document has no `chrome.storage`.** Its `chrome` object is `runtime` only — measured, not assumed. Anything here that needs durable state uses IndexedDB, which belongs to the extension origin and is shared with the service worker and extension pages. The outbox was first written against `chrome.storage.local` and silently stored nothing. (`UploadJobStateOutbox` in `../drive/` has the same defect.)
 - **The worker is told where its artifacts are; it never looks them up.** No `chrome.*` in `analysisWorker.ts` — the parent hands it `modelBaseUrl` and `wasmBaseUrl`. That keeps it testable outside an extension and keeps extension knowledge in the one place that has it.
 - **No network, enforced rather than assumed.** `env.allowRemoteModels = false`, so a wrong path fails loudly instead of quietly reaching a CDN. Stated precisely because the stronger claim is false: a worker still *has* `fetch`. `tests/e2e/analysis-embedding.spec.ts` proves it from outside by blocking all outbound HTTP(S) and still getting vectors.
 - **The backend probe happens *inside* each attempt.** A driver can advertise WebGPU, initialize, and then fail on its first inference. Probing after the loop would report that as a hard failure instead of falling through to WASM; probing inside it, with `dispose()` on failure, is what makes the ladder real.
 - **A downgrade is reported, never silent.** `EmbeddingWorkerClient` calls `reportWarning` when the backend that loaded is not the one requested — the house rule `WorkerStorageTarget` established. A machine without WebGPU is an ordinary tier (RES-06/08), but the user is about to wait considerably longer.
 - **Concurrency is 1 and not configurable.** Two analyses contend for one GPU and one model; the second finishes no sooner for having started, and a live capture alongside would feel both.
 - **The engine is released when the queue drains.** A loaded ONNX graph holds GPU buffers and analysis is a rare per-recording event, so one model load serves a whole queue and nothing stays resident between recordings.
+- **Acknowledgement removes the durable row first, then the held result.** If the row cannot be removed, the result stays, so a reconnect redelivers it rather than treating the row as a lost result and recomputing.
 - **A result is released on acknowledgement, never on delivery.** `deliver` is a `postMessage`: it resolving means the message left, not that anything was stored. The gap between the two is where a result would otherwise be lost.
 - **"Busy" includes a completed-but-unacknowledged result.** A job reports `completed` before its result is persisted, so a busy check watching only running jobs would let `closeForUpdate()` discard the only copy.
 - **Job state is durable; the result is not.** A completed analysis is held in memory until background acks, and recomputed if this document dies first. That is proportionate — unlike upload bytes, an analysis is derived data the transcript can always reproduce, and the reconnect window is seconds because the offscreen's own reconnect wakes the service worker.
@@ -62,6 +64,9 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 | Recording deleted mid-run | background's purge marker | job cancelled; a late result is acknowledged and discarded rather than stored | none |
 | Extension update mid-analysis | `closeForUpdate()` | **refuses** while a job is active (HOST-04) | update deferred, not the job |
 | Result arrives damaged | `fromWireAnalysis` rejects it | dropped *and still acked* — resending cannot fix it | recording reads as un-analysed, re-runnable |
+| Background dies after receiving a result, before storing it | no acknowledgement | result still held; redelivered on reconnect and stored (E2E: ~0.5 s) | none |
+| Offscreen document restarts while holding a result | replayed `completed` row with no result behind it | reported as a lost result; background acknowledges and re-runs from the transcript | one recomputation |
+| Outbox row cannot be removed on ack | IndexedDB error | row *and* result kept; next reconnect redelivers and acknowledges again | none |
 
 ## Files
 
@@ -72,7 +77,7 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 | `EmbeddingWorkerClient.ts` | Spawn, open handshake, promise-per-seq, the `unsupported` latch, batch splitting |
 | `engineConfig.ts` | Where the packaged artifacts are — the URLs only an extension context can form |
 | `AnalysisManager.ts` | The queue: one job at a time, progress, cancellation, engine lifetime, held results |
-| `AnalysisJobStateOutbox.ts` | Terminal job state in `chrome.storage.local` under `analysisJobState:`, one key per job |
+| `AnalysisJobStateOutbox.ts` | Terminal job state in IndexedDB (`analysis-job-outbox`), one key per job; the acknowledgement ordering |
 
 ## Configuration
 

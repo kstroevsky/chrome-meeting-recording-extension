@@ -65,6 +65,22 @@ describe('RecordingTranscriptCapture', () => {
     expect(sendToTab).toHaveBeenLastCalledWith(42, { type: 'SET_TRANSCRIPT_CAPTURE', active: false });
   });
 
+  describe('a discarded run', () => {
+    it('disarms the tab without sweeping it', async () => {
+      // `finish` appends whatever the tab still holds, concurrently with the
+      // discard removing the transcript — so a sweep here could re-create it.
+      const { capture, repository, sendToTab } = harness();
+      await capture.arm(42, RUN_ID);
+      sendToTab.mockClear();
+      sendToTab.mockResolvedValue({ utterances: [utterance(3_000, 'words nobody wants')] });
+
+      await capture.abandon();
+
+      expect(sendToTab).toHaveBeenCalledTimes(1);
+      expect(sendToTab).toHaveBeenCalledWith(42, { type: 'SET_TRANSCRIPT_CAPTURE', active: false });
+      expect(repository.rows.size).toBe(0);
+    });
+
     it('drops pushes the run still sends while its history id is live', async () => {
       // The history id survives until idle, so the run-id check alone would let
       // a push that was already in flight write the transcript back.

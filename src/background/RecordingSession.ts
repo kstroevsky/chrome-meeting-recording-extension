@@ -55,6 +55,9 @@ export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<v
  *   markIdle()           → desired=idle, observed=idle           ⇒ idle (carries the UploadSummary)
  *   fail()               → failed=true                           ⇒ failed (preserves run context)
  */
+/** Whether a finished run leaves a recording behind. */
+export type RunEnding = 'kept' | 'discarded';
+
 export class RecordingSession {
   /**
    * Recorded duration of the run that just ended, keyed by its history id.
@@ -84,8 +87,14 @@ export class RecordingSession {
     /**
      * Fired once when a run ends, with its final recorded duration — the seam
      * downstream data uses to seal anything the run left open (ADR-0005).
+     *
+     * `ending` says whether the run is being **kept**. It matters because this
+     * fires at `markStopping`, before anything is delivered, so a discarded run
+     * announces its end exactly like a kept one — and work queued off the back
+     * of it (a final transcript sweep, a topic analysis) would otherwise be done
+     * for a recording that is about to not exist.
      */
-    private readonly onRunFinished?: (historyId: string, durationMs: number) => void
+    private readonly onRunFinished?: (historyId: string, durationMs: number, ending: RunEnding) => void
   ) {}
 
   /** Hydrates the in-memory session from previously persisted snapshot data. */
@@ -137,13 +146,16 @@ export class RecordingSession {
   }
 
   /** Signals intent to stop (desired=idle); the phase derives to `stopping` while capture drains. */
-  markStopping(interruption?: RecordingInterruption['reason']): RecordingSessionSnapshot {
+  markStopping(
+    interruption?: RecordingInterruption['reason'],
+    ending: RunEnding = 'kept',
+  ): RecordingSessionSnapshot {
     const now = Date.now();
     const { historyId } = this.snapshot;
     // Captured before the timer is banked so the reported position is the one
     // the capture actually reached.
     const atMs = this.elapsedRecordedMs(now);
-    this.rememberFinishedRun(now);
+    this.rememberFinishedRun(now, ending);
     if (interruption && historyId) {
       this.pendingInterruption = { reason: interruption, atMs, historyId };
     }
@@ -404,7 +416,7 @@ export class RecordingSession {
    * Guarded on `historyId`, which is dropped at idle — so a repeated idle report
    * cannot re-announce a run that already finished.
    */
-  private rememberFinishedRun(now: number): void {
+  private rememberFinishedRun(now: number, ending: RunEnding = 'kept'): void {
     const { historyId } = this.snapshot;
     if (!historyId) return;
     // A run ends once. `markStopping` announces it — capture has stopped there,
@@ -413,7 +425,7 @@ export class RecordingSession {
     const alreadyAnnounced = this.lastRun?.historyId === historyId;
     const durationMs = alreadyAnnounced ? this.lastRun!.durationMs : this.elapsedRecordedMs(now);
     this.lastRun = { historyId, durationMs };
-    if (!alreadyAnnounced) this.onRunFinished?.(historyId, durationMs);
+    if (!alreadyAnnounced) this.onRunFinished?.(historyId, durationMs, ending);
   }
 
   /** Live recorded duration in ms: banked time plus the current running span. */

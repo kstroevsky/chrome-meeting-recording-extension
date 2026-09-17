@@ -789,7 +789,24 @@ describe('RecordingSession state machine', () => {
         expect(onRunFinished).toHaveBeenCalledWith(historyId, 3_000, 'kept');
       });
 
-        expect(onRunFinished).toHaveBeenCalledWith(historyId, 3_000);
+      it('says when the run being announced is a discard', () => {
+        // The hook fires before anything is delivered, so without this a
+        // discarded run is indistinguishable from a kept one — and the final
+        // transcript sweep and topic analysis would run for it.
+        const { onRunFinished, hooked } = withHook();
+        hooked.start(RUN_CONFIG, { targetTabId: 42 });
+        const historyId = hooked.getSnapshot().historyId!;
+        hooked.applyOffscreenPhase({ phase: 'recording' });
+
+        t += 2_000;
+        hooked.markStopping(undefined, 'discarded');
+
+        expect(onRunFinished).toHaveBeenCalledTimes(1);
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 2_000, 'discarded');
+
+        // The idle that follows does not re-announce it as kept.
+        hooked.applyOffscreenPhase({ phase: 'idle' });
+        expect(onRunFinished).toHaveBeenCalledTimes(1);
       });
 
       it('announces at markStopping, where capture has already ended', () => {
