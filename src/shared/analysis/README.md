@@ -58,7 +58,7 @@ What ships is `CANDIDATE_ANALYSIS_CONFIG`, named so it cannot be mistaken for se
 | `minSegmentMs` 15 s | candidate default |
 | assignment 0.93, merge 0.95, period 12 | candidate region |
 | `longPauseMs` 3 s | candidate, **no measured effect** — 3 s, 5 s and 8 s were identical across the whole grid |
-| MMR lambda | not calibrated |
+| MMR lambda | **outside the config** — `selectRepresentative` has no caller (D-20) |
 | `PAYLOAD_ASSIGNMENT_THRESHOLD` (0.82) | **retained for provenance, not used** |
 
 4B's corpus is synthetic. It underrepresents interruptions, callbacks, weak transitions and mixed-topic turns — exactly the cases that decide a threshold. **None of this is validated against real conversation yet.**
@@ -66,6 +66,7 @@ What ships is `CANDIDATE_ANALYSIS_CONFIG`, named so it cannot be mistaken for se
 ## Key invariants & gotchas
 
 - **`0.82` is unusable with this encoder.** CLU-04 states it, and 4B measured every genuinely different topic pair above it — 27 of 27, lowest 0.861 — so `cosine > 0.82` means "always join" and every conversation collapses to one cluster. E5-family models compress cosine into a narrow high band. The constant is kept, renamed, and unused.
+- **Adjacent windows never share an utterance at the calibrated stride** — including the tail. A trailing remainder gets a *short* window; anchoring a full-size one at the end overlaps its predecessor and reintroduces the smearing 4B eliminated (D-22).
 - **Boundary resolution is quantized to window boundaries.** Window 4 / stride 4 satisfies the disjointness invariant by construction; the cost is that a boundary can only land on a 4-utterance edge. A higher-resolution detector remains open.
 - **Timecodes are segment-level, never word-level.** Offsets are inherited from `TranscriptSegment` and bound media that genuinely exists, but a caption's text is not word-aligned to its own timecodes. Nothing here may locate an individual word from a segment's offsets.
 - **E5 needs its instruction prefix.** `toEncoderInput` applies `"query: "` and is idempotent. Embedding raw text produces vectors that are subtly and unrecoverably wrong.
@@ -73,6 +74,7 @@ What ships is `CANDIDATE_ANALYSIS_CONFIG`, named so it cannot be mistaken for se
 - **Discourse cues cover English, Russian and Ukrainian.** A language absent from the list contributes nothing and the blend degrades to `0.70/0.10/0.10/0.00` rather than failing. The matcher is Unicode-aware: an ASCII-only word-boundary class treats every Cyrillic letter as a break, so `кстатиь` would match the cue `кстати`.
 - **Tokenization assumes spaces.** `tokenize` splits on non-letter/non-number, which is right for Latin and Cyrillic and wrong for CJK: Japanese or Chinese text becomes a single enormous "term", so c-TF-IDF labels for such a call would be useless. The *embeddings* are unaffected — the encoder is multilingual and segmentation and clustering work normally — so topics are still found and seekable; only their names degrade. A segmenter would be the fix, and it is not in scope.
 - **A label never contains a term every topic shares.** c-TF-IDF ranks a ubiquitous term last but cannot exclude it, so a four-slot list can still reach it. Terms with `df === topicCount` are dropped at label selection, outside the scoring.
+- **Importance is measured against the cluster centroid, not a segment.** IMP-02 is explicit, and the distinction only bites for recurrent topics — ranking against the first segment scores a topic by how much it resembles its own opening, penalising exactly the later stretches that global topics exist to gather.
 - **Importance for a *topic* is our definition, not the payload's.** IMP-03 defines importance for passages only. A topic's score is the **mean** over its passages — averaging rather than summing, so a long dull stretch cannot outrank a short consequential one on length alone.
 
 ## Files
@@ -85,7 +87,7 @@ What ships is `CANDIDATE_ANALYSIS_CONFIG`, named so it cannot be mistaken for se
 | `segments.ts` | Peaks → temporal segments; merges runs shorter than `minSegmentMs` |
 | `clusters.ts` | Online micro-clusters, centroid update, the periodic merge sweep |
 | `keywords.ts` | c-TF-IDF scoring and label selection |
-| `importance.ts` | The 0.30/0.25/0.20/0.15/0.10 ranking and MMR |
+| `importance.ts` | The 0.30/0.25/0.20/0.15/0.10 ranking, and MMR awaiting a consumer (D-20) |
 | `vector.ts` | `cosine`, centroid arithmetic |
 | `analyzeTranscript.ts` | The whole pipeline, with the encoder injected |
 | `encoderInput.ts` | The E5 instruction prefix |

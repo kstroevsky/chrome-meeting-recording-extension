@@ -123,7 +123,7 @@ topicChange = 0.70 × semanticChange
 
 `longPause` comes free from the gap between `tEndMs` and the next `tStartMs`; `speakerPatternChange` from the `speaker` field; `discourseCue` from the fixed set `"anyway"`, `"by the way"`, `"next question"`, `"moving on"`, `"another thing"`, `"speaking of..."`. Honest gap worth flagging now: those cues are English-only while the encoder is deliberately multilingual, so on a non-English call that term contributes nothing and the blend degrades to 0.70/0.10/0.10/0.00 rather than failing. It is a known asymmetry, not a bug to discover later.
 
-**Cluster online (CLU).** BERTopic is explicitly not run here — `embeddings → UMAP → HDBSCAN` is fine offline and wrong for a browser extension, and neither is necessary for this problem (CLU-01). Instead each cluster is a centroid `C` and a count `n`. A new segment embedding `x` joins the cluster when `cosine(x, C) > 0.82`, otherwise it opens a potential new cluster; the centroid updates as `C_new = (n·C + x) / (n + 1)`, which is free. Closely related micro-clusters are then merged periodically by cosine similarity between centroids — the operation that turns *Redis incident #1*, *Redis incident #2* and *Redis config* into one **Redis**. At 50 topics a full merge sweep is 50 × 50 = 2,500 comparisons, which is nothing.
+**Cluster online (CLU).** BERTopic is explicitly not run here — `embeddings → UMAP → HDBSCAN` is fine offline and wrong for a browser extension, and neither is necessary for this problem (CLU-01). Instead each cluster is a centroid `C` and a count `n`. A new segment embedding `x` joins the cluster when `cosine(x, C)` exceeds the calibrated `assignmentThreshold` (D-16: the payload's 0.82 was illustrative and is measured inoperative for this encoder), otherwise it opens a potential new cluster; the centroid updates as `C_new = (n·C + x) / (n + 1)`, which is free. Closely related micro-clusters are then merged periodically by cosine similarity between centroids — the operation that turns *Redis incident #1*, *Redis incident #2* and *Redis config* into one **Redis**. At 50 topics a full merge sweep is 50 × 50 = 2,500 comparisons, which is nothing.
 
 **Rank (IMP).** Per topic, take the centroid over its segment embeddings and score passages:
 
@@ -135,7 +135,7 @@ importance = 0.30 × similarity_to_topic
            + 0.10 × discourse_signal
 ```
 
-`discourse_signal` fires on the fixed set `"I think we should..."`, `"Let's do..."`, `"The reason is..."`, `"We discovered..."`, `"The problem is..."`, `"It turned out..."`, `"I'll..."`, `"We agreed..."` — same English-only caveat. MMR then removes near-duplicate passages. All of it is vector arithmetic on CPU.
+`discourse_signal` fires on the fixed set `"I think we should..."`, `"Let's do..."`, `"The reason is..."`, `"We discovered..."`, `"The problem is..."`, `"It turned out..."`, `"I'll..."`, `"We agreed..."` — extended to Russian and Ukrainian by D-18. MMR is implemented and would remove near-duplicate passages, but is **not called by the shipping pipeline** — representative excerpts have no surface yet, so IMP-05 defers (D-20). All of it is vector arithmetic on CPU.
 
 **Label (c-TF-IDF).** Class-based TF-IDF over each topic's pooled text produces the keyword sets that name topics in the UI. With generation deferred this is the only labelling mechanism, which raises its bar: it is the thing the user reads.
 
@@ -145,7 +145,7 @@ Stage boundaries are the test seams. §5's five stages get unit coverage against
 
 ## 6. Persistence of results
 
-One `analyses` store keyed by `recordingId`, holding the segments, the topics, the cluster centroids and the window embeddings, plus job state (RT-06). Embeddings are the only bulky part — ~2.4 MB per three-hour recording as plain number arrays (D-19: neither a `Float32Array` nor a raw `ArrayBuffer` survives the structured clone in this project's test harness, so a packed representation would be one no unit test could verify; the pipeline still works in `Float32Array` in memory and converts at the storage boundary). They are kept rather than discarded because they are what makes the deferred retrieval index (QRY-01) and the deferred cross-session query (QRY-02) cheap later: this is the payload's "reusable computational memory" claim (ARCH-08), and discarding embeddings would forfeit it.
+One `analyses` store keyed by `recordingId`, holding the segments with **their** embeddings, the topics with their centroids, and job state (RT-06). **Not** the per-window embeddings (D-21). Embeddings are the only bulky part — ~2.4 MB per three-hour recording as plain number arrays (D-19: neither a `Float32Array` nor a raw `ArrayBuffer` survives the structured clone in this project's test harness, so a packed representation would be one no unit test could verify; the pipeline still works in `Float32Array` in memory and converts at the storage boundary). They are kept rather than discarded because they are what makes the deferred retrieval index (QRY-01) and the deferred cross-session query (QRY-02) cheap later: this is the payload's "reusable computational memory" claim (ARCH-08), and discarding embeddings would forfeit it. **At segment granularity, not window granularity** (D-21): a query resolves to a topic and then to a segment, and passage-level ranking inside that segment re-embeds its handful of windows on demand — one batch. That keeps ARCH-08 at a coarser grain for a fraction of the bytes, and the cost is one extra encode on a query path that does not exist yet.
 
 Results are computed once and never recomputed on reopen.
 
@@ -197,7 +197,7 @@ The payload fixes a lot exactly — `C_new = (nC + x)/(n + 1)`, the 0.70/0.10/0.
 | `speakerPatternChange` definition | **4B** | SEG-05 names the term only; currently a provisional Jaccard distance |
 | Micro-cluster **assignment** and **merge** thresholds, and "periodically" | **4B** | Calibrated jointly (D-16). Candidate region: assignment 0.93, merge 0.95, period 12 — **not frozen**, pending real conversations |
 | Definitions of `novelty`, `keyword_distinctiveness`, `recurrence` | **4B** | IMP-03 fixes the weights, not the terms; all three are provisional today |
-| MMR lambda | **4B** | IMP-05 names MMR only |
+| ~~MMR lambda~~ | — | **Removed from the contract (D-20):** `selectRepresentative` has no caller, so the value changed the provenance hash without changing any output. Held as `UNCALIBRATED_MMR_LAMBDA` outside `AnalysisConfig` until excerpt selection acquires a surface |
 | Minimum segment length | **4B** | Unstated; needed to stop 20-second topics |
 
 ---
@@ -229,7 +229,7 @@ Steps 5 and 6 are large and mechanical enough to be worth handing to Codex with 
 ## 11. Verification
 
 1. `npm run typecheck` and `npm run test:unit` green throughout; new suites co-located under `src/` per house practice.
-2. **Stage tests without a model:** fixture transcript + deterministic stub encoder proves boundary blending at the exact 0.70/0.10/0.10/0.10 weights, the `> 0.82` assignment rule, `C_new = (n·C + x)/(n + 1)`, the 0.30/0.25/0.20/0.15/0.10 ranking, and MMR de-duplication.
+2. **Stage tests without a model:** fixture transcript + deterministic stub encoder proves boundary blending at the exact 0.70/0.10/0.10/0.10 weights, the calibrated assignment rule (D-16), `C_new = (n·C + x)/(n + 1)`, the 0.30/0.25/0.20/0.15/0.10 ranking, MMR de-duplication as a unit (though the pipeline does not call it — D-20), and the **disjointness invariant**: adjacent windows must never share an utterance at the calibrated stride.
 3. **The Berlin/Redis/Hiring case (MODEL-06):** a fixture that goes Berlin → Redis → Hiring → Redis → Berlin must yield five `ConversationSegment`s and three `Topic`s, with segments 2 and 4 on the same topic. This is the single test that proves the temporal/global split actually works.
 4. **Real recording, end to end:** record a Meet call with captions on, stop, and confirm topics appear on the player with keyword labels, that clicking one seeks to the right place, and that reopening reads persisted results without recomputing.
 5. ~~**Durability:** kill the service worker mid-analysis; the job completes in offscreen, replays its terminal state on reconnect, and the sealed recording is never touched. Attempt an extension update mid-analysis; `closeForUpdate()` refuses.~~ **Closed 2026-09-15** — `tests/e2e/analysis-durability.spec.ts` proves the first half against a real MV3 worker (three green runs). The `closeForUpdate()` refusal is covered by unit tests in `OffscreenManager.test.ts` rather than E2E; driving a real extension update mid-analysis has no harness seam.
@@ -321,7 +321,7 @@ Every normative signal in the source payload maps to exactly one ID. `active` = 
 - **IMP-02** `active` — Per topic, compute the centroid over its segment embeddings (`e1 … e30` in the worked example).
 - **IMP-03** `active` — Passage ranking, exact weights: `importance = 0.30 * similarity_to_topic + 0.25 * novelty + 0.20 * keyword_distinctiveness + 0.15 * recurrence + 0.10 * discourse_signal`. Term definitions are open contracts (§9).
 - **IMP-04** `active` *(extended by D-18)* — Discourse signals. The payload's exact English set — `"I think we should..."`, `"Let's do..."`, `"The reason is..."`, `"We discovered..."`, `"The problem is..."`, `"It turned out..."`, `"I'll..."`, `"We agreed..."` — is unchanged, with Russian and Ukrainian equivalents added beside it, for the reason given on SEG-06.
-- **IMP-05** `active` — **MMR** eliminates duplicates. Lambda is an open contract (§9).
+- **IMP-05** `deferred` *(D-20)* — **MMR** eliminates duplicates. Implemented and unit-tested as `selectRepresentative`, but not called by the shipping pipeline: nothing consumes representative passages yet. Its lambda is deliberately outside `AnalysisConfig` so it cannot invalidate stored analyses without changing them.
 - **IMP-06** `active` — All of this is basic vector arithmetic; browser **CPU** is more than sufficient.
 - **IMP-07** `deferred` — The discourse heuristics could **eventually** be replaced by a **tiny classifier, not an LLM**.
 
@@ -457,13 +457,19 @@ Closed-world. Every requirement not named here is `NO_CHANGE` from the source pa
 | D-11 | AMEND | §3 prose only; TX-04 strengthened | Author review (2026-09-11). The stop is the same boundary as a pause: Meet refines a caption after the recorder stops, so `stop()` drains the tab at `markStopping()` and the overrun rule becomes uniform — any range ending past its span is refused, never truncated. Records the invariant that the final drain and sweep must not admit refinements representing speech first observed after the cutoff, and states precisely that a segment is temporally anchored to real media but its text is **not** a word-level alignment — which topic analysis must not assume. |
 | D-10 | AMEND | §3 prose only; TX-04 strengthened | Author review (2026-09-11). Pause-boundary semantics: the caption buffer is flushed when a run pauses, so an utterance closes at the boundary and the next opens after the resume. A range that still straddles a pause is refused rather than truncated — truncating would attribute post-resume speech to pre-pause media, and nothing in a caption says where its text divides. A range overrunning its span because the *recording ended* still truncates, since nothing after that instant was recorded anywhere. Confirms `epoch` as the run identifier and no `utteranceId`: push and sweep share one projection path and stored segments are append-only, so content identity is deterministic. |
 | D-09 | AMEND | §3 prose only; TX-04 strengthened | Author review (2026-09-11), plus two defects it surfaced. The wall→media projection is a **span ledger** on `RecordingSession`, not a single origin: the previous reading answered `undefined` for every instant once a run ended, so the end-of-run sweep stored nothing, and `markIdle` additionally dropped the tab to sweep. Adds: run-scoped fencing on every push, a re-arm handshake for a content script that loads mid-run, a buffer flush on arming, and truncation (never clamping) of an utterance that outlives its recorded span. |
+| D-20 | DEFER | IMP-05; amends §5, §9, §11.2 | Review finding (2026-09-15): MMR is implemented and unit-tested, but `analyzeTranscript` never calls `selectRepresentative` and no representatives are persisted, so `mmrLambda` changed `configHash` without changing any output — a config edit would have invalidated every stored analysis and recomputed them all to identical results. `ImportanceConfig` leaves `AnalysisConfig`; the value is held as `UNCALIBRATED_MMR_LAMBDA` until excerpt selection has a consumer. Integrating representatives is a surface decision, not a pipeline one. |
+| D-21 | AMEND | §6 prose; QRY-01 | Review finding (2026-09-15): §6 claimed the *window* embeddings are retained, while `StoredAnalysis` retains segment embeddings and topic centroids. The implementation is the better design and the document was wrong. Retrieval granularity is therefore the segment: a query resolves topic → segment, and passage ranking inside a segment re-embeds its windows on demand (one batch). ARCH-08 holds at a coarser grain, for a fraction of the bytes. |
+| D-22 | AMEND | §5 prose (SEG); adds no requirement | Review finding (2026-09-15): the tail window was anchored at `length - windowUtterances`, so a remainder shorter than the window overlapped its predecessor — at the calibrated 4/4 over ten turns, `[0,4) [4,8) [6,10)`. That is the smearing condition D-16's boundary-context correction exists to prevent, reintroduced by arithmetic. The tail now covers exactly the remainder and is short when the remainder is; `windows.ts` documentation no longer describes overlap as desirable. |
+| D-23 | AMEND | IMP-02 prose | Review finding (2026-09-15): topic importance ranked passages against the **first segment's embedding** rather than the cluster centroid IMP-02 requires, scoring a topic by how much it resembles its own opening. Worst for recurrent topics, which are the reason global topics exist. Corrected, and pinned by an order-independence test. |
 
 ### Ledger counts (r1)
 
 | Status | Count |
 |---|---|
-| active | 77 |
-| deferred | 17 |
+| active | 76 |
+| deferred | 18 |
 | superseded | 10 |
 | evidence | 7 |
 | **total** | **111** |
+
+IMP-05 moved `active` → `deferred` under D-20; the total is unchanged.

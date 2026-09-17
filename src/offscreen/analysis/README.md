@@ -42,6 +42,8 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 - **A downgrade is reported, never silent.** `EmbeddingWorkerClient` calls `reportWarning` when the backend that loaded is not the one requested — the house rule `WorkerStorageTarget` established. A machine without WebGPU is an ordinary tier (RES-06/08), but the user is about to wait considerably longer.
 - **Concurrency is 1 and not configurable.** Two analyses contend for one GPU and one model; the second finishes no sooner for having started, and a live capture alongside would feel both.
 - **The engine is released when the queue drains.** A loaded ONNX graph holds GPU buffers and analysis is a rare per-recording event, so one model load serves a whole queue and nothing stays resident between recordings.
+- **A result is released on acknowledgement, never on delivery.** `deliver` is a `postMessage`: it resolving means the message left, not that anything was stored. The gap between the two is where a result would otherwise be lost.
+- **"Busy" includes a completed-but-unacknowledged result.** A job reports `completed` before its result is persisted, so a busy check watching only running jobs would let `closeForUpdate()` discard the only copy.
 - **Job state is durable; the result is not.** A completed analysis is held in memory until background acks, and recomputed if this document dies first. That is proportionate — unlike upload bytes, an analysis is derived data the transcript can always reproduce, and the reconnect window is seconds because the offscreen's own reconnect wakes the service worker.
 - **Vector width is checked every batch.** A width change mid-session would silently make stored vectors incomparable, so a mismatched reply is refused rather than let through.
 - **The offscreen→background port is JSON, not a structured clone.** A `Float32Array` sent over it arrives as `{"0": …}`. Results cross as plain arrays via `toWireAnalysis`.
@@ -56,6 +58,8 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 | Worker wedges silently | per-request timeout | request rejects, job reaches a terminal state | one job; without this the outbox entry would never settle |
 | Background dies mid-analysis | port disconnect | job completes anyway; state replays from the outbox and the result is re-offered on reconnect | none |
 | Background never acks | ack absent | outbox entry and held result both persist; re-delivered on every reconnect | none |
+| Job ends without a result | `failed` / `canceled` / `unsupported` | background acknowledges immediately — nothing is coming, and the outbox drains only on acknowledgement | none |
+| Recording deleted mid-run | background's purge marker | job cancelled; a late result is acknowledged and discarded rather than stored | none |
 | Extension update mid-analysis | `closeForUpdate()` | **refuses** while a job is active (HOST-04) | update deferred, not the job |
 | Result arrives damaged | `fromWireAnalysis` rejects it | dropped *and still acked* — resending cannot fix it | recording reads as un-analysed, re-runnable |
 

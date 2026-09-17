@@ -1,6 +1,8 @@
 # ADR-0007 — Topics are derived from a persisted transcript, and local inference runs in the data plane
 
-- **Status:** Accepted — 4A ran and passed; its frozen values are in "4A closed" below. 4B calibration has not run.
+- **Status:** Accepted — 4A ran and passed; its frozen values are in "4A closed" below. 4B has run against a *synthetic* corpus only: every semantic value it produced is a candidate, not a contract, until validated against hand-labelled real conversation.
+
+> **Reading this document.** Sections below are in the order they were written, so earlier ones describe a world where decisions were still open and say so in the present tense. Where an earlier section's status language contradicts this header — "stays `Proposed` until…", "still open for 4A" — **the header wins**: those conditions were subsequently met and are recorded in the dated amendments at the end. The historical text is kept rather than rewritten because the reasoning that led to a decision is worth more than a tidy narrative, and `lossless-plan-evolution` treats silent rewriting of a superseded rationale as a loss.
 - **Date:** 2026-09-11
 
 ## Context
@@ -35,7 +37,7 @@ Four questions had to be answered before any code.
 
 ## Validation
 
-This ADR rests on two platform assumptions. **Both must run and pass before anything is built on them**, and this ADR stays `Proposed` until they do.
+This ADR rests on two platform assumptions. **Both must run and pass before anything is built on them**, and this ADR stays `Proposed` until they do. *(Historical: both ran; see "4A closed" and the 4B sections below. The ADR is `Accepted`.)*
 
 1. **Packaged inference under MV3 CSP — RUN, PASSED.** See the 4A amendment below: both backends produce 384-dimension normalized vectors from packaged resources with all outbound HTTP(S) blocked. The weight-fetch half of this assumption was superseded before it ran — the artifact amendment packages the model instead.
 
@@ -171,7 +173,7 @@ WASM beating WebGPU at two sentences is expected — per-call GPU overhead has n
 
 **Threading.** `numThreads = 1`. Threaded ORT needs `SharedArrayBuffer` and therefore cross-origin isolation, which an extension *can* opt into with `cross_origin_embedder_policy` / `cross_origin_opener_policy`. This extension does not, so the WASM fallback is single-threaded by choice. If WASM throughput proves unacceptable at scale, COOP/COEP is its own spike rather than a rider on this one.
 
-**Still open for 4A:** throughput, peak memory and the WebGPU/WASM delta at the 300–800-window workload; the default packaged dtype (Q8 vs FP16); and which ORT variants can be dropped. ADR-0007 stays `Proposed` until those are recorded here.
+**Still open for 4A:** throughput, peak memory and the WebGPU/WASM delta at the 300–800-window workload; the default packaged dtype (Q8 vs FP16); and which ORT variants can be dropped. ADR-0007 stays `Proposed` until those are recorded here. *(Historical: all recorded below. Q8 was chosen, all four ORT variants ship, and the WebGPU/WASM delta turned out to be no delta at all on the reference machine.)*
 
 ## 4A throughput at realistic scale — RUN (2026-09-12)
 
@@ -411,3 +413,50 @@ A recording is started, ~400 utterances are seeded through `TRANSCRIPT_UTTERANCE
 2. *Did it actually die?* `Target.getTargets` is polled until no `service_worker` target remains. The obvious choice — Playwright's `context.on('serviceworker')` — is **wrong here**: Chrome reuses the same target id when an extension worker restarts, so the event never fires a second time. That guard reported zero restarts on a run where the worker had genuinely been terminated and had come back, which is exactly the false negative worth recording.
 
 What this does not cover: an extension update arriving mid-analysis. `closeForUpdate()`'s refusal is unit-tested from both directions in `OffscreenManager.test.ts`; there is no harness seam for driving a real update, and inventing one for a single assertion was not worth it.
+
+
+## Amendment, 2026-09-15 — review findings
+
+An external review of the branch found eight defects. All are fixed; three were durability bugs that the existing tests could not have caught, and two were semantic errors in the pipeline itself.
+
+### The result was released before it was safe (P0)
+
+`AnalysisManager.redeliver()` deleted a held result as soon as `deliver()` resolved. In production `deliver()` is a `postMessage`: it resolves when the message *left*, which says nothing about whether the background persisted anything. The interval between delivery and persistence was therefore unprotected — a control plane that died in it, or an IndexedDB write that failed transiently, lost the only copy while the durable state row still claimed a completed analysis.
+
+`acknowledge()` is now the single release point, and it is called only once the row is on disk (or is known to be unstorable). The durability E2E did not catch this because it kills the worker *during embedding*, not in the much narrower post-computation window.
+
+### Terminal failures leaked outbox rows forever (P0)
+
+The outbox is drained by acknowledgement and by nothing else, but only `completed` reached an acknowledgement — through `handleResult`. `failed`, `canceled` and `unsupported` passed through `handleJobState`, which acknowledged nothing, so their `analysisJobState:` keys were replayed on every reconnect for the life of the profile. Those three are now acknowledged immediately; only `completed` waits.
+
+### An update could tear down a completed-but-unsaved analysis (P0)
+
+`OffscreenManager` cleared its busy flag on any terminal state, and `AnalysisManager.hasActiveJobs()` ignored held results. Since `completed` is reported *before* delivery and persistence, `closeForUpdate()` could permit an update while the only copy of an analysis was still in offscreen memory. Busy now means "queued, running, **or holding an unacknowledged result**", on both sides.
+
+### Topic importance ranked against the wrong vector (P0/P1)
+
+`topicImportance` ranked passages against `segments[0].embedding` rather than the cluster centroid IMP-02 requires — scoring a topic by how much it resembles its own opening. It is worst exactly where global topics earn their keep: for a recurrent subject, the later stretches were penalised for differing from the first, which is the thing a centroid exists to average away.
+
+Pinned by an **order-independence** test, which took three attempts to make discriminating. Symmetric fixtures pass with the bug present, because the mean similarity to either endpoint of a two-stretch topic is identical; the working fixture needs stretches that are both **unequal in size** and far enough apart to move the 0.30 term. With the bug it reads 0.5168 one way and 0.4817 the other.
+
+### The tail window reintroduced the overlap 4B had just eliminated (P1)
+
+The trailing window was anchored at `length - windowUtterances`, so any remainder shorter than a window overlapped its predecessor. At the calibrated 4/4 over ten turns: `[0,4) [4,8) [6,10)` — two shared utterances between the last pair, which is precisely the smearing that cost the earlier build its boundary signal. The tail now covers exactly the remainder and is short when the remainder is. A regression test asserts disjointness and gaplessness at every remainder from 1 to 40 turns.
+
+### Provenance described the wrong moment (P1)
+
+`save()` stamped `currentProvenance()` at persistence time. Provenance is supposed to describe the run that produced the vectors; the two coincide only while nothing changes mid-run, which is exactly when staleness stops mattering. Provenance is now captured at **enqueue**, carried with the job, and persisted as-is. A job whose carried provenance is lost to a worker restart falls back to current conditions — the same guess the old code always made.
+
+### Deleting a recording leaked its analysis (P1)
+
+The removal callback dropped notations and transcripts but not analyses, which are the largest rows in the database. `purge()` now marks the recording, cancels a run still in flight, and removes what is stored; a result that arrives afterwards is acknowledged and discarded rather than written, because a row for a deleted recording would never be cleaned up again.
+
+### Two claims withdrawn
+
+The fallback warning said the other backend "produces the same topics". Unverified: the backends agree on vectors to within floating-point noise, but 0.93 and 0.95 are *decision boundaries*, and a pair sitting within noise of one can land on either side and change the partition. It now reports the backend and promises nothing. Making that promise needs a WebGPU-vs-WASM agreement run over the calibration corpus.
+
+The 3.5 windows/sec floor is reframed as a **reference-machine tripwire**, explicitly not a statement about supported hardware. An older laptop at 2 windows/sec is slow, not broken — analysis is a background job nobody waits on, and RES-08 claims topic organization works on every tier, not that it works at a given speed.
+
+### And one correction to our own sequencing
+
+We had said real 4B calibration was blocked on Plan B's STT. That was wrong, and conflated two things. The *product* needs STT for Russian and Ukrainian recordings. **Calibration needs only real conversational text with hand-labelled boundaries** — obtainable from any offline transcription tool, converted to fixture `TranscriptSegment[]`, embedded once with the packaged Q8 encoder and replayed through the same offline grid. Plan B is a product decision, not a calibration prerequisite.
