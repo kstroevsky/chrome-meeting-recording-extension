@@ -1,6 +1,9 @@
 import { IDBFactory } from 'fake-indexeddb';
 import {
   acknowledgeAnalysisJob,
+  sealAnalysisJob,
+  sealThenDeliverAnalysis,
+  SEAL_ATTEMPTS,
   AnalysisJobStateOutbox,
   createIndexedDbAnalysisJobStateArea,
 } from '../AnalysisJobStateOutbox';
@@ -177,5 +180,67 @@ describe('acknowledgeAnalysisJob', () => {
     expect(released).toBe(false);
     expect(acknowledge).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe('sealing a terminal state', () => {
+  /** No real waiting; the point is that the attempts happen, not how long they take. */
+  const delay = async () => {};
+
+  it('drives its own retries without needing a reconnect', async () => {
+    // The bug this pins: attempts used to be counted across call sites, one per
+    // report and one per delivery, with the third left to a later reconnect. On
+    // a healthy, continuously connected port that third attempt never came — so
+    // the result was held forever and the runtime stayed busy behind it.
+    let calls = 0;
+    const outbox = {
+      put: async () => {
+        calls += 1;
+        if (calls < 3) throw new Error('disk I/O error');
+      },
+    };
+
+    await expect(sealAnalysisJob(outbox, JOB, { delay })).resolves.toBe(true);
+    expect(calls).toBe(3);
+  });
+
+  it('gives up after its bound, rather than retrying a broken store forever', async () => {
+    let calls = 0;
+    const outbox = { put: async () => { calls += 1; throw new Error('disk I/O error'); } };
+
+    await expect(sealAnalysisJob(outbox, JOB, { delay })).resolves.toBe(false);
+    expect(calls).toBe(SEAL_ATTEMPTS);
+  });
+
+  it('waits between attempts, and not after the last one', async () => {
+    const waits: number[] = [];
+    const outbox = { put: async () => { throw new Error('nope'); } };
+
+    await sealAnalysisJob(outbox, JOB, { delay: async (ms) => { waits.push(ms); } });
+    expect(waits).toHaveLength(SEAL_ATTEMPTS - 1);
+    expect(waits[1]).toBeGreaterThan(waits[0]);
+  });
+
+  it('delivers once the state is durable', async () => {
+    const delivered: string[] = [];
+    const outbox = { put: async () => {} };
+
+    await expect(sealThenDeliverAnalysis(outbox, JOB, () => delivered.push(JOB.id), { delay }))
+      .resolves.toBe(true);
+    expect(delivered).toEqual([JOB.id]);
+  });
+
+  it('delivers anyway when the state never seals, and says so', async () => {
+    // The documented degraded path: availability over crash durability, because
+    // holding would keep the runtime busy and block every update on a store
+    // that is not going to recover. The analysis is derived and recomputable.
+    const delivered: string[] = [];
+    const warn = jest.fn();
+    const outbox = { put: async () => { throw new Error('disk I/O error'); } };
+
+    await expect(sealThenDeliverAnalysis(outbox, JOB, () => delivered.push(JOB.id), { delay, warn }))
+      .resolves.toBe(false);
+    expect(delivered).toEqual([JOB.id]);
+    expect(warn.mock.calls.some(([message]) => String(message).includes('without a durable terminal state'))).toBe(true);
   });
 });

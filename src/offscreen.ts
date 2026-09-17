@@ -30,7 +30,12 @@ import { createChromeUploadJobStateOutbox } from './offscreen/drive/UploadJobSta
 import { AnalysisManager } from './offscreen/analysis/AnalysisManager';
 import { EmbeddingWorkerClient } from './offscreen/analysis/EmbeddingWorkerClient';
 import { analysisEngineConfig, spawnAnalysisWorker } from './offscreen/analysis/engineConfig';
-import { acknowledgeAnalysisJob, createAnalysisJobStateOutbox } from './offscreen/analysis/AnalysisJobStateOutbox';
+import {
+  acknowledgeAnalysisJob,
+  createAnalysisJobStateOutbox,
+  sealAnalysisJob,
+  sealThenDeliverAnalysis,
+} from './offscreen/analysis/AnalysisJobStateOutbox';
 import { toWireAnalysis } from './shared/analysis/storedAnalysis';
 import { isTerminalAnalysisJob } from './shared/analysis/job';
 import { renameDriveResources } from './offscreen/drive/DriveMetadataRenamer';
@@ -215,7 +220,6 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     acknowledgeAnalysisState: async (jobId) => {
       if (await acknowledgeAnalysisJob(analysisJobStateOutbox, analysisManager, jobId, L.warn)) {
         sealedAnalysisJobs.delete(jobId);
-        sealAttempts.delete(jobId);
       }
     },
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
@@ -369,40 +373,19 @@ const analysisManager = new AnalysisManager({
   isUnsupported: () => EmbeddingWorkerClient.unsupported,
 });
 
-/**
- * Job ids whose terminal state is on disk, and how often sealing one has
- * failed. A result is not offered until its state is sealed — the invariant is
- * "durable before delivered", and delivering first would let background
- * acknowledge and release a result whose completion nothing recorded.
- */
+/** Job ids whose terminal state is already on disk, so it is written once. */
 const sealedAnalysisJobs = new Set<string>();
-const sealAttempts = new Map<string, number>();
-/** After this many failures the result is delivered unsealed rather than held
- *  forever: a permanently broken store must not also freeze the runtime. */
-const MAX_SEAL_ATTEMPTS = 3;
 
-/** Writes a job's terminal state to the outbox. False when it could not. */
-async function sealAnalysisJob(job: import('./shared/analysis/job').AnalysisJob): Promise<boolean> {
+/** Seals a terminal state, with its own bounded retries. */
+async function seal(job: import('./shared/analysis/job').AnalysisJob): Promise<boolean> {
   if (sealedAnalysisJobs.has(job.id)) return true;
-  try {
-    await analysisJobStateOutbox.put(job);
-    sealedAnalysisJobs.add(job.id);
-    sealAttempts.delete(job.id);
-    return true;
-  } catch (error) {
-    const attempts = (sealAttempts.get(job.id) ?? 0) + 1;
-    sealAttempts.set(job.id, attempts);
-    L.warn(
-      `Could not persist terminal analysis state for replay (attempt ${attempts})`,
-      job.id,
-      describeRuntimeError(error),
-    );
-    return false;
-  }
+  const sealed = await sealAnalysisJob(analysisJobStateOutbox, job, { warn: L.warn });
+  if (sealed) sealedAnalysisJobs.add(job.id);
+  return sealed;
 }
 
 async function reportAnalysisJob(job: import('./shared/analysis/job').AnalysisJob): Promise<void> {
-  if (isTerminalAnalysisJob(job)) await sealAnalysisJob(job);
+  if (isTerminalAnalysisJob(job)) await seal(job);
   try {
     getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_STATE', job });
   } catch (error) {
@@ -423,14 +406,20 @@ async function deliverAnalysisResult(
   result: import('./shared/analysis/analyzeTranscript').AnalysisResult,
   provenance: import('./shared/analysis/provenance').AnalysisProvenance,
 ): Promise<void> {
-  // Seal first, and refuse to deliver if it fails: an unsealed result that
-  // background acknowledges is released here while nothing durable records
-  // that it ever completed. Throwing keeps the payload held, and the next
-  // reconnect retries both the seal and the delivery.
-  if (!await sealAnalysisJob(job) && (sealAttempts.get(job.id) ?? 0) < MAX_SEAL_ATTEMPTS) {
-    throw new Error(`Terminal state for ${job.id} is not durable yet; holding its result`);
+  // Durable before delivered, with the bounded exception documented on
+  // `sealThenDeliverAnalysis`: the retries happen here and now rather than
+  // waiting on a reconnect that may never come.
+  if (sealedAnalysisJobs.has(job.id)) {
+    getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result), provenance });
+    return;
   }
-  getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result), provenance });
+  const sealed = await sealThenDeliverAnalysis(
+    analysisJobStateOutbox,
+    job,
+    () => getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result), provenance }),
+    { warn: L.warn },
+  );
+  if (sealed) sealedAnalysisJobs.add(job.id);
 }
 
 async function replayAnalysisStates(port: chrome.runtime.Port): Promise<void> {

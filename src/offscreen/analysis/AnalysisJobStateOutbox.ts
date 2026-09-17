@@ -174,6 +174,83 @@ export async function acknowledgeAnalysisJob(
   return true;
 }
 
+/**
+ * How many times a terminal state is written before the result is offered
+ * without one, and how long to wait between tries.
+ */
+export const SEAL_ATTEMPTS = 3;
+const SEAL_BACKOFF_MS = 250;
+
+const wait = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+export type SealOptions = {
+  attempts?: number;
+  /** Injected so tests do not wait; production uses a real timer. */
+  delay?: (ms: number) => Promise<void>;
+  warn?: (...args: unknown[]) => void;
+};
+
+/**
+ * Writes a job's terminal state to the outbox, retrying on its own.
+ *
+ * **The retries must not depend on anything else happening.** An earlier
+ * version counted attempts across call sites and threw to hold the result,
+ * expecting a later reconnect to try again — so on a healthy, continuously
+ * connected port the third attempt never came, the result was held forever,
+ * and the runtime stayed busy forever with it. A bound is only a bound if
+ * something drives it.
+ */
+export async function sealAnalysisJob(
+  outbox: Pick<AnalysisJobStateOutbox, 'put'>,
+  job: AnalysisJob,
+  options: SealOptions = {},
+): Promise<boolean> {
+  const attempts = options.attempts ?? SEAL_ATTEMPTS;
+  const delay = options.delay ?? wait;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await outbox.put(job);
+      return true;
+    } catch (error) {
+      options.warn?.(`Could not persist terminal analysis state (attempt ${attempt} of ${attempts})`, job.id, error);
+      if (attempt < attempts) await delay(attempt * SEAL_BACKOFF_MS);
+    }
+  }
+  return false;
+}
+
+/**
+ * Seals a completed job's terminal state, then hands its result over —
+ * **delivering even if the seal never succeeded.**
+ *
+ * The ordinary guarantee is HOST-03's: durable before delivered, so background
+ * cannot acknowledge and release a result whose completion nothing recorded.
+ * This is the deliberate exception. After a bounded number of failures the
+ * result is offered anyway, trading that guarantee for liveness: holding it
+ * would keep the runtime permanently busy and block every extension update on
+ * a store that is not going to recover. In that degraded interval a death of
+ * the service worker or this document can cost the analysis, which is then
+ * recomputed from the transcript — acceptable for derived data, and not
+ * acceptable for anything that is not.
+ */
+export async function sealThenDeliverAnalysis(
+  outbox: Pick<AnalysisJobStateOutbox, 'put'>,
+  job: AnalysisJob,
+  deliver: () => void,
+  options: SealOptions = {},
+): Promise<boolean> {
+  const sealed = await sealAnalysisJob(outbox, job, options);
+  if (!sealed) {
+    options.warn?.(
+      `Delivering the analysis for ${job.historyId} without a durable terminal state after `
+      + `${options.attempts ?? SEAL_ATTEMPTS} attempts; it may need recomputing if this document dies`,
+      job.id,
+    );
+  }
+  deliver();
+  return sealed;
+}
+
 /** The outbox the offscreen document uses. */
 export function createAnalysisJobStateOutbox(): AnalysisJobStateOutbox {
   return new AnalysisJobStateOutbox(createIndexedDbAnalysisJobStateArea());

@@ -546,9 +546,17 @@ When `refreshAnalysisWork()` failed, the update path set `pendingReload` and ret
 
 There is now an explicit `analysisWorkUnknown` bit, counted as critical work, set when the data plane will not answer, retried on a slow timer, and cleared as soon as the data plane speaks by any route. Unknown is safe without being permanent.
 
-### Terminal state is sealed before a result is offered
+### Terminal state is sealed before a result is offered — and what the exception means
 
-`reportAnalysisJob` used to log a failed outbox write and deliver anyway, leaving "durable before delivered" conditional on that write. Delivery now seals first and refuses to hand over a result whose completion nothing recorded; the payload stays held and the next reconnect retries both. After three failed seals it delivers unsealed rather than freezing the runtime on a permanently broken store — durability in the ordinary case, liveness in the pathological one.
+`reportAnalysisJob` used to log a failed outbox write and deliver anyway, leaving "durable before delivered" conditional on that write. Delivery now seals first.
+
+The first attempt at the bound was wrong and is worth recording: attempts were counted *across call sites* — one when the state was reported, one when the result was delivered — with the third left to a later reconnect. On a healthy, continuously connected port that reconnect never comes, so the third attempt never happened, the result was held indefinitely, and the runtime stayed busy behind it, blocking updates forever. **A bound is only a bound if something drives it.** Sealing now retries on its own timer, three attempts with a short backoff, independent of anything else happening.
+
+**The degraded path, stated exactly.** After those attempts fail, the result is delivered *without* durable terminal state. This is a deliberate departure from HOST-03, not a gap in it:
+
+- **Normal guarantee:** a completed result is never offered before its completion is recorded, so background cannot acknowledge and release something whose existence nothing durable attests to.
+- **After repeated outbox failure:** availability is preferred over crash durability. Holding would keep the runtime permanently busy and block every extension update on a store that is not going to recover.
+- **What it costs:** if the service worker or this document dies inside that degraded interval, the analysis is lost and must be recomputed from the transcript on a later run. That is acceptable **only** because an analysis is derived data whose source survives. Nothing with an irreplaceable payload — captured media, upload bytes — may use this trade.
 
 *(All three are pinned by tests that fail when the fix is reverted.)*
 
