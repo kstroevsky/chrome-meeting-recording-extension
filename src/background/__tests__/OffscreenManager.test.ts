@@ -300,4 +300,170 @@ describe('OffscreenManager', () => {
       expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('topic analysis jobs (ADR-0007)', () => {
+    const analysisJob = (id: string, status: string) => ({
+      id,
+      historyId: 'rec_1',
+      status,
+      progress: status === 'analyzing' ? 0.4 : 1,
+      startedAt: 1,
+    });
+
+    function connect() {
+      manager.attachPort(mockPort);
+      return mockPort.onMessage.addListener.mock.calls[0][0] as (m: unknown) => void;
+    }
+
+    it('forwards analysis state to the analysis listener', () => {
+      const onAnalysisJobChanged = jest.fn();
+      manager.onAnalysisJobChanged = onAnalysisJobChanged;
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+
+      expect(onAnalysisJobChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'a1', historyId: 'rec_1', status: 'analyzing' }),
+      );
+    });
+
+    it('forwards a delivered result separately from the state that announced it', () => {
+      const onAnalysisResult = jest.fn();
+      manager.onAnalysisResult = onAnalysisResult;
+      const listener = connect();
+
+      const analysis = { segments: [], topics: [], utteranceCount: 12 };
+      const provenance = { pipelineVersion: 2, configHash: 'abcd1234', embeddingDevice: 'wasm' };
+      listener({ type: 'OFFSCREEN_ANALYSIS_RESULT', job: analysisJob('a1', 'completed'), analysis, provenance });
+
+      // The provenance the run was enqueued under comes back with it, untouched.
+      expect(onAnalysisResult).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'a1' }),
+        analysis,
+        provenance,
+      );
+    });
+
+    it('refuses an update while an analysis is running, then frees once it settles (HOST-04)', async () => {
+      const closeDocumentSpy = jest
+        .spyOn(chrome.offscreen, 'closeDocument')
+        .mockImplementation(async () => {});
+      manager.hydratePhase('idle'); // analysis outlives the recording phase
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+      await expect(manager.closeForUpdate()).resolves.toBe(false);
+      expect(closeDocumentSpy).not.toHaveBeenCalled();
+
+      // `completed` alone no longer frees it — the acknowledgement does, once
+      // background has the result on disk.
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'completed') });
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+      manager.acknowledgeAnalysisState('a1');
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      await expect(manager.closeForUpdate()).resolves.toBe(true);
+      expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays busy after `completed` until the result is acknowledged (HOST-04)', async () => {
+      const closeDocumentSpy = jest
+        .spyOn(chrome.offscreen, 'closeDocument')
+        .mockImplementation(async () => {});
+      manager.hydratePhase('idle');
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'completed') });
+
+      // The data plane reports `completed` before the result has been delivered
+      // and persisted, so tearing the document down here would discard the only
+      // copy of the analysis.
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+      await expect(manager.closeForUpdate()).resolves.toBe(false);
+      expect(closeDocumentSpy).not.toHaveBeenCalled();
+
+      manager.acknowledgeAnalysisState('a1');
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      await expect(manager.closeForUpdate()).resolves.toBe(true);
+    });
+
+    it('treats a replayed completed job as still-held work', () => {
+      manager.hydrateAnalysisJobs([analysisJob('a1', 'completed') as never]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+
+      manager.hydrateAnalysisJobs([analysisJob('a1', 'failed') as never]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
+    });
+
+    it('frees the update path for every way an analysis can stop', async () => {
+      jest.spyOn(chrome.offscreen, 'closeDocument').mockImplementation(async () => {});
+      manager.hydratePhase('idle');
+      const listener = connect();
+
+      // `completed` is deliberately absent: it is held until acknowledged.
+      for (const status of ['failed', 'canceled', 'unsupported']) {
+        listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+        expect(manager.hasActiveAnalysisJobs()).toBe(true);
+        listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', status) });
+        expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      }
+    });
+
+    it('seeds liveness from replayed jobs after a reconnect', () => {
+      manager.hydrateAnalysisJobs([
+        analysisJob('a1', 'analyzing') as never,
+        analysisJob('a2', 'failed') as never,
+      ]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+
+      manager.hydrateAnalysisJobs([analysisJob('a2', 'failed') as never]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
+    });
+
+    describe('refreshAnalysisWork', () => {
+      it('answers no without creating a document when none exists', async () => {
+        const internals = manager as any;
+        jest.spyOn(internals, 'hasOffscreenContext').mockResolvedValue(false);
+        const ensureReady = jest.spyOn(manager, 'ensureReady');
+        manager.hydrateAnalysisJobs([analysisJob('stale', 'analyzing') as never]);
+
+        await expect(manager.refreshAnalysisWork()).resolves.toBe(false);
+        // No document means no analysis can exist, so memory is corrected…
+        expect(manager.hasActiveAnalysisJobs()).toBe(false);
+        // …and nothing is spun up just to ask.
+        expect(ensureReady).not.toHaveBeenCalled();
+      });
+
+      it('replaces an empty memory with what the data plane reports', async () => {
+        // The restart case: nothing replayed yet, but the document is busy.
+        const internals = manager as any;
+        jest.spyOn(internals, 'hasOffscreenContext').mockResolvedValue(true);
+        jest.spyOn(manager, 'ensureReady').mockResolvedValue(undefined);
+        const rpc = jest.spyOn(manager, 'rpc').mockResolvedValue({ ok: true, jobIds: ['a1', 'a2'] });
+
+        await expect(manager.refreshAnalysisWork()).resolves.toBe(true);
+        expect(rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_LIST_ANALYSIS_WORK' });
+        expect(manager.hasActiveAnalysisJobs()).toBe(true);
+
+        // And those jobs clear through the ordinary acknowledgement path.
+        manager.acknowledgeAnalysisState('a1');
+        manager.acknowledgeAnalysisState('a2');
+        expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      });
+
+      it('throws rather than guessing when the data plane gives no answer', async () => {
+        const internals = manager as any;
+        jest.spyOn(internals, 'hasOffscreenContext').mockResolvedValue(true);
+        jest.spyOn(manager, 'ensureReady').mockResolvedValue(undefined);
+        jest.spyOn(manager, 'rpc').mockResolvedValue({ ok: false, error: 'unknown command' });
+
+        await expect(manager.refreshAnalysisWork()).rejects.toThrow('did not report');
+      });
+    });
+
+    it('acknowledges without throwing when the port is gone', () => {
+      expect(() => manager.acknowledgeAnalysisState('a1')).not.toThrow();
+    });
+  });
 });

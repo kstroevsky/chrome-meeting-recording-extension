@@ -13,6 +13,7 @@ const {
   applyTargetToManifest,
 } = require('./scripts/lib/manifestTargets.cjs')
 const { telemetryHostPermission } = require('./scripts/lib/telemetryEndpoint.cjs')
+const { ANALYSIS_MODEL, modelCacheDir } = require('./scripts/lib/analysisModel.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
@@ -160,6 +161,13 @@ module.exports = (_env, argv) => {
       background: './src/background.ts',
       offscreen: './src/offscreen.ts',
       opfsWorker: './src/offscreen/storage/opfsWorker.ts',
+      // A worker has no `document`, so it cannot use webpack's default
+      // JSONP chunk loading. @huggingface/transformers splits its ONNX backends
+      // into async chunks, so this entry needs the worker-native loader.
+      analysisWorker: {
+        import: './src/offscreen/analysis/analysisWorker.ts',
+        chunkLoading: 'import-scripts',
+      },
       micsetup: './src/micsetup.ts',
       camsetup: './src/camsetup.ts',
       settings: './src/settings.ts',
@@ -167,15 +175,30 @@ module.exports = (_env, argv) => {
     },
     output: {
       path: path.resolve(__dirname, outputDir),
-      filename: '[name].js'
+      filename: '[name].js',
+      // Explicit, because the default ('auto') derives the path from
+      // `document.currentScript` — which does not exist in a worker and throws
+      // at module scope. In an extension, '/' is the package root, where every
+      // bundle and chunk already lives.
+      publicPath: '/',
     },
-    resolve: { extensions: ['.ts', '.js'] },
+    // `.mjs` for @huggingface/transformers, which ships ESM under that extension.
+    resolve: { extensions: ['.ts', '.js', '.mjs'] },
     module: {
       rules: [
         {
           test: /\.ts$/,
           use: 'ts-loader',
           exclude: /node_modules/
+        },
+        {
+          // ONNX Runtime reaches for its own `.wasm` through `import.meta.url`.
+          // The worker points ORT at the packaged copies in `ort/` instead
+          // (`wasmPaths`), so letting webpack emit a second, hashed copy would
+          // ship 22.5 MB nobody loads.
+          test: /\.wasm$/,
+          type: 'asset/resource',
+          generator: { emit: false },
         }
       ]
     },
@@ -194,6 +217,14 @@ module.exports = (_env, argv) => {
         '__WEB_OAUTH_CLIENT_ID__': JSON.stringify(webOauthClientId),
         '__WEB_OAUTH_CLIENT_SECRET__': JSON.stringify(webOauthClientSecret),
         '__TELEMETRY_ENDPOINT__': JSON.stringify(telemetryEndpoint),
+        // The model this build actually packaged. Defined rather than written
+        // in TypeScript so an analysis can never record provenance for a model
+        // or quantization other than the one on disk beside it (ADR-0007).
+        '__ANALYSIS_MODEL__': JSON.stringify({
+          id: ANALYSIS_MODEL.id,
+          revision: ANALYSIS_MODEL.revision,
+          dtype: ANALYSIS_MODEL.dtype,
+        }),
         'process.env.NODE_ENV': JSON.stringify(mode),
       }),
       // Stamp the per-compilation content hash into every entry bundle as
@@ -225,6 +256,48 @@ module.exports = (_env, argv) => {
           // Finder metadata is ignored by git but can still exist locally; never
           // ship it inside the extension package.
           { from: PUBLIC_DIR, to: '.', noErrorOnMissing: true, globOptions: { ignore: ['**/.DS_Store', '**/._*'] } },
+          // ADR-0007: the embedding model is extension-owned. Materialized and
+          // SHA-256 verified by `scripts/fetch-analysis-model.mjs` before the
+          // build; analysis never reaches the network.
+          // Exactly one ONNX export ships. The cache may hold several — 4A
+          // measures Q8 and FP16 as separate builds — so everything under
+          // `onnx/` except the selected one is filtered out here.
+          {
+            from: modelCacheDir(),
+            to: `models/${ANALYSIS_MODEL.id}`,
+            filter: (resourcePath) => {
+              const relative = path.relative(modelCacheDir(), resourcePath).split(path.sep).join('/')
+              return !relative.startsWith('onnx/') || relative === ANALYSIS_MODEL.onnxPath
+            },
+          },
+          // ONNX Runtime's WASM binaries, copied from the version
+          // @huggingface/transformers resolved. Not an independent dependency:
+          // two ORT versions would be worse than a path that breaks loudly.
+          //
+          // Which variants ORT selects is its own decision, made from the
+          // features it detects — an earlier attempt inferred the set from the
+          // file names, packaged only `jsep` and the plain build, and failed at
+          // runtime asking for `asyncify`. `ORT_VARIANTS` exists so the set can
+          // be narrowed by measurement against a working build instead.
+          {
+            from: path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
+            to: 'ort',
+            globOptions: { ignore: ['**/*.map'] },
+            filter: (resourcePath) => {
+              const name = path.basename(resourcePath)
+              // Only what ORT fetches at runtime. `wasmPaths` resolves
+              // `ort-wasm-simd-threaded[.variant].{wasm,mjs}` and nothing else;
+              // the package's own `ort.*.mjs` entry points are build-time
+              // imports webpack has already inlined into `analysisWorker.js`,
+              // so copying them shipped ~16 MB no URL could ever reach.
+              if (!/^ort-wasm-simd-threaded[.a-z]*\.(wasm|mjs)$/.test(name)) return false
+              const allow = process.env.ORT_VARIANTS
+              if (!allow) return true
+              return allow.split(',').some((v) => name === `ort-wasm-simd-threaded.${v}`.replace(/\.$/, '')
+                || name.startsWith(`ort-wasm-simd-threaded.${v}.`)
+                || (v === 'base' && /^ort-wasm-simd-threaded\.(wasm|mjs)$/.test(name)))
+            },
+          },
         ]
       })
     ]

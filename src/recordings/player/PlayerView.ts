@@ -9,8 +9,9 @@
  */
 
 import type { PlaybackManifest } from '../../shared/playback';
-import { formatClock, seekFraction, toNoteMarks } from './playerFormat';
+import { formatClock, seekFraction, toNoteMarks, toTopicBands } from './playerFormat';
 import { audioTracks, shownCount, type TrackDescriptor } from './playerTracks';
+import { describeTopics, recurrenceHint } from './playerTopics';
 import { KEYBOARD_HELP, SKIP_STEPS, SPEED_STEPS } from './playerKeymap';
 
 const $ = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) => {
@@ -45,11 +46,16 @@ export class PlayerView {
   private readonly played = $('span', 'player__played');
   private readonly playhead = $('span', 'player__playhead');
   private readonly marks = $('span', 'player__marks');
+  /** Topic spans, a band of their own under the scrubber (ADR-0007 §8). */
+  private readonly topicBand = $('span', 'player__topics-band');
   private readonly clock = $('span', 'player__clock');
   private readonly playButton = document.createElement('button');
   private readonly filesButton = document.createElement('button');
   private readonly filesCount = $('span', 'player__files-count');
   private readonly filesMenu = $('div', 'player__menu player__menu--files');
+  private readonly topicsButton = document.createElement('button');
+  private readonly topicsCount = $('span', 'player__files-count');
+  private readonly topicsMenu = $('div', 'player__menu player__menu--topics');
   private readonly volumeButton = document.createElement('button');
   private readonly volumeMenu = $('div', 'player__menu player__menu--volume');
   private readonly settingsButton = document.createElement('button');
@@ -92,7 +98,19 @@ export class PlayerView {
     const filesWrap = $('span', 'player__popover');
     filesWrap.append(this.filesButton, this.filesMenu);
 
-    header.append(back, this.title, $('span', 'player__divider'), filesWrap, this.date, close);
+    this.topicsButton.className = 'player__files'; this.topicsButton.type = 'button';
+    this.topicsButton.title = 'What this recording was about';
+    this.topicsButton.setAttribute('aria-haspopup', 'true');
+    const topicsLabel = $('span', 'player__files-label'); topicsLabel.textContent = 'TOPICS';
+    this.topicsButton.append(topicsLabel, this.topicsCount);
+    this.topicsButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.togglePopover(this.topicsMenu);
+    });
+    const topicsWrap = $('span', 'player__popover');
+    topicsWrap.append(this.topicsButton, this.topicsMenu);
+
+    header.append(back, this.title, $('span', 'player__divider'), filesWrap, topicsWrap, this.date, close);
 
     // Stage — the picture, with every control on it.
     this.video.className = 'player__video';
@@ -105,7 +123,10 @@ export class PlayerView {
     hit.setAttribute('role', 'slider');
     hit.setAttribute('aria-label', 'Seek');
     hit.tabIndex = 0;
-    this.track.append(this.played, this.marks, this.playhead);
+    // Order is paint order: topics sit behind, notes and the playhead in front.
+    // A topic band drawn over a note mark would hide the thing the user is
+    // scrubbing *for*.
+    this.track.append(this.topicBand, this.played, this.marks, this.playhead);
     hit.append(this.track);
     hit.addEventListener('click', (event) => {
       const fraction = seekFraction(event.clientX, hit.getBoundingClientRect());
@@ -169,9 +190,10 @@ export class PlayerView {
       this.closePopovers();
     });
     this.filesMenu.hidden = true;
+    this.topicsMenu.hidden = true;
     this.volumeMenu.hidden = true;
     this.settingsMenu.hidden = true;
-    for (const menu of [this.filesMenu, this.volumeMenu, this.settingsMenu]) this.keepOpen(menu);
+    for (const menu of [this.filesMenu, this.topicsMenu, this.volumeMenu, this.settingsMenu]) this.keepOpen(menu);
     this.setPlaying(false);
   }
 
@@ -190,8 +212,16 @@ export class PlayerView {
 
   closePopovers(): void {
     this.filesMenu.hidden = true;
+    this.topicsMenu.hidden = true;
     this.volumeMenu.hidden = true;
     this.settingsMenu.hidden = true;
+  }
+
+  /** Opens the TOPICS list, for the keyboard binding. False when there are none. */
+  toggleTopics(): boolean {
+    if (this.topicsButton.hidden) return false;
+    this.togglePopover(this.topicsMenu);
+    return !this.topicsMenu.hidden;
   }
 
   /** Returns whether the map ended up open, so Escape can close it first. */
@@ -379,7 +409,59 @@ export class PlayerView {
       .toUpperCase();
     this.durationMs = manifest.durationMs ?? 0;
     this.renderMarks(manifest);
+    this.renderTopics(manifest);
     this.setPosition(0);
+  }
+
+  /**
+   * Draws the topic band and fills the TOPICS list.
+   *
+   * Both disappear entirely when a recording has no current analysis — never
+   * analysed, still running, or stale. An empty "TOPICS 0" would be a promise
+   * the player cannot keep, and the recording is perfectly watchable without
+   * it; this mirrors FILES hiding itself for a single-file recording.
+   */
+  private renderTopics(manifest: PlaybackManifest): void {
+    const topics = describeTopics(manifest.topics);
+    this.topicsButton.hidden = topics.length === 0;
+    this.topicsCount.textContent = String(topics.length);
+
+    this.topicBand.replaceChildren();
+    this.topicBand.hidden = topics.length === 0;
+    for (const band of toTopicBands(manifest.topics, this.durationMs)) {
+      const el = $('span', `player__topic-span player__topic-span--${band.shade}`);
+      el.style.left = `${band.leftPct}%`;
+      el.style.width = `${band.widthPct}%`;
+      el.title = band.label;
+      el.addEventListener('click', (event) => {
+        // A band is a seek target, not part of the track behind it.
+        event.stopPropagation();
+        this.callbacks.seekTo(band.startMs);
+      });
+      this.topicBand.append(el);
+    }
+
+    this.topicsMenu.replaceChildren();
+    for (const topic of topics) {
+      const row = document.createElement('button');
+      row.className = 'player__topic';
+      row.type = 'button';
+      row.setAttribute('role', 'menuitem');
+      const dot = $('span', `player__topic-dot player__topic-dot--${topic.shade}`);
+      const label = $('span', 'player__topic-label'); label.textContent = topic.label;
+      const meta = $('span', 'player__topic-meta');
+      const repeats = recurrenceHint(topic);
+      // "2×" says the conversation came back to this, which is the whole point
+      // of separating global topics from temporal segments (MODEL-04).
+      meta.textContent = repeats ? `${repeats}  ${topic.duration}` : topic.duration;
+      row.append(dot, label, meta);
+      row.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.callbacks.seekTo(topic.seekMs);
+        this.closePopovers();
+      });
+      this.topicsMenu.append(row);
+    }
   }
 
   private renderMarks(manifest: PlaybackManifest): void {

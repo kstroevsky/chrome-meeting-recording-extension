@@ -9,13 +9,23 @@
  * the service worker.
  */
 
-import type { PlaybackManifest, PlaybackSource, PlaybackTrack } from '../shared/playback';
+import type { PlaybackManifest, PlaybackSource, PlaybackTrack, TranscriptStatus } from '../shared/playback';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 import type { RecordingNotation } from '../shared/notations';
+import { toPlaybackTopics } from '../shared/analysis/playbackTopics';
+import type { StoredAnalysis } from '../shared/analysis/storedAnalysis';
 
 export type RecordingPlaybackServiceDeps = {
   getEntry: (recordingId: string) => Promise<RecordingHistoryEntry | undefined>;
   listNotations: (recordingId: string) => Promise<RecordingNotation[]>;
+  /** Drives the player's rail. See `RecordingTranscriptService.status`. */
+  transcriptStatus: (recordingId: string) => Promise<TranscriptStatus>;
+  /**
+   * The recording's topic analysis, or `undefined` when it has none *or* the
+   * stored one is stale. Optional so a context without analysis wired up still
+   * produces a manifest — a recording is watchable with or without topics.
+   */
+  analysis?: (recordingId: string) => Promise<StoredAnalysis | undefined>;
 };
 
 export class RecordingPlaybackService {
@@ -41,12 +51,30 @@ export class RecordingPlaybackService {
       recordingId: entry.id,
       title: entry.name,
       createdAt: entry.createdAt,
-      // No transcription pipeline exists yet, so the rail never renders today.
-      transcriptStatus: 'none',
+      transcriptStatus: await this.deps.transcriptStatus(recordingId),
       ...(entry.durationMs != null ? { durationMs: entry.durationMs } : {}),
       notations: await this.deps.listNotations(recordingId),
+      topics: await this.topics(recordingId),
       tracks: media.map(toTrack).sort(byStreamOrder),
     };
+  }
+
+  /**
+   * Topics for the player, or none.
+   *
+   * Failure is swallowed deliberately: topics are an aid to scrubbing, and a
+   * recording must stay watchable when the derived layer above it cannot be
+   * read. Notations and tracks are not treated this way — those are the
+   * recording.
+   */
+  private async topics(recordingId: string): Promise<PlaybackManifest['topics']> {
+    if (!this.deps.analysis) return [];
+    try {
+      const analysis = await this.deps.analysis(recordingId);
+      return analysis ? toPlaybackTopics(analysis) : [];
+    } catch {
+      return [];
+    }
   }
 }
 

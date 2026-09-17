@@ -37,6 +37,9 @@ describe('background notation commands', () => {
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
       closeForUpdate: jest.fn().mockResolvedValue(true),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
     };
   }
 

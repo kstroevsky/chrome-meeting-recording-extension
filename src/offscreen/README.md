@@ -21,7 +21,7 @@ background ──OFFSCREEN_START/STOP (RPC)──▶ rpcHandlers ─▶ Offscree
 offscreen ──OFFSCREEN_STATE { phase, epoch } (status)─────────┘
 ```
 
-`rpcHandlers` validate commands and drive the controller; `OffscreenController` owns the capture phase/warning state and sequences capture finalization; `RecorderEngine` captures/encodes; the storage targets persist; `RecordingFinalizer` delivers local files; and `UploadManager` delivers Drive jobs after capture has returned to idle. Each layer is its own README: [engine](./engine/README.md), [storage](./storage/README.md), [drive](./drive/README.md).
+`rpcHandlers` validate commands and drive the controller; `OffscreenController` owns the capture phase/warning state and sequences capture finalization; `RecorderEngine` captures/encodes; the storage targets persist; `RecordingFinalizer` delivers local files; and `UploadManager` delivers Drive jobs after capture has returned to idle. Each layer is its own README: [engine](./engine/README.md), [storage](./storage/README.md), [drive](./drive/README.md), [analysis](./analysis/README.md).
 
 ## The stop → delivery pipeline
 
@@ -71,7 +71,7 @@ flowchart TD
 | `rpcHandlers.ts` | background→offscreen command handlers, Drive metadata rename RPC, upload-state acknowledgement, and reconnect runtime listener |
 | `RuntimeSampler.ts` | cumulative event-loop lag / long-task / heap sampler shared by the local dashboard and bounded production reducer |
 
-Subsystems (own READMEs): [`engine/`](./engine/README.md), [`storage/`](./storage/README.md), [`drive/`](./drive/README.md). Support modules (`RecorderAudio`, `RecorderCapture` — its e2e-only synthetic tab stream lives in the sibling `RecorderCaptureE2EMock` so the production capture path carries no test scaffolding — `RecorderProfiles`, `DriveTarget`, `LocalFileTarget`) sit at this root and are documented by the subsystem that owns them.
+Subsystems (own READMEs): [`engine/`](./engine/README.md), [`storage/`](./storage/README.md), [`drive/`](./drive/README.md), [`analysis/`](./analysis/README.md) — the embedding engine and the analysis job (ADR-0007). Support modules (`RecorderAudio`, `RecorderCapture` — its e2e-only synthetic tab stream lives in the sibling `RecorderCaptureE2EMock` so the production capture path carries no test scaffolding — `RecorderProfiles`, `DriveTarget`, `LocalFileTarget`) sit at this root and are documented by the subsystem that owns them.
 
 ## Observability
 

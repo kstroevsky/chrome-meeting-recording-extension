@@ -161,6 +161,30 @@ export type UploadJob = {
  * (`targetTabId`, `meetingSlug`) that only the background reads — for auto-stop
  * tab matching and survival across service-worker restarts.
  */
+/**
+ * One contiguous stretch of wall clock that was written into the media.
+ *
+ * A run is a sequence of these separated by pauses, and a paused span is never
+ * written into the file — so this list, not a single origin, is what maps a
+ * wall-clock instant onto a media offset. An instant that falls in no span has
+ * no media position at all, which is why projection can fail.
+ */
+export type RecordedSpan = {
+  /** Wall clock (epoch ms) when this span began recording. */
+  wallStartMs: number;
+  /** Wall clock when it stopped. Absent while the span is still running. */
+  wallEndMs?: number;
+  /** Media offset this span begins at: the recorded time banked before it. */
+  mediaStartMs: number;
+};
+
+/**
+ * Bound on the span ledger, following the house rule that durable lists are
+ * always bounded. One span per pause/resume, so this is a runaway guard against
+ * a stuck toggle rather than a product limit on how often a user may pause.
+ */
+export const MAX_RECORDED_SPANS = 500;
+
 export type RecordingSessionSnapshot = {
   /**
    * Displayed recording phase. **Derived** (ADR-0003, Decision 4): always equal
@@ -241,6 +265,17 @@ export type RecordingSessionSnapshot = {
    */
   recordedMs?: number;
   runningSince?: number;
+  /**
+   * Every contiguous stretch of wall clock this run actually wrote into the
+   * media, in order. Where `recordedMs`/`runningSince` answer *how much* has
+   * been recorded, this answers *which moments* — the piecewise map from wall
+   * clock onto the media timeline that a transcript needs (ADR-0007).
+   *
+   * Phase-independent, like `epoch`: it survives the return to idle, because
+   * the transcript sweep that reads it runs *after* the run has finished, and
+   * is reset on the next `start()`. Bounded by {@link MAX_RECORDED_SPANS}.
+   */
+  recordedSpans?: RecordedSpan[];
   /**
    * Real delivered dimensions from the captured tab video track's getSettings().
    * Only meaningful while an active run exists; omitted when Chrome does not

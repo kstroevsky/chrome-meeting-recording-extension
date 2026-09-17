@@ -36,11 +36,38 @@ export type PlaybackTrack = {
 };
 
 /**
- * Drives the player's rail. Always `none` today — nothing produces transcripts
- * yet — but the state is carried so the player branches on data rather than on
- * a feature flag when transcription lands.
+ * Drives the player's rail, from the stored transcript aggregate (ADR-0007).
+ *
+ * Real since Phase 0 landed: `RecordingTranscriptService.status` answers it, so
+ * a recording captured with Meet captions on reports `ready` and one without
+ * reports `none`. The player branches on this rather than on a feature flag.
  */
 export type TranscriptStatus = 'none' | 'processing' | 'ready';
+
+/**
+ * One topic, as the player reads it (ADR-0007, UI-02).
+ *
+ * **Carries its spans rather than one range**, because a topic is *global* and
+ * a span is *temporal* (MODEL-01, MODEL-05): a meeting that returns to Redis
+ * after twenty minutes of hiring is one topic with two spans, and flattening it
+ * to a single start-to-end range would claim the hiring discussion was Redis.
+ * The scrub band draws the spans; the TOPICS list shows one row per topic.
+ *
+ * Deliberately free of vectors. Centroids and segment embeddings stay in the
+ * `analyses` store where the retrieval work will want them (QRY-01); the player
+ * needs words and offsets and would only be made heavier by the rest.
+ */
+export type PlaybackTopic = {
+  id: string;
+  /** Label terms, strongest first — what UI-02 renders as `redis · timeout · pool`. */
+  keywords: string[];
+  /** Every stretch of media this topic covers, in time order. Never empty. */
+  spans: Array<{ tStartMs: number; tEndMs: number }>;
+  /** Summed across `spans` — the `23 min` in UI-02's list, not last minus first. */
+  totalMs: number;
+  /** Relative standing among this recording's topics, in [0, 1]. */
+  importance: number;
+};
 
 export type PlaybackManifest = {
   recordingId: string;
@@ -49,8 +76,20 @@ export type PlaybackManifest = {
   durationMs?: number;
   transcriptStatus: TranscriptStatus;
   notations: RecordingNotation[];
+  /**
+   * Empty when the recording has no current analysis — never analysed, still
+   * running, or analysed under conditions that no longer apply. The player
+   * renders topics when there are some and stays out of the way when there are
+   * none, which is the same branch for all three.
+   */
+  topics: PlaybackTopic[];
   tracks: PlaybackTrack[];
 };
+
+/** Where picking a topic seeks to: the start of its first span. */
+export function topicSeekMs(topic: PlaybackTopic): number {
+  return topic.spans[0]?.tStartMs ?? 0;
+}
 
 /** True for a source the player can actually feed to a media element. */
 export function isStreamableSource(source: PlaybackSource): boolean {

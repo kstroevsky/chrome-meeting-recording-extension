@@ -200,6 +200,8 @@ Two carriers, by design: **commands** (`OFFSCREEN_START`/`STOP`/`DISCARD`, uploa
 
 `shared/settings/` is its own **deep module** (load / persist / normalize / derive recorder configuration) and is documented in its own README — not covered here.
 
+`shared/analysis/` is likewise its own **deep module**: the five-stage topic pipeline, pure over vectors with the encoder injected, plus the provenance and durable shapes that surround it. See [its README](./analysis/README.md) and [ADR-0007](../../docs/adr/0007-topics-are-derived-from-a-persisted-transcript.md).
+
 ## Testing notes
 
 - `__tests__/recordingProjection.test.ts` is the spec: it asserts `projectPhase` over the **exhaustive 20-combination** input space (so the transition table above is *tested*, not aspirational) plus the `decomposeLegacyPhase` ⇄ `projectPhase` **round-trip** for all five capture phases.

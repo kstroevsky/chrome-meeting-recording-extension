@@ -1,5 +1,6 @@
 /** ADR-0006 §11: the manifest carries capabilities, never bytes. */
 import { RecordingPlaybackService } from '../RecordingPlaybackService';
+import type { TranscriptStatus } from '../../shared/playback';
 import { isPlayable, masterTrack } from '../../shared/playback';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
@@ -20,12 +21,28 @@ const file = (id: string, stream: 'tab' | 'mic' | 'self-video', over: Record<str
     id, stream, filename: `${stream}.webm`, destination: 'drive', status: 'available', ...over,
   } as never);
 
-const make = (e?: RecordingHistoryEntry, notations: unknown[] = []) => new RecordingPlaybackService({
+const make = (
+  e?: RecordingHistoryEntry,
+  notations: unknown[] = [],
+  transcriptStatus: TranscriptStatus = 'none',
+  analysis?: () => Promise<unknown>,
+) => new RecordingPlaybackService({
   getEntry: jest.fn(async () => e),
   listNotations: jest.fn(async () => notations as never),
+  transcriptStatus: jest.fn(async () => transcriptStatus),
+  ...(analysis ? { analysis: analysis as never } : {}),
 });
 
 describe('RecordingPlaybackService.getManifest', () => {
+  it('reports the recording\'s real transcript state on the manifest', async () => {
+    // The rail is data-driven, not flag-driven (ADR-0006): a recording with a
+    // stored transcript says so, one without says `none`.
+    await expect(make(entry(), [], 'ready').getManifest('rec:1'))
+      .resolves.toHaveProperty('transcriptStatus', 'ready');
+    await expect(make(entry(), [], 'none').getManifest('rec:1'))
+      .resolves.toHaveProperty('transcriptStatus', 'none');
+  });
+
   it('builds a manifest with tracks in tab, mic, self-video order', async () => {
     const service = make(entry({
       files: [file('r1:mic', 'mic'), file('r1:self', 'self-video'), file('r1:tab', 'tab')],
@@ -123,5 +140,66 @@ describe('manifest helpers', () => {
       { stream: 'tab', sources: [{ kind: 'download', downloadId: 1, playableInExtension: false }] },
       { stream: 'mic', sources: [{ kind: 'opfs', key: 'a' }] },
     ]))?.stream).toBe('mic');
+  });
+});
+
+describe('RecordingPlaybackService topics (ADR-0007)', () => {
+  const vector = Float32Array.from([1, 0]);
+  const storedAnalysis = {
+    provenance: {
+      pipelineVersion: 1,
+      embeddingModel: 'm',
+      embeddingModelRevision: 'r',
+      embeddingDimensions: 2,
+      embeddingDtype: 'q8',
+      configHash: 'abcd1234',
+    },
+    completedAt: 5,
+    utteranceCount: 40,
+    topics: [
+      { id: 't_redis', centroid: vector, segments: [], keywords: ['redis', 'pool'], importance: 0.9 },
+      { id: 't_hiring', centroid: vector, segments: [], keywords: ['interview'], importance: 0.3 },
+    ],
+    segments: [
+      { id: 's1', tStartMs: 0, tEndMs: 300_000, embedding: vector, localTopicId: 't_redis', startWindow: 0, endWindow: 4 },
+      { id: 's2', tStartMs: 300_000, tEndMs: 900_000, embedding: vector, localTopicId: 't_hiring', startWindow: 4, endWindow: 8 },
+      { id: 's3', tStartMs: 900_000, tEndMs: 1_200_000, embedding: vector, localTopicId: 't_redis', startWindow: 8, endWindow: 12 },
+    ],
+  };
+
+  it('carries topics with their spans, strongest first', async () => {
+    const manifest = await make(entry(), [], 'ready', async () => storedAnalysis).getManifest('r1');
+
+    expect(manifest!.topics.map((t) => t.keywords.join(' · '))).toEqual(['redis · pool', 'interview']);
+    expect(manifest!.topics[0].spans).toEqual([
+      { tStartMs: 0, tEndMs: 300_000 },
+      { tStartMs: 900_000, tEndMs: 1_200_000 },
+    ]);
+    expect(manifest!.topics[0].totalMs).toBe(600_000);
+  });
+
+  it('carries no vectors into the manifest', async () => {
+    const manifest = await make(entry(), [], 'ready', async () => storedAnalysis).getManifest('r1');
+    expect(JSON.stringify(manifest!.topics)).not.toContain('centroid');
+    expect(JSON.stringify(manifest!.topics)).not.toContain('embedding');
+  });
+
+  it('is empty when the recording has no current analysis', async () => {
+    await expect(make(entry(), [], 'none', async () => undefined).getManifest('r1'))
+      .resolves.toHaveProperty('topics', []);
+  });
+
+  it('is empty when nothing supplies analysis at all', async () => {
+    await expect(make(entry()).getManifest('r1')).resolves.toHaveProperty('topics', []);
+  });
+
+  it('keeps the recording watchable when the analysis store throws', async () => {
+    const manifest = await make(entry({ files: [file('f1', 'tab')] }), [], 'none', async () => {
+      throw new Error('IndexedDB is gone');
+    }).getManifest('r1');
+
+    // Topics are an aid to scrubbing; the recording is not.
+    expect(manifest!.topics).toEqual([]);
+    expect(manifest!.tracks).toHaveLength(1);
   });
 });

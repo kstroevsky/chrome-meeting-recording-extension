@@ -18,8 +18,10 @@ import {
   VALID_STORAGE_MODES,
   VALID_TAB_CONTENT_TYPES,
 } from './recordingConstants';
+import { MAX_RECORDED_SPANS } from './recordingTypes';
 import type {
   CapturedTabResolution,
+  RecordedSpan,
   RecordingCaptureDevices,
   DesiredState,
   MicMode,
@@ -371,6 +373,9 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     historyId,
     // Phase-independent: the epoch is preserved across idle so it stays monotonic.
     epoch: normalizeEpoch(candidate.epoch),
+    // Phase-independent (ADR-0007): the transcript sweep reads the span ledger
+    // after the run has finished, so it must outlive the return to idle.
+    recordedSpans: normalizeRecordedSpans(candidate.recordedSpans),
     // Phase-independent (design n4): an interruption outlives its run, because
     // the capture is already saved and the user still has to be told.
     interruption: normalizeInterruption(candidate.interruption),
@@ -429,4 +434,34 @@ export function hasUploadsInFlight(jobs: UploadJob[] | undefined): boolean {
 /** True when a stop request can act on the phase (active capture in progress). */
 export function isStoppablePhase(phase: RecordingPhase): boolean {
   return phase === 'starting' || phase === 'recording' || phase === 'stopping';
+}
+
+/**
+ * Decodes the recorded-span ledger. A span with no usable start is dropped
+ * rather than repaired: a wrong span would map words onto media positions they
+ * were never spoken at, which is worse than having no transcript for them.
+ */
+function normalizeRecordedSpans(value: unknown): RecordedSpan[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const spans: RecordedSpan[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidate = entry as Record<string, unknown>;
+    const wallStartMs = finiteNonNegative(candidate.wallStartMs);
+    const mediaStartMs = finiteNonNegative(candidate.mediaStartMs);
+    if (wallStartMs == null || mediaStartMs == null) continue;
+
+    const wallEndMs = finiteNonNegative(candidate.wallEndMs);
+    spans.push({
+      wallStartMs,
+      mediaStartMs,
+      ...(wallEndMs != null && wallEndMs >= wallStartMs ? { wallEndMs } : {}),
+    });
+    if (spans.length >= MAX_RECORDED_SPANS) break;
+  }
+  return spans.length ? spans : undefined;
+}
+
+function finiteNonNegative(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
