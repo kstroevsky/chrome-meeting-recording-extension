@@ -412,8 +412,18 @@ export class OffscreenManager {
     }
 
     if (msg.type === 'OFFSCREEN_ANALYSIS_STATE') {
-      if (msg.job.status === 'analyzing') this.activeAnalysisJobs.add(msg.job.id);
-      else this.activeAnalysisJobs.delete(msg.job.id);
+      // `completed` is deliberately *not* treated as finished work. The data
+      // plane reports it before the result has been delivered and persisted,
+      // so clearing here would let `closeForUpdate()` tear the offscreen
+      // document down while the only copy of an analysis was still in its
+      // memory. The acknowledgement clears it instead — see
+      // `acknowledgeAnalysisState`, which background sends only once the row
+      // is on disk (or is known to be unstorable).
+      if (msg.job.status === 'analyzing' || msg.job.status === 'completed') {
+        this.activeAnalysisJobs.add(msg.job.id);
+      } else {
+        this.activeAnalysisJobs.delete(msg.job.id);
+      }
       if (this.activeAnalysisJobs.size > 0) this.cancelRecorderTabCleanup();
       this.onAnalysisJobChanged?.(msg.job);
       return;
@@ -433,7 +443,9 @@ export class OffscreenManager {
   hydrateAnalysisJobs(jobs: AnalysisJob[] | undefined): void {
     this.activeAnalysisJobs.clear();
     for (const job of jobs ?? []) {
-      if (job.status === 'analyzing') this.activeAnalysisJobs.add(job.id);
+      // Same rule as the live path: a replayed `completed` job is one whose
+      // result may still be held in the offscreen document awaiting an ack.
+      if (job.status === 'analyzing' || job.status === 'completed') this.activeAnalysisJobs.add(job.id);
     }
   }
 
@@ -458,6 +470,8 @@ export class OffscreenManager {
 
   /** Tells the data plane its completed analysis is persisted and may be released. */
   acknowledgeAnalysisState(jobId: string): void {
+    // The single point where an analysis stops counting as active work.
+    this.activeAnalysisJobs.delete(jobId);
     try {
       this.port?.postMessage({ type: 'OFFSCREEN_ACK_ANALYSIS_STATE', jobId });
     } catch {

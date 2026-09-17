@@ -216,15 +216,19 @@ describe('AnalysisManager', () => {
     expect(engine.state.disposed).toBe(1);
   });
 
-  it('reports the job as busy while it is queued or running, and not after', async () => {
+  it('reports the job as busy while it is queued or running, and until its result is acknowledged', async () => {
     const h = harness();
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
     expect(h.manager.hasActiveJobs()).toBe(true);
     expect(h.manager.activeJobs().map((j) => j.historyId)).toEqual(['rec_1']);
 
     await settle();
-    expect(h.manager.hasActiveJobs()).toBe(false);
+    // Off the queue, but the result is still only in memory here.
     expect(h.manager.activeJobs()).toEqual([]);
+    expect(h.manager.hasActiveJobs()).toBe(true);
+
+    h.manager.acknowledge(id);
+    expect(h.manager.hasActiveJobs()).toBe(false);
   });
 
   it('ends a job as failed when the engine throws, and drops the engine', async () => {
@@ -275,6 +279,55 @@ describe('AnalysisManager', () => {
     expect(h.manager.cancel(id)).toBe(false);
   });
 
+  it('keeps a delivered result until it is acknowledged, not until it is sent', async () => {
+    // The P0 this pins: `deliver` is a postMessage, so it resolving says the
+    // message left — not that the background persisted anything. Releasing on a
+    // successful send loses the only copy whenever the control plane dies in
+    // the gap between delivery and persistence.
+    const h = harness();
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG);
+    await settle();
+
+    expect(h.delivered).toHaveLength(1);
+    // Still held, even though delivery succeeded.
+    expect(h.manager.hasActiveJobs()).toBe(true);
+
+    // A reconnect before any ack re-offers the same result rather than nothing.
+    await h.manager.redeliver();
+    expect(h.delivered).toHaveLength(2);
+    expect(h.delivered[1].job.id).toBe(h.delivered[0].job.id);
+
+    h.manager.acknowledge(h.delivered[0].job.id);
+    await h.manager.redeliver();
+    expect(h.delivered).toHaveLength(2);
+    expect(h.manager.hasActiveJobs()).toBe(false);
+  });
+
+  it('counts a completed-but-unacknowledged result as active work (HOST-04)', async () => {
+    const h = harness();
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG);
+    await settle();
+
+    // The job has left the queue, but its result has nowhere else to live yet,
+    // so an extension update must still be refused.
+    expect(h.manager.activeJobs()).toEqual([]);
+    expect(h.manager.undeliveredCount()).toBe(1);
+    expect(h.manager.hasActiveJobs()).toBe(true);
+
+    h.manager.acknowledge(last(h.reported)!.id);
+    expect(h.manager.hasActiveJobs()).toBe(false);
+  });
+
+  it('is not busy for a job that ended without a result', async () => {
+    const h = harness({ isUnsupported: () => true });
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    await settle();
+
+    // Nothing was produced, so nothing is being held.
+    expect(h.manager.undeliveredCount()).toBe(0);
+    expect(h.manager.hasActiveJobs()).toBe(false);
+  });
+
   it('holds an undelivered result and re-delivers it when the port comes back', async () => {
     let down = true;
     const h = harness({ deliverFails: () => down });
@@ -294,6 +347,7 @@ describe('AnalysisManager', () => {
     h.manager.acknowledge(h.delivered[0].job.id);
     await h.manager.redeliver();
     expect(h.delivered).toHaveLength(1);
+    expect(h.manager.hasActiveJobs()).toBe(false);
   });
 
   it('keeps a held result after a failed re-delivery attempt', async () => {

@@ -353,10 +353,44 @@ describe('OffscreenManager', () => {
       await expect(manager.closeForUpdate()).resolves.toBe(false);
       expect(closeDocumentSpy).not.toHaveBeenCalled();
 
+      // `completed` alone no longer frees it — the acknowledgement does, once
+      // background has the result on disk.
       listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'completed') });
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+      manager.acknowledgeAnalysisState('a1');
       expect(manager.hasActiveAnalysisJobs()).toBe(false);
       await expect(manager.closeForUpdate()).resolves.toBe(true);
       expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays busy after `completed` until the result is acknowledged (HOST-04)', async () => {
+      const closeDocumentSpy = jest
+        .spyOn(chrome.offscreen, 'closeDocument')
+        .mockImplementation(async () => {});
+      manager.hydratePhase('idle');
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
+      listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'completed') });
+
+      // The data plane reports `completed` before the result has been delivered
+      // and persisted, so tearing the document down here would discard the only
+      // copy of the analysis.
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+      await expect(manager.closeForUpdate()).resolves.toBe(false);
+      expect(closeDocumentSpy).not.toHaveBeenCalled();
+
+      manager.acknowledgeAnalysisState('a1');
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      await expect(manager.closeForUpdate()).resolves.toBe(true);
+    });
+
+    it('treats a replayed completed job as still-held work', () => {
+      manager.hydrateAnalysisJobs([analysisJob('a1', 'completed') as never]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(true);
+
+      manager.hydrateAnalysisJobs([analysisJob('a1', 'failed') as never]);
+      expect(manager.hasActiveAnalysisJobs()).toBe(false);
     });
 
     it('frees the update path for every way an analysis can stop', async () => {
@@ -364,6 +398,7 @@ describe('OffscreenManager', () => {
       manager.hydratePhase('idle');
       const listener = connect();
 
+      // `completed` is deliberately absent: it is held until acknowledged.
       for (const status of ['failed', 'canceled', 'unsupported']) {
         listener({ type: 'OFFSCREEN_ANALYSIS_STATE', job: analysisJob('a1', 'analyzing') });
         expect(manager.hasActiveAnalysisJobs()).toBe(true);
@@ -375,11 +410,11 @@ describe('OffscreenManager', () => {
     it('seeds liveness from replayed jobs after a reconnect', () => {
       manager.hydrateAnalysisJobs([
         analysisJob('a1', 'analyzing') as never,
-        analysisJob('a2', 'completed') as never,
+        analysisJob('a2', 'failed') as never,
       ]);
       expect(manager.hasActiveAnalysisJobs()).toBe(true);
 
-      manager.hydrateAnalysisJobs([analysisJob('a2', 'completed') as never]);
+      manager.hydrateAnalysisJobs([analysisJob('a2', 'failed') as never]);
       expect(manager.hasActiveAnalysisJobs()).toBe(false);
     });
 

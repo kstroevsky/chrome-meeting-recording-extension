@@ -109,9 +109,23 @@ export class AnalysisManager {
     return true;
   }
 
-  /** True while any job is queued or running; feeds the HOST-04 "busy" check. */
+  /**
+   * True while any job is queued, running, **or holding an unacknowledged
+   * result** — the HOST-04 "busy" check.
+   *
+   * The last clause is the one that is easy to miss. A job reports `completed`
+   * before its result has been delivered and persisted, so a busy check that
+   * watched only running jobs would go quiet while the only copy of an
+   * analysis still lived in this document's memory — and an extension update
+   * arriving in that window would discard it.
+   */
   hasActiveJobs(): boolean {
-    return this.tasks.size > 0;
+    return this.tasks.size > 0 || this.undelivered.size > 0;
+  }
+
+  /** How many completed results are still waiting to be acknowledged. */
+  undeliveredCount(): number {
+    return this.undelivered.size;
   }
 
   /** In-flight jobs, for replay after a background reconnect. */
@@ -129,7 +143,14 @@ export class AnalysisManager {
     for (const [jobId, held] of [...this.undelivered]) {
       try {
         await this.deps.deliver(held.job, held.result);
-        this.undelivered.delete(jobId);
+        // Deliberately **not** deleted here. `deliver` is a `postMessage`: it
+        // resolves when the message left, which says nothing about whether the
+        // background persisted anything. Releasing on a successful send loses
+        // the only copy of a result whenever the control plane dies, or its
+        // IndexedDB write fails, in the interval between the two.
+        //
+        // `acknowledge()` is the single release point, and it is called only
+        // after the row is on disk.
       } catch (error) {
         this.deps.warn?.('Could not deliver analysis result', jobId, describeRuntimeError(error));
         return;
