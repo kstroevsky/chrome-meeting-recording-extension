@@ -127,8 +127,15 @@ export class EmbeddingWorkerClient {
         // Metal-3 — 5.37 against 5.23 windows/sec — with WebGPU the slower of
         // the two to load. Promising "it will be slower" would be wrong there,
         // and we have no measurement for the user's actual machine.
+        // Says which backend ran and nothing more. "The same topics" would be
+        // an unverified claim: the two backends agree on vectors to within
+        // floating-point noise, but the calibrated 0.93 assignment and 0.95
+        // merge thresholds are decision boundaries, and a pair sitting within
+        // noise of one can in principle land on either side and change the
+        // partition. Making that promise needs a WebGPU-vs-WASM agreement run
+        // over the calibration corpus, which has not been done.
         deps.reportWarning?.(
-          `Topic analysis is running on ${opened.device} rather than ${requested}. It produces the same topics.`,
+          `Topic analysis is running on ${opened.device} rather than ${requested}.`,
         );
       }
       return new EmbeddingWorkerClient(worker, deps, opened);

@@ -120,9 +120,11 @@ describe('EmbeddingWorkerClient', () => {
     // RES-06: which rung ran is surfaced, never inferred.
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('wasm');
-    // But it must not promise a slowdown: the benchmark found the two backends
-    // within each other's variance on Apple Metal-3.
+    // It reports the backend and promises nothing else: not a slowdown (the two
+    // are within each other's variance on Metal-3), and not identical topics
+    // (unverified near the calibrated decision boundaries).
     expect(warnings[0]).not.toMatch(/slow/i);
+    expect(warnings[0]).not.toMatch(/same topics/i);
   });
 
   it('stays silent when the requested backend is the one that loaded', async () => {

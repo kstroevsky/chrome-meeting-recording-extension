@@ -44,15 +44,19 @@ const BATCH = 32;
  * the two — CPU contention rather than the model — and the two backends are
  * within each other's variance on this hardware.
  *
- * **This is a tripwire, not a target.** Set at roughly 30% below the slowest
- * observation, so it catches a real regression — a lost SIMD path, an
- * accidental batch-size change, a dtype swap — while tolerating a loaded CI
- * machine that happens to be sharing cores. A floor placed at the observed
- * value would flake on the first busy afternoon and get deleted, which is worse
- * than no floor at all.
+ * **A reference-machine tripwire, not a product requirement.** It is calibrated
+ * against *this* development machine and catches a regression in what we
+ * control — a lost SIMD path, an accidental batch-size change, a dtype swap —
+ * while tolerating a loaded CI box sharing cores. A floor placed at the
+ * observed value would flake on the first busy afternoon and get deleted, which
+ * is worse than no floor at all.
  *
- * Any machine this runs on that is genuinely slower than this is telling us
- * something worth knowing, which is the point.
+ * It is explicitly **not** a statement about supported hardware. An older
+ * laptop that embeds at 2 windows/sec is slow, not broken: analysis is a
+ * background job nobody waits on, and RES-08's claim is that topic organization
+ * works on every tier rather than that it works at a given speed. Do not run
+ * this as an acceptance gate on user hardware, and do not read a failure on an
+ * unfamiliar machine as a defect before comparing like with like.
  */
 const MIN_WINDOWS_PER_SEC = 3.5;
 
@@ -197,9 +201,10 @@ test.describe('embedding throughput at realistic scale (ADR-0007 4A) @analysis-b
       const windowsPerSec = WINDOWS / (run.totalEmbedMs / 1000);
       expect(
         windowsPerSec,
-        `${run.device} embedded ${windowsPerSec.toFixed(1)} windows/sec, below the ${MIN_WINDOWS_PER_SEC} floor. `
-        + 'Either this machine is heavily loaded, or something in the packaged runtime regressed — '
-        + 'check the ORT variant list, the dtype, and EMB-07\'s batch size.',
+        `${run.device} embedded ${windowsPerSec.toFixed(1)} windows/sec, below the ${MIN_WINDOWS_PER_SEC} floor `
+        + 'calibrated on the reference machine. Before treating this as a regression, check that this '
+        + 'machine is comparable and not loaded; if it is, look at the ORT variant list, the dtype, '
+        + 'and EMB-07\'s batch size.',
       ).toBeGreaterThan(MIN_WINDOWS_PER_SEC);
 
       const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
