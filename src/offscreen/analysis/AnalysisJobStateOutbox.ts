@@ -219,38 +219,6 @@ export async function sealAnalysisJob(
   return false;
 }
 
-/**
- * Seals a completed job's terminal state, then hands its result over —
- * **delivering even if the seal never succeeded.**
- *
- * The ordinary guarantee is HOST-03's: durable before delivered, so background
- * cannot acknowledge and release a result whose completion nothing recorded.
- * This is the deliberate exception. After a bounded number of failures the
- * result is offered anyway, trading that guarantee for liveness: holding it
- * would keep the runtime permanently busy and block every extension update on
- * a store that is not going to recover. In that degraded interval a death of
- * the service worker or this document can cost the analysis, which is then
- * recomputed from the transcript — acceptable for derived data, and not
- * acceptable for anything that is not.
- */
-export async function sealThenDeliverAnalysis(
-  outbox: Pick<AnalysisJobStateOutbox, 'put'>,
-  job: AnalysisJob,
-  deliver: () => void,
-  options: SealOptions = {},
-): Promise<boolean> {
-  const sealed = await sealAnalysisJob(outbox, job, options);
-  if (!sealed) {
-    options.warn?.(
-      `Delivering the analysis for ${job.historyId} without a durable terminal state after `
-      + `${options.attempts ?? SEAL_ATTEMPTS} attempts; it may need recomputing if this document dies`,
-      job.id,
-    );
-  }
-  deliver();
-  return sealed;
-}
-
 /** The outbox the offscreen document uses. */
 export function createAnalysisJobStateOutbox(): AnalysisJobStateOutbox {
   return new AnalysisJobStateOutbox(createIndexedDbAnalysisJobStateArea());

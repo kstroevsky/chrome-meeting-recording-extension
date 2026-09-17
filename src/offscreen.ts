@@ -30,12 +30,8 @@ import { createChromeUploadJobStateOutbox } from './offscreen/drive/UploadJobSta
 import { AnalysisManager } from './offscreen/analysis/AnalysisManager';
 import { EmbeddingWorkerClient } from './offscreen/analysis/EmbeddingWorkerClient';
 import { analysisEngineConfig, spawnAnalysisWorker } from './offscreen/analysis/engineConfig';
-import {
-  acknowledgeAnalysisJob,
-  createAnalysisJobStateOutbox,
-  sealAnalysisJob,
-  sealThenDeliverAnalysis,
-} from './offscreen/analysis/AnalysisJobStateOutbox';
+import { createAnalysisJobStateOutbox } from './offscreen/analysis/AnalysisJobStateOutbox';
+import { AnalysisSealLedger } from './offscreen/analysis/AnalysisSealLedger';
 import { toWireAnalysis } from './shared/analysis/storedAnalysis';
 import { isTerminalAnalysisJob } from './shared/analysis/job';
 import { renameDriveResources } from './offscreen/drive/DriveMetadataRenamer';
@@ -217,11 +213,10 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     cancelAnalysis: (jobId) => analysisManager.cancel(jobId),
     listAnalysisWork: () => analysisManager.busyJobs().map((job) => job.id),
     // Durable row first, then the held result — see `acknowledgeAnalysisJob`.
-    acknowledgeAnalysisState: async (jobId) => {
-      if (await acknowledgeAnalysisJob(analysisJobStateOutbox, analysisManager, jobId, L.warn)) {
-        sealedAnalysisJobs.delete(jobId);
-      }
-    },
+    // Removes the durable row then releases the result — unless the state was
+    // deliberately never sealed, in which case there is no row to remove and
+    // holding the result would defeat the degraded path's whole purpose.
+    acknowledgeAnalysisState: (jobId) => analysisSeals.acknowledge(jobId).then(() => {}),
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
     pushState: controller.pushState,
     log: L.log,
@@ -358,6 +353,11 @@ const uploadManager = new UploadManager({
 // terminated under it, so it takes the same durable shape uploads do —
 // reported as it moves, terminal state held in an outbox until background acks.
 const analysisJobStateOutbox = createAnalysisJobStateOutbox();
+const analysisSeals = new AnalysisSealLedger(
+  analysisJobStateOutbox,
+  { acknowledge: (jobId) => analysisManager.acknowledge(jobId) },
+  { warn: L.warn },
+);
 
 const analysisManager = new AnalysisManager({
   openEngine: () => EmbeddingWorkerClient.create(
@@ -373,19 +373,9 @@ const analysisManager = new AnalysisManager({
   isUnsupported: () => EmbeddingWorkerClient.unsupported,
 });
 
-/** Job ids whose terminal state is already on disk, so it is written once. */
-const sealedAnalysisJobs = new Set<string>();
-
-/** Seals a terminal state, with its own bounded retries. */
-async function seal(job: import('./shared/analysis/job').AnalysisJob): Promise<boolean> {
-  if (sealedAnalysisJobs.has(job.id)) return true;
-  const sealed = await sealAnalysisJob(analysisJobStateOutbox, job, { warn: L.warn });
-  if (sealed) sealedAnalysisJobs.add(job.id);
-  return sealed;
-}
-
 async function reportAnalysisJob(job: import('./shared/analysis/job').AnalysisJob): Promise<void> {
-  if (isTerminalAnalysisJob(job)) await seal(job);
+  // One sealing attempt per job, shared with delivery below.
+  if (isTerminalAnalysisJob(job)) await analysisSeals.ensureSealed(job);
   try {
     getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_STATE', job });
   } catch (error) {
@@ -406,20 +396,10 @@ async function deliverAnalysisResult(
   result: import('./shared/analysis/analyzeTranscript').AnalysisResult,
   provenance: import('./shared/analysis/provenance').AnalysisProvenance,
 ): Promise<void> {
-  // Durable before delivered, with the bounded exception documented on
-  // `sealThenDeliverAnalysis`: the retries happen here and now rather than
-  // waiting on a reconnect that may never come.
-  if (sealedAnalysisJobs.has(job.id)) {
+  // Durable before delivered, with the bounded exception the ledger documents.
+  await analysisSeals.deliver(job, () => {
     getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result), provenance });
-    return;
-  }
-  const sealed = await sealThenDeliverAnalysis(
-    analysisJobStateOutbox,
-    job,
-    () => getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result), provenance }),
-    { warn: L.warn },
-  );
-  if (sealed) sealedAnalysisJobs.add(job.id);
+  });
 }
 
 async function replayAnalysisStates(port: chrome.runtime.Port): Promise<void> {

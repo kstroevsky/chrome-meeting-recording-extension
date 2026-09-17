@@ -552,6 +552,10 @@ There is now an explicit `analysisWorkUnknown` bit, counted as critical work, se
 
 The first attempt at the bound was wrong and is worth recording: attempts were counted *across call sites* — one when the state was reported, one when the result was delivered — with the third left to a later reconnect. On a healthy, continuously connected port that reconnect never comes, so the third attempt never happened, the result was held indefinitely, and the runtime stayed busy behind it, blocking updates forever. **A bound is only a bound if something drives it.** Sealing now retries on its own timer, three attempts with a short backoff, independent of anything else happening.
 
+**And the degraded path did not actually release anything.** Found on review of the fix above: delivery succeeded unsealed, background stored the analysis and acknowledged it — and the acknowledgement then asked the *same broken store* to remove a row that was never written. That failed, so the held result was never released, the document stayed busy, and updates stayed blocked. The fallback reached background but did not achieve the one property it exists for.
+
+Sealing is now a **single outcome per job** (`AnalysisSealLedger`), shared by the state report and the delivery — which also fixes a quieter mismatch, where each ran its own three-attempt retry and the flow made six. Acknowledgement follows that recorded outcome: a job known to be unsealed releases its result without touching the outbox; anything else takes the normal row-first path, including a job replayed after a restart, whose row is real.
+
 **The degraded path, stated exactly.** After those attempts fail, the result is delivered *without* durable terminal state. This is a deliberate departure from HOST-03, not a gap in it:
 
 - **Normal guarantee:** a completed result is never offered before its completion is recorded, so background cannot acknowledge and release something whose existence nothing durable attests to.

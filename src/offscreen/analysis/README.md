@@ -43,6 +43,7 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 - **A downgrade is reported, never silent.** `EmbeddingWorkerClient` calls `reportWarning` when the backend that loaded is not the one requested — the house rule `WorkerStorageTarget` established. A machine without WebGPU is an ordinary tier (RES-06/08), but the user is about to wait considerably longer.
 - **Concurrency is 1 and not configurable.** Two analyses contend for one GPU and one model; the second finishes no sooner for having started, and a live capture alongside would feel both.
 - **The engine is released when the queue drains.** A loaded ONNX graph holds GPU buffers and analysis is a rare per-recording event, so one model load serves a whole queue and nothing stays resident between recordings.
+- **A deliberately unsealed result is released without touching the outbox.** After bounded seal failures a result is delivered anyway (liveness over crash durability, for derived data only). Acknowledging it must not then ask the same broken store to remove a row that was never written — that failure would hold the payload forever, which is precisely what the fallback exists to prevent.
 - **Acknowledgement removes the durable row first, then the held result.** If the row cannot be removed, the result stays, so a reconnect redelivers it rather than treating the row as a lost result and recomputing.
 - **A result is released on acknowledgement, never on delivery.** `deliver` is a `postMessage`: it resolving means the message left, not that anything was stored. The gap between the two is where a result would otherwise be lost.
 - **"Busy" includes a completed-but-unacknowledged result.** A job reports `completed` before its result is persisted, so a busy check watching only running jobs would let `closeForUpdate()` discard the only copy.
@@ -78,6 +79,7 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 | `engineConfig.ts` | Where the packaged artifacts are — the URLs only an extension context can form |
 | `AnalysisManager.ts` | The queue: one job at a time, progress, cancellation, engine lifetime, held results |
 | `AnalysisJobStateOutbox.ts` | Terminal job state in IndexedDB (`analysis-job-outbox`), one key per job; the acknowledgement ordering |
+| `AnalysisSealLedger.ts` | One sealing outcome per job, and what acknowledging it therefore does |
 
 ## Configuration
 
