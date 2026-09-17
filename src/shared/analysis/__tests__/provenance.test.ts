@@ -108,4 +108,21 @@ describe('isStale', () => {
     expect(hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG))
       .toBe(hashAnalysisConfig({ ...CANDIDATE_ANALYSIS_CONFIG }));
   });
+
+  it('records the backend without letting it make a result stale', () => {
+    // Diagnostic only. Comparing it would recompute every analysis whenever a
+    // machine changes tier, over a divergence nobody has shown exists — while
+    // recording it is what lets stored rows be told apart if one ever is.
+    const onGpu = provenance({ embeddingDevice: 'webgpu' });
+    const onCpu = provenance({ embeddingDevice: 'wasm' });
+    expect(isStale(onGpu, onCpu)).toBe(false);
+    expect(isStale(onGpu, provenance())).toBe(false);
+  });
+
+  it('is at the version that includes the tail-window and centroid corrections', () => {
+    // D-22 and D-23 changed what the pipeline outputs without changing any
+    // threshold, so only the version can make earlier rows read as stale.
+    expect(PIPELINE_VERSION).toBe(2);
+    expect(isStale(provenance({ pipelineVersion: 1 }), provenance())).toBe(true);
+  });
 });

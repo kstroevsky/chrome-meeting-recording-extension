@@ -34,6 +34,7 @@ function wire(overrides: Partial<Record<string, any>> = {}) {
     cancelUpload: overrides.cancelUpload ?? jest.fn().mockReturnValue(true),
     acknowledgeUploadState: overrides.acknowledgeUploadState ?? jest.fn().mockResolvedValue(undefined),
     analyzeTranscript: overrides.analyzeTranscript,
+    listAnalysisWork: overrides.listAnalysisWork,
     cancelAnalysis: overrides.cancelAnalysis,
     acknowledgeAnalysisState: overrides.acknowledgeAnalysisState,
     pushState: jest.fn((next: RecordingPhase) => { phase = next; }),
@@ -500,6 +501,14 @@ describe('topic analysis commands (ADR-0007)', () => {
     keywordsPerTopic: 4,
   };
   const transcript = [{ tStartMs: 0, tEndMs: 2_000, speaker: 'Ada', text: 'the redis pool is saturated' }];
+  const provenance = {
+    pipelineVersion: 2,
+    embeddingModel: 'Xenova/multilingual-e5-small',
+    embeddingModelRevision: 'rev',
+    embeddingDimensions: 384,
+    embeddingDtype: 'q8',
+    configHash: 'abcd1234',
+  };
 
   const analyze = (overrides: Record<string, unknown> = {}) => ({
     __id: 'ana-1',
@@ -507,6 +516,7 @@ describe('topic analysis commands (ADR-0007)', () => {
     historyId: 'rec_1',
     transcript,
     config: ANALYSIS_CONFIG,
+    provenance,
     ...overrides,
   });
 
@@ -522,7 +532,7 @@ describe('topic analysis commands (ADR-0007)', () => {
 
     await listener(analyze());
 
-    expect(analyzeTranscript).toHaveBeenCalledWith('rec_1', transcript, ANALYSIS_CONFIG);
+    expect(analyzeTranscript).toHaveBeenCalledWith('rec_1', transcript, ANALYSIS_CONFIG, provenance);
     expect(replyFor(port, 'ana-1')).toEqual({ ok: true, jobId: 'ana_7' });
   });
 
@@ -551,6 +561,10 @@ describe('topic analysis commands (ADR-0007)', () => {
 
     await listener(analyze({ __id: 'c', config: undefined }));
     expect(replyFor(port, 'c')).toEqual({ ok: false, error: 'Missing analysis configuration' });
+
+    // A run that could not say what produced it is refused, not defaulted.
+    await listener(analyze({ __id: 'd', provenance: undefined }));
+    expect(replyFor(port, 'd')).toEqual({ ok: false, error: 'Missing analysis provenance' });
 
     expect(analyzeTranscript).not.toHaveBeenCalled();
   });
@@ -584,5 +598,21 @@ describe('topic analysis commands (ADR-0007)', () => {
     // An empty id would remove nothing and is not worth a storage round-trip.
     await listener({ type: 'OFFSCREEN_ACK_ANALYSIS_STATE', jobId: '' });
     expect(acknowledgeAnalysisState).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists every job still keeping the data plane busy', async () => {
+    const listAnalysisWork = jest.fn(() => ['ana_running', 'ana_held']);
+    const { port, listener } = wire({ listAnalysisWork });
+
+    await listener({ __id: 'w1', type: 'OFFSCREEN_LIST_ANALYSIS_WORK' });
+    expect(replyFor(port, 'w1')).toEqual({ ok: true, jobIds: ['ana_running', 'ana_held'] });
+  });
+
+  it('answers an empty list, not an error, when the runtime has no manager', async () => {
+    // Background asks this to decide whether it may reload; "no manager" is a
+    // real answer to that question.
+    const { port, listener } = wire();
+    await listener({ __id: 'w2', type: 'OFFSCREEN_LIST_ANALYSIS_WORK' });
+    expect(replyFor(port, 'w2')).toEqual({ ok: true, jobIds: [] });
   });
 });

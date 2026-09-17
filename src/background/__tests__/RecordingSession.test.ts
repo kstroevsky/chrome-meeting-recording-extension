@@ -774,7 +774,7 @@ describe('RecordingSession state machine', () => {
         hooked.applyOffscreenPhase({ phase: 'idle' });
 
         expect(onRunFinished).toHaveBeenCalledTimes(1);
-        expect(onRunFinished).toHaveBeenCalledWith(historyId, 6_000);
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 6_000, 'kept');
       });
 
       it('announces a run that ended in failure', () => {
@@ -784,6 +784,10 @@ describe('RecordingSession state machine', () => {
         hooked.applyOffscreenPhase({ phase: 'recording' });
         t += 3_000;
         hooked.fail('the meeting tab closed');
+
+        // A failure is not a discard: whatever the run produced may still be delivered.
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 3_000, 'kept');
+      });
 
         expect(onRunFinished).toHaveBeenCalledWith(historyId, 3_000);
       });
@@ -798,7 +802,7 @@ describe('RecordingSession state machine', () => {
         hooked.markStopping();
 
         // Early enough that the stop RPC can still carry the notes export.
-        expect(onRunFinished).toHaveBeenCalledWith(historyId, 9_000);
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 9_000, 'kept');
 
         // And the later idle must not repeat it, nor change the duration.
         t += 4_000;

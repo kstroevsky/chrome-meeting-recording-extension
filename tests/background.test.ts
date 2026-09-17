@@ -20,6 +20,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -78,6 +81,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -144,6 +150,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockImplementation(async () => {
         offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
@@ -207,6 +216,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: any) => void) | undefined,
       onSaveRequested: undefined as ((msg: any) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -261,6 +273,9 @@ describe('background runtime messages', () => {
         rpc: jest.fn(),
         revokeBlobUrl: jest.fn(),
         closeForUpdate: jest.fn().mockResolvedValue(true),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       };
 
       jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
@@ -312,6 +327,9 @@ describe('background runtime messages', () => {
         rpc: jest.fn(),
         revokeBlobUrl: jest.fn(),
         closeForUpdate: jest.fn().mockResolvedValue(true),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       };
 
       jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
@@ -342,6 +360,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -383,6 +404,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -422,6 +446,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -460,6 +487,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -500,6 +530,9 @@ describe('background runtime messages', () => {
       onStateChanged: undefined as ((msg: { type: 'OFFSCREEN_STATE'; phase: 'idle' | 'recording' | 'stopping' }) => void) | undefined,
       onSaveRequested: undefined as ((msg: { type: 'OFFSCREEN_SAVE'; filename: string; blobUrl: string; opfsFilename?: string }) => void) | undefined,
       hydratePhase: jest.fn(),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
       stopIfPossibleOnSuspend: jest.fn(),
@@ -544,6 +577,9 @@ describe('background runtime messages', () => {
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
       closeForUpdate: jest.fn().mockResolvedValue(true),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
     };
   }
 
@@ -652,9 +688,90 @@ describe('background runtime messages', () => {
 
     const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
     onUpdate({ version: '2.0.0' });
-    await Promise.resolve();
+    await untilCalled(chrome.runtime.reload as jest.Mock);
 
     expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
+  });
+
+  describe('updates and topic analysis (ADR-0007 HOST-04)', () => {
+    /** A mock whose analysis liveness the test controls. */
+    function withAnalysis(initiallyActive: boolean) {
+      const offscreenInstance: any = makeOffscreenInstance();
+      let active = initiallyActive;
+      offscreenInstance.hasActiveAnalysisJobs = jest.fn(() => active);
+      offscreenInstance.refreshAnalysisWork = jest.fn(async () => active);
+      return { offscreenInstance, setActive: (next: boolean) => { active = next; } };
+    }
+
+    /** Drains enough turns for the async update handler to decide. */
+    const settle = async () => {
+      for (let i = 0; i < 40; i += 1) await new Promise(process.nextTick);
+    };
+
+    it('does not reload over a running analysis, even with the session idle', async () => {
+      // The P0: the update path checked only recording and uploads, so an idle
+      // session reloaded straight over an analysis in the offscreen document.
+      const { offscreenInstance } = withAnalysis(true);
+      await importBackgroundWith(offscreenInstance);
+
+      const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+      onUpdate({ version: '2.0.0' });
+      await settle();
+
+      expect(chrome.runtime.reload).not.toHaveBeenCalled();
+    });
+
+    it('applies the deferred reload when the analysis settles, with no session change at all', async () => {
+      // An analysis finishing changes nothing in RecordingSession, so a reload
+      // waiting only on session transitions would never fire.
+      const { offscreenInstance, setActive } = withAnalysis(true);
+      await importBackgroundWith(offscreenInstance);
+
+      const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+      onUpdate({ version: '2.0.0' });
+      await settle();
+      expect(chrome.runtime.reload).not.toHaveBeenCalled();
+
+      setActive(false);
+      offscreenInstance.onAnalysisJobChanged?.({
+        id: 'ana_1', historyId: 'rec_1', status: 'failed', progress: 0, startedAt: 1, finishedAt: 2,
+      });
+      await settle();
+
+      expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks the data plane before reloading, rather than trusting an empty memory', async () => {
+      // After a worker restart the in-memory set is empty until the offscreen
+      // document replays. The data plane is asked directly, and its answer wins.
+      const offscreenInstance: any = makeOffscreenInstance();
+      let active = false;
+      offscreenInstance.hasActiveAnalysisJobs = jest.fn(() => active);
+      offscreenInstance.refreshAnalysisWork = jest.fn(async () => { active = true; return true; });
+      await importBackgroundWith(offscreenInstance);
+      (chrome.runtime.reload as jest.Mock).mockClear();
+
+      const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+      onUpdate({ version: '2.0.0' });
+      await settle();
+
+      expect(offscreenInstance.refreshAnalysisWork).toHaveBeenCalled();
+      expect(chrome.runtime.reload).not.toHaveBeenCalled();
+    });
+
+    it('defers rather than reloads when the data plane cannot be asked', async () => {
+      const offscreenInstance: any = makeOffscreenInstance();
+      offscreenInstance.refreshAnalysisWork = jest.fn().mockRejectedValue(new Error('port closed'));
+      await importBackgroundWith(offscreenInstance);
+      (chrome.runtime.reload as jest.Mock).mockClear();
+
+      const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+      onUpdate({ version: '2.0.0' });
+      await settle();
+
+      // Not knowing is not the same as knowing nothing is running.
+      expect(chrome.runtime.reload).not.toHaveBeenCalled();
+    });
   });
 
   it('defers the update reload while recording and applies it after work finishes', async () => {
@@ -664,6 +781,10 @@ describe('background runtime messages', () => {
 
     const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
     onUpdate({ version: '2.0.0' });
+    // Let the handler actually decide. This test used to fire `idle` before the
+    // handler's microtask ran, so it passed through the reload-immediately
+    // branch and never exercised the deferral its name describes.
+    for (let i = 0; i < 20; i += 1) await new Promise(process.nextTick);
 
     // Busy → no immediate reload.
     expect(chrome.runtime.reload).not.toHaveBeenCalled();

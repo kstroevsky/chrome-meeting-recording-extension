@@ -333,11 +333,14 @@ describe('OffscreenManager', () => {
       const listener = connect();
 
       const analysis = { segments: [], topics: [], utteranceCount: 12 };
-      listener({ type: 'OFFSCREEN_ANALYSIS_RESULT', job: analysisJob('a1', 'completed'), analysis });
+      const provenance = { pipelineVersion: 2, configHash: 'abcd1234', embeddingDevice: 'wasm' };
+      listener({ type: 'OFFSCREEN_ANALYSIS_RESULT', job: analysisJob('a1', 'completed'), analysis, provenance });
 
+      // The provenance the run was enqueued under comes back with it, untouched.
       expect(onAnalysisResult).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'a1' }),
         analysis,
+        provenance,
       );
     });
 
@@ -416,6 +419,47 @@ describe('OffscreenManager', () => {
 
       manager.hydrateAnalysisJobs([analysisJob('a2', 'failed') as never]);
       expect(manager.hasActiveAnalysisJobs()).toBe(false);
+    });
+
+    describe('refreshAnalysisWork', () => {
+      it('answers no without creating a document when none exists', async () => {
+        const internals = manager as any;
+        jest.spyOn(internals, 'hasOffscreenContext').mockResolvedValue(false);
+        const ensureReady = jest.spyOn(manager, 'ensureReady');
+        manager.hydrateAnalysisJobs([analysisJob('stale', 'analyzing') as never]);
+
+        await expect(manager.refreshAnalysisWork()).resolves.toBe(false);
+        // No document means no analysis can exist, so memory is corrected…
+        expect(manager.hasActiveAnalysisJobs()).toBe(false);
+        // …and nothing is spun up just to ask.
+        expect(ensureReady).not.toHaveBeenCalled();
+      });
+
+      it('replaces an empty memory with what the data plane reports', async () => {
+        // The restart case: nothing replayed yet, but the document is busy.
+        const internals = manager as any;
+        jest.spyOn(internals, 'hasOffscreenContext').mockResolvedValue(true);
+        jest.spyOn(manager, 'ensureReady').mockResolvedValue(undefined);
+        const rpc = jest.spyOn(manager, 'rpc').mockResolvedValue({ ok: true, jobIds: ['a1', 'a2'] });
+
+        await expect(manager.refreshAnalysisWork()).resolves.toBe(true);
+        expect(rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_LIST_ANALYSIS_WORK' });
+        expect(manager.hasActiveAnalysisJobs()).toBe(true);
+
+        // And those jobs clear through the ordinary acknowledgement path.
+        manager.acknowledgeAnalysisState('a1');
+        manager.acknowledgeAnalysisState('a2');
+        expect(manager.hasActiveAnalysisJobs()).toBe(false);
+      });
+
+      it('throws rather than guessing when the data plane gives no answer', async () => {
+        const internals = manager as any;
+        jest.spyOn(internals, 'hasOffscreenContext').mockResolvedValue(true);
+        jest.spyOn(manager, 'ensureReady').mockResolvedValue(undefined);
+        jest.spyOn(manager, 'rpc').mockResolvedValue({ ok: false, error: 'unknown command' });
+
+        await expect(manager.refreshAnalysisWork()).rejects.toThrow('did not report');
+      });
     });
 
     it('acknowledges without throwing when the port is gone', () => {

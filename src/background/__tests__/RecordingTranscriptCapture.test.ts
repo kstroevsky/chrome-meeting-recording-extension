@@ -65,6 +65,47 @@ describe('RecordingTranscriptCapture', () => {
     expect(sendToTab).toHaveBeenLastCalledWith(42, { type: 'SET_TRANSCRIPT_CAPTURE', active: false });
   });
 
+    it('drops pushes the run still sends while its history id is live', async () => {
+      // The history id survives until idle, so the run-id check alone would let
+      // a push that was already in flight write the transcript back.
+      const { capture, repository } = harness();
+      await capture.arm(42, RUN_ID);
+      await capture.abandon();
+
+      await capture.receive(RUN_ID, [utterance(3_000, 'late words from a discarded run')]);
+      expect(repository.rows.size).toBe(0);
+    });
+
+    it('leaves nothing for a later finish to sweep', async () => {
+      const { capture, sendToTab } = harness();
+      await capture.arm(42, RUN_ID);
+      await capture.abandon();
+      sendToTab.mockClear();
+
+      await capture.finish('rec:1');
+      expect(sendToTab).not.toHaveBeenCalled();
+    });
+
+    it('does not affect the next run', async () => {
+      let runId = RUN_ID;
+      const repository = fakeRepository();
+      const capture = new RecordingTranscriptCapture({
+        transcripts: new RecordingTranscriptService(repository),
+        activeHistoryId: () => 'rec:2',
+        activeRunId: () => runId,
+        recordedRangeAt: (start, end) => ({ tStartMs: start - RUN_START, tEndMs: Math.max(end, start) - RUN_START }),
+        sendToTab: jest.fn(async () => ({ utterances: [] })),
+        warn: jest.fn(),
+      });
+      await capture.arm(42, RUN_ID);
+      await capture.abandon();
+
+      runId = RUN_ID + 1;
+      await capture.receive(runId, [utterance(3_000, 'the next recording')]);
+      expect(repository.rows.get('rec:2')?.segments.map((s) => s.text)).toEqual(['the next recording']);
+    });
+  });
+
   it('stores pushed utterances against the active run, on the media timeline', async () => {
     const { capture, repository } = harness();
     await capture.receive(RUN_ID, [utterance(3_000, 'the pool is saturated')]);

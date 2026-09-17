@@ -3,6 +3,7 @@ import type { EmbeddingWorkerClient } from '../EmbeddingWorkerClient';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisResult } from '../../../shared/analysis/analyzeTranscript';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
+import type { AnalysisProvenance } from '../../../shared/analysis/provenance';
 import type { TranscriptSegment } from '../../../shared/transcript';
 
 const CONFIG: AnalysisConfig = {
@@ -19,6 +20,16 @@ const CONFIG: AnalysisConfig = {
 };
 
 const SUBJECTS: Record<string, number> = { redis: 0, berlin: 90, hiring: 180 };
+
+/** What the control plane captured at enqueue; the manager must hand it back. */
+const PROVENANCE = {
+  pipelineVersion: 2,
+  embeddingModel: 'Xenova/multilingual-e5-small',
+  embeddingModelRevision: 'rev',
+  embeddingDimensions: 2,
+  embeddingDtype: 'q8' as const,
+  configHash: 'abcd1234',
+};
 
 /** Same stub encoder the pipeline tests use: same subject, same direction. */
 function embed(texts: string[]): Float32Array[] {
@@ -68,7 +79,7 @@ function fakeEngine(overrides: { device?: 'webgpu' | 'wasm'; failAfter?: number 
 type Harness = {
   manager: AnalysisManager;
   reported: AnalysisJob[];
-  delivered: { job: AnalysisJob; result: AnalysisResult }[];
+  delivered: { job: AnalysisJob; result: AnalysisResult; provenance: AnalysisProvenance }[];
   opens: number;
   engineState: { disposed: number; batches: number };
 };
@@ -81,7 +92,7 @@ function harness(options: {
 } = {}): Harness {
   const engine = options.engine ?? fakeEngine();
   const reported: AnalysisJob[] = [];
-  const delivered: { job: AnalysisJob; result: AnalysisResult }[] = [];
+  const delivered: { job: AnalysisJob; result: AnalysisResult; provenance: AnalysisProvenance }[] = [];
   const h = { opens: 0 } as Harness;
 
   h.manager = new AnalysisManager({
@@ -91,9 +102,9 @@ function harness(options: {
       return engine.client;
     },
     report: (job) => { reported.push({ ...job }); },
-    deliver: async (job, result) => {
+    deliver: async (job, result, provenance) => {
       if (options.deliverFails?.()) throw new Error('port disconnected');
-      delivered.push({ job, result });
+      delivered.push({ job, result, provenance });
     },
     isUnsupported: options.isUnsupported,
     now: () => 1_000,
@@ -118,7 +129,7 @@ async function settle(): Promise<void> {
 describe('AnalysisManager', () => {
   it('reports an analyzing job before the engine has loaded', () => {
     const h = harness();
-    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
 
     // Synchronous, deliberately: a cold WASM load is the longest part of a run,
     // and a surface that waits for it shows nothing for a minute. The engine
@@ -130,7 +141,7 @@ describe('AnalysisManager', () => {
 
   it('runs the pipeline and delivers the result with the job', async () => {
     const h = harness();
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12], ['redis', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12], ['redis', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     const terminal = last(h.reported)!;
@@ -147,7 +158,7 @@ describe('AnalysisManager', () => {
 
   it('records which rung of the ladder ran, so a slow analysis is explicable', async () => {
     const h = harness({ engine: fakeEngine({ device: 'wasm' }) });
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     expect(last(h.reported)!.device).toBe('wasm');
@@ -157,7 +168,7 @@ describe('AnalysisManager', () => {
     const h = harness();
     // 180 utterances at window 4 / stride 4 is 45 windows: two batches of 32,
     // which is the minimum that can show progress moving at all.
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 60], ['berlin', 60], ['hiring', 60]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 60], ['berlin', 60], ['hiring', 60]]), CONFIG, PROVENANCE);
     await settle();
 
     const progressing = h.reported.filter((j) => j.status === 'analyzing' && j.windowsTotal != null);
@@ -184,8 +195,8 @@ describe('AnalysisManager', () => {
       genId: () => `ana_${(ids += 1)}`,
     });
 
-    manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
-    manager.enqueue('rec_2', transcriptOf([['berlin', 12]]), CONFIG);
+    manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
+    manager.enqueue('rec_2', transcriptOf([['berlin', 12]]), CONFIG, PROVENANCE);
     // One has started; the other has not, because concurrency is 1.
     await Promise.resolve();
     await Promise.resolve();
@@ -207,8 +218,8 @@ describe('AnalysisManager', () => {
       genId: () => `ana_${(ids += 1)}`,
     });
 
-    manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
-    manager.enqueue('rec_2', transcriptOf([['berlin', 12]]), CONFIG);
+    manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
+    manager.enqueue('rec_2', transcriptOf([['berlin', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     // One model load serves both; the GPU buffers go back when nothing is queued.
@@ -218,7 +229,7 @@ describe('AnalysisManager', () => {
 
   it('reports the job as busy while it is queued or running, and until its result is acknowledged', async () => {
     const h = harness();
-    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
     expect(h.manager.hasActiveJobs()).toBe(true);
     expect(h.manager.activeJobs().map((j) => j.historyId)).toEqual(['rec_1']);
 
@@ -235,7 +246,7 @@ describe('AnalysisManager', () => {
     const engine = fakeEngine({ failAfter: 1 });
     const h = harness({ engine });
     // Long enough to need a second batch, which is the one that throws.
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 60], ['berlin', 60], ['hiring', 60]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 60], ['berlin', 60], ['hiring', 60]]), CONFIG, PROVENANCE);
     await settle();
 
     const terminal = last(h.reported)!;
@@ -249,7 +260,7 @@ describe('AnalysisManager', () => {
 
   it('ends a job as failed when the engine will not open at all', async () => {
     const h = harness({ openFails: new Error('no available backend found') });
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     expect(last(h.reported)).toMatchObject({ status: 'failed', error: expect.stringContaining('no available backend') });
@@ -257,7 +268,7 @@ describe('AnalysisManager', () => {
 
   it('ends a job as unsupported when the engine path is already latched off', async () => {
     const h = harness({ isUnsupported: () => true });
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     expect(last(h.reported)).toMatchObject({ status: 'unsupported' });
@@ -267,7 +278,7 @@ describe('AnalysisManager', () => {
 
   it('cancels at a batch boundary and delivers nothing', async () => {
     const h = harness();
-    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 60], ['berlin', 60], ['hiring', 60]]), CONFIG);
+    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 60], ['berlin', 60], ['hiring', 60]]), CONFIG, PROVENANCE);
     await Promise.resolve();
     await Promise.resolve();
     expect(h.manager.cancel(id)).toBe(true);
@@ -285,7 +296,7 @@ describe('AnalysisManager', () => {
     // successful send loses the only copy whenever the control plane dies in
     // the gap between delivery and persistence.
     const h = harness();
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     expect(h.delivered).toHaveLength(1);
@@ -305,7 +316,7 @@ describe('AnalysisManager', () => {
 
   it('counts a completed-but-unacknowledged result as active work (HOST-04)', async () => {
     const h = harness();
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     // The job has left the queue, but its result has nowhere else to live yet,
@@ -320,7 +331,7 @@ describe('AnalysisManager', () => {
 
   it('is not busy for a job that ended without a result', async () => {
     const h = harness({ isUnsupported: () => true });
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     // Nothing was produced, so nothing is being held.
@@ -328,10 +339,37 @@ describe('AnalysisManager', () => {
     expect(h.manager.hasActiveJobs()).toBe(false);
   });
 
+  it('hands back the provenance it was given, with the backend that actually ran', async () => {
+    // The control plane captures provenance before any backend has loaded, so
+    // the device can only be stamped here. Everything else must come back
+    // exactly as sent, whatever the service worker has done meanwhile.
+    const h = harness({ engine: fakeEngine({ device: 'wasm' }) });
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG, PROVENANCE);
+    await settle();
+
+    expect(h.delivered[0].provenance).toEqual({ ...PROVENANCE, embeddingDevice: 'wasm' });
+  });
+
+  it('lists a held result among the jobs that keep it busy', async () => {
+    const h = harness();
+    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
+    expect(h.manager.busyJobs().map((j) => [j.id, j.status])).toEqual([[id, 'analyzing']]);
+
+    await settle();
+    // Off the queue, still held — and still announced on a replay.
+    expect(h.manager.activeJobs()).toEqual([]);
+    expect(h.manager.busyJobs().map((j) => [j.id, j.status])).toEqual([[id, 'completed']]);
+    expect(h.manager.holdsResult(id)).toBe(true);
+
+    h.manager.acknowledge(id);
+    expect(h.manager.busyJobs()).toEqual([]);
+    expect(h.manager.holdsResult(id)).toBe(false);
+  });
+
   it('holds an undelivered result and re-delivers it when the port comes back', async () => {
     let down = true;
     const h = harness({ deliverFails: () => down });
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     // The job finished and was reported, but the control plane never took it.
@@ -353,7 +391,7 @@ describe('AnalysisManager', () => {
   it('keeps a held result after a failed re-delivery attempt', async () => {
     let down = true;
     const h = harness({ deliverFails: () => down });
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     await h.manager.redeliver();
@@ -375,7 +413,7 @@ describe('AnalysisManager', () => {
       genId: () => 'ana_1',
     });
 
-    manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG);
+    manager.enqueue('rec_1', transcriptOf([['redis', 12], ['berlin', 12]]), CONFIG, PROVENANCE);
     await settle();
 
     // The analysis still ran and still reached the control plane.
@@ -384,7 +422,7 @@ describe('AnalysisManager', () => {
 
   it('completes a recording too short to fill a window, rather than failing it', async () => {
     const h = harness();
-    h.manager.enqueue('rec_1', transcriptOf([['redis', 1]]), CONFIG);
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 1]]), CONFIG, PROVENANCE);
     await settle();
 
     // `buildContextWindows` covers a short transcript with one window rather
@@ -396,7 +434,7 @@ describe('AnalysisManager', () => {
 
   it('completes an empty transcript with nothing, and never opens an engine', async () => {
     const h = harness();
-    h.manager.enqueue('rec_1', [], CONFIG);
+    h.manager.enqueue('rec_1', [], CONFIG, PROVENANCE);
     await settle();
 
     expect(last(h.reported)).toMatchObject({ status: 'completed', topicCount: 0, segmentCount: 0 });

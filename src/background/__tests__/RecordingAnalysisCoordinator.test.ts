@@ -54,9 +54,13 @@ function harness(options: {
   stored?: StoredAnalysis;
   analyzeAnswer?: { ok: boolean; jobId?: string; error?: string };
   ensureReadyThrows?: Error;
-  saveThrows?: Error;
+  saveThrows?: Error | (() => Error | undefined);
+  /** Answers the deletion fence; defaults to reading `tombstones`. */
+  isRecordingDeleted?: (historyId: string) => Promise<boolean>;
 } = {}) {
+  // Durable state: survives a "service-worker restart" (a fresh coordinator).
   const rows = new Map<string, StoredAnalysis>();
+  const tombstones = new Set<string>();
   /** Mutable "conditions right now", so a test can change them mid-run. */
   const current = { provenance: PROVENANCE };
   if (options.stored) rows.set('rec_1', options.stored);
@@ -66,8 +70,8 @@ function harness(options: {
     ensureReady: async () => {
       if (options.ensureReadyThrows) throw options.ensureReadyThrows;
     },
-    analyzeTranscript: async (historyId, transcript, config) => {
-      calls.analyze.push({ historyId, transcript, config });
+    analyzeTranscript: async (historyId, transcript, config, provenance) => {
+      calls.analyze.push({ historyId, transcript, config, provenance });
       return options.analyzeAnswer ?? { ok: true, jobId: 'ana_1' };
     },
     cancelAnalysis: async (jobId) => { calls.cancel.push(jobId); return { ok: true }; },
@@ -78,7 +82,8 @@ function harness(options: {
     {
       get: async (id) => rows.get(id),
       put: async (id, analysis) => {
-        if (options.saveThrows) throw options.saveThrows;
+        const failure = typeof options.saveThrows === 'function' ? options.saveThrows() : options.saveThrows;
+        if (failure) throw failure;
         rows.set(id, analysis);
       },
       remove: async (id) => { rows.delete(id); },
@@ -87,16 +92,22 @@ function harness(options: {
   );
 
   const changed: AnalysisJob[] = [];
-  const coordinator = new RecordingAnalysisCoordinator({
+  /**
+   * A coordinator over the same durable state. Calling it again is what a
+   * service-worker restart looks like: every in-memory map starts empty.
+   */
+  const freshCoordinator = () => new RecordingAnalysisCoordinator({
     dataPlane,
     analyses,
     readTranscript: async () => options.transcript,
+    isRecordingDeleted: options.isRecordingDeleted ?? (async (id) => tombstones.has(id)),
     config: () => CANDIDATE_ANALYSIS_CONFIG,
     onJobChanged: (job) => changed.push(job),
     now: () => 5_000,
   });
+  const coordinator = freshCoordinator();
 
-  return { coordinator, calls, rows, changed, current, analyses };
+  return { coordinator, freshCoordinator, calls, rows, tombstones, changed, current, analyses };
 }
 
 describe('RecordingAnalysisCoordinator', () => {
@@ -106,7 +117,8 @@ describe('RecordingAnalysisCoordinator', () => {
 
     // Background owns `recording-history`; the data plane is told, never asked.
     expect(h.calls.analyze).toEqual([
-      { historyId: 'rec_1', transcript: TRANSCRIPT.segments, config: CANDIDATE_ANALYSIS_CONFIG },
+      // Provenance travels with the job, captured before it starts.
+      { historyId: 'rec_1', transcript: TRANSCRIPT.segments, config: CANDIDATE_ANALYSIS_CONFIG, provenance: PROVENANCE },
     ]);
   });
 
@@ -349,6 +361,124 @@ describe('RecordingAnalysisCoordinator', () => {
 
       await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
       expect(h.rows.has('rec_1')).toBe(true);
+    });
+  });
+
+  describe('the recording stays held until its result is settled', () => {
+    it('refuses a second run while a completed result waits to be stored', async () => {
+      // `completed` means computed, not persisted. A run started in between
+      // would repeat the whole computation — and after a reconnect, when
+      // delivery lags by seconds, "in between" is not small.
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.analyze('rec_1');
+      h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+
+      await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
+      expect(h.calls.analyze).toHaveLength(1);
+    });
+
+    it('re-establishes the hold from a replayed completed state after a restart', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      const restarted = h.freshCoordinator();
+      restarted.handleJobState({ ...JOB, status: 'completed' });
+
+      await expect(restarted.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
+    });
+
+    it('keeps holding through a transient storage failure, and releases once stored', async () => {
+      let failing = true;
+      const aborted = Object.assign(new Error('transaction aborted'), { name: 'AbortError' });
+      const h = harness({ transcript: TRANSCRIPT, saveThrows: () => (failing ? aborted : undefined) });
+      await h.coordinator.analyze('rec_1');
+      h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+      // The result will be re-offered; starting another run now would be waste.
+      await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
+
+      failing = false;
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+      // Released — and now stored, so a plain request finds nothing to do.
+      await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'already-analyzed' });
+    });
+  });
+
+  describe('the deletion fence is durable', () => {
+    it('refuses a late result after the worker that purged the recording is gone', async () => {
+      // The P1: the purge marker lived only in service-worker memory. A result
+      // replayed to a restarted worker was written back for a deleted recording.
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.analyze('rec_1');
+      h.tombstones.add('rec_1'); // what RecordingHistoryService.remove writes first
+      await h.coordinator.purge('rec_1');
+
+      const restarted = h.freshCoordinator();
+      await restarted.handleResult(JOB, toWireAnalysis(RESULT));
+
+      expect(h.rows.has('rec_1')).toBe(false);
+      expect(h.calls.ack).toContain('ana_1');
+    });
+
+    it('still saves a result whose history row does not exist yet', async () => {
+      // Analysis is queued at markStopping, before finalize creates the row, so
+      // "no row" is an ordinary state for a short recording — not a deletion.
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+      expect(h.rows.has('rec_1')).toBe(true);
+    });
+
+    it('removes a row written in the instant the recording was deleted', async () => {
+      // Deleted after the pre-write check, before the write landed.
+      let checks = 0;
+      const h = harness({ transcript: TRANSCRIPT, isRecordingDeleted: async () => (checks += 1) > 1 });
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+
+      expect(h.rows.has('rec_1')).toBe(false);
+      expect(h.calls.ack).toEqual(['ana_1']);
+    });
+  });
+
+  describe('provenance that travels with the job', () => {
+    it('persists the provenance that came back with the result, even after a restart', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      const atRunTime = { ...PROVENANCE, configHash: 'run0time', embeddingDevice: 'wasm' as const };
+      h.current.provenance = { ...PROVENANCE, configHash: 'now0diff' };
+
+      await h.freshCoordinator().handleResult(JOB, toWireAnalysis(RESULT), atRunTime);
+
+      // Not the current conditions, and not a guess: exactly what ran.
+      expect(h.rows.get('rec_1')!.provenance).toEqual(atRunTime);
+    });
+
+    it('falls back when the provenance that came back cannot be read', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), { configHash: 42 });
+      expect(h.rows.get('rec_1')!.provenance).toEqual(PROVENANCE);
+    });
+  });
+
+  describe('a result lost with its offscreen document', () => {
+    it('acknowledges the lost job and analyses the recording again', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      h.coordinator.handleJobState({
+        ...JOB,
+        status: 'failed',
+        lostResult: true,
+        error: 'result lost when the offscreen document restarted',
+      });
+      await new Promise(process.nextTick);
+
+      // Acknowledged, so its `completed` outbox row stops holding updates back…
+      expect(h.calls.ack).toEqual(['ana_1']);
+      // …and re-run, because the transcript it came from is still there.
+      expect(h.calls.analyze).toHaveLength(1);
+    });
+
+    it('does not re-run an ordinary failure', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      h.coordinator.handleJobState({ ...JOB, status: 'failed', error: 'no backend' });
+      await new Promise(process.nextTick);
+      expect(h.calls.analyze).toEqual([]);
     });
   });
 });

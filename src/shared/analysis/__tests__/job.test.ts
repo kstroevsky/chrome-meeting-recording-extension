@@ -67,4 +67,11 @@ describe('normalizeAnalysisJob', () => {
     const minimal = normalizeAnalysisJob({ id: 'a', historyId: 'r', status: 'failed', startedAt: 1 });
     expect(Object.keys(minimal!).sort()).toEqual(['historyId', 'id', 'progress', 'startedAt', 'status']);
   });
+
+  it('keeps the lost-result marker, and only when it is exactly true', () => {
+    expect(normalizeAnalysisJob({ ...JOB, status: 'failed', lostResult: true })?.lostResult).toBe(true);
+    // A truthy non-boolean is not the marker: it would trigger a re-run.
+    expect(normalizeAnalysisJob({ ...JOB, status: 'failed', lostResult: 'yes' })?.lostResult).toBeUndefined();
+    expect(normalizeAnalysisJob({ ...JOB, status: 'failed' })?.lostResult).toBeUndefined();
+  });
 });
