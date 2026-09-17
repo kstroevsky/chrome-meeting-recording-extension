@@ -57,21 +57,34 @@ export class RecordingAnalysisService {
   }
 
   /**
-   * Stores a completed analysis, stamping it with the conditions it ran under.
+   * The conditions a run starting now would use. Captured at **enqueue** and
+   * carried with the job, so what is stored describes the run that actually
+   * produced those vectors.
+   */
+  provenanceForNewRun(): AnalysisProvenance {
+    return this.currentProvenance();
+  }
+
+  /**
+   * Stores a completed analysis under the conditions it **ran** under.
    *
-   * Provenance is applied here rather than trusted from the caller, so a job
-   * cannot record conditions it did not actually use.
+   * `provenance` is the caller's, and must be the value captured when the run
+   * was enqueued. Stamping `currentProvenance()` here instead — which this used
+   * to do — records what is true at *persistence* time, which is a different
+   * claim: a configuration or model change between enqueue and save would make
+   * the row assert conditions that never produced it, and it would then read as
+   * current when it is not.
+   *
+   * The two coincide whenever nothing changes mid-run, which is why the bug was
+   * invisible; they stop coinciding exactly when staleness starts to matter.
    */
   async save(
     recordingId: string,
     result: Omit<StoredAnalysis, 'provenance' | 'completedAt'>,
+    provenance: AnalysisProvenance,
     now: number = Date.now(),
   ): Promise<StoredAnalysis> {
-    const analysis: StoredAnalysis = {
-      ...result,
-      provenance: this.currentProvenance(),
-      completedAt: now,
-    };
+    const analysis: StoredAnalysis = { ...result, provenance, completedAt: now };
     await this.repository.put(recordingId, analysis);
     return analysis;
   }

@@ -18,6 +18,7 @@
 import { makeLogger } from '../shared/logger';
 import { fromWireAnalysis, type WireAnalysis } from '../shared/analysis/storedAnalysis';
 import type { AnalysisJob } from '../shared/analysis/job';
+import type { AnalysisProvenance } from '../shared/analysis/provenance';
 import type { AnalysisConfig } from '../shared/analysis/types';
 import type { Transcript } from '../shared/transcript';
 import type { RecordingAnalysisService } from './RecordingAnalysisService';
@@ -55,6 +56,18 @@ export type AnalysisStartResult =
 
 export class RecordingAnalysisCoordinator {
   private readonly running = new Map<string, string>();
+  /** Recordings deleted while an analysis was in flight; see {@link purge}. */
+  private readonly purged = new Set<string>();
+  /**
+   * The conditions each in-flight job was enqueued under, keyed by job id.
+   *
+   * Provenance has to describe the run that produced a result, not the moment
+   * it happened to be written, so it is captured at enqueue and carried here
+   * until the result comes back. A job whose entry is missing — because the
+   * service worker restarted mid-run — falls back to current conditions, which
+   * is the same guess the old code always made and is no worse.
+   */
+  private readonly provenanceByJob = new Map<string, AnalysisProvenance>();
 
   constructor(private readonly deps: RecordingAnalysisCoordinatorDeps) {}
 
@@ -78,6 +91,13 @@ export class RecordingAnalysisCoordinator {
     const transcript = await this.deps.readTranscript(historyId);
     if (!transcript?.segments.length) return { ok: false, reason: 'no-transcript' };
 
+    // Reaching here means the recording exists and has words, so an earlier
+    // deletion marker is stale — the id has been reused or the recording came
+    // back. Either way a fresh run's result is wanted.
+    this.purged.delete(historyId);
+
+    // Captured before the run starts, not when its result lands.
+    const provenance = this.deps.analyses.provenanceForNewRun();
     try {
       await this.deps.dataPlane.ensureReady();
       const response = await this.deps.dataPlane.analyzeTranscript(
@@ -89,12 +109,39 @@ export class RecordingAnalysisCoordinator {
         return { ok: false, reason: 'failed', error: response.error ?? 'The data plane refused the job' };
       }
       this.running.set(historyId, response.jobId);
+      this.provenanceByJob.set(response.jobId, provenance);
       return { ok: true, jobId: response.jobId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       L.warn('Could not start topic analysis', historyId, message);
       return { ok: false, reason: 'failed', error: message };
     }
+  }
+
+  /**
+   * Drops a deleted recording's analysis, and makes sure a late one cannot
+   * resurrect it.
+   *
+   * Three things in order, because the race is real: a run started before the
+   * deletion can finish afterwards and deliver a result for a recording that no
+   * longer exists.
+   *
+   *  1. mark the recording purged, so a result arriving later is discarded
+   *     rather than stored,
+   *  2. cancel any job still running, so the data plane stops paying for work
+   *     nobody wants, and
+   *  3. remove whatever is already on disk.
+   *
+   * The marker is kept rather than cleared on cancel, because cancellation is
+   * asynchronous — the job stops at its next batch boundary, and a job that had
+   * already finished computing will still deliver. It is cleared when the same
+   * recording is analysed again, which can only happen if it exists.
+   */
+  async purge(historyId: string): Promise<void> {
+    this.purged.add(historyId);
+    await this.cancel(historyId).catch(() => {});
+    this.running.delete(historyId);
+    await this.deps.analyses.removeAll(historyId);
   }
 
   /** Aborts a recording's running analysis, if it has one. */
@@ -116,6 +163,18 @@ export class RecordingAnalysisCoordinator {
     if (job.status === 'analyzing') this.running.set(job.historyId, job.id);
     else if (this.running.get(job.historyId) === job.id) this.running.delete(job.historyId);
     this.deps.onJobChanged?.(job);
+
+    // A job that ends without a result has nothing left to wait for, so its
+    // outbox row is released here. Only `completed` defers its acknowledgement
+    // to `handleResult`, which waits until the analysis is actually on disk.
+    //
+    // Without this, a failed or cancelled run leaves an `analysisJobState:` key
+    // behind that is replayed on every reconnect for the life of the profile —
+    // the outbox is drained by acknowledgement and by nothing else.
+    if (job.status === 'failed' || job.status === 'canceled' || job.status === 'unsupported') {
+      this.provenanceByJob.delete(job.id);
+      this.deps.dataPlane.acknowledgeAnalysisState(job.id);
+    }
   }
 
   /**
@@ -127,15 +186,27 @@ export class RecordingAnalysisCoordinator {
    * un-analysed and can be run again.
    */
   async handleResult(job: AnalysisJob, wire: WireAnalysis): Promise<void> {
-    const result = fromWireAnalysis(wire);
-    if (!result) {
-      L.warn('Discarding an incoherent analysis result', job.historyId, job.id);
+    if (this.purged.has(job.historyId)) {
+      // The recording was deleted while this was computing. Acknowledged so the
+      // data plane stops holding it, and deliberately not stored: writing it
+      // would leave a row for a recording nothing will ever delete again.
+      L.log(`Discarding an analysis for deleted recording ${job.historyId}`);
+      this.provenanceByJob.delete(job.id);
       this.deps.dataPlane.acknowledgeAnalysisState(job.id);
       return;
     }
 
+    const result = fromWireAnalysis(wire);
+    if (!result) {
+      L.warn('Discarding an incoherent analysis result', job.historyId, job.id);
+      this.provenanceByJob.delete(job.id);
+      this.deps.dataPlane.acknowledgeAnalysisState(job.id);
+      return;
+    }
+
+    const provenance = this.provenanceByJob.get(job.id) ?? this.deps.analyses.provenanceForNewRun();
     try {
-      await this.deps.analyses.save(job.historyId, result, this.deps.now?.());
+      await this.deps.analyses.save(job.historyId, result, provenance, this.deps.now?.());
     } catch (error) {
       if (!isQuotaExceeded(error)) {
         // Transient — a transaction aborted under another write, say. Hold the
@@ -155,9 +226,11 @@ export class RecordingAnalysisCoordinator {
         `Discarding the analysis for ${job.historyId}: storage is full. `
         + 'The recording is unaffected and can be analysed again after freeing space.',
       );
+      this.provenanceByJob.delete(job.id);
       this.deps.dataPlane.acknowledgeAnalysisState(job.id);
       return;
     }
+    this.provenanceByJob.delete(job.id);
     this.deps.dataPlane.acknowledgeAnalysisState(job.id);
   }
 }

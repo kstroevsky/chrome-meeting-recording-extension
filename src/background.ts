@@ -128,6 +128,13 @@ const history = new RecordingHistoryService(
     // Every derived aggregate goes with the recording it describes.
     await notations.removeAll(id);
     await transcripts.removeAll(id).catch((error) => L.warn('Could not remove recording transcript:', error));
+    // Analyses are the largest rows this database holds — megabytes of vectors
+    // per recording — so leaving them behind is a storage leak that grows with
+    // every deletion. `purge` also cancels a run still in flight and refuses
+    // the result if one arrives afterwards; without that, an analysis that
+    // completes just after its recording is deleted writes a row nothing will
+    // ever delete.
+    await analysisCoordinator.purge(id).catch((error) => L.warn('Could not remove recording analysis:', error));
   },
   async (keys, historyId) => {
     // The tombstone already stands. If a player is reading these bytes, the

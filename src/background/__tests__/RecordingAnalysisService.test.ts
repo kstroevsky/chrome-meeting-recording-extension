@@ -47,22 +47,33 @@ describe('RecordingAnalysisService', () => {
     const repository = fakeRepository();
     const service = new RecordingAnalysisService(repository, () => provenance());
 
-    const saved = await service.save('rec:1', result(), 1_700_000);
+    const saved = await service.save('rec:1', result(), provenance(), 1_700_000);
     expect(saved.provenance).toEqual(provenance());
     expect(saved.completedAt).toBe(1_700_000);
   });
 
-  it('does not let a job record conditions it did not use', async () => {
-    const service = new RecordingAnalysisService(fakeRepository(), () => provenance({ embeddingDtype: 'q8' }));
-    // The caller cannot supply provenance at all — the signature omits it, and
-    // the service applies its own.
-    const saved = await service.save('rec:1', result());
+  it('stores the conditions the run used, not the conditions at save time', async () => {
+    // Current conditions say fp16; the run happened under q8. Provenance
+    // describes the run, so the row must say q8 — otherwise it would read as
+    // current under conditions that never produced it.
+    const service = new RecordingAnalysisService(fakeRepository(), () => provenance({ embeddingDtype: 'fp16' }));
+    const atRunTime = provenance({ embeddingDtype: 'q8' });
+
+    const saved = await service.save('rec:1', result(), atRunTime);
     expect(saved.provenance.embeddingDtype).toBe('q8');
+    // And it is correctly seen as stale against what is current now.
+    expect(await service.get('rec:1')).toBeUndefined();
+    expect((await service.state('rec:1')).status).toBe('stale');
+  });
+
+  it('hands out the conditions a new run should be stamped with', () => {
+    const service = new RecordingAnalysisService(fakeRepository(), () => provenance({ configHash: 'abc12345' }));
+    expect(service.provenanceForNewRun().configHash).toBe('abc12345');
   });
 
   it('reads back an analysis computed under the same conditions', async () => {
     const service = new RecordingAnalysisService(fakeRepository(), () => provenance());
-    await service.save('rec:1', result());
+    await service.save('rec:1', result(), provenance());
 
     const stored = await service.get('rec:1');
     expect(stored?.topics).toHaveLength(2);
@@ -73,7 +84,7 @@ describe('RecordingAnalysisService', () => {
     const repository = fakeRepository();
     let dtype: AnalysisProvenance['embeddingDtype'] = 'q8';
     const service = new RecordingAnalysisService(repository, () => provenance({ embeddingDtype: dtype }));
-    await service.save('rec:1', result());
+    await service.save('rec:1', result(), provenance());
 
     // The packaged model is re-quantized: the vectors move, so the topics
     // derived from them are no longer the ones this pipeline would produce.
@@ -89,7 +100,7 @@ describe('RecordingAnalysisService', () => {
 
     await expect(service.state('rec:1')).resolves.toEqual({ status: 'none' });
 
-    await service.save('rec:1', result());
+    await service.save('rec:1', result(), provenance());
     await expect(service.state('rec:1')).resolves.toMatchObject({ status: 'ready' });
 
     // A provisional scoring term gets redefined: no config value moves, so only
@@ -100,7 +111,7 @@ describe('RecordingAnalysisService', () => {
 
   it('summarizes for a list surface without carrying the vectors', async () => {
     const service = new RecordingAnalysisService(fakeRepository(), () => provenance());
-    await service.save('rec:1', result());
+    await service.save('rec:1', result(), provenance());
 
     const state = await service.state('rec:1');
     expect(state).toEqual({
@@ -120,13 +131,13 @@ describe('RecordingAnalysisService', () => {
     const service = new RecordingAnalysisService(fakeRepository(), () => provenance());
     const incoherent = { ...result(), topics: [result().topics[0]] };
 
-    await expect(service.save('rec:1', incoherent)).rejects.toThrow(/does not decode/);
+    await expect(service.save('rec:1', incoherent, provenance())).rejects.toThrow(/does not decode/);
   });
 
   it('drops an analysis entirely', async () => {
     const repository = fakeRepository();
     const service = new RecordingAnalysisService(repository, () => provenance());
-    await service.save('rec:1', result());
+    await service.save('rec:1', result(), provenance());
 
     await service.removeAll('rec:1');
     expect(repository.rows.has('rec:1')).toBe(false);
@@ -137,7 +148,7 @@ describe('RecordingAnalysisService', () => {
     it('digests a page of recordings into keywords and a search haystack', async () => {
       const repository = fakeRepository();
       const service = new RecordingAnalysisService(repository, () => provenance());
-      await service.save('rec:1', result(), 1);
+      await service.save('rec:1', result(), provenance(), 1);
 
       const summaries = await service.topicSummaries(['rec:1', 'rec:2']);
 
@@ -155,7 +166,7 @@ describe('RecordingAnalysisService', () => {
       const repository = fakeRepository();
       let current = provenance();
       const service = new RecordingAnalysisService(repository, () => current);
-      await service.save('rec:1', result(), 1);
+      await service.save('rec:1', result(), provenance(), 1);
 
       expect(await service.topicSummaries(['rec:1'])).toHaveProperty('rec:1');
       current = provenance({ configHash: 'deadbeef' });
