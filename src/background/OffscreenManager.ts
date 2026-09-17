@@ -424,11 +424,14 @@ export class OffscreenManager {
       // memory. The acknowledgement clears it instead — see
       // `acknowledgeAnalysisState`, which background sends only once the row
       // is on disk (or is known to be unstorable).
-      if (msg.job.status === 'analyzing' || msg.job.status === 'completed') {
-        this.activeAnalysisJobs.add(msg.job.id);
-      } else {
-        this.activeAnalysisJobs.delete(msg.job.id);
-      }
+      // A lost result is held for the same reason: background is about to try
+      // to replace it, and until that replacement exists there is nothing else
+      // keeping the runtime alive on this recording's behalf.
+      const held = msg.job.status === 'analyzing'
+        || msg.job.status === 'completed'
+        || (msg.job.status === 'failed' && msg.job.lostResult === true);
+      if (held) this.activeAnalysisJobs.add(msg.job.id);
+      else this.activeAnalysisJobs.delete(msg.job.id);
       if (this.activeAnalysisJobs.size > 0) this.cancelRecorderTabCleanup();
       this.onAnalysisJobChanged?.(msg.job);
       return;
@@ -449,8 +452,12 @@ export class OffscreenManager {
     this.activeAnalysisJobs.clear();
     for (const job of jobs ?? []) {
       // Same rule as the live path: a replayed `completed` job is one whose
-      // result may still be held in the offscreen document awaiting an ack.
-      if (job.status === 'analyzing' || job.status === 'completed') this.activeAnalysisJobs.add(job.id);
+      // result may still be held in the offscreen document awaiting an ack,
+      // and a lost one is awaiting its replacement.
+      if (job.status === 'analyzing' || job.status === 'completed'
+        || (job.status === 'failed' && job.lostResult === true)) {
+        this.activeAnalysisJobs.add(job.id);
+      }
     }
   }
 

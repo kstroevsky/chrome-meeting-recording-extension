@@ -531,3 +531,37 @@ The plan fixes every value its source payload fixed (the `> 0.82` assignment thr
 - The discourse-cue and discourse-signal term sets are English-only while the encoder is deliberately multilingual. On a non-English call those terms contribute nothing and the boundary blend degrades to 0.70/0.10/0.10/0.00 rather than failing. Known asymmetry, recorded here so it is not rediscovered as a bug.
 - Window embeddings are retained (~1.2 MB per recording) rather than discarded after clustering, because they are what makes cross-session retrieval cheap later. Discarding them would forfeit the "reusable computational memory" claim the architecture rests on.
 - Nothing in this decision requires a GPU. Topic organization works on every hardware tier; only the sophistication of interpretation would change if a generative layer is added later.
+
+## Amendment, 2026-09-17 (second) — closing two lifecycle races
+
+### A lost result could be dropped by the reload it was waiting behind
+
+`lostResult` arrived as `failed`, which released the job from `activeAnalysisJobs`, acknowledged it, and only then queued the replacement *asynchronously*. Background re-evaluated critical work in between. With a reload already deferred, the runtime could be torn down in that gap — after the durable state was deleted and before the replacement existed. The analysis would then be gone for good, which is the one outcome this whole design exists to prevent.
+
+**The unacknowledged outbox row is now the recovery token.** It survives until recovery is actually established — a replacement queued, a current result already stored, or nothing left to analyse — and a lost result counts as active work until then. If the replacement cannot be started, the row stays and the next reconnect retries it.
+
+### "We could not ask" did not behave like "busy"
+
+When `refreshAnalysisWork()` failed, the update path set `pendingReload` and returned, but started no keep-alive. So the comment claimed a conservative deferral while Chrome remained free to unload the idle worker and install the update itself — exactly what the keep-alive was added to prevent.
+
+There is now an explicit `analysisWorkUnknown` bit, counted as critical work, set when the data plane will not answer, retried on a slow timer, and cleared as soon as the data plane speaks by any route. Unknown is safe without being permanent.
+
+### Terminal state is sealed before a result is offered
+
+`reportAnalysisJob` used to log a failed outbox write and deliver anyway, leaving "durable before delivered" conditional on that write. Delivery now seals first and refuses to hand over a result whose completion nothing recorded; the payload stays held and the next reconnect retries both. After three failed seals it delivers unsealed rather than freezing the runtime on a permanently broken store — durability in the ordinary case, liveness in the pathological one.
+
+*(All three are pinned by tests that fail when the fix is reverted.)*
+
+## 4B against real conversation — the protocol, agreed 2026-09-17
+
+Recorded before the work starts, because the temptation is to run one transcript through the existing grid and take the best F1, which would produce numbers that look frozen and are not.
+
+**Corpus.** Four to eight genuine conversations spanning different shapes: clean sequential topics, frequent callbacks and recurrence, interruptions, short side topics, and topics with overlapping vocabulary. Real timestamps and speaker identities preserved — without timestamps `longPauseMs` cannot honestly be calibrated, and without speakers neither can `speakerPatternChange`.
+
+**Labels.** Two independent things, hand-labelled: temporal topic boundaries, and global topic identity for each resulting stretch. Importance needs its own labels — a separate ranking of the passages that mattered — because boundary labels cannot validate `novelty`, recurrence or discourse weighting.
+
+**Method.** Embed each fixture once with the packaged Q8 encoder, persist the vectors, and keep the grid search offline exactly as the synthetic pass did. Validate leave-one-meeting-out, or at minimum on a held-out split: tuning and reporting on the same calls would make `0.93`/`0.95` look far more certain than they are.
+
+**Metrics, kept separate.** Boundaries with a temporal tolerance — a prediction counts within one contextual window of a labelled transition — rather than exact turn indices. Global topics with a clustering metric **plus an explicit false-merge count**, because aggregate F1 hides the error that matters most here: the pipeline can repair over-splitting through the merge sweep and has no operation that can undo a wrong join. Where two candidates score alike, prefer the one that over-splits.
+
+**Afterwards.** Freeze what survives, and bump `PIPELINE_VERSION` if any of it changes behaviour.

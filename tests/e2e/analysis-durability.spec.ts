@@ -9,8 +9,8 @@
  *
  * Every mechanical part of that is unit-tested against fakes. What only a
  * browser can prove is the part those fakes stand in for: real
- * `chrome.storage.local`, a real port reconnect, and a real service worker that
- * genuinely loses its memory.
+ * a real IndexedDB outbox, a real port reconnect, and a real service worker
+ * that genuinely loses its memory.
  *
  * **Why the transcript is seeded rather than spoken.** Analysis has to still be
  * running when the worker is killed, which means enough windows to take
@@ -290,16 +290,24 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
    * left — not that anything was persisted. A worker killed after that and
    * before the IndexedDB write took the only copy with it.
    *
-   * **How the window is reached.** The worker is killed repeatedly from shortly
-   * after the stop, while the control page watches `chrome.storage.local` for
-   * the job's `completed` outbox row — which the data plane writes *before* it
-   * delivers anything. The moment that row appears the worker is killed once
-   * more, and IndexedDB is read directly to confirm nothing was stored. Both
-   * reads come from an extension page, so neither revives the worker.
+   * **How the window is reached.** Not by racing the kill — a worker revived by
+   * the data plane's port stores and acknowledges a result in tens of
+   * milliseconds, and three attempts at timing it either missed the window or
+   * timed out. The window is *held open* instead: the control page keeps a
+   * `readwrite` transaction on the `analyses` store alive, IndexedDB queues
+   * background's write behind it, and the worker is killed while blocked.
+   * Every read here comes from an extension page, so none of them revives it.
    *
-   * **The guard.** If the analysis is already on disk when the completed row is
-   * first seen, the run never entered the window and proves nothing; the test
-   * says so rather than passing.
+   * **Two guards.** The job's outbox row must still be unacknowledged when the
+   * worker is killed, and nothing must be on disk once the queued write dies
+   * with it — otherwise the run never entered the window and proves nothing.
+   *
+   * **And the assertion is *how* it recovers.** A lost result is no longer
+   * fatal: the data plane reports it and background re-runs the analysis. So
+   * "topics eventually appear" holds either way, and only redelivery is
+   * correct here. Redelivery is a reconnect and one write; recomputing repeats
+   * the whole run. Half the original run's duration is a bound only redelivery
+   * can meet.
    */
   test('keeps a finished analysis whose service worker dies before storing it', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));

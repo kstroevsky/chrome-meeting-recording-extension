@@ -772,6 +772,53 @@ describe('background runtime messages', () => {
       // Not knowing is not the same as knowing nothing is running.
       expect(chrome.runtime.reload).not.toHaveBeenCalled();
     });
+
+    it('treats an unanswerable data plane as busy, not merely as a deferral', async () => {
+      // Deferring on "we could not ask" is only honest if the unknown state is
+      // also busy. Otherwise the keep-alive stays off, Chrome unloads the idle
+      // worker, and it installs the pending update itself — the outcome the
+      // deferral was meant to prevent.
+      const offscreenInstance: any = makeOffscreenInstance();
+      offscreenInstance.refreshAnalysisWork = jest.fn().mockRejectedValue(new Error('port closed'));
+      await importBackgroundWith(offscreenInstance);
+
+      const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+      onUpdate({ version: '2.0.0' });
+      await settle();
+      (chrome.runtime.reload as jest.Mock).mockClear();
+
+      // An idle session transition must not now conclude that work has finished.
+      offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
+      await settle();
+      expect(chrome.runtime.reload).not.toHaveBeenCalled();
+
+      // Hearing from the data plane at all clears the unknown, and the deferred
+      // reload then applies.
+      offscreenInstance.hasActiveAnalysisJobs = jest.fn(() => false);
+      offscreenInstance.onAnalysisJobChanged?.({
+        id: 'ana_1', historyId: 'rec_1', status: 'failed', progress: 0, startedAt: 1, finishedAt: 2,
+      });
+      await settle();
+      expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('requests the reload only once, however many things settle at once', async () => {
+      const { offscreenInstance, setActive } = withAnalysis(true);
+      await importBackgroundWith(offscreenInstance);
+
+      const onUpdate = (chrome.runtime.onUpdateAvailable.addListener as jest.Mock).mock.calls[0][0];
+      onUpdate({ version: '2.0.0' });
+      await settle();
+
+      setActive(false);
+      offscreenInstance.onAnalysisJobChanged?.({
+        id: 'ana_1', historyId: 'rec_1', status: 'failed', progress: 0, startedAt: 1, finishedAt: 2,
+      });
+      offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle' });
+      await settle();
+
+      expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('defers the update reload while recording and applies it after work finishes', async () => {

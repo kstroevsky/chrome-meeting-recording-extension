@@ -62,6 +62,13 @@ export type RecordingAnalysisCoordinatorDeps = {
   config: () => AnalysisConfig;
   /** Notified whenever a job moves, for the surface. */
   onJobChanged?: (job: AnalysisJob) => void;
+  /**
+   * Fired after a job stops being work anyone is waiting on — acknowledged and
+   * released. Analysis settling changes nothing in `RecordingSession`, so this
+   * is what lets a caller re-evaluate anything gated on active work, such as a
+   * deferred extension reload.
+   */
+  onSettled?: () => void;
   now?: () => number;
 };
 
@@ -172,21 +179,59 @@ export class RecordingAnalysisCoordinator {
    * on acknowledgement.
    */
   handleJobState(job: AnalysisJob): void {
+    const lost = job.status === 'failed' && job.lostResult === true;
     if (job.status === 'analyzing' || job.status === 'completed') {
       this.running.set(job.historyId, job.id);
+    } else if (lost) {
+      // Release the dead job's hold so the replacement can start, but do **not**
+      // acknowledge it yet — see `recoverLostResult`.
+      if (this.running.get(job.historyId) === job.id) this.running.delete(job.historyId);
     } else {
       this.settle(job);
     }
     this.deps.onJobChanged?.(job);
 
-    // A result the data plane computed and then lost with its document. The
-    // transcript is untouched, so the analysis is simply run again rather than
-    // leaving the recording without topics until someone notices.
-    if (job.status === 'failed' && job.lostResult) {
-      void this.analyze(job.historyId).catch((error) => {
-        L.warn('Could not re-run an analysis whose result was lost', job.historyId, error);
-      });
+    if (lost) void this.recoverLostResult(job);
+  }
+
+  /**
+   * Replaces a result the data plane computed and then lost with its document.
+   *
+   * **The unacknowledged outbox row is the recovery token.** Acknowledging on
+   * arrival would delete the only durable trace of the work while the
+   * replacement run existed nowhere yet — and because an acknowledgement also
+   * ends the job's claim on the runtime, a reload deferred until "work
+   * finishes" could be applied in exactly that gap, destroying a recording's
+   * analysis for good.
+   *
+   * So the row survives until recovery is actually established: a replacement
+   * queued, a current result already on disk, or nothing left to analyse. If
+   * none of those hold — the data plane refused, or is unreachable — the row
+   * stays, and the next reconnect replays it and tries again.
+   */
+  private async recoverLostResult(job: AnalysisJob): Promise<void> {
+    let outcome: AnalysisStartResult;
+    try {
+      outcome = await this.analyze(job.historyId);
+    } catch (error) {
+      L.warn('Could not re-run an analysis whose result was lost', job.historyId, error);
+      return;
     }
+
+    if (!outcome.ok) {
+      // `already-analyzed` and `no-transcript` are recoveries too: one means a
+      // current result is on disk, the other that there is nothing left to
+      // analyse. `busy` and `failed` are not — the work still has to happen.
+      const recovered = outcome.reason === 'already-analyzed' || outcome.reason === 'no-transcript';
+      if (!recovered) {
+        L.warn(
+          `Could not re-run the lost analysis for ${job.historyId} (${outcome.reason}); `
+          + 'keeping its durable state so a later reconnect can retry',
+        );
+        return;
+      }
+    }
+    this.settle(job);
   }
 
   /**
@@ -256,6 +301,7 @@ export class RecordingAnalysisCoordinator {
     if (this.running.get(job.historyId) === job.id) this.running.delete(job.historyId);
     this.provenanceByJob.delete(job.id);
     this.deps.dataPlane.acknowledgeAnalysisState(job.id);
+    this.deps.onSettled?.();
   }
 }
 

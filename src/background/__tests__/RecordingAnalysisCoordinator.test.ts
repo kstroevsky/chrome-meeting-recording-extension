@@ -92,6 +92,7 @@ function harness(options: {
   );
 
   const changed: AnalysisJob[] = [];
+  const settled: number[] = [];
   /**
    * A coordinator over the same durable state. Calling it again is what a
    * service-worker restart looks like: every in-memory map starts empty.
@@ -103,11 +104,12 @@ function harness(options: {
     isRecordingDeleted: options.isRecordingDeleted ?? (async (id) => tombstones.has(id)),
     config: () => CANDIDATE_ANALYSIS_CONFIG,
     onJobChanged: (job) => changed.push(job),
+    onSettled: () => { settled.push(Date.now()); },
     now: () => 5_000,
   });
   const coordinator = freshCoordinator();
 
-  return { coordinator, freshCoordinator, calls, rows, tombstones, changed, current, analyses };
+  return { coordinator, freshCoordinator, calls, rows, tombstones, changed, settled, current, analyses };
 }
 
 describe('RecordingAnalysisCoordinator', () => {
@@ -458,20 +460,64 @@ describe('RecordingAnalysisCoordinator', () => {
   });
 
   describe('a result lost with its offscreen document', () => {
-    it('acknowledges the lost job and analyses the recording again', async () => {
+    const LOST: AnalysisJob = {
+      ...JOB,
+      status: 'failed',
+      lostResult: true,
+      error: 'result lost when the offscreen document restarted',
+    };
+
+    it('analyses the recording again, and acknowledges only once that is queued', async () => {
       const h = harness({ transcript: TRANSCRIPT });
-      h.coordinator.handleJobState({
-        ...JOB,
-        status: 'failed',
-        lostResult: true,
-        error: 'result lost when the offscreen document restarted',
-      });
+      h.coordinator.handleJobState(LOST);
+
+      // The race this pins: acknowledging on arrival ends the job's claim on
+      // the runtime while the replacement exists nowhere, so a deferred reload
+      // could be applied in the gap and destroy the analysis for good.
+      expect(h.calls.ack).toEqual([]);
+
+      await new Promise(process.nextTick);
+      expect(h.calls.analyze).toHaveLength(1);
+      expect(h.calls.ack).toEqual(['ana_1']);
+    });
+
+    it('keeps the durable state when the replacement cannot be started', async () => {
+      // The row is the recovery token: unacknowledged, it is replayed on the
+      // next reconnect and tried again.
+      const h = harness({ transcript: TRANSCRIPT, analyzeAnswer: { ok: false, error: 'offscreen is gone' } });
+      h.coordinator.handleJobState(LOST);
       await new Promise(process.nextTick);
 
-      // Acknowledged, so its `completed` outbox row stops holding updates back…
+      expect(h.calls.ack).toEqual([]);
+    });
+
+    it('acknowledges when a current result already exists', async () => {
+      const h = harness({
+        transcript: TRANSCRIPT,
+        stored: { ...RESULT, provenance: PROVENANCE, completedAt: 1 },
+      });
+      h.coordinator.handleJobState(LOST);
+      await new Promise(process.nextTick);
+
+      // Nothing to recover — someone stored one meanwhile.
+      expect(h.calls.analyze).toEqual([]);
       expect(h.calls.ack).toEqual(['ana_1']);
-      // …and re-run, because the transcript it came from is still there.
-      expect(h.calls.analyze).toHaveLength(1);
+    });
+
+    it('acknowledges when there is no transcript left to analyse', async () => {
+      const h = harness({});
+      h.coordinator.handleJobState(LOST);
+      await new Promise(process.nextTick);
+
+      expect(h.calls.ack).toEqual(['ana_1']);
+    });
+
+    it('reports that work settled, which no session transition would', async () => {
+      const h = harness({ transcript: TRANSCRIPT });
+      h.coordinator.handleJobState(LOST);
+      await new Promise(process.nextTick);
+
+      expect(h.settled).toHaveLength(1);
     });
 
     it('does not re-run an ordinary failure', async () => {

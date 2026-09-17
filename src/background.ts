@@ -101,8 +101,13 @@ const analysisCoordinator = new RecordingAnalysisCoordinator({
   // gone. An absent row is deliberately *not* deleted: see the dep's docs.
   isRecordingDeleted: async (historyId) => Boolean((await historyRepository.get(historyId))?.deletedAt),
   config: () => CANDIDATE_ANALYSIS_CONFIG,
+  // Analysis settling is invisible to `RecordingSession`, so a deferred reload
+  // waiting on "work finished" has to be told here.
+  onSettled: () => syncCriticalWork(),
 });
 offscreen.onAnalysisJobChanged = (job) => {
+  // The data plane is reachable and reporting, so its state is no longer unknown.
+  clearAnalysisWorkUnknown();
   analysisCoordinator.handleJobState(job);
   // A job starting needs keep-alive; one ending without a result has just been
   // acknowledged and may have been the last thing holding a reload back.
@@ -293,7 +298,54 @@ let pendingReload = false;
 function hasCriticalWork(snapshot = session.getSnapshot()): boolean {
   return isBusyPhase(snapshot.phase)
     || hasUploadsInFlight(snapshot.uploadJobs)
-    || offscreen.hasActiveAnalysisJobs();
+    || offscreen.hasActiveAnalysisJobs()
+    // Not knowing whether an analysis is running means treating one as running.
+    || analysisWorkUnknown;
+}
+
+/**
+ * True when the data plane could not be asked what it is doing.
+ *
+ * Deferring a reload on "we could not ask" is only honest if the unknown state
+ * is *also* treated as busy. Otherwise the keep-alive stays off, Chrome unloads
+ * an idle service worker, and it installs the pending update itself — the exact
+ * outcome the deferral was protecting against.
+ *
+ * Cleared as soon as the data plane answers, by a direct query or by any job
+ * state it reports, so an unreachable moment cannot block updates for good.
+ */
+let analysisWorkUnknown = false;
+let analysisWorkRetry: ReturnType<typeof setTimeout> | null = null;
+
+/** Retry cadence for a data plane that would not answer. Slow: this only has to
+ *  outlast a reconnect, and a pending update is not urgent. */
+const ANALYSIS_WORK_RETRY_MS = 30_000;
+
+/** Asks the data plane what analysis work exists, and records not knowing. */
+async function confirmAnalysisWork(): Promise<void> {
+  try {
+    await offscreen.refreshAnalysisWork();
+    clearAnalysisWorkUnknown();
+  } catch (error) {
+    analysisWorkUnknown = true;
+    L.warn('Could not confirm what the data plane is analysing; treating it as busy', error);
+    if (!analysisWorkRetry) {
+      analysisWorkRetry = setTimeout(() => {
+        analysisWorkRetry = null;
+        void confirmAnalysisWork().then(() => syncCriticalWork());
+      }, ANALYSIS_WORK_RETRY_MS);
+    }
+  }
+}
+
+/** The data plane has spoken, by whatever route; its state is known again. */
+function clearAnalysisWorkUnknown(): void {
+  if (!analysisWorkUnknown) return;
+  analysisWorkUnknown = false;
+  if (analysisWorkRetry) {
+    clearTimeout(analysisWorkRetry);
+    analysisWorkRetry = null;
+  }
 }
 
 /**
@@ -316,6 +368,10 @@ function syncCriticalWork(snapshot = session.getSnapshot()): void {
   }
   stopKeepAlive();
   if (pendingReload) {
+    // Consumed, not merely read: several things settle at once — a job state, a
+    // coordinator acknowledgement, a session transition — and a reload that is
+    // already under way must not be requested again by the next one.
+    pendingReload = false;
     L.log('Applying deferred update reload now that work has finished');
     chrome.runtime.reload();
   }
@@ -654,16 +710,9 @@ chrome.runtime.onUpdateAvailable?.addListener(() => {
     // replays. Asking the data plane directly closes that window: an update
     // arriving seconds after a worker restart must not reload over an analysis
     // nobody has re-announced yet.
-    try {
-      await offscreen.refreshAnalysisWork();
-    } catch (error) {
-      // Not knowing is not the same as knowing nothing is running. Deferred;
-      // failing any later trigger, Chrome installs the update itself once this
-      // worker goes idle, which is the pre-existing fallback.
-      L.warn('Could not confirm analysis state before applying an update; deferring', error);
-      pendingReload = true;
-      return;
-    }
+    // Records "unknown" as busy when it cannot be answered, so the deferral
+    // below is backed by a keep-alive rather than by hope.
+    await confirmAnalysisWork();
     if (hasCriticalWork()) {
       L.log('Update available; deferring reload until the running analysis finishes');
       pendingReload = true;
@@ -726,12 +775,15 @@ const sessionHydration = (async () => {
       L.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await offscreen.ensureReady();
       startKeepAlive();
-    } else if (await offscreen.refreshAnalysisWork().catch(() => false)) {
+    } else {
       // An analysis the previous worker instance was waiting on. Reconnecting
       // now, rather than on the offscreen document's own backoff (up to 30 s),
       // is what gets a held result persisted promptly.
-      L.log('SW restarted while an analysis was active — re-attaching offscreen');
-      syncCriticalWork();
+      await confirmAnalysisWork();
+      if (hasCriticalWork()) {
+        L.log('SW restarted while an analysis was active — re-attaching offscreen');
+        syncCriticalWork();
+      }
     }
   } catch (e) {
     L.warn('Session re-hydration failed (non-fatal):', e);
