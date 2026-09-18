@@ -734,8 +734,18 @@ chrome.runtime.onInstalled?.addListener(async (details) => {
   if (!closed) pendingReload = true;
 });
 
+/**
+ * The bootstrap: settings, perf runtime, telemetry and the persisted session,
+ * hydrated on every service-worker start.
+ *
+ * Exported so an integration test can *await* it rather than guess at how many
+ * macrotask turns it needs. The guess was a race — under load the bootstrap
+ * outran a fixed drain, and work that finished after teardown failed the run
+ * with every assertion passing. Nothing in production reads this export;
+ * `background.js` is a bundled entry point.
+ */
 // Hydrate persisted session on service-worker (re)start.
-const sessionHydration = (async () => {
+export const sessionHydration = (async () => {
   try {
     const settings = await configurePerfRuntime({
       source: 'background',
