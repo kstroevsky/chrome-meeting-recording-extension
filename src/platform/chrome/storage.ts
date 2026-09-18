@@ -22,9 +22,16 @@ export function hasSessionStorageArea(): boolean {
 
 // The wrappers below degrade to a no-op (empty read) when the storage area is
 // unavailable instead of throwing `Cannot read properties of undefined (reading
-// 'local')`. Some hosts expose `chrome` without `chrome.storage` (e.g. the e2e
-// tab-capture runtime), and the stop/finalize pipeline must not abort a recording
-// just because a crash-recovery marker couldn't be persisted.
+// 'local')`, because the stop/finalize pipeline must not abort a recording just
+// because a bookkeeping write could not be persisted.
+//
+// **Know what that costs before using these for durable state.** The host that
+// lacks `chrome.storage` is the **offscreen document** — its `chrome` object is
+// `runtime` only — which is where capture, uploads and analysis all run. There,
+// these wrappers make a write look successful while storing nothing, which is
+// how the upload outbox and the crash-recovery markers were silently inert for
+// months. Durable state owned by the offscreen document belongs in IndexedDB;
+// see `offscreen/storage/indexedDbKeyValueArea.ts`.
 
 export async function getLocalStorageValues(keys: string | string[]): Promise<StorageValues> {
   if (!hasLocalStorageArea()) return {};

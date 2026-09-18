@@ -85,7 +85,8 @@ Every Drive HTTP operation — folder lookup/create, resumable-session creation,
 
 If the offscreen document dies mid-upload, recovery does **not** resume the abandoned session. Why: the marker (`PendingUploadStore`) intentionally does **not** store the session URI, because a WebM OPFS file can contain raw, pre-duration-fix bytes — splicing it onto the duration-fixed prefix the old session already committed would silently corrupt the file. So `resumePendingDriveUploads` re-opens the raw OPFS file, **re-runs the duration fix only for WebM**, and uploads through a **brand-new** resumable session. MP4 and M4A retain their real MIME type and bypass the fix. Recovery re-sends already-committed bytes only in the rare crash case, in exchange for guaranteed correctness.
 
-- **`PendingUploadStore`** writes **one `chrome.storage.local` key per file** (prefix-namespaced), *not* a single map — so the concurrent (across-files) uploader's `put`/`remove` can never lose each other to a read-modify-write race.
+- **`PendingUploadStore`** writes **one IndexedDB key per file** (prefix-namespaced), *not* a single map — so the concurrent (across-files) uploader's `put`/`remove` can never lose each other to a read-modify-write race.
+- **Durable state here is IndexedDB, never `chrome.storage`.** This code runs in the offscreen document, whose `chrome` object is `runtime` only, and `platform/chrome/storage.ts` deliberately degrades to a no-op instead of throwing so a failed marker cannot abort finalize. Both together meant every marker and every terminal upload state was silently discarded: crash recovery had nothing to find, and terminal states were never replayed. IndexedDB belongs to the extension origin, so the offscreen document writes it and background reads it.
 - The marker is cleared **the instant** Drive confirms the upload (before deleting the OPFS file), to keep the "crashed between Drive's 200 and our cleanup" duplicate window as small as possible.
 - Markers carry the owning `historyId` and detached `jobId` when available. Recovery first reports the grouped job as uploading, then reports a terminal result, so history and the popup converge rather than receiving a silent Drive-side change.
 - A marker whose OPFS file is already gone is reported as **unavailable** and dropped. A recovery upload failure is **retry-pending** and retains its marker for the next launch; the UI must not claim either outcome was saved locally.
@@ -134,7 +135,7 @@ Drive upload feeds the `upload.*` section of the local perf snapshot and the pro
 | `DriveChunkUploader.ts` | the resumable chunk `PUT` loop: byte-range protocol, 308/200 handling, retry/backoff, `recoverFromCommittedState` |
 | `DriveFolderResolver.ts` | resolve/create `root/recording` folders, static race-free cache, query escaping |
 | `DriveMetadataRenamer.ts` | GET current metadata, sequential PATCH rename, reverse rollback, and incomplete-rollback reconciliation evidence |
-| `PendingUploadStore.ts` | per-file `chrome.storage.local` crash-recovery markers |
+| `PendingUploadStore.ts` | per-file IndexedDB crash-recovery markers |
 | `resumePendingUploads.ts` | next-launch fresh re-upload of interrupted uploads |
 | `UploadJobStateOutbox.ts` | durable terminal detached-upload state, replayed until `OFFSCREEN_ACK_UPLOAD_STATE` |
 | `request.ts` | `driveFetch` (real / E2E bridge), `createCachedTokenProvider`, `fetchWithAuthRetry` |

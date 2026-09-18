@@ -4,9 +4,18 @@
  * Persists "this sealed recording is mid-upload to Drive" markers so an upload
  * interrupted by a crash or power-off can be recovered on the next launch.
  *
- * One `chrome.storage.local` key per file (prefix-namespaced) — NOT a single
- * map — so the bounded-concurrency uploader's concurrent put/remove on
- * different files can never lose each other to a read-modify-write race.
+ * One key per file (prefix-namespaced) — NOT a single map — so the
+ * bounded-concurrency uploader's concurrent put/remove on different files can
+ * never lose each other to a read-modify-write race.
+ *
+ * **Stored in IndexedDB, not `chrome.storage.local`.** This runs in the
+ * offscreen document, whose `chrome` object exposes `runtime` and nothing else,
+ * and the wrappers in `platform/chrome/storage.ts` degrade to a no-op rather
+ * than throw so a failed marker cannot abort the stop/finalize pipeline. The
+ * two together meant every marker written here was silently discarded — so no
+ * interrupted upload was ever recoverable, while the code read as though it
+ * were. IndexedDB belongs to the extension origin, which the offscreen
+ * document can write and background can read.
  *
  * The marker deliberately does NOT store the resumable session URI: the on-disk
  * OPFS file is the raw, pre-duration-fix bytes, which don't match the bytes the
@@ -15,11 +24,7 @@
  * re-run that upload.
  */
 
-import {
-  getAllLocalStorageValues,
-  removeLocalStorageValues,
-  setLocalStorageValues,
-} from '../../platform/chrome/storage';
+import { createIndexedDbKeyValueArea } from '../storage/indexedDbKeyValueArea';
 import type { RecordingStream } from '../../shared/recordingTypes';
 
 const PENDING_UPLOAD_PREFIX = 'pendingDriveUpload:';
@@ -76,10 +81,12 @@ export class PendingUploadStore {
 }
 
 /** Builds a store backed by the real `chrome.storage.local` area. */
-export function createChromePendingUploadStore(): PendingUploadStore {
-  return new PendingUploadStore({
-    getAll: () => getAllLocalStorageValues(),
-    set: (items) => setLocalStorageValues(items),
-    remove: (key) => removeLocalStorageValues(key),
-  });
+export const PENDING_UPLOAD_DATABASE = 'pending-drive-uploads';
+
+/** The store the offscreen document uses. */
+export function createPendingUploadStore(): PendingUploadStore {
+  return new PendingUploadStore(createIndexedDbKeyValueArea({
+    databaseName: PENDING_UPLOAD_DATABASE,
+    storeName: 'markers',
+  }));
 }

@@ -15,7 +15,7 @@
 
 import { RetainedMediaStore } from './offscreen/storage/RetainedMediaStore';
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
-import { addStorageChangedListener, hasLocalStorageArea } from './platform/chrome/storage';
+import { addStorageChangedListener } from './platform/chrome/storage';
 import { getBuildId } from './shared/build';
 import { makeLogger } from './shared/logger';
 import { sendToBackground } from './shared/messages';
@@ -25,8 +25,8 @@ import { WorkerStorageTarget } from './offscreen/storage/WorkerStorageTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { UploadManager } from './offscreen/UploadManager';
-import { createChromePendingUploadStore } from './offscreen/drive/PendingUploadStore';
-import { createChromeUploadJobStateOutbox } from './offscreen/drive/UploadJobStateOutbox';
+import { createPendingUploadStore } from './offscreen/drive/PendingUploadStore';
+import { createUploadJobStateOutbox } from './offscreen/drive/UploadJobStateOutbox';
 import { AnalysisManager } from './offscreen/analysis/AnalysisManager';
 import { EmbeddingWorkerClient } from './offscreen/analysis/EmbeddingWorkerClient';
 import { analysisEngineConfig, spawnAnalysisWorker } from './offscreen/analysis/engineConfig';
@@ -265,8 +265,8 @@ async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
 
 // ─── Core services ───────────────────────────────────────────────────────────
 
-const pendingUploadStore = createChromePendingUploadStore();
-const uploadJobStateOutbox = createChromeUploadJobStateOutbox();
+const pendingUploadStore = createPendingUploadStore();
+const uploadJobStateOutbox = createUploadJobStateOutbox();
 
 async function reportUploadJob(job: import('./shared/recording').UploadJob, telemetryRunId?: string): Promise<void> {
   const accumulator = telemetryRunId ? telemetryRuns.get(telemetryRunId) : undefined;
@@ -490,9 +490,11 @@ const offscreenStartedAtMs = Date.now();
 // Fire and forget — both are no-ops when nothing is pending.
 void (async () => {
   if (controller.currentPhase() !== 'idle') return;
-  // Recovery persists/reads markers via chrome.storage; skip in any host that
-  // lacks it (e.g. the e2e tab-capture runtime) rather than throwing.
-  if (!hasLocalStorageArea()) return;
+  // No storage-availability guard any more, and its absence is the point: the
+  // old one skipped recovery whenever `chrome.storage` was missing, which is
+  // *always* in an offscreen document — so recovery never ran in the runtime
+  // that hosts it. Markers now live in IndexedDB, which this document can read,
+  // and a host without IndexedDB degrades to an empty read rather than a throw.
   // #1: re-upload a Drive upload interrupted mid-flight (sealed, marked files).
   try {
     await resumePendingDriveUploadsWithChrome({

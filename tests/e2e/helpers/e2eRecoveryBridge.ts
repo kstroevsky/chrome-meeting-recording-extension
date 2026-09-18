@@ -12,16 +12,24 @@
  * never ships in production bundles.
  */
 
-import { createChromePendingUploadStore } from '../../../src/offscreen/drive/PendingUploadStore';
+import { createPendingUploadStore, type PendingUpload } from '../../../src/offscreen/drive/PendingUploadStore';
 import { resumePendingDriveUploadsWithChrome } from '../../../src/offscreen/drive/resumePendingUploads';
 import { recoverOrphanRecordingsWithChrome } from '../../../src/offscreen/storage/recoverOrphanRecordings';
 
 export function installRecoveryTestBridge(): void {
-  const store = createChromePendingUploadStore();
+  const store = createPendingUploadStore();
   const log = (...a: any[]) => console.log('[recovery]', ...a);
   const warn = (...a: any[]) => console.warn('[recovery]', ...a);
 
   (globalThis as any).__recoveryTest = {
+    /**
+     * Writes a pending-upload marker through the **real** store, so a test
+     * seeds one the way production does rather than hand-rolling its key
+     * format — and so the marker lands wherever the store actually keeps it.
+     */
+    markPending: (entry: PendingUpload) => store.put(entry),
+    /** Reads the markers back, for asserting one was cleared. */
+    listPending: () => store.list(),
     /** #1 — resume interrupted Drive uploads (the simulator ignores the token). */
     resumeUploads: () =>
       resumePendingDriveUploadsWithChrome({

@@ -476,7 +476,7 @@ We had said real 4B calibration was blocked on Plan B's STT. That was wrong, and
 
 ### An offscreen document has no `chrome.storage`
 
-Measured with CDP against the built extension: the offscreen document's `chrome` object has exactly `csi`, `loadTimes` and `runtime`. **The analysis outbox had never stored anything.** Every `put` threw and was caught as a warning, so HOST-03's durability existed only on paper — and the first durability E2E's "no outbox rows left behind" check passed because there never were any.
+Measured with CDP against the built extension: the offscreen document's `chrome` object has exactly `csi`, `loadTimes` and `runtime`. **The analysis outbox had never stored anything** — and, corrected 2026-09-18, not by throwing. The wrappers in `platform/chrome/storage.ts` deliberately degrade to a no-op when the area is missing, so that a failed bookkeeping write cannot abort the stop/finalize pipeline. Every write therefore *succeeded* and stored nothing, which is why no warning was ever logged and why the first durability E2E's "no outbox rows left behind" check passed with nothing to find. Silent success is the worse failure: the outbox reported a durability it never had.
 
 It surfaced only because this round's own fix made it visible. Removing the durable row before releasing the held result is correct, but against a store that always throws it meant the result was **never** released, so every later update would have been refused indefinitely. The new post-completion E2E caught that before it shipped.
 

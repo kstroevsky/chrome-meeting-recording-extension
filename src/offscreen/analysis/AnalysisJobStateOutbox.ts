@@ -12,8 +12,9 @@
  * **Why IndexedDB and not `chrome.storage.local`.** An offscreen document's
  * `chrome` object exposes `runtime` and nothing else — measured, not assumed:
  * `chrome.storage` is simply absent there. The first version of this outbox
- * used `chrome.storage.local`, so every write threw, was swallowed as a
- * warning, and the outbox silently held nothing. IndexedDB belongs to the
+ * used `chrome.storage.local`, and the wrappers in `platform/chrome/storage.ts`
+ * degrade to a no-op rather than throw — so every write succeeded and stored
+ * nothing, reporting a durability the outbox did not have. IndexedDB belongs to the
  * extension *origin*, which the offscreen document, the service worker and
  * extension pages all share — so it is both writable here and readable by
  * everything that needs to see it.

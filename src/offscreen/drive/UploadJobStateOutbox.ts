@@ -1,8 +1,20 @@
-import {
-  getAllLocalStorageValues,
-  removeLocalStorageValues,
-  setLocalStorageValues,
-} from '../../platform/chrome/storage';
+/**
+ * @file offscreen/drive/UploadJobStateOutbox.ts
+ *
+ * Durable terminal-state outbox for background Drive-upload jobs (ADR-0004).
+ *
+ * **Stored in IndexedDB, not `chrome.storage.local`.** This runs in the
+ * offscreen document, whose `chrome` object exposes `runtime` and nothing
+ * else — and the wrappers in `platform/chrome/storage.ts` deliberately degrade
+ * to a no-op rather than throw, so that a failed bookkeeping write cannot abort
+ * the stop/finalize pipeline. Together those two facts meant every write here
+ * silently succeeded and stored nothing: the outbox reported durability it did
+ * not have, and a terminal upload state was never replayed after a
+ * service-worker death. IndexedDB belongs to the extension origin, so the
+ * offscreen document can actually write it and background can read it.
+ */
+
+import { createIndexedDbKeyValueArea } from '../storage/indexedDbKeyValueArea';
 import { normalizeUploadJobs, type UploadJob } from '../../shared/recording';
 
 const TERMINAL_UPLOAD_STATE_PREFIX = 'terminalUploadState:';
@@ -38,10 +50,12 @@ export class UploadJobStateOutbox {
   }
 }
 
-export function createChromeUploadJobStateOutbox(): UploadJobStateOutbox {
-  return new UploadJobStateOutbox({
-    getAll: () => getAllLocalStorageValues(),
-    set: (items) => setLocalStorageValues(items),
-    remove: (key) => removeLocalStorageValues(key),
-  });
+export const UPLOAD_OUTBOX_DATABASE = 'upload-job-outbox';
+
+/** The outbox the offscreen document uses. */
+export function createUploadJobStateOutbox(): UploadJobStateOutbox {
+  return new UploadJobStateOutbox(createIndexedDbKeyValueArea({
+    databaseName: UPLOAD_OUTBOX_DATABASE,
+    storeName: 'jobs',
+  }));
 }

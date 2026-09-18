@@ -1,3 +1,5 @@
+import { IDBFactory } from 'fake-indexeddb';
+import { createIndexedDbKeyValueArea } from '../../storage/indexedDbKeyValueArea';
 import {
   PendingUploadStore,
   type PendingUpload,
@@ -61,5 +63,60 @@ describe('PendingUploadStore', () => {
   it('returns an empty list when nothing is pending', async () => {
     const store = new PendingUploadStore(fakeArea());
     expect(await store.list()).toEqual([]);
+  });
+});
+
+describe('the store the offscreen document can actually write', () => {
+  /**
+   * A marker exists so a crash mid-upload is recoverable on the next launch.
+   * Written against `chrome.storage.local` — absent in an offscreen document,
+   * and no-opped rather than thrown by `platform/chrome/storage.ts` — every
+   * marker was silently discarded, so no interrupted upload was ever
+   * recoverable while the code read as though they were.
+   */
+  const area = (factory: IDBFactory) =>
+    createIndexedDbKeyValueArea({ databaseName: 'pending-drive-uploads', storeName: 'markers', factory });
+
+  it('leaves a marker the next launch can find', async () => {
+    const factory = new IDBFactory();
+    await new PendingUploadStore(area(factory)).put(entry('staging/tab.webm'));
+
+    // A fresh store over the same database is the next launch.
+    expect(await new PendingUploadStore(area(factory)).list())
+      .toEqual([entry('staging/tab.webm')]);
+  });
+
+  it('clears a marker once its upload finishes', async () => {
+    const factory = new IDBFactory();
+    const store = new PendingUploadStore(area(factory));
+    await store.put(entry('staging/tab.webm'));
+    await store.remove('staging/tab.webm');
+
+    expect(await new PendingUploadStore(area(factory)).list()).toEqual([]);
+  });
+
+  it('keeps one key per file, so concurrent uploads cannot lose each other', async () => {
+    const factory = new IDBFactory();
+    const store = new PendingUploadStore(area(factory));
+    await Promise.all([
+      store.put(entry('staging/tab.webm')),
+      store.put(entry('staging/mic.webm')),
+    ]);
+    await store.remove('staging/tab.webm');
+
+    expect((await store.list()).map((marker) => marker.opfsFilename)).toEqual(['staging/mic.webm']);
+  });
+
+  it('reports a failing store rather than pretending the marker was written', async () => {
+    const broken = {
+      open: () => {
+        const request: any = {};
+        setTimeout(() => { request.error = new Error('disk I/O error'); request.onerror?.(); }, 0);
+        return request;
+      },
+    } as unknown as IDBFactory;
+
+    await expect(new PendingUploadStore(area(broken)).put(entry('staging/tab.webm')))
+      .rejects.toThrow('disk I/O error');
   });
 });
