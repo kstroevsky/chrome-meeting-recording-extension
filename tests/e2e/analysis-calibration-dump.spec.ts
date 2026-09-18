@@ -14,6 +14,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { closeHarness, launchExtensionHarness, type ExtensionHarness } from './helpers/extensionHarness';
 import { buildCalibrationCases } from './helpers/calibrationCorpus';
+import { loadCalibrationConversations } from './helpers/calibrationFixtures';
 import { buildContextWindows } from '../../src/shared/analysis/windows';
 
 /**
@@ -41,7 +42,32 @@ const SHAPES = [
 test.setTimeout(900_000);
 
 test('embeds the calibration corpus @analysis-bench', async ({}, testInfo) => {
-  const cases = buildCalibrationCases();
+  /*
+   * Real conversations first, synthetic ones after.
+   *
+   * Both are embedded, and each case says which it is, because they answer
+   * different questions. Synthetic cases prove the *mechanics* — that a
+   * recurring subject can be reunited at all — with topic blocks so clean that
+   * a threshold tuned on them means little. Real conversations are what a
+   * threshold may actually be frozen from. The grid keeps them apart; mixing
+   * their scores would let easy cases flatter a configuration that fails on the
+   * hard ones.
+   *
+   * A checkout with no fixtures runs exactly as before. See
+   * `tests/fixtures/calibration/README.md`.
+   */
+  const conversations = loadCalibrationConversations();
+  const cases: Array<{
+    name: string;
+    segments: import('../../src/shared/transcript').TranscriptSegment[];
+    topicOfUtterance: string[];
+    source: 'real' | 'synthetic';
+    holdout: boolean;
+    notes?: string;
+  }> = [
+    ...conversations.map((c) => ({ ...c, source: 'real' as const })),
+    ...buildCalibrationCases().map((c) => ({ ...c, source: 'synthetic' as const, holdout: false })),
+  ];
   let harness: ExtensionHarness | undefined;
 
   try {
@@ -104,6 +130,10 @@ test('embeds the calibration corpus @analysis-bench', async ({}, testInfo) => {
       dtype,
       cases: cases.map((c) => ({
         name: c.name,
+        source: c.source,
+        holdout: c.holdout,
+        ...(c.notes ? { notes: c.notes } : {}),
+        utteranceCount: c.segments.length,
         topicOfUtterance: c.topicOfUtterance,
         shapes: jobs.filter((j) => j.caseName === c.name).map((j) => {
           const embeddings = vectors.slice(cursor, cursor + j.windows.length);
@@ -126,7 +156,16 @@ test('embeds the calibration corpus @analysis-bench', async ({}, testInfo) => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, 'corpus.json'), JSON.stringify(payload));
     // eslint-disable-next-line no-console
-    console.log(`    embedded ${texts.length} windows across ${cases.length} cases × ${SHAPES.length} shapes`);
+    const real = cases.filter((c) => c.source === 'real');
+    // eslint-disable-next-line no-console
+    console.log(
+      `    embedded ${texts.length} windows across ${cases.length} cases × ${SHAPES.length} shapes`
+      + ` (${real.length} real: ${real.map((c) => c.name + (c.holdout ? ' [holdout]' : '')).join(', ') || 'none'})`,
+    );
+    if (!real.length) {
+      // eslint-disable-next-line no-console
+      console.log('    no real conversations present — see tests/fixtures/calibration/README.md');
+    }
   } finally {
     if (harness) await closeHarness(harness);
   }
