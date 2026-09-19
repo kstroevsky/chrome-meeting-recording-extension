@@ -21,6 +21,9 @@ import { PERF_FLAGS, logPerf, nowMs, roundMs } from '../shared/perf';
 
 const STREAM_UPLOAD_ORDER: RecordingStream[] = ['tab', 'mic', 'self-video'];
 
+/** Aggregate Drive progress, plus each file's committed bytes keyed by filename. */
+export type UploadProgressSink = (fraction: number, loadedByFilename?: Record<string, number>) => void;
+
 type UploadOutcome = {
   stream: RecordingStream;
   filename: string;
@@ -93,8 +96,10 @@ export type FinalizeArtifactsOptions = RecordingArtifactContext & {
    * Per-call aggregate Drive-upload progress (fraction in [0, 1], throttled to
    * whole-percent steps). Lets a per-job caller (the UploadManager, ADR-0004) get
    * its own progress; falls back to the construction-time `onUploadProgress` dep.
+   * The second argument is each file's committed bytes, keyed by filename, so a
+   * caller can say which file is moving and which is still waiting its turn.
    */
-  onUploadProgress?: (fraction: number) => void;
+  onUploadProgress?: UploadProgressSink;
   /**
    * Suppresses the local-download failsafe when a Drive upload fails (ADR-0004). Set
    * for a *retry*: the file was already downloaded on the original failure, so failing
@@ -268,7 +273,7 @@ export class RecordingFinalizer {
   private async uploadArtifactsToDrive(
     artifacts: CompletedRecordingArtifact[],
     recordingFolderName: string,
-    onUploadProgress?: (fraction: number) => void,
+    onUploadProgress?: UploadProgressSink,
     skipLocalFallback = false,
     signal?: AbortSignal,
     context: RecordingArtifactContext = {},
@@ -306,7 +311,9 @@ export class RecordingFinalizer {
       const percent = Math.min(100, Math.floor((loaded / totalBytes) * 100));
       if (percent <= lastReportedPercent) return;
       lastReportedPercent = percent;
-      progressSink(loaded / totalBytes);
+      const perFile: Record<string, number> = {};
+      artifacts.forEach(({ artifact }, i) => { perFile[artifact.filename] = loadedPerFile[i]; });
+      progressSink(loaded / totalBytes, perFile);
     };
 
     const summary: UploadSummary = {

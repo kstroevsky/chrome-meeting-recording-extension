@@ -73,6 +73,22 @@ describe('UploadManager (ADR-0004)', () => {
     });
   });
 
+  it('carries each file\'s committed bytes, so a file not yet started still reads as waiting', async () => {
+    const finalize = jest.fn(async (opts: any) => {
+      opts.onUploadProgress?.(0.25, { 'tab.webm': 40, 'mic.webm': 0 });
+      return { uploaded: [{ stream: 'tab', filename: 'tab.webm' }, { stream: 'mic', filename: 'mic.webm' }], localFallbacks: [] } as UploadSummary;
+    });
+    const { manager, reports } = setup(finalize);
+
+    manager.enqueue([artifact('tab', 'tab.webm'), artifact('mic', 'mic.webm')], 'recording:n');
+    await flush();
+
+    const moving = reports.find((r) => r.progress === 0.25)!;
+    expect(moving.files.find((f) => f.filename === 'tab.webm')?.uploadedBytes).toBe(40);
+    // Nothing committed yet: no field at all, rather than a zero that reads as started.
+    expect(moving.files.find((f) => f.filename === 'mic.webm')).not.toHaveProperty('uploadedBytes');
+  });
+
   it('settles partial when some files fall back and failed when all fall back', async () => {
     const partial = setup(async () => ({
       uploaded: [{ stream: 'tab', filename: 'tab.webm' }],

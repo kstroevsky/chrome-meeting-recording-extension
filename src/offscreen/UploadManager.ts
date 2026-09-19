@@ -18,6 +18,7 @@ import type { UploadJob, UploadJobFile, UploadJobStatus, UploadSummary } from '.
 import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { describeRuntimeError } from './errors';
 import type { RecordingStream } from '../shared/recording';
+import type { UploadProgressSink } from './RecordingFinalizer';
 
 const MAX_RETRYABLE_BYTES = 128 * 1024 * 1024;
 const RETRY_RETENTION_MS = 5 * 60 * 1000;
@@ -27,7 +28,7 @@ export interface JobFinalizer {
   finalize(opts: {
     artifacts: CompletedRecordingArtifact[];
     storageMode: 'drive';
-    onUploadProgress?: (fraction: number) => void;
+    onUploadProgress?: UploadProgressSink;
     skipLocalFallback?: boolean;
     signal?: AbortSignal;
     historyId?: string;
@@ -199,9 +200,15 @@ export class UploadManager {
         signal: controller.signal,
         historyId: job.historyId,
         uploadJobId: job.id,
-        onUploadProgress: (fraction) => {
+        onUploadProgress: (fraction, loadedByFilename) => {
           lastProgress = fraction;
-          const progress = { ...task.job, status: 'uploading' as const, progress: fraction };
+          const files = loadedByFilename
+            ? task.job.files.map((file) => {
+              const uploadedBytes = loadedByFilename[file.filename];
+              return uploadedBytes > 0 ? { ...file, uploadedBytes } : file;
+            })
+            : task.job.files;
+          const progress = { ...task.job, status: 'uploading' as const, progress: fraction, files };
           task.job = progress;
           void this.emit(progress);
         },

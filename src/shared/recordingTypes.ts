@@ -118,6 +118,11 @@ export type UploadJobFile = {
   filename: string;
   status: 'uploading' | 'uploaded' | 'fallback' | 'retry-pending' | 'unavailable';
   bytes?: number;
+  /**
+   * Bytes of this file Drive has committed so far, while its job uploads. Absent
+   * until the file starts, which is how a file still waiting its turn reads as queued.
+   */
+  uploadedBytes?: number;
   driveFileId?: string;
   webViewLink?: string;
   error?: string;

@@ -160,6 +160,9 @@ function parseUploadJobFile(value: unknown): UploadJobFile | null {
   if (typeof filename !== 'string' || !filename) return null;
   if (!(VALID_UPLOAD_JOB_FILE_STATUSES as readonly unknown[]).includes(status)) return null;
   const bytes = typeof value.bytes === 'number' && value.bytes >= 0 ? value.bytes : undefined;
+  const uploadedBytes = typeof value.uploadedBytes === 'number' && value.uploadedBytes > 0
+    ? value.uploadedBytes
+    : undefined;
   const driveFileId = typeof value.driveFileId === 'string' && value.driveFileId.trim()
     ? value.driveFileId.trim()
     : undefined;
@@ -176,6 +179,7 @@ function parseUploadJobFile(value: unknown): UploadJobFile | null {
     filename,
     status: status as UploadJobFile['status'],
     bytes,
+    ...(uploadedBytes != null ? { uploadedBytes } : {}),
     driveFileId,
     webViewLink,
     error,
