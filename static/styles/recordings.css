@@ -27,6 +27,17 @@
   /* NOTES column (f1): the count chip, and the dash for a recording with none. */
   --note-chip: #efe9df;
   --note-dash: #cabfa8;
+  /* Notes in the detail modal (f2, f17). */
+  --note-icon: #c4b79c;
+  --note-band: #faf6ee;
+  --note-pale: #dcd0b6;
+  --armed: #faf1ee;
+  --armed-strike: #d8b6ae;
+  --armed-text: #7c7568;
+  --remove-border: #e7d5d0;
+  --danger-wash: #f6e5e1;
+  --confirm-surface: #fffdfc;
+  --watch-hover: #332f28;
   /*
    * TOPICS (ADR-0007 §8). Four shades a topic keeps across every span it
    * occupies, so a subject the conversation returns to looks like the same
@@ -67,6 +78,16 @@
   --detail: #c99a55;
   --note-chip: #2e281f;
   --note-dash: #544c3f;
+  --note-icon: #5e564a;
+  --note-band: #221d16;
+  --note-pale: #57452b;
+  --armed: #2e1c18;
+  --armed-strike: #683a32;
+  --armed-text: #8f8674;
+  --remove-border: #4a2a24;
+  --danger-wash: #34211d;
+  --confirm-surface: #1d1915;
+  --watch-hover: #d8d1c4;
   --drive-icon: #6ba885;
   --local-icon: #8a7f68;
   --selection: #241f18;
@@ -92,8 +113,20 @@
     --success: #4fae7d;
     --warning: #d99a45;
     --detail: #c99a55;
-  --note-chip: #2e281f;
-  --note-dash: #544c3f;
+    --note-chip: #2e281f;
+    --note-dash: #544c3f;
+    --note-icon: #5e564a;
+    --note-band: #221d16;
+    --note-pale: #57452b;
+    --armed: #2e1c18;
+    --armed-strike: #683a32;
+    --armed-text: #8f8674;
+    --remove-border: #4a2a24;
+    --danger-wash: #34211d;
+    --confirm-surface: #1d1915;
+    --watch-hover: #d8d1c4;
+    --drive-icon: #6ba885;
+    --local-icon: #8a7f68;
     --selection: #241f18;
     --overlay: rgba(0, 0, 0, .55);
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 26px -12px rgba(0, 0, 0, .7);
@@ -102,6 +135,8 @@
 }
 
 * { box-sizing: border-box; }
+/* A class that sets `display` would otherwise beat the attribute (Load more was always shown). */
+[hidden] { display: none !important; }
 body { min-width: 700px; min-height: 100vh; margin: 0; background: var(--surface); color: var(--body); font-family: 'Space Grotesk', system-ui, sans-serif; }
 button, input, textarea { font: inherit; }
 button { -webkit-font-smoothing: antialiased; }
@@ -161,7 +196,6 @@ button { -webkit-font-smoothing: antialiased; }
 .recording-status-dot--saving, .recording-status-dot--partial { background: var(--warning); }
 .recording-row__name { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--ink); font: 500 12px/1 'IBM Plex Mono', monospace; }
 .recording-row__name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recording-row__note { flex: 0 0 auto; color: var(--detail); font-size: 11px; line-height: 1; }
 .recording-row__meta { overflow: hidden; color: var(--muted); font: 400 10.5px/1 'IBM Plex Mono', monospace; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .recording-row__time { font-size: 11px; }
 .destination-icon { width: 15px; height: 15px; display: block; color: var(--drive-icon); justify-self: center; }
@@ -288,9 +322,6 @@ button { -webkit-font-smoothing: antialiased; }
 .player__icon--on-picture:hover { background: rgba(250, 248, 244, .18); }
 .player__play:focus-visible, .player__icon:focus-visible, .player__close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .player__icon--on-picture:focus-visible { outline-color: #f2ede3; }
-.recording-row__play { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1), color 160ms cubic-bezier(.32, .72, 0, 1); }
-.recording-row__play:hover { background: var(--field); color: var(--detail); }
-.recording-row__play:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .player__selfcam { position: absolute; top: 12px; right: 12px; width: 104px; height: 59px; border-radius: 6px; object-fit: cover; background: #241f19; border: 1px solid rgba(250, 248, 244, .16); }
 .player__selfcam[hidden] { display: none; }
 
@@ -384,3 +415,99 @@ button { -webkit-font-smoothing: antialiased; }
 .detail-destination__fixed { margin: 0 0 6px; padding: 0 11px; height: 36px; display: flex; align-items: center; border-radius: 6px; background: var(--field); color: var(--body); font: 400 12.5px 'Space Grotesk', sans-serif; }
 
 .detail-destination__hint { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+
+/* ── Detail modal notes (f2) ─────────────────────────────────────────────────
+   The timeline and the NOTES spoiler sit above everything that says where the
+   recording is stored; clicking a span opens the list and selects its note. */
+.recording-detail__notes { padding: 0 26px; }
+.detail-notes__timeline { position: relative; height: 12px; margin: 18px 0 14px; }
+.detail-notes__track { position: absolute; top: 5px; right: 0; left: 0; height: 2px; background: var(--divider); }
+.detail-notes__span { position: absolute; top: 0; height: 12px; padding: 0; border: 0; border-radius: 2px; background: var(--detail); cursor: pointer; }
+.detail-notes__span.unnamed { background: var(--note-pale); }
+.detail-notes__span--selected { box-shadow: 0 0 0 2px var(--detail), 0 0 0 4px var(--raised); }
+.detail-notes__span:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.detail-notes__header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 -8px 2px; }
+.detail-notes__toggle { display: inline-flex; align-items: center; flex: 1; min-width: 0; gap: 7px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.detail-notes__toggle:hover { background: var(--field); }
+.detail-notes__toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.detail-notes__toggle svg { width: 10px; height: 10px; flex: 0 0 auto; color: var(--detail); transition: transform 160ms cubic-bezier(.32, .72, 0, 1); }
+.detail-notes__toggle[aria-expanded='false'] svg { transform: rotate(-90deg); }
+.detail-notes__label { color: var(--faint); font-size: 9.5px; font-weight: 600; letter-spacing: .14em; }
+.detail-notes__count { margin-left: auto; color: var(--faint); font: 9.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+.detail-notes__range { padding: 1px 0 6px; color: var(--faint); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
+.detail-notes__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 40px; border-bottom: 1px solid var(--divider); transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.detail-notes__row--selected { background: var(--raised); }
+.detail-notes__row--unnamed { background: var(--note-band); }
+.detail-notes__main { display: inline-flex; align-items: baseline; flex: 1; min-width: 0; gap: 11px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.detail-notes__main:focus-visible { border-radius: 4px; outline: 2px solid var(--focus); outline-offset: 2px; }
+.detail-notes__at { flex: 0 0 auto; color: var(--detail); font: 10.5px 'IBM Plex Mono', monospace; }
+.detail-notes__text { overflow: hidden; flex: 1; min-width: 0; color: var(--body); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+.detail-notes__row--unnamed .detail-notes__text { color: var(--faint); }
+.detail-notes__input { flex: 1; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--detail); border-radius: 4px; outline: 0; background: var(--surface); box-shadow: 0 0 0 3px color-mix(in srgb, var(--detail) 16%, transparent); color: var(--ink); font-size: 12.5px; }
+.detail-notes__side { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 11px; }
+.detail-notes__length { color: var(--faint); font: 10px 'IBM Plex Mono', monospace; }
+.detail-notes__edit,
+.detail-notes__delete { display: inline-flex; align-items: center; justify-content: center; width: 10px; height: 10px; padding: 0; border: 0; background: transparent; color: var(--note-icon); cursor: pointer; transition: color 160ms cubic-bezier(.32, .72, 0, 1); }
+.detail-notes__edit svg { width: 10px; height: 10px; }
+.detail-notes__delete svg { width: 9px; height: 9px; }
+.detail-notes__edit:hover { color: var(--detail); }
+.detail-notes__delete:hover { color: var(--accent); }
+.detail-notes__edit:focus-visible,
+.detail-notes__delete:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+/* f17: the row arms in place — the name strikes through, Keep / Delete take the length's place. */
+.detail-notes__row--armed { margin: 0 -8px; padding: 0 8px; border-radius: 6px; background: var(--armed); }
+.detail-notes__row--armed .detail-notes__at { color: var(--accent-dark); }
+.detail-notes__row--armed .detail-notes__text { color: var(--armed-text); text-decoration: line-through; text-decoration-color: var(--armed-strike); }
+.detail-notes__row--armed .detail-notes__side { gap: 7px; }
+.detail-notes__ask { color: var(--accent-dark); font-size: 11.5px; }
+.detail-notes__keep,
+.detail-notes__confirm { display: inline-flex; align-items: center; height: 26px; padding: 0 9px; border-radius: 6px; cursor: pointer; font-size: 11.5px; font-weight: 600; }
+.detail-notes__keep { border: 1px solid var(--border); background: transparent; color: var(--body); }
+.detail-notes__keep:hover { background: var(--note-chip); }
+.detail-notes__confirm { border: 0; background: var(--accent-dark); color: var(--surface); }
+.detail-notes__confirm:hover { background: #8f2717; }
+.detail-notes__keep:focus-visible,
+.detail-notes__confirm:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
+
+.recording-detail__body--more { padding-top: 0; }
+/* DESCRIPTION reads as a field with its pencil, and is edited in place. */
+.detail-note-field { position: relative; }
+.detail-note-field .detail-note { display: block; resize: none; field-sizing: content; padding: 9px 32px 9px 11px; }
+.detail-note-field .detail-note:hover { background: var(--note-chip); }
+.detail-note-field__icon { position: absolute; top: 9px; right: 10px; display: inline-flex; color: var(--note-icon); pointer-events: none; }
+.detail-note-field:focus-within .detail-note-field__icon { color: var(--detail); }
+
+.recording-detail__footer-actions { display: inline-flex; align-items: center; gap: 8px; }
+.modal-button--remove { border-color: var(--remove-border); }
+.modal-button--watch { display: inline-flex; align-items: center; gap: 9px; border: 0; background: var(--ink); color: var(--surface); padding-inline: 16px; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.modal-button--watch:hover { background: var(--watch-hover); }
+
+/* ── Remove from history (f17): names what goes and what stays ──────────────── */
+.confirm-overlay { position: fixed; z-index: 40; inset: 0; display: flex; align-items: center; justify-content: center; padding: 28px; background: var(--overlay); }
+.confirm-card { width: min(440px, 100%); padding: 16px 18px 14px; border: 1px solid var(--remove-border); border-radius: 8px; background: var(--confirm-surface); box-shadow: 0 14px 30px -14px rgba(44, 36, 28, .4); }
+.confirm-card__head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.confirm-card__icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; background: var(--danger-wash); color: var(--accent-dark); }
+.confirm-card__icon svg { width: 15px; height: 15px; }
+.confirm-card__copy { min-width: 0; }
+.confirm-card__title { display: block; margin-bottom: 5px; color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.confirm-card__body { display: block; color: var(--armed-text); font-size: 12px; line-height: 1.55; }
+.confirm-card__actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.confirm-card__cancel,
+.confirm-card__confirm { display: inline-flex; align-items: center; height: 32px; padding: 0 13px; border-radius: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.confirm-card__cancel { border: 1px solid var(--border); background: transparent; color: var(--body); }
+.confirm-card__cancel:hover { background: var(--note-chip); }
+.confirm-card__confirm { border: 0; background: var(--accent-dark); color: var(--surface); }
+.confirm-card__confirm:hover { background: #8f2717; }
+.confirm-card__cancel:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.confirm-card__confirm:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
+
+/* ── UNDO toast (f17): dark in both themes, eight seconds draining ─────────── */
+.undo-toast { position: fixed; z-index: 50; bottom: 24px; left: 50%; display: flex; align-items: center; justify-content: space-between; gap: 12px; width: min(380px, calc(100vw - 32px)); height: 40px; padding: 0 12px; border-radius: 6px; background: #1c1a17; box-shadow: var(--modal-shadow); transform: translateX(-50%); }
+.undo-toast__text { overflow: hidden; min-width: 0; color: #f2ede3; font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+.undo-toast__side { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 10px; }
+.undo-toast__bar { position: relative; width: 34px; height: 2px; border-radius: 1px; background: rgba(250, 248, 244, .24); }
+.undo-toast__fill { position: absolute; top: 0; left: 0; width: 100%; height: 2px; border-radius: 1px; background: #c99a55; animation: undo-drain linear forwards; }
+.undo-toast__undo { padding: 0; border: 0; background: transparent; color: #c99a55; cursor: pointer; font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: .08em; }
+.undo-toast__undo:hover { color: #fff; }
+.undo-toast__undo:focus-visible { outline: 2px solid #f2ede3; outline-offset: 2px; }
+@keyframes undo-drain { from { width: 100%; } to { width: 0; } }

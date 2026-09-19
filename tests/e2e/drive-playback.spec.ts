@@ -106,7 +106,8 @@ test.describe('Drive playback (integration)', () => {
 
       await page.reload({ waitUntil: 'domcontentloaded' });
       await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
-      await page.locator('.recording-row__play').first().click();
+      await page.locator('.recording-row').first().click();
+      await page.locator('.modal-button--watch').click();
       await expect(page.locator('.player')).toBeVisible();
 
       // The element points at Drive, not at a local blob.
