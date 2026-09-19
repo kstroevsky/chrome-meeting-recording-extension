@@ -21,6 +21,7 @@ export type PlayerAction =
   | { kind: 'note'; direction: -1 | 1 }
   | { kind: 'topic'; direction: -1 | 1 }
   | { kind: 'fullscreen' }
+  | { kind: 'subtitles' }
   | { kind: 'help' }
   | { kind: 'escape' };
 
@@ -76,6 +77,7 @@ export function resolvePlayerAction(event: KeyLike, options: KeymapOptions = {})
     case 'l': return { kind: 'speed', direction: 1 };
     case 'm': return { kind: 'mute' };
     case 'f': return { kind: 'fullscreen' };
+    case 'c': return { kind: 'subtitles' };
     case 'n': return { kind: 'note', direction: event.shiftKey ? -1 : 1 };
     // Same shape as N, because it is the same gesture against the other set of
     // marks: walk the conversation by subject rather than by note (ADR-0007).
@@ -128,6 +130,7 @@ export const KEYBOARD_HELP: ReadonlyArray<{ keys: string; description: string }>
   { keys: 'N / ⇧N', description: 'Next or previous note' },
   { keys: 'T / ⇧T', description: 'Next or previous topic' },
   { keys: 'F', description: 'Fullscreen' },
+  { keys: 'C', description: 'Subtitles' },
   { keys: '?', description: 'This map' },
   { keys: 'Esc', description: 'Leave fullscreen, then close' },
 ];

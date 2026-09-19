@@ -9,15 +9,17 @@
 import type { RecordingNotation } from '../../shared/notations';
 import type { PlaybackTopic } from '../../shared/playback';
 
-/** `mm:ss`, or `h:mm:ss` past an hour. Tabular numerals are applied in CSS. */
+/**
+ * `mm:ss`, or `h:mm:ss` past an hour — minutes padded, as the design writes a
+ * position (`05:54 / 22:40`). Tabular numerals are applied in CSS.
+ */
 export function formatClock(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) ms = 0;
   const total = Math.floor(ms / 1000);
   const seconds = total % 60;
   const minutes = Math.floor(total / 60) % 60;
   const hours = Math.floor(total / 3600);
-  const mm = hours ? String(minutes).padStart(2, '0') : String(minutes);
-  return `${hours ? `${hours}:` : ''}${mm}:${String(seconds).padStart(2, '0')}`;
+  return `${hours ? `${hours}:` : ''}${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 export type NoteMark = {

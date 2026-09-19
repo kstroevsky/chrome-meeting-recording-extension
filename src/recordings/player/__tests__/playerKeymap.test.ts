@@ -22,6 +22,7 @@ describe('resolvePlayerAction', () => {
     expect(resolvePlayerAction({ key: 'L' })).toEqual({ kind: 'speed', direction: 1 });
     expect(resolvePlayerAction({ key: 'm' })).toEqual({ kind: 'mute' });
     expect(resolvePlayerAction({ key: 'F' })).toEqual({ kind: 'fullscreen' });
+    expect(resolvePlayerAction({ key: 'c' })).toEqual({ kind: 'subtitles' });
   });
 
   it('walks notes forward, and backward with shift', () => {
@@ -41,7 +42,7 @@ describe('resolvePlayerAction', () => {
     const inField = { inField: true };
 
     it('swallows every bare letter and arrow', () => {
-      for (const key of ['m', 'f', 'j', 'l', 'n', ' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+      for (const key of ['m', 'f', 'c', 'j', 'l', 'n', ' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
         expect(resolvePlayerAction({ key }, inField)).toBeNull();
       }
     });

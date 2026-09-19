@@ -38,6 +38,11 @@
   --danger-wash: #f6e5e1;
   --confirm-surface: #fffdfc;
   --watch-hover: #332f28;
+  /* Idle chrome that should all but disappear: the player's close (f12). */
+  --idle: #c4bcac;
+  --quiet-track: #e4ded1;
+  --quiet-clock: #b3ab9c;
+  --note-border: #e0d6c2;
   /*
    * TOPICS (ADR-0007 §8). Four shades a topic keeps across every span it
    * occupies, so a subject the conversation returns to looks like the same
@@ -88,6 +93,10 @@
   --danger-wash: #34211d;
   --confirm-surface: #1d1915;
   --watch-hover: #d8d1c4;
+  --idle: #5e564a;
+  --quiet-track: #3a342d;
+  --quiet-clock: #6f695f;
+  --note-border: #3d3527;
   --drive-icon: #6ba885;
   --local-icon: #8a7f68;
   --selection: #241f18;
@@ -125,6 +134,10 @@
     --danger-wash: #34211d;
     --confirm-surface: #1d1915;
     --watch-hover: #d8d1c4;
+    --idle: #5e564a;
+    --quiet-track: #3a342d;
+    --quiet-clock: #6f695f;
+    --note-border: #3d3527;
     --drive-icon: #6ba885;
     --local-icon: #8a7f68;
     --selection: #241f18;
@@ -275,20 +288,50 @@ button { -webkit-font-smoothing: antialiased; }
 .player__header { display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 12px 0 8px; }
 .player__title { flex: 1; min-width: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .player__divider { width: 1px; height: 16px; background: var(--divider); flex-shrink: 0; }
-.player__date { flex-shrink: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; color: var(--muted); letter-spacing: .1em; }
+.player__date { flex-shrink: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; color: var(--faint); letter-spacing: .1em; }
 .player__icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--detail); cursor: pointer; flex-shrink: 0; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
 .player__icon:hover { background: var(--field); }
-.player__close { flex-shrink: 0; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; transition: color 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__close { flex-shrink: 0; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--idle); font-size: 15px; line-height: 1; cursor: pointer; transition: color 160ms cubic-bezier(.32, .72, 0, 1); }
 .player__close:hover { color: var(--body); }
 
-.player__stage { position: relative; height: 376px; border-top: 1px solid var(--divider); background: #1c1a17; overflow: hidden; }
+.player__body { display: flex; align-items: stretch; height: 376px; border-top: 1px solid var(--divider); }
+.player__stage { position: relative; flex: 1; min-width: 0; background: #1c1a17; overflow: hidden; }
+/* With the rail open the picture keeps 462px and the rail takes the rest (f10). */
+.player__body--rail .player__stage { flex: 0 0 462px; }
 .player__video { width: 100%; height: 100%; object-fit: contain; background: #1c1a17; display: block; }
 .player__scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 148px; pointer-events: none; background: linear-gradient(rgba(10, 9, 8, 0) 0%, rgba(10, 9, 8, .56) 48%, rgba(10, 9, 8, .88) 100%); }
-.player__stage--quiet .player__scrub, .player__stage--quiet .player__controls { opacity: .35; pointer-events: none; }
+/* f16: the frame goes quiet rather than dark — the picture, its scrim and the
+   marks step out; the controls keep their places, outlined and idle. */
+.player__stage--quiet { background: var(--field); }
+.player__stage--quiet .player__video,
+.player__stage--quiet .player__selfcam,
+.player__stage--quiet .player__scrim,
+.player__stage--quiet .player__played,
+.player__stage--quiet .player__playhead,
+.player__stage--quiet .player__marks,
+.player__stage--quiet .player__topics-band { visibility: hidden; }
+.player__stage--quiet .player__scrub,
+.player__stage--quiet .player__controls { pointer-events: none; }
+.player__stage--quiet .player__track { background: var(--quiet-track); }
+.player__stage--quiet .player__play,
+.player__stage--quiet .player__icon--on-picture { border: 1px solid var(--border); background: transparent; color: var(--idle); }
+.player__stage--quiet .player__clock { color: var(--quiet-clock); }
 /* `display` on a class beats the UA's [hidden] rule, so the attribute needs
    restating — without this an empty scrim sits over the picture forever. */
 .player__status[hidden] { display: none; }
-.player__status { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; padding: 0 40px; text-align: center; font-size: 12.5px; line-height: 1.5; color: #e6ded0; background: rgba(10, 9, 8, .72); }
+.player__status { position: absolute; inset: 0 0 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; margin: 0; padding: 0 40px; text-align: center; }
+.player__status-icon { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: var(--danger-wash); color: var(--accent-dark); }
+.player__status-icon svg { width: 19px; height: 19px; }
+.player__status-copy { display: block; }
+.player__status-title { display: block; margin-bottom: 5px; color: var(--ink); font-size: 14px; font-weight: 600; }
+.player__status-body { display: block; color: var(--armed-text); font-size: 12px; line-height: 1.5; }
+.player__status-actions { display: inline-flex; align-items: center; gap: 7px; }
+.player__status-action { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border: 1px solid var(--note-border); border-radius: 6px; background: transparent; color: var(--body); cursor: pointer; font-size: 12.5px; font-weight: 600; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__status-action:hover { background: var(--note-chip); }
+.player__status-action--danger { border-color: var(--remove-border); color: var(--accent-dark); }
+.player__status-action--danger:hover { background: var(--danger-wash); }
+.player__status-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.player__status-action--danger:focus-visible { outline-color: var(--accent-dark); }
 
 /* Scrubber: a 16px hit zone around a 5px rail, so a note mark is hittable. */
 .player__scrub { position: absolute; left: 12px; right: 12px; bottom: 38px; }
@@ -331,7 +374,9 @@ button { -webkit-font-smoothing: antialiased; }
 .player__files:hover { background: var(--field); }
 .player__files[hidden] { display: none; }
 .player__files-label { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600; letter-spacing: .08em; color: var(--detail); }
-.player__files-count { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: var(--faint); }
+.player__files-count { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: var(--note-icon); }
+.player__files-chevron { flex: 0 0 auto; color: var(--faint); transition: transform 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__files[aria-expanded='true'] .player__files-chevron { transform: rotate(180deg); }
 .player__menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 4; min-width: 180px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 14px 30px -10px rgba(28, 26, 23, .28); }
 .player__menu[hidden] { display: none; }
 .player__popover--up .player__menu { top: auto; bottom: calc(100% + 6px); }
@@ -381,7 +426,11 @@ button { -webkit-font-smoothing: antialiased; }
 /* Fullscreen (design f15): the picture takes the screen; chrome stays legible. */
 .player-overlay:fullscreen { padding: 0; background: #000; }
 .player-overlay:fullscreen .player { width: 100%; height: 100%; border: 0; border-radius: 0; display: flex; flex-direction: column; box-shadow: none; }
-.player-overlay:fullscreen .player__stage { flex: 1; height: auto; }
+.player-overlay:fullscreen .player__body { flex: 1; height: auto; border-top: 0; }
+.player-overlay:fullscreen .player__stage,
+.player-overlay:fullscreen .player__body--rail .player__stage { flex: 1; height: auto; }
+/* Fullscreen is for the picture; the rail steps out and returns on exit. */
+.player-overlay:fullscreen .player__rail { display: none; }
 .player-overlay:fullscreen .player__video { height: 100%; }
 /* Auxiliary tracks: audio is invisible, the camera renders as the PiP. */
 .player__aux { position: absolute; inset: 0; pointer-events: none; }
@@ -511,3 +560,47 @@ button { -webkit-font-smoothing: antialiased; }
 .undo-toast__undo:hover { color: #fff; }
 .undo-toast__undo:focus-visible { outline: 2px solid #f2ede3; outline-offset: 2px; }
 @keyframes undo-drain { from { width: 100%; } to { width: 0; } }
+
+/* ── Transcript rail (f10) ──────────────────────────────────────────────────
+   Present only when the recording has a transcript; otherwise absent, and the
+   header loses its toggle (f11/f12). Lines said during a note sit under that
+   note's sticky heading, joined by a gold rail in the gutter. */
+.player__rail-toggle { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--idle); cursor: pointer; transition: color 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__rail-toggle--open,
+.player__rail-toggle:hover { color: var(--detail); }
+.player__rail-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.player__rail { display: flex; flex: 1; flex-direction: column; min-width: 0; border-left: 1px solid var(--divider); background: var(--raised); }
+.player__rail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 34px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--divider); }
+.player__rail-count { overflow: hidden; flex: 1; min-width: 0; color: var(--faint); font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; white-space: nowrap; text-overflow: ellipsis; }
+.player__rail-srt { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--detail); cursor: pointer; font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .08em; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__rail-srt:hover { background: var(--note-chip); }
+.player__rail-srt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.player__rail-list { flex: 1; overflow-y: auto; padding: 0 12px 12px; scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
+.player__rail-heading { position: sticky; z-index: 1; top: 0; display: block; width: 100%; padding: 9px 0 5px 12px; border: 0; background: var(--raised); color: var(--detail); cursor: pointer; font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; text-align: left; text-transform: uppercase; transition: color 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__rail-heading:hover { color: color-mix(in srgb, var(--detail) 80%, var(--ink)); }
+.player__rail-heading--unnamed { color: var(--faint); }
+.player__rail-heading:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.player__rail-line { display: grid; grid-template-columns: 3px minmax(0, 1fr); gap: 9px; width: calc(100% + 12px); margin: 0 -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; transition: background 160ms cubic-bezier(.32, .72, 0, 1); }
+.player__rail-line:hover { background: var(--note-chip); }
+.player__rail-line:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.player__rail-gutter { align-self: stretch; }
+.player__rail-line--noted .player__rail-gutter { background: var(--detail); }
+.player__rail-gutter--first { margin-top: 4px; border-radius: 2px 2px 0 0; }
+.player__rail-gutter--last { margin-bottom: 4px; border-radius: 0 0 2px 2px; }
+.player__rail-gutter--single { margin: 4px 0; border-radius: 2px; }
+.player__rail-content { display: block; min-width: 0; padding: 7px 0; }
+.player__rail-meta { display: block; margin-bottom: 2px; }
+.player__rail-time { color: var(--faint); font: 9.5px 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.player__rail-line--noted .player__rail-time { color: var(--detail); }
+.player__rail-tag { margin-left: 7px; color: var(--idle); font: 600 8px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.player__rail-text { display: block; color: var(--body); font-size: 11.5px; line-height: 1.5; }
+/* The line being spoken: a warm band, the playhead's red on its time. */
+.player__rail-line--active { background: var(--note-band); }
+.player__rail-line--active .player__rail-time { color: var(--accent); }
+.player__rail-line--active .player__rail-text { color: var(--ink); }
+
+/* Subtitles on the picture (f10): fixed colours, because the picture is dark in both themes. */
+.player__subtitle { position: absolute; z-index: 1; right: 14px; bottom: 66px; left: 14px; display: flex; justify-content: center; pointer-events: none; }
+.player__subtitle-bubble { display: inline-flex; align-items: baseline; gap: 8px; max-width: 100%; padding: 7px 11px; border-radius: 6px; background: rgba(10, 9, 8, .7); color: #f6f3ec; font-size: 12.5px; line-height: 1.45; }
+.player__subtitle-tag { flex-shrink: 0; color: #c9bfa9; font: 600 8px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .14em; text-transform: uppercase; }
+.player__stage--quiet .player__subtitle { display: none; }

@@ -47,6 +47,12 @@ Everything topic-shaped disappears when `topics` is empty, which covers never-an
 
 The manifest carries no vectors. Centroids and segment embeddings stay in the `analyses` store for the deferred retrieval work; the player needs words and offsets.
 
+## Transcript
+
+A recording with a persisted transcript (ADR-0007, `manifest.transcriptStatus === 'ready'`) gets the design's `f10` rail beside the picture: the video keeps 462px and the rail lists every line with its time and speaker, the line being spoken banded and its time in the playhead's red, and a subtitle band on the picture shows the same line. Lines said during a note sit under that note's sticky heading, joined by a gold rail in the gutter; a line belongs to the earliest-starting note whose range holds its start (`playerTranscript.railItems`). Clicking a line or a heading seeks there. The header's panel toggle hides and restores the rail, `C` and the Subtitles row toggle the band, and SRT downloads the transcript as SubRip.
+
+Without a transcript the rail is **absent**, not hidden, and the header loses its toggle — `f11`/`f12`. The transcript is read beside playback rather than before it (`GET_RECORDING_TRANSCRIPT`), so a failure costs the rail and says nothing on the picture. Speaker names come from Meet's captions; the design's `TAB` / `MIC` source tags have no equivalent in a caption transcript.
+
 ## Synchronization
 
 One clock, `PlaybackClock`, with the tab track as master. Correction is deliberately reluctant — seeking an element is *audible*, so a stream of micro-seeks sounds worse than the drift it fixes:
@@ -76,13 +82,14 @@ The Drive retry is **exactly once per open**. A retry loop against a genuinely d
 | File | Role |
 | :--- | :--- |
 | `PlayerController.ts` | Orchestration: manifest → sources → elements → clock |
-| `PlayerView.ts` | The modal DOM (design card `f12`) |
+| `PlayerView.ts` | The modal DOM (design cards `f12`, `f10` with a transcript, `f16` quiet) |
 | `PlaybackClock.ts` | Master/auxiliary synchronization and drift bands |
 | `playbackSource.ts` | One track → a URL a media element can take |
 | `playerFormat.ts` | Clock text, note-mark and topic-band placement, seek fraction |
 | `playerKeymap.ts` | The `f19` map, resolved as data |
 | `playerTracks.ts` | What FILES and the volume popup are lists of |
 | `playerTopics.ts` | What TOPICS is a list of |
+| `playerTranscript.ts` | What the rail is a list of: note grouping, the playing line, SRT |
 
 ## Testing notes
 
