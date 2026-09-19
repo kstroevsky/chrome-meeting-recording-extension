@@ -34,6 +34,16 @@ const NAME_COMMIT_MS = 400;
 /** Keeps a just-started span visible before elapsed time has caught up to it. */
 const MIN_SCALE_MS = 1000;
 
+/**
+ * The shortcut tip's "Got it" outlives the popup. `localStorage` because the
+ * popup reads it synchronously on the first paint, so a dismissed tip never flashes.
+ */
+const HINT_DISMISSED_KEY = 'meetRecorder.noteHintDismissed';
+
+function hintDismissed(): boolean {
+  try { return localStorage.getItem(HINT_DISMISSED_KEY) === '1'; } catch { return false; }
+}
+
 export type RecordingNotesElements = {
   ribbon: HTMLElement | null;
   track: HTMLElement | null;
@@ -52,6 +62,8 @@ export type RecordingNotesElements = {
   /** Replaces the count while a note runs: where that note started. */
   from: HTMLElement | null;
   hint: HTMLElement | null;
+  /** "Got it": retires the tip for good, not just for this run. */
+  hintDismiss: HTMLButtonElement | null;
   editor: HTMLElement | null;
   editorIndex: HTMLElement | null;
   editorRange: HTMLElement | null;
@@ -102,6 +114,10 @@ export class RecordingNotesView {
       : null;
     this.el.startButton?.addEventListener('click', () => void this.onToggle());
     this.el.toggle?.addEventListener('click', () => void this.onToggle());
+    this.el.hintDismiss?.addEventListener('click', () => {
+      try { localStorage.setItem(HINT_DISMISSED_KEY, '1'); } catch { /* the tip just returns next open */ }
+      if (this.el.hint) this.el.hint.hidden = true;
+    });
     this.el.editorClose?.addEventListener('click', () => this.closeEditor());
     this.el.editor?.querySelector('[data-note-editor-dismiss]')
       ?.addEventListener('click', () => this.closeEditor());
@@ -232,7 +248,7 @@ export class RecordingNotesView {
       this.el.startButton.title = open ? 'End this note (⌥M)' : 'Start a note (⌥M)';
     }
     // The tip has done its job once the user has made a note.
-    if (this.el.hint) this.el.hint.hidden = count > 0 || !live;
+    if (this.el.hint) this.el.hint.hidden = count > 0 || !live || hintDismissed();
     if (this.el.row) this.el.row.hidden = !live;
 
     if (this.el.ribbon) this.el.ribbon.hidden = count === 0 || !live;

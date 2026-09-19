@@ -10,7 +10,8 @@
  * list's business.
  */
 
-import { DETAIL_OPEN_ICON, detailPercent } from './historyChrome';
+import { DETAIL_OPEN_ICON, detailPercent, recordingListDay } from './historyChrome';
+import { formatBytes } from '../../shared/format';
 import { formatDuration, formatPosition } from '../popupStatus';
 import { sendToBackground } from '../../shared/messages';
 import { describeNotationForList, type RecordingNotation } from '../../shared/notations';
@@ -21,6 +22,26 @@ const NOTE_CHIP_ICON = '<svg width="9" height="9" viewBox="0 0 16 16" fill="curr
 
 /** The list shows at most this many rows; uploads take places from the top. */
 const VISIBLE_ROWS = 3;
+
+/**
+ * How many rows the list showed last time. The next open holds that much room
+ * while history is read, so the buttons under the list do not jump down when
+ * the rows arrive. `localStorage` because it only has to outlive the popup.
+ */
+const ROW_COUNT_KEY = 'meetRecorder.recentRowCount';
+
+function expectedRows(): number {
+  try {
+    const stored = Number(localStorage.getItem(ROW_COUNT_KEY));
+    return localStorage.getItem(ROW_COUNT_KEY) != null && Number.isInteger(stored) ? Math.min(stored, VISIBLE_ROWS) : VISIBLE_ROWS;
+  } catch {
+    return VISIBLE_ROWS;
+  }
+}
+
+function rememberRows(count: number): void {
+  try { localStorage.setItem(ROW_COUNT_KEY, String(count)); } catch { /* the next open just guesses */ }
+}
 
 export type RecordingsListActions = {
   openRecording: (entry: RecordingHistoryEntry) => void;
@@ -58,7 +79,24 @@ export class RecordingsListView {
     const list = document.getElementById('popup-recordings-list');
     if (list) list.replaceChildren();
     if (entries) this.render(entries);
+    else this.reserveRows();
     return true;
+  }
+
+  /** Blank rows, or the empty line's height, standing in until history arrives. */
+  private reserveRows(): void {
+    const list = document.getElementById('popup-recordings-list');
+    const empty = document.getElementById('popup-recordings-empty');
+    if (!list || !empty) return;
+    const rows = expectedRows();
+    for (let index = 0; index < rows; index++) {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'popup-recording-placeholder';
+      placeholder.setAttribute('aria-hidden', 'true');
+      list.appendChild(placeholder);
+    }
+    empty.hidden = rows > 0;
+    empty.classList.toggle('reserving', rows === 0);
   }
 
   render(entries: RecordingHistoryEntry[]): void {
@@ -70,6 +108,8 @@ export class RecordingsListView {
     for (const job of uploads) list.appendChild(this.uploadRow(job));
     const visible = entries.slice(0, Math.max(0, VISIBLE_ROWS - uploads.length));
     empty.hidden = uploads.length > 0 || visible.length > 0;
+    empty.classList.remove('reserving');
+    rememberRows(uploads.length + visible.length);
     for (const entry of visible) list.appendChild(this.recordingRow(entry));
     if (visible.length) void this.paintNoteCounts(visible);
   }
@@ -105,7 +145,12 @@ export class RecordingsListView {
     title.textContent = entry.name;
     const meta = document.createElement('div');
     meta.className = 'popup-recording-meta';
-    meta.textContent = `${entry.files.length} ${entry.files.length === 1 ? 'FILE' : 'FILES'} · ${new Date(entry.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }).toUpperCase()}`;
+    const bytes = entry.files.reduce((total, file) => total + (file.bytes ?? 0), 0);
+    meta.textContent = [
+      `${entry.files.length} ${entry.files.length === 1 ? 'FILE' : 'FILES'}`,
+      ...(bytes ? [formatBytes(bytes).toUpperCase()] : []),
+      recordingListDay(entry.createdAt),
+    ].join(' · ');
     copy.append(title, meta);
     const open = document.createElement('button');
     open.type = 'button';

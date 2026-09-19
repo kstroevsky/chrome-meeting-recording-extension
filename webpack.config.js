@@ -4,7 +4,7 @@ const webpack = require('webpack')
 const CopyWebpackPlugin = require('copy-webpack-plugin')
 const { CleanWebpackPlugin } = require('clean-webpack-plugin')
 const pkg = require('./package.json')
-const { toChromeManifestVersion } = require('./scripts/lib/manifestVersion.cjs')
+const { readReleaseVersion, hasUncommittedChanges, releaseVersionName, majorOf } = require('./scripts/lib/releaseVersion.cjs')
 const {
   TARGET_PROFILES,
   DEFAULT_TARGET,
@@ -13,6 +13,7 @@ const {
   applyTargetToManifest,
 } = require('./scripts/lib/manifestTargets.cjs')
 const { telemetryHostPermission } = require('./scripts/lib/telemetryEndpoint.cjs')
+const { ANALYSIS_MODEL, modelCacheDir } = require('./scripts/lib/analysisModel.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
@@ -82,17 +83,36 @@ function resolveBrowserTarget(rawTarget) {
   return target
 }
 
-function transformManifest(content, oauthClientId, isDevBuild, browserTarget, telemetryEndpoint) {
+/**
+ * The release version a.b.c.d, counted from git history (scripts/lib/releaseVersion.cjs);
+ * package.json only supplies the major. A dev build without git history still
+ * builds, as a.0.0.0; a production build must be able to count.
+ */
+function resolveReleaseVersion(isDevBuild) {
+  try {
+    const version = readReleaseVersion({ cwd: __dirname, packageVersion: pkg.version })
+    const name = releaseVersionName(version, { dev: isDevBuild, dirty: hasUncommittedChanges(__dirname) })
+    return { version, name }
+  } catch (error) {
+    if (!isDevBuild) {
+      throw new Error(`Production builds count the release version from git history, which failed: ${error.message}`)
+    }
+    const version = `${majorOf(pkg.version)}.0.0.0`
+    console.warn(`[build] cannot count the release version from git (${error.message}); using ${version}`)
+    return { version, name: releaseVersionName(version, { dev: true, fromGit: false }) }
+  }
+}
+
+function transformManifest(content, oauthClientId, isDevBuild, browserTarget, telemetryEndpoint, release) {
   const manifest = JSON.parse(content.toString('utf8'))
   // Per-target manifest decisions (oauth2 / key) live in the tested profile model
   // (scripts/lib/manifestTargets.cjs), keyed off browser family + auth capability.
   applyTargetToManifest(manifest, browserTarget, { oauthClientId })
-  // package.json is the single source of truth for the release version; the
-  // numeric Chrome `version` is derived here so the two can never drift, and the
-  // full semver (incl. any pre-release tag) is preserved for display in
-  // `version_name`. The value in static/manifest.json is an ignored placeholder.
-  manifest.version = toChromeManifestVersion(pkg.version)
-  manifest.version_name = isDevBuild ? `${pkg.version} (dev)` : pkg.version
+  // The version is counted from git history at build time; `version_name` adds
+  // what makes this build differ from that commit (dev, uncommitted changes).
+  // The value in static/manifest.json is an ignored placeholder.
+  manifest.version = release.version
+  manifest.version_name = release.name
   // Dev-only diagnostics: system-wide CPU sampling via chrome.system.cpu. Never
   // shipped to production so the store listing keeps a minimal permission set
   // and avoids a permission re-review prompt for users.
@@ -137,6 +157,8 @@ module.exports = (_env, argv) => {
     throw new Error(`${TELEMETRY_ENDPOINT_ENV_KEY} is required for production builds`)
   }
   telemetryHostPermission(telemetryEndpoint)
+  const release = resolveReleaseVersion(isDevBuild)
+  console.log(`[build] release version ${release.name}`)
 
   if (targetProfile.auth === 'chrome-identity' && !configuredGoogleOauthClientId) {
     console.warn(
@@ -160,6 +182,13 @@ module.exports = (_env, argv) => {
       background: './src/background.ts',
       offscreen: './src/offscreen.ts',
       opfsWorker: './src/offscreen/storage/opfsWorker.ts',
+      // A worker has no `document`, so it cannot use webpack's default
+      // JSONP chunk loading. @huggingface/transformers splits its ONNX backends
+      // into async chunks, so this entry needs the worker-native loader.
+      analysisWorker: {
+        import: './src/offscreen/analysis/analysisWorker.ts',
+        chunkLoading: 'import-scripts',
+      },
       micsetup: './src/micsetup.ts',
       camsetup: './src/camsetup.ts',
       settings: './src/settings.ts',
@@ -167,15 +196,30 @@ module.exports = (_env, argv) => {
     },
     output: {
       path: path.resolve(__dirname, outputDir),
-      filename: '[name].js'
+      filename: '[name].js',
+      // Explicit, because the default ('auto') derives the path from
+      // `document.currentScript` — which does not exist in a worker and throws
+      // at module scope. In an extension, '/' is the package root, where every
+      // bundle and chunk already lives.
+      publicPath: '/',
     },
-    resolve: { extensions: ['.ts', '.js'] },
+    // `.mjs` for @huggingface/transformers, which ships ESM under that extension.
+    resolve: { extensions: ['.ts', '.js', '.mjs'] },
     module: {
       rules: [
         {
           test: /\.ts$/,
           use: 'ts-loader',
           exclude: /node_modules/
+        },
+        {
+          // ONNX Runtime reaches for its own `.wasm` through `import.meta.url`.
+          // The worker points ORT at the packaged copies in `ort/` instead
+          // (`wasmPaths`), so letting webpack emit a second, hashed copy would
+          // ship 22.5 MB nobody loads.
+          test: /\.wasm$/,
+          type: 'asset/resource',
+          generator: { emit: false },
         }
       ]
     },
@@ -194,6 +238,14 @@ module.exports = (_env, argv) => {
         '__WEB_OAUTH_CLIENT_ID__': JSON.stringify(webOauthClientId),
         '__WEB_OAUTH_CLIENT_SECRET__': JSON.stringify(webOauthClientSecret),
         '__TELEMETRY_ENDPOINT__': JSON.stringify(telemetryEndpoint),
+        // The model this build actually packaged. Defined rather than written
+        // in TypeScript so an analysis can never record provenance for a model
+        // or quantization other than the one on disk beside it (ADR-0007).
+        '__ANALYSIS_MODEL__': JSON.stringify({
+          id: ANALYSIS_MODEL.id,
+          revision: ANALYSIS_MODEL.revision,
+          dtype: ANALYSIS_MODEL.dtype,
+        }),
         'process.env.NODE_ENV': JSON.stringify(mode),
       }),
       // Stamp the per-compilation content hash into every entry bundle as
@@ -210,7 +262,7 @@ module.exports = (_env, argv) => {
           {
             from: path.join(STATIC_DIR, 'manifest.json'),
             to: 'manifest.json',
-            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild, browserTarget, telemetryEndpoint),
+            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild, browserTarget, telemetryEndpoint, release),
           },
           { from: path.join(STATIC_DIR, 'popup.html'),     to: 'popup.html' },
           ...(isDevBuild ? [{ from: path.join(STATIC_DIR, 'popup-gallery.html'), to: 'popup-gallery.html' }] : []),
@@ -225,6 +277,48 @@ module.exports = (_env, argv) => {
           // Finder metadata is ignored by git but can still exist locally; never
           // ship it inside the extension package.
           { from: PUBLIC_DIR, to: '.', noErrorOnMissing: true, globOptions: { ignore: ['**/.DS_Store', '**/._*'] } },
+          // ADR-0007: the embedding model is extension-owned. Materialized and
+          // SHA-256 verified by `scripts/fetch-analysis-model.mjs` before the
+          // build; analysis never reaches the network.
+          // Exactly one ONNX export ships. The cache may hold several — 4A
+          // measures Q8 and FP16 as separate builds — so everything under
+          // `onnx/` except the selected one is filtered out here.
+          {
+            from: modelCacheDir(),
+            to: `models/${ANALYSIS_MODEL.id}`,
+            filter: (resourcePath) => {
+              const relative = path.relative(modelCacheDir(), resourcePath).split(path.sep).join('/')
+              return !relative.startsWith('onnx/') || relative === ANALYSIS_MODEL.onnxPath
+            },
+          },
+          // ONNX Runtime's WASM binaries, copied from the version
+          // @huggingface/transformers resolved. Not an independent dependency:
+          // two ORT versions would be worse than a path that breaks loudly.
+          //
+          // Which variants ORT selects is its own decision, made from the
+          // features it detects — an earlier attempt inferred the set from the
+          // file names, packaged only `jsep` and the plain build, and failed at
+          // runtime asking for `asyncify`. `ORT_VARIANTS` exists so the set can
+          // be narrowed by measurement against a working build instead.
+          {
+            from: path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
+            to: 'ort',
+            globOptions: { ignore: ['**/*.map'] },
+            filter: (resourcePath) => {
+              const name = path.basename(resourcePath)
+              // Only what ORT fetches at runtime. `wasmPaths` resolves
+              // `ort-wasm-simd-threaded[.variant].{wasm,mjs}` and nothing else;
+              // the package's own `ort.*.mjs` entry points are build-time
+              // imports webpack has already inlined into `analysisWorker.js`,
+              // so copying them shipped ~16 MB no URL could ever reach.
+              if (!/^ort-wasm-simd-threaded[.a-z]*\.(wasm|mjs)$/.test(name)) return false
+              const allow = process.env.ORT_VARIANTS
+              if (!allow) return true
+              return allow.split(',').some((v) => name === `ort-wasm-simd-threaded.${v}`.replace(/\.$/, '')
+                || name.startsWith(`ort-wasm-simd-threaded.${v}.`)
+                || (v === 'base' && /^ort-wasm-simd-threaded\.(wasm|mjs)$/.test(name)))
+            },
+          },
         ]
       })
     ]

@@ -19,7 +19,9 @@ export type PlayerAction =
   | { kind: 'volume'; direction: -1 | 1 }
   | { kind: 'mute' }
   | { kind: 'note'; direction: -1 | 1 }
+  | { kind: 'topic'; direction: -1 | 1 }
   | { kind: 'fullscreen' }
+  | { kind: 'subtitles' }
   | { kind: 'help' }
   | { kind: 'escape' };
 
@@ -75,7 +77,11 @@ export function resolvePlayerAction(event: KeyLike, options: KeymapOptions = {})
     case 'l': return { kind: 'speed', direction: 1 };
     case 'm': return { kind: 'mute' };
     case 'f': return { kind: 'fullscreen' };
+    case 'c': return { kind: 'subtitles' };
     case 'n': return { kind: 'note', direction: event.shiftKey ? -1 : 1 };
+    // Same shape as N, because it is the same gesture against the other set of
+    // marks: walk the conversation by subject rather than by note (ADR-0007).
+    case 't': return { kind: 'topic', direction: event.shiftKey ? -1 : 1 };
     default: return null;
   }
 }
@@ -91,11 +97,15 @@ export function nextSpeed(current: number, direction: -1 | 1): number {
 }
 
 /**
- * The note to jump to from `positionMs`. Forward finds the first note that
- * starts later; backward finds the last that starts earlier, so repeated
- * presses walk the list rather than sticking on the current one.
+ * The mark to jump to from `positionMs` — note starts or topic-span starts,
+ * whichever set is passed. Forward finds the first that starts later; backward
+ * finds the last that starts earlier, so repeated presses walk the list rather
+ * than sticking on the current one.
+ *
+ * The 250 ms dead zone is what makes the backward case work: without it, a jump
+ * that lands exactly on a mark would immediately find that same mark again.
  */
-export function adjacentNoteStart(
+export function adjacentMarkStart(
   starts: readonly number[],
   positionMs: number,
   direction: -1 | 1,
@@ -118,7 +128,9 @@ export const KEYBOARD_HELP: ReadonlyArray<{ keys: string; description: string }>
   { keys: 'M', description: 'Mute every track' },
   { keys: '↑ / ↓', description: 'Volume' },
   { keys: 'N / ⇧N', description: 'Next or previous note' },
+  { keys: 'T / ⇧T', description: 'Next or previous topic' },
   { keys: 'F', description: 'Fullscreen' },
+  { keys: 'C', description: 'Subtitles' },
   { keys: '?', description: 'This map' },
   { keys: 'Esc', description: 'Leave fullscreen, then close' },
 ];

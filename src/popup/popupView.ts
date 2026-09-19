@@ -99,23 +99,27 @@ export type PopupElements = {
   /** Tab bar populated with the live tab + one tab per background upload job. */
   sessionTabs: HTMLElement | null;
   viewUpload: HTMLElement | null;
-  /** In-progress block (linear bar); hidden once the job completes. */
-  uploadProgress: HTMLElement | null;
-  /** Done block (saved confirmation); shown only for a completed job. */
-  uploadDone: HTMLElement | null;
+  /** Icon, title and mono summary: leads while uploading (d4) and once saved (n2a). */
+  uploadHead: HTMLElement | null;
   uploadJobLabel: HTMLElement | null;
-  uploadJobPct: HTMLElement | null;
-  /** The linear progress bar's fill; its `width` encodes the upload fraction. */
-  uploadBarFill: HTMLElement | null;
-  /** Aggregate "N of M files · <size>" line under the bar. */
-  uploadJobMeta: HTMLElement | null;
+  /** "1 OF 3 FILES" while uploading; "3 FILES · 284 MB" once saved. */
   uploadJobSub: HTMLElement | null;
+  /** The outcome line a failed (8A) or partial (8C) job leads with instead of the head. */
+  uploadEyebrow: HTMLElement | null;
+  /** PROGRESS / IN GOOGLE DRIVE above the file rows. */
+  uploadFilesLabel: HTMLElement | null;
   uploadJobFiles: HTMLElement | null;
   uploadJobNotes: HTMLElement | null;
   uploadJobNotesLine: HTMLElement | null;
+  uploadJobNotesLabel: HTMLElement | null;
   uploadJobNotesState: HTMLElement | null;
-  /** Opens the completed job's Google Drive folder when Drive returned one. */
+  /** Opens the job's Google Drive folder when Drive returned one. */
   uploadJobOpenDrive: HTMLButtonElement | null;
+  uploadJobOpenDriveLabel: HTMLElement | null;
+  /** Back to Setup; the job keeps going (d4) or waits for a retry (8A). */
+  uploadJobNewRecording: HTMLButtonElement | null;
+  /** The reassurance under a failed or partial job's actions (8A, 8C). */
+  uploadRecoveryNote: HTMLElement | null;
   /** "Retry upload" CTA, shown only for a failed/partial job. */
   uploadJobRetry: HTMLButtonElement | null;
   /** Cancels an in-progress Drive upload and downloads unfinished files. */

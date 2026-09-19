@@ -133,6 +133,8 @@ export class NotationRibbon {
       // A note the run sealed on the way out reads as muted: it ended because
       // the recording did, not because the user closed it.
       span.classList.toggle('auto-ended', notation.endedBy === 'auto');
+      // A note nobody named is drawn pale, so the gaps in the record show (d1, f2).
+      span.classList.toggle('unnamed', !notation.text);
       if (this.options.activeClass) span.classList.toggle(this.options.activeClass, active);
       const label = describeNotation(notation);
       span.title = label;

@@ -21,6 +21,33 @@ export function recordingDetailDate(timestamp: number): string {
     .toUpperCase();
 }
 
+/**
+ * When a recording was made, as the detail's summary says it (d1, f4): the day
+ * as a word while it is recent — TODAY, YESTERDAY, SAT — then the date, always
+ * followed by the 24-hour time.
+ */
+export function recordingDetailWhen(timestamp: number, now = Date.now()): string {
+  const at = new Date(timestamp);
+  const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }).format(at);
+  const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const days = Math.round((startOfDay(new Date(now)) - startOfDay(at)) / 86_400_000);
+  const day = days === 0 ? 'TODAY'
+    : days === 1 ? 'YESTERDAY'
+      : days > 1 && days < 7 ? new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(at)
+        : new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(at);
+  return `${day.toUpperCase()} ${time}`;
+}
+
+/** The list row's day (n1): TODAY or YESTERDAY while recent, else the date. */
+export function recordingListDay(timestamp: number, now = Date.now()): string {
+  const at = new Date(timestamp);
+  const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const days = Math.round((startOfDay(new Date(now)) - startOfDay(at)) / 86_400_000);
+  if (days === 0) return 'TODAY';
+  if (days === 1) return 'YESTERDAY';
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(at).toUpperCase();
+}
+
 export function recordingDetailDuration(entry: RecordingHistoryEntry): string {
   return entry.durationMs == null ? '—' : formatDuration(entry.durationMs);
 }

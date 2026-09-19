@@ -52,6 +52,14 @@ export type NotationListResult =
   | { ok: true; notations: RecordingNotation[] }
   | { ok: false; error: string };
 
+/**
+ * A recording's stored transcript, or `undefined` when it has none — a
+ * recording made without captions is a normal outcome, not an error.
+ */
+export type TranscriptResult =
+  | { ok: true; transcript?: import('./transcript').Transcript }
+  | { ok: false; error: string };
+
 export type DriveTokenResponse =
   | { ok: true; token: string }
   | { ok: false; error: string };
@@ -117,6 +125,7 @@ export type PopupDeliverLocalRecording = {
   folderId: string | null;
 };
 export type PopupGetPlaybackManifest = { type: 'GET_RECORDING_PLAYBACK_MANIFEST'; recordingId: string };
+export type PopupGetRecordingTranscript = { type: 'GET_RECORDING_TRANSCRIPT'; recordingId: string };
 /**
  * Note what is absent: no `tabId`. Background reads it from `sender`, because a
  * page that could name its own tab could ask for Drive credentials to be
@@ -142,6 +151,8 @@ export type PopupAddRecordingNotation = {
   text: string;
 };
 export type PopupListRecordingNotationSummaries = { type: 'LIST_RECORDING_NOTATION_SUMMARIES'; recordingIds: string[] };
+/** Topic digests for a page of the library, so keywords fold into its search (ADR-0007 §8). */
+export type PopupListRecordingTopicSummaries = { type: 'LIST_RECORDING_TOPIC_SUMMARIES'; recordingIds: string[] };
 export type PopupUpdateRecordingNotation = {
   type: 'UPDATE_RECORDING_NOTATION';
   recordingId: string;
@@ -186,9 +197,11 @@ export type PopupToBg =
   | PopupPreparePlaybackSource
   | PopupRefreshPlaybackSource
   | PopupListRecordingNotationSummaries
+  | PopupListRecordingTopicSummaries
   | PopupAddRecordingNotation
   | PopupUpdateRecordingNotation
-  | PopupRemoveRecordingNotation;
+  | PopupRemoveRecordingNotation
+  | PopupGetRecordingTranscript;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -228,9 +241,13 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupRefreshPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupListRecordingNotationSummaries ?
     { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
+  T extends PopupListRecordingTopicSummaries ?
+    { ok: true; summaries: Record<string, import('./analysis/storedAnalysis').RecordingTopicSummary> }
+    | { ok: false; error: string } :
   T extends PopupAddRecordingNotation ? NotationResult :
   T extends PopupUpdateRecordingNotation ? NotationListResult :
   T extends PopupRemoveRecordingNotation ? NotationListResult :
+  T extends PopupGetRecordingTranscript ? TranscriptResult :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -238,15 +255,35 @@ export type PopupResetTranscript = { type: 'RESET_TRANSCRIPT' };
 /** Asks the content script whether the Meet captions region is currently present. */
 export type PopupGetCaptionState = { type: 'GET_CAPTION_STATE' };
 
+/**
+ * Arms or disarms the incremental push of committed utterances.
+ *
+ * Without this the content script would wake the service worker every few
+ * seconds on any Meet call with captions on, recording or not. Background arms
+ * it when a run starts and disarms it when the run ends.
+ */
+export type BgSetTranscriptCapture = { type: 'SET_TRANSCRIPT_CAPTURE'; active: boolean; runId?: number };
+
+/**
+ * Drains everything the caption buffer has committed. The backstop for the
+ * push: a content script that loaded after the run started was never armed, so
+ * background sweeps the tab once at stop while it is still reachable.
+ */
+export type BgGetTranscriptUtterances = { type: 'GET_TRANSCRIPT_UTTERANCES' };
+
 export type PopupToContent =
   | PopupGetTranscript
   | PopupResetTranscript
-  | PopupGetCaptionState;
+  | PopupGetCaptionState
+  | BgSetTranscriptCapture
+  | BgGetTranscriptUtterances;
 
 export type PopupToContentResponse<T extends PopupToContent> =
   T extends PopupGetTranscript ? { transcript: string; provider: MeetingProviderInfo } :
   T extends PopupResetTranscript ? { ok: true } :
   T extends PopupGetCaptionState ? { captionsActive: boolean } :
+  T extends BgSetTranscriptCapture ? { ok: true } :
+  T extends BgGetTranscriptUtterances ? { utterances: import('./transcript').CaptionUtterance[] } :
   never;
 
 export type ContentMeetingEnded = {
@@ -254,6 +291,41 @@ export type ContentMeetingEnded = {
   meetingId: string | null;
   reason?: string;
 };
+
+/**
+ * Committed caption utterances, pushed as they are finalized rather than pulled
+ * at stop: captions live only in the meeting tab's memory, and that tab can
+ * close before — or during — finalize (ADR-0007 Decision 1).
+ *
+ * Wall-clock, because the content script has no other clock. Background
+ * projects them onto the media timeline. Fire-and-forget, so redelivery is
+ * expected and the service deduplicates.
+ */
+export type ContentTranscriptUtterances = {
+  type: 'TRANSCRIPT_UTTERANCES';
+  /**
+   * The run these words belong to — the session's fencing token (ADR-0003),
+   * opaque to the content script. Without it a message delayed across a
+   * stop/start boundary would file one run's words under the next one.
+   */
+  runId: number;
+  utterances: import('./transcript').CaptionUtterance[];
+};
+
+/**
+ * Asked by a content script that has just loaded, to find out whether it
+ * missed an arming message. A Meet page can navigate or reload mid-run, and
+ * the fresh script would otherwise stay silent until the run ended.
+ */
+export type ContentGetTranscriptCaptureState = { type: 'GET_TRANSCRIPT_CAPTURE_STATE' };
+
+/** Whether captions should be shipped, and for which run. */
+export type TranscriptCaptureState = { active: boolean; runId?: number };
+
+export type ContentToBg =
+  | ContentMeetingEnded
+  | ContentTranscriptUtterances
+  | ContentGetTranscriptCaptureState;
 
 export type BgToPopup =
   | { type: 'RECORDING_STATE'; session: RecordingStatusView }
@@ -324,12 +396,41 @@ export type BgToOffscreenRpc =
   | RpcRequest<{
       type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES';
       resources: Array<{ id: string; name: string }>;
-    }>;
+    }>
+  /**
+   * Queues topic analysis for one recording (HOST-01). Background reads the
+   * transcript and supplies it here rather than having the data plane reach
+   * into `recording-history`, which background alone writes.
+   */
+  | RpcRequest<{
+      type: 'OFFSCREEN_ANALYZE_TRANSCRIPT';
+      historyId: string;
+      transcript: import('./transcript').TranscriptSegment[];
+      /** Every §9 value the run must use; see `shared/analysis/types`. */
+      config: import('./analysis/types').AnalysisConfig;
+      /**
+       * The conditions this run is being started under, captured by the control
+       * plane at enqueue. Carried with the job and returned with its result, so
+       * what is persisted describes the run that produced it even if the
+       * service worker that started it is long gone.
+       */
+      provenance: import('./analysis/provenance').AnalysisProvenance;
+    }>
+  | RpcRequest<{ type: 'OFFSCREEN_CANCEL_ANALYSIS'; jobId: string }>
+  /**
+   * Every analysis job the data plane still considers unfinished — queued,
+   * running, or holding a result nobody has acknowledged. Background asks this
+   * rather than trusting its own memory before anything that could destroy
+   * the offscreen document.
+   */
+  | RpcRequest<{ type: 'OFFSCREEN_LIST_ANALYSIS_WORK' }>;
 
 export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string }
   /** Background persisted a terminal upload outcome and history state. */
-  | { type: 'OFFSCREEN_ACK_UPLOAD_STATE'; jobId: string };
+  | { type: 'OFFSCREEN_ACK_UPLOAD_STATE'; jobId: string }
+  /** Background persisted a completed analysis; the data plane may release it. */
+  | { type: 'OFFSCREEN_ACK_ANALYSIS_STATE'; jobId: string };
 
 export type BgToOffscreenRuntime =
   | { type: 'OFFSCREEN_CONNECT' };
@@ -339,6 +440,19 @@ export type OffscreenToBg =
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
   | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
+  | { type: 'OFFSCREEN_ANALYSIS_STATE'; job: import('./analysis/job').AnalysisJob }
+  /**
+   * A completed analysis, on its way to the `analyses` store. Separate from the
+   * state message because the state is small enough to replay freely and this
+   * is not: sending megabytes of vectors on every progress tick would be absurd.
+   */
+  | {
+      type: 'OFFSCREEN_ANALYSIS_RESULT';
+      job: import('./analysis/job').AnalysisJob;
+      analysis: import('./analysis/storedAnalysis').WireAnalysis;
+      /** The enqueue-time provenance, with the backend that actually ran stamped on. */
+      provenance: import('./analysis/provenance').AnalysisProvenance;
+    }
   | { type: 'TELEMETRY_SNAPSHOT'; snapshot: import('./telemetry').TelemetrySnapshot; critical?: boolean }
   | { type: 'TELEMETRY_FLUSH'; snapshot: import('./telemetry').TelemetrySnapshot; reason: 'incident' | 'recording_complete' | 'upload_complete' };
 
@@ -373,9 +487,34 @@ export function isPopupToContentMessage(value: unknown): value is PopupToContent
   return hasKnownMessageType(value, POPUP_TO_CONTENT_MESSAGE_TYPES);
 }
 
-/** Checks whether a content script message reports that the active meeting ended. */
-export function isMeetingEndedMessage(value: unknown): value is ContentMeetingEnded {
+/** Checks whether a message belongs to the content script -> background set. */
+export function isContentToBgMessage(value: unknown): value is ContentToBg {
   return hasKnownMessageType(value, CONTENT_TO_BG_MESSAGE_TYPES);
+}
+
+/**
+ * Checks whether a content script message reports that the active meeting ended.
+ *
+ * Discriminates on the type rather than on set membership: the content script
+ * now sends more than one kind of message, and a set check would classify all
+ * of them as this one.
+ */
+export function isMeetingEndedMessage(value: unknown): value is ContentMeetingEnded {
+  return getMessageType(value) === 'MEETING_ENDED';
+}
+
+/** Checks whether a content script message carries committed caption utterances. */
+export function isTranscriptUtterancesMessage(value: unknown): value is ContentTranscriptUtterances {
+  return getMessageType(value) === 'TRANSCRIPT_UTTERANCES'
+    && Array.isArray((value as ContentTranscriptUtterances).utterances)
+    && typeof (value as ContentTranscriptUtterances).runId === 'number';
+}
+
+/** Checks whether a freshly loaded content script is asking to re-arm. */
+export function isTranscriptCaptureStateRequest(
+  value: unknown,
+): value is ContentGetTranscriptCaptureState {
+  return getMessageType(value) === 'GET_TRANSCRIPT_CAPTURE_STATE';
 }
 
 /** Checks whether a port/runtime message belongs to the offscreen -> background set. */

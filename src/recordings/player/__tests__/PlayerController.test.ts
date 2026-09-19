@@ -12,6 +12,7 @@ const manifest = (sources: PlaybackSource[], extra: Partial<PlaybackManifest> = 
   createdAt: 0,
   transcriptStatus: 'none',
   notations: [],
+  topics: [],
   tracks: [{
     fileId: 'r1:tab', stream: 'tab', filename: 'tab.webm', mimeType: 'video/webm',
     captureStartOffsetMs: 0, sources,
@@ -188,3 +189,57 @@ describe('autoplay', () => {
   });
 });
 
+
+describe('transcript rail (f10)', () => {
+  const flushAll = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+  const transcript = {
+    source: 'meet-captions' as const,
+    segments: [
+      { tStartMs: 1_000, tEndMs: 2_000, speaker: 'Alex', text: 'Before the note.' },
+      { tStartMs: 10_000, tEndMs: 12_000, speaker: 'Maria', text: 'Inside the note.' },
+    ],
+  };
+  const noted = { notations: [{ id: 'n1', tStartMs: 9_000, tEndMs: 20_000, endedBy: 'user' as const, text: 'Pricing objection' }] };
+
+  it('is absent, header toggle and all, when the recording has no transcript (f11/f12)', async () => {
+    const getTranscript = jest.fn();
+    const { controller } = make({ getManifest: jest.fn(async () => manifest([], noted)), getTranscript });
+    await controller.open('r1');
+    await flushAll();
+    expect(getTranscript).not.toHaveBeenCalled();
+    expect(controller.element.querySelector<HTMLElement>('.player__rail')!.hidden).toBe(true);
+    expect(controller.element.querySelector<HTMLElement>('.player__rail-toggle')!.hidden).toBe(true);
+  });
+
+  it('lists the transcript beside the picture, headed by the notes its lines fall in', async () => {
+    const { controller } = make({
+      getManifest: jest.fn(async () => manifest([], { ...noted, transcriptStatus: 'ready' })),
+      getTranscript: jest.fn(async () => transcript),
+    });
+    await controller.open('r1');
+    await flushAll();
+    const rail = controller.element.querySelector<HTMLElement>('.player__rail')!;
+    expect(rail.hidden).toBe(false);
+    expect(rail.querySelector('.player__rail-count')?.textContent).toBe('1 NOTE');
+    expect(rail.querySelectorAll('.player__rail-line')).toHaveLength(2);
+    expect(Array.from(rail.querySelectorAll('.player__rail-heading'), (h) => h.textContent)).toEqual(['Pricing objection']);
+
+    const toggle = controller.element.querySelector<HTMLButtonElement>('.player__rail-toggle')!;
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    toggle.click();
+    expect(rail.hidden).toBe(true);
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps the player working, silently, when the transcript cannot be read', async () => {
+    const { controller } = make({
+      getManifest: jest.fn(async () => manifest([], { transcriptStatus: 'ready' })),
+      getTranscript: jest.fn(async () => { throw new Error('storage unavailable'); }),
+    });
+    await controller.open('r1');
+    await flushAll();
+    expect(controller.element.querySelector<HTMLElement>('.player__rail')!.hidden).toBe(true);
+    // The status speaks for the missing video only, never for the transcript.
+    expect(statusText(controller)).not.toMatch(/transcript cannot|could not read/i);
+  });
+});

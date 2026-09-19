@@ -10,7 +10,7 @@ const settingsHtml = readFileSync(
 
 describe('settings page', () => {
   const savedSettings: ExtensionSettings = {
-    storage: { driveFolderPresets: [] },
+    storage: { driveFolderPresets: [], localFolderPresets: [] },
     privacy: {
       anonymousDiagnostics: true,
     },
@@ -85,7 +85,7 @@ describe('settings page', () => {
     await Promise.resolve();
 
     expect(saveExtensionSettingsToStorage).toHaveBeenCalledWith({
-      storage: { driveFolderPresets: [] },
+      storage: { driveFolderPresets: [], localFolderPresets: [] },
       privacy: {
         anonymousDiagnostics: false,
       },

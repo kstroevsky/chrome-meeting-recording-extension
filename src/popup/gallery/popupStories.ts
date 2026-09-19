@@ -59,7 +59,14 @@ function session(overrides: Partial<RecordingStatusView> = {}): RecordingStatusV
   };
 }
 
+const MB = 1024 * 1024;
+
+/**
+ * Mirrors the design's saving (d4) and saved (n2a) cards: the microphone is up,
+ * the tab is two-thirds through, the camera is still waiting its turn.
+ */
 function uploadJob(status: UploadJob['status'] = 'uploading', progress = 0.68): UploadJob {
+  const done = status === 'completed';
   return {
     id: `gallery-upload-${status}`,
     label: 'Weekly product review',
@@ -68,9 +75,12 @@ function uploadJob(status: UploadJob['status'] = 'uploading', progress = 0.68): 
     startedAt: FIXTURE_TIME,
     folderWebViewLink: 'https://drive.google.com/drive/folders/gallery-preview',
     files: [
-      { stream: 'tab', filename: 'meeting-tab.webm', status: 'uploaded', bytes: 181_000_000 },
-      { stream: 'mic', filename: 'microphone.webm', status: status === 'completed' ? 'uploaded' : 'uploading', bytes: 18_000_000 },
-      { stream: 'self-video', filename: 'camera.webm', status: status === 'completed' ? 'uploaded' : status === 'failed' ? 'retry-pending' : 'uploading', bytes: 49_000_000 },
+      { stream: 'tab', filename: 'meeting-tab.webm', bytes: 214 * MB, webViewLink: 'https://drive.google.com/file/d/gallery-tab/view',
+        ...(status === 'uploading'
+          ? { status: 'uploading' as const, uploadedBytes: Math.round(214 * MB * 0.67) }
+          : status === 'failed' ? { status: 'fallback' as const } : { status: 'uploaded' as const }) },
+      { stream: 'mic', filename: 'microphone.webm', status: status === 'failed' ? 'fallback' : 'uploaded', bytes: 12 * MB, webViewLink: 'https://drive.google.com/file/d/gallery-mic/view' },
+      { stream: 'self-video', filename: 'camera.webm', status: done ? 'uploaded' : status === 'uploading' ? 'uploading' : 'fallback', bytes: 58 * MB, ...(done ? { webViewLink: 'https://drive.google.com/file/d/gallery-camera/view' } : {}) },
     ],
   };
 }
@@ -248,6 +258,7 @@ export const POPUP_STORIES: PopupStory[] = [
       screen: 'session',
       session: session({ uploadJobs: [{ ...uploadJob('completed', 1), historyId: 'gallery-history-alex' }] }),
       selectedUploadJobId: uploadJob('completed', 1).id,
+      savedDurationMs: 1_360_000,
       notations: [
         { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
         { id: 'n2', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
@@ -260,7 +271,9 @@ export const POPUP_STORIES: PopupStory[] = [
     description: 'The open note is named where it happens — the capture row becomes the name and its start.',
     preview: {
       screen: 'session',
-      session: session({ phase: 'recording', recordedMs: 380_000, runningSince: FIXTURE_TIME }),
+      // Frozen like the other notes stories: a running clock would drift off 2a's 06:20.
+      session: session({ ...activeRecording, recordedMs: 380_000, runningSince: undefined }),
+      transcriptActive: true,
       notations: [
         { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
         { id: 'n2', tStartMs: 334_000, text: 'Drive quota limit' },
@@ -276,32 +289,33 @@ export const POPUP_STORIES: PopupStory[] = [
         uploadJobs: [{
           ...uploadJob('uploading', 0.34),
           historyId: 'gallery-history-alex',
-          // The sidecar is delivered first, so it is still uploading here.
+          // The sidecar is delivered first: d4 shows it already up, media still moving.
           files: [
-            { stream: 'tab', filename: 'notes.vtt', status: 'uploading', bytes: 4_100, kind: 'notes' },
+            { stream: 'tab', filename: 'notes.vtt', status: 'uploaded', bytes: 4_100, kind: 'notes' },
             ...uploadJob('uploading', 0.34).files,
           ],
         }],
       }),
       selectedUploadJobId: uploadJob('uploading', 0.34).id,
+      savedDurationMs: 1_360_000,
       notations: [
         { id: 'n1', tStartMs: 48_000, tEndMs: 85_000, endedBy: 'user', text: 'Q3 target changed' },
       ],
     },
   },
-  ...(['uploading', 'completed', 'failed'] as const).map((status): PopupStory => {
-    const job = uploadJob(status, status === 'completed' ? 1 : 0.68);
-    const title = status === 'uploading' ? 'Upload in progress' : status === 'completed' ? 'Upload complete' : 'Upload incomplete';
-    const description = status === 'uploading'
-      ? 'Aggregate and per-file Drive progress with cancel and background actions.'
-      : status === 'completed'
-        ? 'Saved confirmation, Drive file list, transcript, and next actions.'
-        : 'Partial success with a retry path and retained file progress.';
+  ...(['uploading', 'completed', 'failed', 'partial'] as const).map((status): PopupStory => {
+    const job = uploadJob(status, status === 'uploading' ? 0.68 : 1);
+    const copy = {
+      uploading: ['Upload in progress', 'd4 — each file with its own state: saved, uploading with its share, or queued.'],
+      completed: ['Upload complete', 'n2a — saved confirmation, the Drive block with open arrows, transcript, and next actions.'],
+      failed: ['Upload failed', '8A — the outcome leads; every file says DONE or FAILED and why nothing was lost.'],
+      partial: ['Upload partly saved', '8C — what landed is shareable now; the one file that did not offers its retry in place.'],
+    }[status];
     return {
       id: `upload-${status === 'uploading' ? 'progress' : status}`,
-      title,
+      title: copy[0],
       group: 'Saving',
-      description,
+      description: copy[1],
       preview: {
         screen: 'session',
         session: session({ uploadJobs: [job] }),
@@ -356,6 +370,15 @@ export const POPUP_STORIES: PopupStory[] = [
     },
   },
   {
+    id: 'recording-detail-rename', title: 'Saved recording · renaming', group: 'Library',
+    description: '7H — the name is edited in the header; the body lists the files the name will rename.',
+    preview: {
+      screen: 'recording-detail',
+      target: { kind: 'recording', entry: { ...savedRecording, name: 'Weekly sync', durationMs: 1_360_000 } },
+      renaming: true,
+    },
+  },
+  {
     id: 'upload-detail', title: 'Upload detail', group: 'Library',
     description: 'Pushed detail view for an upload that is still running.',
     preview: { screen: 'recording-detail', target: { kind: 'upload', job: uploadJob() } },
@@ -374,6 +397,39 @@ export const POPUP_STORIES: PopupStory[] = [
           { id: 'airpods', label: 'AirPods Pro' },
         ],
       },
+    },
+  },
+  ...([false, true] as const).map((folders): PopupStory => ({
+    id: folders ? 'naming-folders' : 'naming',
+    title: folders ? 'Naming · folders exist' : 'Naming · no folders',
+    group: 'Overlays',
+    description: folders
+      ? '9FL — the name, then FOLDER as a field; Save and the quiet way out.'
+      : '9L — the name with where it already lives under it.',
+    preview: {
+      screen: 'session',
+      session: session({ uploadJobs: [{ ...uploadJob('completed', 1), label: 'Team sync — Jul 11', namingStatus: 'pending', historyId: 'gallery-history-alex' }] }),
+      selectedUploadJobId: uploadJob('completed', 1).id,
+      naming: {
+        folders: folders
+          ? [{ id: 'weekly', name: 'Weekly meetings' }, { id: 'clients', name: 'Client calls' }]
+          : [],
+      },
+    },
+  })),
+  {
+    id: 'discard-confirm', title: 'Discard confirmation', group: 'Overlays',
+    description: 'n3 — the stake in bold, and the notes a discard would take, named rather than implied.',
+    preview: {
+      screen: 'session',
+      session: session({ ...activeRecording, recordedMs: 1_360_000, runningSince: undefined }),
+      transcriptActive: true,
+      confirmDiscard: true,
+      notations: [
+        { id: 'n1', tStartMs: 154_000, tEndMs: 209_000, endedBy: 'user', text: 'Pricing objection' },
+        { id: 'n2', tStartMs: 312_000, tEndMs: 376_000, endedBy: 'user', text: 'Migration owner' },
+        { id: 'n3', tStartMs: 1_082_000, tEndMs: 1_130_000, endedBy: 'user', text: '' },
+      ],
     },
   },
   {

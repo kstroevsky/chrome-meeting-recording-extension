@@ -21,7 +21,7 @@ import { PermissionView } from './recording/PermissionView';
 import { RecordingControlsView } from './recording/RecordingControlsView';
 import { PopupStatusView } from './recording/PopupStatusView';
 import { PopupNotations } from './notes/PopupNotations';
-import { CompletedNamingPrompt } from './history/CompletedNamingPrompt';
+import { CompletedNamingPrompt, previewDriveNaming } from './history/CompletedNamingPrompt';
 import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
@@ -47,7 +47,10 @@ import { isDevBuild, isTestRuntime } from '../shared/build';
 import type {
   RecordingPhase,
   RecordingStatusView,
+  UploadJob,
 } from '../shared/recording';
+import { uploadPanelState } from './history/uploadJobPanel';
+import { formatDuration } from './popupStatus';
 import type { RecordingHistoryEntry } from '../shared/recordingHistory';
 
 /**
@@ -79,6 +82,10 @@ export class PopupController {
   private readonly notes: RecordingNotesView;
   /** The recording whose saved-screen notes are already mounted. */
   private mountedSavedNotesFor: string | null = null;
+  /** The upload screen's late-arriving summary parts, for the recording on screen. */
+  private savedExtras: { historyId: string; durationMs?: number; notes?: number } | null = null;
+  /** The gallery's stand-in for the history list's duration of the saved recording. */
+  private previewSavedDurationMs: number | undefined;
   private readonly captionPoller: CaptionPoller;
   private readonly sessionTabs: SessionTabsView;
   private readonly devicePicker: DevicePickerView;
@@ -159,7 +166,7 @@ export class PopupController {
       rename: (id, name) => this.renameRecording(id, name),
       notes: () => this.notations.detailActions(),
       onRemoved: () => void this.recordingsList.refreshCount(),
-    }, this.confirmDialog, this.recordingNameDialog);
+    }, this.confirmDialog);
     this.status = new PopupStatusView(el);
     this.controls = new RecordingControlsView(el, {
       setMicMuted: (muted) => sendToBackground({ type: 'SET_MIC_MUTED', muted }),
@@ -251,6 +258,7 @@ export class PopupController {
       this.detail.clear();
       this.notations.usePreview(preview.notations ?? []);
       this.showRecordingDetail(preview.target);
+      if (preview.renaming) this.detail.beginRename();
       return;
     }
 
@@ -269,11 +277,15 @@ export class PopupController {
     // Set before applying the session: painting it mounts the saved-screen notes,
     // which read this fixture rather than the background.
     this.notations.usePreview(preview.notations ?? []);
+    this.previewSavedDurationMs = preview.savedDurationMs;
     this.state.applyPreviewSession(preview.session);
     if (preview.selectedUploadJobId) this.sessionTabs.select(preview.selectedUploadJobId);
     this.renderPreviewTranscript(preview.transcriptActive === true);
     this.renderPreviewSetup(preview.setup);
     if (preview.devicePicker) this.devicePicker.showPreview(preview.devicePicker.device, preview.devicePicker.options);
+    if (preview.confirmDiscard) void this.commands.askDiscard().confirmation;
+    const namingJob = preview.naming && preview.session.uploadJobs?.find((job) => job.id === preview.selectedUploadJobId);
+    if (preview.naming && namingJob) void this.recordingNameDialog.ask(previewDriveNaming(namingJob, preview.naming.folders));
   }
 
   /** Wires the controller-owned interactions that are safe inside a static preview. */
@@ -309,6 +321,7 @@ export class PopupController {
     // resolve in that gap; retaining the explicit local view prevents setup and
     // history from rendering together (and makes the popup scroll under its footer).
     if (this.showingRecordings) {
+      if (this.el.uploadJobCancel) this.el.uploadJobCancel.hidden = true;
       const open = this.detail.target;
       if (open?.kind === 'upload') {
         const current = session?.uploadJobs?.find((job) => job.id === open.job.id);
@@ -335,16 +348,19 @@ export class PopupController {
       if (this.el.viewFinalizing) this.el.viewFinalizing.hidden = true;
       if (this.el.viewUpload) this.el.viewUpload.hidden = false;
       this.status.setHeaderCompact(true);
-      this.status.syncHeaderUpload(job.status === 'completed');
+      this.status.syncHeaderUpload(job);
       this.sessionTabs.renderJobView(job);
       return;
     }
 
     if (this.el.viewUpload) this.el.viewUpload.hidden = true;
+    // The menu's "Cancel upload" belongs to the upload screen alone.
+    if (this.el.uploadJobCancel) this.el.uploadJobCancel.hidden = true;
     const view = setActiveView(this.el, phase, session?.interruption != null);
     this.status.setHeaderCompact(view !== 'config');
 
     if (view === 'interrupted') {
+      this.status.syncHeaderInterrupted();
       this.timer.stop();
       this.notes.stop();
       this.captionPoller.stop();
@@ -574,13 +590,35 @@ export class PopupController {
    * Shown while the upload runs too: the sidecar row above reports that the
    * notes went up first, and this is still where they are read.
    */
-  private mountSavedNotes(job: import('../shared/recording').UploadJob): void {
+  /**
+   * The upload screen's extras, which arrive after it paints: the recording's
+   * length and its note count. The summary carries both (d4 `1 OF 3 FILES · 22:40`,
+   * n2a `3 FILES · 284 MB · 22:40 · 3 NOTES`); the notes band counts while uploading;
+   * and the notes section itself mounts once the recording is saved (n2a → n2c).
+   */
+  private mountSavedNotes(job: UploadJob): void {
     const host = this.el.uploadJobNotes;
-    if (!host || !job.historyId) return;
+    if (!host) return;
+    const state = uploadPanelState(job);
+    if (!job.historyId || (state !== 'saved' && state !== 'uploading')) {
+      host.replaceChildren();
+      this.mountedSavedNotesFor = null;
+      return;
+    }
+    if (this.savedExtras?.historyId !== job.historyId) {
+      this.savedExtras = { historyId: job.historyId };
+      void this.loadSavedExtras(job);
+    }
+    this.paintSavedExtras(job);
+    // The list belongs to the saved screen; while uploading, the band speaks for it (d4).
+    if (state === 'uploading') {
+      host.replaceChildren();
+      this.mountedSavedNotesFor = null;
+      return;
+    }
     if (this.mountedSavedNotesFor === job.historyId) return;
     this.mountedSavedNotesFor = job.historyId;
     host.replaceChildren();
-
     const notes = new RecordingNotesDetail(
       job.historyId,
       undefined,
@@ -588,14 +626,48 @@ export class PopupController {
       { timeline: false, collapsible: true },
     );
     host.appendChild(notes.element);
-    void notes.load().then(() => {
-      // The subline is painted before the notes load, so extend it once they
-      // arrive rather than re-rendering the whole panel.
-      const count = Number(notes.element.querySelector('.detail-notes-count')?.textContent ?? 0);
-      const sub = this.el.uploadJobSub;
-      if (!count || !sub || sub.textContent?.includes('NOTE')) return;
-      sub.textContent = `${sub.textContent} · ${count} ${count === 1 ? 'NOTE' : 'NOTES'}`;
-    });
+    void notes.load();
+  }
+
+  private async loadSavedExtras(job: UploadJob): Promise<void> {
+    const historyId = job.historyId;
+    if (!historyId) return;
+    const [durationMs, notes] = await Promise.all([
+      this.recordingDuration(historyId),
+      this.notations.detailActions().load(historyId).then((list) => list.length, () => undefined),
+    ]);
+    if (this.savedExtras?.historyId !== historyId) return;
+    this.savedExtras = { historyId, durationMs, notes };
+    const current = this.lastSession?.uploadJobs?.find((candidate) => candidate.id === job.id) ?? job;
+    this.paintSavedExtras(current);
+  }
+
+  /** A just-finished recording is always on the first history page. */
+  private async recordingDuration(historyId: string): Promise<number | undefined> {
+    if (this.previewing) return this.previewSavedDurationMs;
+    try {
+      const response = await sendToBackground({ type: 'LIST_RECORDING_HISTORY' });
+      if (!response.ok) return undefined;
+      return response.entries.find((entry) => entry.id === historyId)?.durationMs;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private paintSavedExtras(job: UploadJob): void {
+    const extras = this.savedExtras;
+    if (!extras || extras.historyId !== job.historyId) return;
+    const sub = this.el.uploadJobSub;
+    const base = sub?.dataset.base;
+    if (sub && base != null) {
+      const parts = [base];
+      if (extras.durationMs) parts.push(formatDuration(extras.durationMs));
+      if (extras.notes && uploadPanelState(job) === 'saved') parts.push(`${extras.notes} ${extras.notes === 1 ? 'NOTE' : 'NOTES'}`);
+      sub.textContent = parts.join(' · ');
+    }
+    if (this.el.uploadJobNotesLabel && extras.notes) {
+      this.el.uploadJobNotesLabel.textContent = `${extras.notes} ${extras.notes === 1 ? 'note' : 'notes'}`;
+    }
   }
 
   private wireDiagnosticsLink() {

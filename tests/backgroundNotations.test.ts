@@ -37,6 +37,9 @@ describe('background notation commands', () => {
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
       closeForUpdate: jest.fn().mockResolvedValue(true),
+      hasActiveAnalysisJobs: jest.fn(() => false),
+      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      acknowledgeAnalysisState: jest.fn(),
     };
   }
 
@@ -45,11 +48,16 @@ describe('background notation commands', () => {
     jest.doMock('../src/background/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => makeOffscreenInstance()),
     }));
-    await import('../src/background');
-    // The bootstrap IIFE initializes telemetry, which with a real `indexedDB`
-    // resolves over several macrotask turns. Anything still pending when the
-    // test ends logs after teardown, which Jest reports as a failed run even
-    // though every assertion passed — so drain it before handing back.
+    const background = await import('../src/background');
+    // Wait for the bootstrap itself, not for a number of turns. With a real
+    // `indexedDB` it resolves over several macrotask turns, and anything still
+    // pending when the test ends logs after teardown — which Jest reports as a
+    // failed run even though every assertion passed. A fixed drain was a race
+    // that lost under full-suite load; awaiting the promise cannot be.
+    await background.sessionHydration;
+    // The reconcilers it fires afterwards are deliberately fire-and-forget, so
+    // they still need draining — but they are short, and no longer behind the
+    // bootstrap in the same queue.
     for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
     ({ stopKeepAlive: stopBackgroundKeepAlive } = await import('../src/background/sessionLifecycle'));
     return (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];

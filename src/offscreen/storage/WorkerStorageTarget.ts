@@ -199,9 +199,14 @@ export class WorkerStorageTarget implements StorageTarget {
    * size-scaled budget. A dead or silently-wedged worker never replies, so without
    * this the await — and the whole stop pipeline above it — would hang in
    * `stopping` forever. On timeout we reject; `close()` then terminates the worker
-   * and rethrows. That is corruption-safe: the OPFS bytes were already flushed and
-   * the sync handle closed before the (read-only) duration fix runs, so the raw
-   * recording survives and is recovered on next launch rather than lost.
+   * and rethrows. That is corruption-safe: the OPFS bytes were flushed and the sync
+   * handle closed before the duration fix runs, and the fix rewrites the file
+   * through `createWritable`, which commits its swap file only on `close()`. A
+   * worker killed mid-rewrite therefore discards the swap and leaves the raw
+   * recording intact, to be recovered on next launch rather than lost.
+   *
+   * The rewrite costs one pass at roughly 670 MB/s, well inside the 100 ms/MB
+   * this budget allows.
    */
   private awaitSeal(): Promise<SealResult> {
     const budgetMs = TIMEOUTS.SEAL_BASE_MS

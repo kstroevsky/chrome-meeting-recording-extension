@@ -2,8 +2,8 @@
  * @file background/recordingHistoryDatabase.ts
  *
  * Owns the `recording-history` IndexedDB connection and schema for every
- * repository that reads it. Two repositories now share this database — history
- * entries and notations — and a database has exactly one version, so the
+ * repository that reads it. Four repositories now share this database — history
+ * entries, notations, transcripts and analyses — and a database has exactly one version, so the
  * version number and the `onupgradeneeded` that satisfies it must live in one
  * place. A repository that declared its own version would downgrade-block the
  * other on open.
@@ -16,11 +16,17 @@
 import { normalizeRecordingHistoryEntry, type RecordingHistoryEntry } from '../shared/recordingHistory';
 
 const DATABASE_NAME = 'recording-history';
-/** v3 → v4 adds the `notations` store (ADR-0005). */
-const DATABASE_VERSION = 4;
+/**
+ * v3 → v4 adds the `notations` store (ADR-0005).
+ * v4 → v5 adds the `transcripts` store (ADR-0007).
+ * v5 → v6 adds the `analyses` store (ADR-0007).
+ */
+const DATABASE_VERSION = 6;
 
 export const RECORDINGS_STORE = 'recordings';
 export const NOTATIONS_STORE = 'notations';
+export const TRANSCRIPTS_STORE = 'transcripts';
+export const ANALYSES_STORE = 'analyses';
 export const CREATED_AT_ID_INDEX = 'createdAtId';
 export const ACTIVE_CREATED_AT_ID_INDEX = 'activeCreatedAtId';
 
@@ -96,6 +102,19 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
   // so a mark can be written before the history row it belongs to exists.
   if (!database.objectStoreNames.contains(NOTATIONS_STORE)) {
     database.createObjectStore(NOTATIONS_STORE, { keyPath: 'recordingId' });
+  }
+
+  // Transcripts key the same way and for the same reason: captions are committed
+  // while the call is still running, long before finalize creates the row.
+  if (!database.objectStoreNames.contains(TRANSCRIPTS_STORE)) {
+    database.createObjectStore(TRANSCRIPTS_STORE, { keyPath: 'recordingId' });
+  }
+
+  // Topic analysis derived from a transcript. Keyed the same way, and holding
+  // its own provenance so a result computed under different conditions is
+  // recognizable rather than silently current.
+  if (!database.objectStoreNames.contains(ANALYSES_STORE)) {
+    database.createObjectStore(ANALYSES_STORE, { keyPath: 'recordingId' });
   }
 }
 

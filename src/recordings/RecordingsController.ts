@@ -1,3 +1,4 @@
+import { createExternalTab } from '../platform/chrome/tabs';
 import { loadExtensionSettingsFromStorage } from '../shared/settings';
 import { sendToBackground } from '../shared/messages';
 import { PlayerController } from './player/PlayerController';
@@ -86,6 +87,18 @@ export class RecordingsController {
           return response.ok ? response.url : undefined;
         },
         warn: (...args) => console.warn('[recordings]', ...args),
+        getTranscript: async (id) => {
+          const response = await sendToBackground({ type: 'GET_RECORDING_TRANSCRIPT', recordingId: id });
+          return response.ok ? response.transcript : undefined;
+        },
+        // f16: the way to the folder the video should have been in, and the way out of history.
+        openFolder: (id) => {
+          const folderId = this.entries.find((entry) => entry.id === id)?.driveFolderId;
+          if (folderId) void createExternalTab(`https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`);
+        },
+        remove: (id) => {
+          void this.view.askToRemove(id).then((removed) => { if (removed) player.close(); });
+        },
       });
       this.player = player;
       document.body.append(player.element);
@@ -130,6 +143,7 @@ export class RecordingsController {
     this.view.showError();
     this.render();
     void this.refreshNoteSummaries();
+    void this.refreshTopicSummaries();
   }
 
   async loadMore() {
@@ -144,6 +158,7 @@ export class RecordingsController {
       this.view.showError();
       this.render();
       void this.refreshNoteSummaries();
+      void this.refreshTopicSummaries();
     } catch (error) {
       this.view.showError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -170,6 +185,24 @@ export class RecordingsController {
       this.render();
     } catch {
       // Leave the column empty; the recordings themselves still list.
+    }
+  }
+
+  /**
+   * Reads the topics digest for the loaded page, exactly as the notes one is
+   * read and for the same reason: it makes the table searchable by subject, and
+   * a recording is still findable by name without it.
+   */
+  private async refreshTopicSummaries(): Promise<void> {
+    const recordingIds = this.entries.map((entry) => entry.id);
+    if (!recordingIds.length) return;
+    try {
+      const response = await sendToBackground({ type: 'LIST_RECORDING_TOPIC_SUMMARIES', recordingIds });
+      if (!response.ok) return;
+      this.view.setTopicSummaries(response.summaries);
+      this.render();
+    } catch {
+      // Same as notes: a missing digest costs search reach, not the list.
     }
   }
 }

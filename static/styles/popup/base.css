@@ -9,6 +9,9 @@
 
 :root {
   color-scheme: light dark;
+  /* One easing for every hover and state change, so the popup moves as one thing. */
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --hover-transition: background-color 180ms var(--ease), border-color 180ms var(--ease), color 180ms var(--ease), box-shadow 180ms var(--ease), opacity 180ms var(--ease);
   --surface: #faf8f4;
   --raised: #f6f2ea;
   --tile: #f1ece2;
@@ -49,6 +52,35 @@
   --danger-soft: #faeeeb;
   --danger-border: #e7b4aa;
   --danger-ink: #c0503c;
+  /* Paused is its own amber, a step warmer than the notes gold (d3). */
+  --paused: #b07d3c;
+  --paused-open: rgb(176 125 60 / 32%);
+  /* The status line under the timer (e5) and its quieter form under a ribbon (2a). */
+  --status-sep: #cabfa8;
+  --status-muted: #7c7568;
+  --status-sep-muted: #d5cbb8;
+  --ready-muted: #5f7f6c;
+  /* The key chip inside a tip: warmer than a control fill. */
+  --kbd-bg: #efe9df;
+  /* The paused summary's separators and icons (d3). */
+  --paused-sep: #cdc3b2;
+  --meta-icon: #9a8f7d;
+  /* Where the open note started (2a): quiet in light, a step up in dark (2ad). */
+  --note-from: #a49c8e;
+  /* Upload screens: a progress track, the saved check's bed, a settled DONE (d4, n2a, 8A). */
+  --bar-track: #efe9df;
+  --saved-bed: #e8f2eb;
+  --done-ink: #3f7f5c;
+  /* An edit field lifts off the surface: white in light, near-black in dark (7G, 7H). */
+  --field-bg: #fff;
+  /* The naming dialog's disk sits on a green bed (9L); dark keeps it dim (7F). */
+  --name-bed: #e8efe9;
+  /* A sheet over the popup sits a touch brighter than the page (3c). */
+  --sheet-bg: #fffdf9;
+  /* An unnamed note's span: the gold, faded (d1). */
+  --note-pale: #dcd0b6;
+  /* Text fields sit a shade darker than a card border. */
+  --border-field: #e3ddd0;
   --scrim: rgb(28 26 23 / 55%);
 }
 
@@ -83,6 +115,24 @@
   --danger-soft: #2e1c18;
   --danger-border: #683a32;
   --danger-ink: #dd7565;
+  --paused: #d99a45;
+  --paused-open: rgb(217 154 69 / 30%);
+  --status-sep: #4a433a;
+  --status-muted: #8f8674;
+  --status-sep-muted: #4a433a;
+  --ready-muted: #6fca9c;
+  --kbd-bg: #2e281f;
+  --paused-sep: #4a433a;
+  --meta-icon: #9a8f7d;
+  --note-from: #8f8674;
+  --bar-track: #2e281f;
+  --saved-bed: color-mix(in srgb, #4fae7d 16%, transparent);
+  --done-ink: #4fae7d;
+  --field-bg: #17140f;
+  --name-bed: #1e2a22;
+  --sheet-bg: #1a1714;
+  --note-pale: #57452b;
+  --border-field: #3a332a;
   --scrim: rgb(0 0 0 / 62%);
 }
 
@@ -117,6 +167,26 @@
     --danger-soft: #2e1c18;
     --danger-border: #683a32;
     --danger-ink: #dd7565;
+    --control-bg: #2a251e;
+    --ink-meta: #8f8674;
+    --paused: #d99a45;
+    --paused-open: rgb(217 154 69 / 30%);
+    --status-sep: #4a433a;
+    --status-muted: #8f8674;
+    --status-sep-muted: #4a433a;
+    --ready-muted: #6fca9c;
+    --kbd-bg: #2e281f;
+    --paused-sep: #4a433a;
+    --meta-icon: #9a8f7d;
+    --note-from: #8f8674;
+    --bar-track: #2e281f;
+    --saved-bed: color-mix(in srgb, #4fae7d 16%, transparent);
+    --done-ink: #4fae7d;
+    --field-bg: #17140f;
+    --name-bed: #1e2a22;
+    --sheet-bg: #1a1714;
+    --note-pale: #57452b;
+    --border-field: #3a332a;
     --scrim: rgb(0 0 0 / 62%);
   }
 }
@@ -129,12 +199,22 @@ body { position: relative; width: 300px; margin: 0; padding: 18px; background: v
 button,
 select { font: inherit; }
 [hidden] { display: none !important; }
+/* Anything that reacts to the pointer eases into its hover. `:where` keeps this
+   at zero specificity, so a rule that animates transform or size still wins. */
+:where(button, a, input, select, textarea, [role='button'], [role='option'], [tabindex]) { transition: var(--hover-transition); }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 /* Sticky so the wordmark, the menu and the upload-return control stay reachable
    on the screens that outgrow the popup (the recording detail runs past 700px).
    Needs its own background: content scrolls underneath it, not behind the body. */
 .pp-header { position: sticky; z-index: 30; top: 0; display: flex; align-items: center; justify-content: space-between; margin: -18px -18px 15px; padding: 15px 18px 14px; border-bottom: 1px solid var(--divider); background: var(--surface); }
+/* The gap under the header is part of each screen's rhythm: 15px above a list
+   or a setup form, 16px above a live or saving screen, 18px above paused (d3). */
+body:has(#view-recording:not([hidden])) .pp-header,
+body:has(#view-finalizing:not([hidden])) .pp-header,
+body:has(#view-interrupted:not([hidden])) .pp-header,
+body:has(#view-upload:not([hidden])) .pp-header { margin-bottom: 16px; }
+body:has(#view-recording:not([hidden]) .controls.paused) .pp-header { margin-bottom: 18px; }
 .brand { display: flex; align-items: center; gap: 9px; }
 .brand-mark { display: block; width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--ready); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ready) 16%, transparent); }
 .brand-name { color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
@@ -147,23 +227,30 @@ select { font: inherit; }
 .icon-button svg { width: 15px; height: 15px; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .menu-wrap { position: relative; }
-.upload-navigation { --upload-progress: 0; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--accent); font: 600 11px 'IBM Plex Mono', monospace; cursor: pointer; transition: background 140ms ease, border-color 140ms ease, transform 140ms ease; }
+.upload-navigation { --upload-progress: 0; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--accent); font: 600 11px 'IBM Plex Mono', monospace; cursor: pointer; transition: var(--hover-transition), transform 180ms var(--ease); }
 .upload-navigation:hover,
 .upload-navigation:focus-visible { border-color: var(--control-bg-strong); background: var(--control-bg-strong); outline: 0; }
 .upload-navigation:active { transform: scale(.97); }
 .upload-navigation-ring { position: relative; display: block; width: 15px; height: 15px; flex: 0 0 auto; border-radius: 50%; background: conic-gradient(var(--accent) calc(var(--upload-progress) * 1%), #ddd6c8 0); }
-.upload-navigation-ring::after { position: absolute; inset: 3px; border-radius: inherit; background: var(--tile); content: ''; transition: background 140ms ease; }
+.upload-navigation-ring::after { position: absolute; inset: 3px; border-radius: inherit; background: var(--tile); content: ''; transition: var(--hover-transition); }
 .upload-navigation:hover .upload-navigation-ring::after,
 .upload-navigation:focus-visible .upload-navigation-ring::after { background: var(--control-bg-strong); }
 :root[data-theme='dark'] .upload-navigation-ring { background: conic-gradient(var(--accent) calc(var(--upload-progress) * 1%), #3a342d 0); }
-/* The design sets this chip in the wordmark's face, not the mono one. */
-.header-phase { position: absolute; top: 7px; right: 36px; color: var(--rec); font: 700 10px 'Space Grotesk', system-ui, sans-serif; letter-spacing: .12em; }
-.header-phase[data-tone='paused'] { color: var(--warn); }
-.header-phase[data-tone='saved'] { color: var(--ready); }
-.header-phase[data-tone='uploading'] { color: var(--ink-3); }
+/* The design sets this chip in the wordmark's face, not the mono one. It sits
+   9px left of the menu button, as every phase label in the design does. */
+.header-phase { position: absolute; top: 7px; right: 37px; color: var(--rec); font: 700 10px 'Space Grotesk', system-ui, sans-serif; letter-spacing: .12em; white-space: nowrap; }
+.header-phase[data-tone='paused'] { color: var(--paused); }
+.header-phase[data-tone='saving'] { color: var(--warn-label); }
+.header-phase[data-tone='stopped'] { color: var(--rec-label); }
+/* SAVED carries its own green dot: the wordmark's dot stays the recorder's (n2a). */
+.header-phase[data-tone='saved'] { display: inline-flex; align-items: center; gap: 6px; color: var(--ready); }
+.header-phase[data-tone='saved']::before { width: 7px; height: 7px; border-radius: 50%; background: currentcolor; content: ''; }
 .pp-header.recording-active .brand-mark { background: var(--rec); box-shadow: 0 0 0 4px color-mix(in srgb, var(--rec) 16%, transparent); animation: mr-pulse 1.3s ease-in-out infinite; }
-.pp-header.recording-paused .brand-mark { background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 16%, transparent); animation: none; }
-.pp-header.recording-saved .brand-mark { background: var(--ready); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ready) 16%, transparent); animation: none; }
+.pp-header.recording-paused .brand-mark { background: var(--paused); box-shadow: 0 0 0 4px color-mix(in srgb, var(--paused) 16%, transparent); animation: none; }
+/* After the run the dot stays the recorder's red, still: something was just
+   recorded, and the label beside the menu says what became of it (n2a, 8A). */
+.pp-header.recording-saved .brand-mark { background: var(--rec); box-shadow: 0 0 0 4px color-mix(in srgb, var(--rec) 16%, transparent); animation: none; }
+.pp-header.recording-stopped .brand-mark { background: var(--rec-label); box-shadow: 0 0 0 4px color-mix(in srgb, var(--rec-label) 16%, transparent); animation: none; }
 .pp-header.permission-blocked .brand-mark { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); animation: none; }
 
 .popup-menu { position: absolute; z-index: 20; top: 32px; right: 0; width: 200px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); box-shadow: 0 20px 44px -16px rgb(0 0 0 / 40%); }

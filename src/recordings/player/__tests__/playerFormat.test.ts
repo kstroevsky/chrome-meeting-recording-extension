@@ -6,17 +6,17 @@ const note = (over: Partial<RecordingNotation>): RecordingNotation =>
 
 describe('formatClock', () => {
   it('drops the hour until there is one, and pads inside it', () => {
-    expect(formatClock(0)).toBe('0:00');
-    expect(formatClock(5_000)).toBe('0:05');
-    expect(formatClock(65_000)).toBe('1:05');
+    expect(formatClock(0)).toBe('00:00');
+    expect(formatClock(5_000)).toBe('00:05');
+    expect(formatClock(65_000)).toBe('01:05');
     expect(formatClock(600_000)).toBe('10:00');
     expect(formatClock(3_600_000)).toBe('1:00:00');
     expect(formatClock(3_965_000)).toBe('1:06:05');
   });
 
   it('treats nonsense as zero rather than rendering NaN', () => {
-    expect(formatClock(Number.NaN)).toBe('0:00');
-    expect(formatClock(-5)).toBe('0:00');
+    expect(formatClock(Number.NaN)).toBe('00:00');
+    expect(formatClock(-5)).toBe('00:00');
   });
 });
 

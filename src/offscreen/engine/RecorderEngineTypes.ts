@@ -27,6 +27,12 @@ export interface SealedStorageFile {
    * good approximation, not the true media offset.
    */
   startOffsetMs?: number;
+  /**
+   * Set once the artifact has been promoted into the retained library. It makes
+   * the bytes re-readable after the in-memory File is gone, which is what lets
+   * an upload retry outlive both the retention budget and an offscreen restart.
+   */
+  retainedKey?: string;
   cleanup: () => Promise<void>;
 }
 

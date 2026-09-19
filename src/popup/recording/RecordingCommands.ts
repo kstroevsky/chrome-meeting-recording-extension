@@ -108,6 +108,27 @@ export class RecordingCommands {
     });
   }
 
+  /** Opens the discard prompt (n3): the stake in bold, then the notes it would take. */
+  askDiscard(): { confirmation: Promise<boolean>; copy: () => { lead: string; message: string } } {
+    const notes = this.actions.activeNotations();
+    const copy = () => buildDiscardConfirmMessage(this.el.recTimer?.textContent ?? undefined, notes.length);
+    const { lead, message } = copy();
+    const confirmation = this.confirmDialog.ask({
+      title: DISCARD_CONFIRM_TEXT.title,
+      message,
+      lead,
+      confirmLabel: DISCARD_CONFIRM_TEXT.confirmLabel,
+      cancelLabel: DISCARD_CONFIRM_TEXT.cancelLabel,
+      tone: 'danger',
+      details: notes.map((notation) => ({
+        at: formatPosition(notation.tStartMs),
+        text: describeNotationForList(notation, formatDuration),
+        muted: !notation.text,
+      })),
+    });
+    return { confirmation, copy };
+  }
+
   /**
    * Discard destroys captured media with no undo, so it is gated behind an
    * in-popup confirmation. The prompt runs *before* the in-flight lock is taken:
@@ -121,23 +142,13 @@ export class RecordingCommands {
       if (this.confirmDialog.isOpen()) return;
       closePopupMenu();
 
-      const notes = this.actions.activeNotations();
-      const message = () =>
-        buildDiscardConfirmMessage(this.el.recTimer?.textContent ?? undefined, notes.length);
-      const confirmation = this.confirmDialog.ask({
-        title: DISCARD_CONFIRM_TEXT.title,
-        message: message(),
-        confirmLabel: DISCARD_CONFIRM_TEXT.confirmLabel,
-        cancelLabel: DISCARD_CONFIRM_TEXT.cancelLabel,
-        tone: 'danger',
-        details: notes.map((notation) => ({
-          at: formatPosition(notation.tStartMs),
-          text: describeNotationForList(notation, formatDuration),
-        })),
-      });
+      const { confirmation, copy } = this.askDiscard();
       // Recording continues behind the prompt; keep the amount to be discarded
       // truthful as the popup's live timer advances.
-      const messageTimer = setInterval(() => this.confirmDialog.updateMessage(message()), 1_000);
+      const messageTimer = setInterval(() => {
+        const { message, lead } = copy();
+        this.confirmDialog.updateMessage(message, lead);
+      }, 1_000);
       const confirmed = await confirmation;
       clearInterval(messageTimer);
       if (!confirmed) return;

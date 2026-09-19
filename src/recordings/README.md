@@ -49,7 +49,7 @@ note, so one field searches all three.
 groups are replaced by `MATCHED IN NOTES` then `MATCHED IN NAME` — a note match
 is the more interesting of the two and needs saying — and the matched substring
 is wrapped in a gold `<b>` in both the name and the notes preview. The count
-becomes `3 OF 42 · IN NAMES AND NOTES`, because a bare count is only useful next
+becomes `3 OF 42 · IN NAMES, NOTES AND TOPICS`, because a bare count is only useful next
 to what it was drawn from.
 
 ## Pagination and reconciliation

@@ -67,7 +67,8 @@ test.describe('recording playback (integration)', () => {
       void retained;
 
       // Play, and confirm the element got real bytes rather than an empty src.
-      await page.locator('.recording-row__play').first().click();
+      await page.locator('.recording-row').first().click();
+      await page.locator('.modal-button--watch').click();
       const player = page.locator('.player');
       await expect(player).toBeVisible();
 
@@ -137,7 +138,8 @@ test.describe('recording playback (integration)', () => {
         waitUntil: 'domcontentloaded',
       });
       await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
-      await page.locator('.recording-row__play').first().click();
+      await page.locator('.recording-row').first().click();
+      await page.locator('.modal-button--watch').click();
       await expect(page.locator('.player')).toBeVisible();
 
       const video = page.locator('.player__video');
@@ -198,7 +200,8 @@ test.describe('recording playback (integration)', () => {
         waitUntil: 'domcontentloaded',
       });
       await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
-      await page.locator('.recording-row__play').first().click();
+      await page.locator('.recording-row').first().click();
+      await page.locator('.modal-button--watch').click();
       const video = page.locator('.player__video');
       await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
       await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
@@ -251,7 +254,8 @@ test.describe('recording playback (integration)', () => {
         waitUntil: 'domcontentloaded',
       });
       await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
-      await page.locator('.recording-row__play').first().click();
+      await page.locator('.recording-row').first().click();
+      await page.locator('.modal-button--watch').click();
       await expect.poll(async () => await page.locator('.player__video').getAttribute('src'), {
         timeout: 20_000,
       }).toMatch(/^blob:/);
@@ -343,7 +347,8 @@ test.describe('recording playback (integration)', () => {
         waitUntil: 'domcontentloaded',
       });
       await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
-      await page.locator('.recording-row__play').first().click();
+      await page.locator('.recording-row').first().click();
+      await page.locator('.modal-button--watch').click();
       const video = page.locator('.player__video');
       await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
       await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {
@@ -399,7 +404,8 @@ test.describe('recording playback (integration)', () => {
         waitUntil: 'domcontentloaded',
       });
       await expect(page.locator('.recording-row').first()).toBeVisible({ timeout: 20_000 });
-      await page.locator('.recording-row__play').first().click();
+      await page.locator('.recording-row').first().click();
+      await page.locator('.modal-button--watch').click();
       const video = page.locator('.player__video');
       await expect.poll(async () => await video.getAttribute('src'), { timeout: 20_000 }).toMatch(/^blob:/);
       await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.readyState), {

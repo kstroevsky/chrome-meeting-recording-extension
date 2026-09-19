@@ -10,16 +10,35 @@
  */
 
 import { isStreamableSource, masterTrack, type PlaybackManifest, type PlaybackTrack } from '../../shared/playback';
+import type { Transcript } from '../../shared/transcript';
 import { resolveTrackSource, type SourceResolverDeps } from './playbackSource';
-import { PlayerView } from './PlayerView';
+import { PlayerView, type PlayerStatus } from './PlayerView';
 import { PlaybackClock } from './PlaybackClock';
-import { adjacentNoteStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
+import { adjacentMarkStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
 import { clockOffsetMs, describeTracks, toggleShown } from './playerTracks';
+
+/** What survives an unreachable video, said on every such status (f16). */
+const KEPT = 'Notes and transcript are kept by the extension and are still available.';
+const DRIVE_UNREACHABLE: PlayerStatus = {
+  title: 'Could not open this recording from Google Drive.',
+  body: `It was deleted or moved, or Drive could not be reached. ${KEPT}`,
+  actions: ['folder', 'remove'],
+};
+const UNPLAYABLE: PlayerStatus = {
+  title: 'This recording could not be played.',
+  body: 'The file is there, but this browser could not decode it.',
+};
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
   prepareDriveSource: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
   openDownloaded?: (recordingId: string, fileId: string) => void;
+  /** Opens the recording's Drive folder, when it has one (f16). */
+  openFolder?: (recordingId: string) => void;
+  /** Takes the recording out of history, after the page's own confirmation (f16). */
+  remove?: (recordingId: string) => void;
+  /** The recording's persisted transcript (ADR-0007), for the rail and the subtitles (f10). */
+  getTranscript?: (recordingId: string) => Promise<Transcript | undefined>;
   resolver?: SourceResolverDeps;
   warn?: (...args: unknown[]) => void;
 };
@@ -49,6 +68,8 @@ export class PlayerController {
   constructor(private readonly deps: PlayerControllerDeps) {
     this.view = new PlayerView({
       close: () => this.close(),
+      ...(deps.openFolder ? { openFolder: () => { if (this.manifest) deps.openFolder?.(this.manifest.recordingId); } } : {}),
+      ...(deps.remove ? { remove: () => { if (this.manifest) deps.remove?.(this.manifest.recordingId); } } : {}),
       seekTo: (ms) => this.seek(ms),
       togglePlay: () => { void this.togglePlay(); },
       toggleFullscreen: () => { void this.toggleFullscreen(); },
@@ -113,11 +134,24 @@ export class PlayerController {
       }
       case 'note': {
         const starts = (this.manifest?.notations ?? []).map((note) => note.tStartMs);
-        const target = adjacentNoteStart(starts, video.currentTime * 1000, action.direction);
+        const target = adjacentMarkStart(starts, video.currentTime * 1000, action.direction);
+        if (target != null) this.seek(target);
+        return;
+      }
+      case 'topic': {
+        // Every span's start, not one per topic: walking by subject means
+        // stopping where the conversation *returned* to one, too (MODEL-04).
+        const starts = (this.manifest?.topics ?? [])
+          .flatMap((topic) => topic.spans.map((span) => span.tStartMs));
+        const target = adjacentMarkStart(starts, video.currentTime * 1000, action.direction);
         if (target != null) this.seek(target);
         return;
       }
       case 'fullscreen': return void this.toggleFullscreen();
+      case 'subtitles': {
+        if (this.view.toggleSubtitles()) this.view.setSettings(this.skipSeconds, this.speed);
+        return;
+      }
       case 'help': { this.view.toggleHelp(); return; }
       case 'escape': {
         // Escape unwinds one layer at a time: the map, then fullscreen, then the
@@ -144,12 +178,34 @@ export class PlayerController {
 
   get element(): HTMLElement { return this.view.overlay; }
 
+  /**
+   * The rail and the subtitles, when the recording has a transcript. Loaded
+   * beside playback rather than before it: a failure here costs the rail, never
+   * the video, and says nothing on the picture.
+   */
+  private async loadTranscript(manifest: PlaybackManifest): Promise<void> {
+    this.view.setTranscript(null, [], manifest.title);
+    if (manifest.transcriptStatus !== 'ready' || !this.deps.getTranscript) return;
+    let transcript: Transcript | undefined;
+    try {
+      transcript = await this.deps.getTranscript(manifest.recordingId);
+    } catch (error) {
+      this.deps.warn?.('Could not read the transcript', error);
+      return;
+    }
+    // The player may have closed or moved on while the transcript was read.
+    if (this.manifest !== manifest || !transcript?.segments.length) return;
+    this.view.setTranscript(transcript.segments, manifest.notations, manifest.title);
+    this.view.setSettings(this.skipSeconds, this.speed);
+  }
+
   async open(recordingId: string): Promise<void> {
     this.reset();
     const manifest = await this.deps.getManifest(recordingId);
-    if (!manifest) { this.view.setStatus('This recording is no longer available.'); return; }
+    if (!manifest) { this.view.setStatus({ title: 'This recording is no longer available.' }); return; }
     this.manifest = manifest;
     this.view.render(manifest);
+    void this.loadTranscript(manifest);
 
     const track = masterTrack(manifest);
     if (!track) {
@@ -157,8 +213,8 @@ export class PlayerController {
       // chrome.downloads exposes no bytes to us.
       const external = manifest.tracks.flatMap((t) => t.sources).find((s) => s.kind === 'download');
       this.view.setStatus(external
-        ? 'This recording was saved before in-extension playback. Open the downloaded file instead.'
-        : 'This recording has no playable copy left.');
+        ? { title: 'This recording was saved before in-extension playback.', body: 'Open the downloaded file instead.' }
+        : { title: 'This recording has no playable copy left.', body: KEPT, actions: ['remove'] });
       return;
     }
     this.track = track;
@@ -272,8 +328,8 @@ export class PlayerController {
     const resolved = await this.urlFor(track, refresh);
     if (!resolved) {
       this.view.setStatus(track.sources.some((source) => source.kind === 'drive')
-        ? 'Could not open this recording from Google Drive.'
-        : 'This recording has no playable copy left.');
+        ? DRIVE_UNREACHABLE
+        : { title: 'This recording has no playable copy left.', body: KEPT, actions: ['remove'] });
       return;
     }
     this.revoke = resolved.revoke ?? null;
@@ -302,11 +358,11 @@ export class PlayerController {
    */
   private async onMediaError(): Promise<void> {
     if (!this.track || this.refreshed) {
-      this.view.setStatus('This recording could not be played.');
+      this.view.setStatus(UNPLAYABLE);
       return;
     }
     if (!this.track.sources.some((source) => source.kind === 'drive')) {
-      this.view.setStatus('This recording could not be played.');
+      this.view.setStatus(UNPLAYABLE);
       return;
     }
     this.refreshed = true;

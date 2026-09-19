@@ -47,6 +47,22 @@ describe('ConfirmDialog', () => {
     expect(document.querySelector('.modal-message')?.textContent).toBe('You will lose 0:28 of recording.');
   });
 
+  it('sets the lead in bold ahead of the message, and keeps it as the timer moves', () => {
+    void dialog.ask({ ...OPTIONS, lead: '22:40', message: "of video, audio and transcript. This can't be undone." });
+    expect(document.querySelector('.modal-message .modal-lead')?.textContent).toBe('22:40');
+    expect(document.querySelector('.modal-message')?.textContent).toBe("22:40 of video, audio and transcript. This can't be undone.");
+
+    dialog.updateMessage("of video, audio and transcript. This can't be undone.", '22:41');
+    expect(document.querySelector('.modal-message .modal-lead')?.textContent).toBe('22:41');
+  });
+
+  it('quiets a detail line for a note nobody named', () => {
+    void dialog.ask({ ...OPTIONS, details: [{ at: '02:34', text: 'Pricing objection' }, { at: '18:02', text: 'Unnamed · 0:48', muted: true }] });
+    const rows = document.querySelectorAll('.modal-detail');
+    expect(rows[0].classList.contains('modal-detail--muted')).toBe(false);
+    expect(rows[1].classList.contains('modal-detail--muted')).toBe(true);
+  });
+
   it('resolves false on cancel, Escape, and a backdrop click', async () => {
     const cancelled = dialog.ask(OPTIONS);
     cancelBtn().click();
@@ -79,7 +95,7 @@ describe('ConfirmDialog', () => {
     expect(document.activeElement).toBe(cancelBtn());
   });
 
-  it('traps Tab between the two actions and restores focus to the opener on close', async () => {
+  it('wraps Tab at both edges so focus cannot leave the dialog', async () => {
     const opener = document.createElement('button');
     document.body.appendChild(opener);
     opener.focus();
@@ -87,10 +103,12 @@ describe('ConfirmDialog', () => {
     const answer = dialog.ask(OPTIONS);
     expect(document.activeElement).toBe(cancelBtn());
 
-    pressKey('Tab', { shiftKey: true });
+    // DOM order is confirm then cancel, so cancel is the last stop: Tab there
+    // must come back to the first rather than escape to the page behind.
+    pressKey('Tab');
     expect(document.activeElement).toBe(confirmBtn());
 
-    pressKey('Tab');
+    pressKey('Tab', { shiftKey: true });
     expect(document.activeElement).toBe(cancelBtn());
 
     cancelBtn().click();

@@ -15,7 +15,7 @@
 
 import { RetainedMediaStore } from './offscreen/storage/RetainedMediaStore';
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
-import { addStorageChangedListener, hasLocalStorageArea } from './platform/chrome/storage';
+import { addStorageChangedListener } from './platform/chrome/storage';
 import { getBuildId } from './shared/build';
 import { makeLogger } from './shared/logger';
 import { sendToBackground } from './shared/messages';
@@ -25,8 +25,15 @@ import { WorkerStorageTarget } from './offscreen/storage/WorkerStorageTarget';
 import { describeRuntimeError } from './offscreen/errors';
 import { RecordingFinalizer } from './offscreen/RecordingFinalizer';
 import { UploadManager } from './offscreen/UploadManager';
-import { createChromePendingUploadStore } from './offscreen/drive/PendingUploadStore';
-import { createChromeUploadJobStateOutbox } from './offscreen/drive/UploadJobStateOutbox';
+import { createPendingUploadStore } from './offscreen/drive/PendingUploadStore';
+import { createUploadJobStateOutbox } from './offscreen/drive/UploadJobStateOutbox';
+import { AnalysisManager } from './offscreen/analysis/AnalysisManager';
+import { EmbeddingWorkerClient } from './offscreen/analysis/EmbeddingWorkerClient';
+import { analysisEngineConfig, spawnAnalysisWorker } from './offscreen/analysis/engineConfig';
+import { createAnalysisJobStateOutbox } from './offscreen/analysis/AnalysisJobStateOutbox';
+import { AnalysisSealLedger } from './offscreen/analysis/AnalysisSealLedger';
+import { toWireAnalysis } from './shared/analysis/storedAnalysis';
+import { isTerminalAnalysisJob } from './shared/analysis/job';
 import { renameDriveResources } from './offscreen/drive/DriveMetadataRenamer';
 import { resumePendingDriveUploadsWithChrome } from './offscreen/drive/resumePendingUploads';
 import { recoverOrphanRecordingsWithChrome } from './offscreen/storage/recoverOrphanRecordings';
@@ -201,6 +208,15 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     openRetained: (key: string) => retainedMediaStore.read(key),
     cancelUpload: (jobId) => uploadManager.cancel(jobId),
     acknowledgeUploadState: (jobId) => uploadJobStateOutbox.remove(jobId),
+    analyzeTranscript: (historyId, transcript, config, provenance) =>
+      analysisManager.enqueue(historyId, transcript, config, provenance),
+    cancelAnalysis: (jobId) => analysisManager.cancel(jobId),
+    listAnalysisWork: () => analysisManager.busyJobs().map((job) => job.id),
+    // Durable row first, then the held result — see `acknowledgeAnalysisJob`.
+    // Removes the durable row then releases the result — unless the state was
+    // deliberately never sealed, in which case there is no row to remove and
+    // holding the result would defeat the degraded path's whole purpose.
+    acknowledgeAnalysisState: (jobId) => analysisSeals.acknowledge(jobId).then(() => {}),
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
     pushState: controller.pushState,
     log: L.log,
@@ -227,6 +243,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   });
   L.log('READY signaled via Port');
   void replayUploadStates(port);
+  void replayAnalysisStates(port);
   return port;
 }
 
@@ -248,8 +265,8 @@ async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
 
 // ─── Core services ───────────────────────────────────────────────────────────
 
-const pendingUploadStore = createChromePendingUploadStore();
-const uploadJobStateOutbox = createChromeUploadJobStateOutbox();
+const pendingUploadStore = createPendingUploadStore();
+const uploadJobStateOutbox = createUploadJobStateOutbox();
 
 async function reportUploadJob(job: import('./shared/recording').UploadJob, telemetryRunId?: string): Promise<void> {
   const accumulator = telemetryRunId ? telemetryRuns.get(telemetryRunId) : undefined;
@@ -327,7 +344,103 @@ const uploadManager = new UploadManager({
   finalizer,
   report: reportUploadJob,
   warn: L.warn,
+  // Lets a failed upload stay retryable from the library rather than from a
+  // five-minute, 128 MB in-memory budget.
+  readRetained: (key) => retainedMediaStore.read(key),
 });
+
+// Topic analysis (ADR-0007): a long data-plane job whose control plane can be
+// terminated under it, so it takes the same durable shape uploads do —
+// reported as it moves, terminal state held in an outbox until background acks.
+const analysisJobStateOutbox = createAnalysisJobStateOutbox();
+const analysisSeals = new AnalysisSealLedger(
+  analysisJobStateOutbox,
+  { acknowledge: (jobId) => analysisManager.acknowledge(jobId) },
+  { warn: L.warn },
+);
+
+const analysisManager = new AnalysisManager({
+  openEngine: () => EmbeddingWorkerClient.create(
+    analysisEngineConfig((path) => chrome.runtime.getURL(path)),
+    {
+      spawn: () => spawnAnalysisWorker((path) => chrome.runtime.getURL(path)),
+      reportWarning: controller.reportWarning,
+    },
+  ),
+  report: reportAnalysisJob,
+  deliver: deliverAnalysisResult,
+  warn: L.warn,
+  isUnsupported: () => EmbeddingWorkerClient.unsupported,
+});
+
+async function reportAnalysisJob(job: import('./shared/analysis/job').AnalysisJob): Promise<void> {
+  // One sealing attempt per job, shared with delivery below.
+  if (isTerminalAnalysisJob(job)) await analysisSeals.ensureSealed(job);
+  try {
+    getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_STATE', job });
+  } catch (error) {
+    // The outbox entry stands and is replayed when a later port connects.
+    L.warn('Could not send analysis state to background', job.id, describeRuntimeError(error));
+  }
+}
+
+/**
+ * Hands a finished analysis to the control plane, which owns `recording-history`.
+ *
+ * Fire-and-forget on the wire but not in bookkeeping: the manager keeps the
+ * result until an `OFFSCREEN_ACK_ANALYSIS_STATE` comes back, so a post that
+ * lands in a dead port is retried on reconnect rather than lost.
+ */
+async function deliverAnalysisResult(
+  job: import('./shared/analysis/job').AnalysisJob,
+  result: import('./shared/analysis/analyzeTranscript').AnalysisResult,
+  provenance: import('./shared/analysis/provenance').AnalysisProvenance,
+): Promise<void> {
+  // Durable before delivered, with the bounded exception the ledger documents.
+  await analysisSeals.deliver(job, () => {
+    getPort().postMessage({ type: 'OFFSCREEN_ANALYSIS_RESULT', job, analysis: toWireAnalysis(result), provenance });
+  });
+}
+
+async function replayAnalysisStates(port: chrome.runtime.Port): Promise<void> {
+  let terminal: import('./shared/analysis/job').AnalysisJob[] = [];
+  try {
+    terminal = await analysisJobStateOutbox.list();
+  } catch (error) {
+    L.warn('Could not load terminal analysis state outbox', describeRuntimeError(error));
+  }
+  // Everything this document is still responsible for, held results included —
+  // a result whose outbox write failed exists only here, and must still be
+  // announced.
+  const byId = new Map(analysisManager.busyJobs().map((job) => [job.id, job]));
+  for (const job of terminal) {
+    if (byId.has(job.id)) continue;
+    if (job.status === 'completed' && !analysisManager.holdsResult(job.id)) {
+      // A durable `completed` row with no payload: the document that computed
+      // it has since restarted. Announcing it as completed would make the
+      // control plane wait forever for a result that cannot arrive — and hold
+      // back every update while it waited. Reported as lost instead, which
+      // background acknowledges and re-runs from the transcript.
+      byId.set(job.id, {
+        ...job,
+        status: 'failed',
+        lostResult: true,
+        error: 'The analysis finished, but its result was lost when the offscreen document restarted.',
+      });
+      continue;
+    }
+    byId.set(job.id, job);
+  }
+  for (const job of byId.values()) {
+    try {
+      port.postMessage({ type: 'OFFSCREEN_ANALYSIS_STATE', job });
+    } catch {
+      return;
+    }
+  }
+  // State replayed; now re-offer any result the background never took.
+  await analysisManager.redeliver();
+}
 
 const engine = new RecorderEngine({
   log: L.log,
@@ -377,9 +490,11 @@ const offscreenStartedAtMs = Date.now();
 // Fire and forget — both are no-ops when nothing is pending.
 void (async () => {
   if (controller.currentPhase() !== 'idle') return;
-  // Recovery persists/reads markers via chrome.storage; skip in any host that
-  // lacks it (e.g. the e2e tab-capture runtime) rather than throwing.
-  if (!hasLocalStorageArea()) return;
+  // No storage-availability guard any more, and its absence is the point: the
+  // old one skipped recovery whenever `chrome.storage` was missing, which is
+  // *always* in an offscreen document — so recovery never ran in the runtime
+  // that hosts it. Markers now live in IndexedDB, which this document can read,
+  // and a host without IndexedDB degrades to an empty read rather than a throw.
   // #1: re-upload a Drive upload interrupted mid-flight (sealed, marked files).
   try {
     await resumePendingDriveUploadsWithChrome({

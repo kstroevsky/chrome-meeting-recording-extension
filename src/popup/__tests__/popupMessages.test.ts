@@ -75,18 +75,17 @@ describe('popupMessages', () => {
 });
 
 describe('buildDiscardConfirmMessage', () => {
-  it('names the elapsed time so the stakes are concrete', () => {
+  it('leads with the elapsed time so the stakes are concrete (n3)', () => {
     expect(buildDiscardConfirmMessage('00:22:40'))
-      .toBe("You'll lose 22:40 of video, audio, and the live transcript. This can't be undone.");
+      .toEqual({ lead: '22:40', message: "of video, audio and transcript. This can't be undone." });
   });
 
   it('adds notes to the list only when the run has some', () => {
-    expect(buildDiscardConfirmMessage('05:00', 0)).toContain('video, audio, and the live transcript.');
-    expect(buildDiscardConfirmMessage('05:00', 3))
-      .toContain('video, audio, the live transcript, and your notes.');
+    expect(buildDiscardConfirmMessage('05:00', 0).message).toContain('video, audio and transcript.');
+    expect(buildDiscardConfirmMessage('05:00', 3).message).toContain('video, audio, transcript and notes.');
   });
 
   it('falls back to zero when the timer has produced nothing yet', () => {
-    expect(buildDiscardConfirmMessage(undefined)).toContain("lose 0:00 of");
+    expect(buildDiscardConfirmMessage(undefined).lead).toBe('0:00');
   });
 });

@@ -33,6 +33,26 @@ Sources are preference-ordered by the manifest, and a miss falls through to the 
 - **`el.duration` is `Infinity` on a retained copy.** The WebM duration fix produces a new in-memory Blob that goes to Downloads and Drive; the bytes left in OPFS keep the unfixed header. The player takes its total from the manifest's recorded duration instead — which is the better source anyway, because it is pause-aware ([ADR-0005](../../../docs/adr/0005-notations-are-a-separate-timecoded-aggregate.md)) and a container duration is not.
 - **Bare letters must never fire while a field has focus.** That single rule is what makes the rest of the map safe as unmodified single keys; see `playerKeymap.ts`.
 
+## Topics
+
+A finished recording that has been analysed (ADR-0007) carries `manifest.topics`, and the player shows them two ways: a **band under the scrubber**, one stripe per span, and a **TOPICS popover** listing each topic once with its total minutes. `T` / `⇧T` walks them the way `N` / `⇧N` walks notes.
+
+The distinction that shapes all of it:
+
+> **A topic is global; a span is temporal.** A call that returns to Redis after twenty minutes of hiring is *one* topic with *two* spans.
+
+So the band draws spans and the list draws topics, a topic's `23 min` is the **sum** of its spans rather than last-minus-first, and a shade is keyed to the topic so the stripe at 05:00 and the stripe at 31:00 are visibly the same subject. Four shades cycle; past four, two topics share one and the label disambiguates — the band was never the identifier.
+
+Everything topic-shaped disappears when `topics` is empty, which covers never-analysed, still-running and stale-under-new-settings alike. All three mean "nothing to show", and a `TOPICS 0` trigger would promise otherwise.
+
+The manifest carries no vectors. Centroids and segment embeddings stay in the `analyses` store for the deferred retrieval work; the player needs words and offsets.
+
+## Transcript
+
+A recording with a persisted transcript (ADR-0007, `manifest.transcriptStatus === 'ready'`) gets the design's `f10` rail beside the picture: the video keeps 462px and the rail lists every line with its time and speaker, the line being spoken banded and its time in the playhead's red, and a subtitle band on the picture shows the same line. Lines said during a note sit under that note's sticky heading, joined by a gold rail in the gutter; a line belongs to the earliest-starting note whose range holds its start (`playerTranscript.railItems`). Clicking a line or a heading seeks there. The header's panel toggle hides and restores the rail, `C` and the Subtitles row toggle the band, and SRT downloads the transcript as SubRip.
+
+Without a transcript the rail is **absent**, not hidden, and the header loses its toggle — `f11`/`f12`. The transcript is read beside playback rather than before it (`GET_RECORDING_TRANSCRIPT`), so a failure costs the rail and says nothing on the picture. Speaker names come from Meet's captions; the design's `TAB` / `MIC` source tags have no equivalent in a caption transcript.
+
 ## Synchronization
 
 One clock, `PlaybackClock`, with the tab track as master. Correction is deliberately reluctant — seeking an element is *audible*, so a stream of micro-seeks sounds worse than the drift it fixes:
@@ -62,12 +82,14 @@ The Drive retry is **exactly once per open**. A retry loop against a genuinely d
 | File | Role |
 | :--- | :--- |
 | `PlayerController.ts` | Orchestration: manifest → sources → elements → clock |
-| `PlayerView.ts` | The modal DOM (design card `f12`) |
+| `PlayerView.ts` | The modal DOM (design cards `f12`, `f10` with a transcript, `f16` quiet) |
 | `PlaybackClock.ts` | Master/auxiliary synchronization and drift bands |
 | `playbackSource.ts` | One track → a URL a media element can take |
-| `playerFormat.ts` | Clock text, note-mark placement, seek fraction |
+| `playerFormat.ts` | Clock text, note-mark and topic-band placement, seek fraction |
 | `playerKeymap.ts` | The `f19` map, resolved as data |
 | `playerTracks.ts` | What FILES and the volume popup are lists of |
+| `playerTopics.ts` | What TOPICS is a list of |
+| `playerTranscript.ts` | What the rail is a list of: note grouping, the playing line, SRT |
 
 ## Testing notes
 

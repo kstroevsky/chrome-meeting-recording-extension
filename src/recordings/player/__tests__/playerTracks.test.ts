@@ -8,6 +8,7 @@ const manifest = (streams: Array<'tab' | 'mic' | 'self-video'>): PlaybackManifes
   createdAt: 0,
   transcriptStatus: 'none',
   notations: [],
+  topics: [],
   tracks: streams.map((stream) => ({
     fileId: `r1:${stream}`,
     stream,

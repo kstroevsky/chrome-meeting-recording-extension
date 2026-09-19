@@ -275,7 +275,8 @@ Each **store-published** build (Chrome Web Store, Edge Add-ons) gets its own sto
 | `npm run typecheck:e2e` | TypeScript check for Playwright specs and helpers |
 | `npm run lint` | Alias for `typecheck` |
 | `npm test` / `npm run test:unit` | Unit test suite (skips E2E) |
-| `npm version patch\|minor\|major` | Bump the release version (single source of truth) and tag the commit |
+| `npm run release:version` | Print the release version of the checked-out commit (`a.b.c.d`, counted from git) |
+| `npm run hooks:install` | Install the commit-msg hook that checks commit prefixes (also runs on `npm install`) |
 | `npm run release:build` | Production build to `dist/` then the production guards (version + no E2E markers) |
 | `npm run test:e2e` / `npm run test:e2e:mock` | Functional mocked-Meet E2E plus performance smoke |
 | `npm run test:e2e:perf:smoke` | Three critical browser/extension performance cases |
@@ -292,20 +293,35 @@ Each **store-published** build (Chrome Web Store, Edge Add-ons) gets its own sto
 There are two independent version identifiers; do not conflate them:
 
 - **Build ID** (`globalThis.__BUILD_ID__`) is a content hash stamped into every bundle by webpack. It changes on every code change and drives the service-worker ↔ offscreen skew handshake and the on-update reload. It is fully automatic — never set it by hand.
-- **Release version** (semver) lives in **`package.json` only — the single source of truth.** `dist/manifest.json`'s `version` is *derived* from it at build time (`transformManifest` in `webpack.config.js`), so the two cannot drift. The `version` in `static/manifest.json` is an ignored `0.0.0` placeholder.
+- **Release version** (`a.b.c.d`) is **counted from git history at build time**; nobody bumps it. Only `a` is written down, as the major of `package.json`'s version (kept at `a.0.0`). The rest comes from `scripts/lib/releaseVersion.cjs`, and the build writes the result into `dist/manifest.json`. The `version` in `static/manifest.json` is an ignored `0.0.0` placeholder.
+
+| Segment | Counts | Goes up on |
+| :--- | :--- | :--- |
+| `a` | the major in `package.json` | a deliberate new era: `npm version major -m "Release: %s"` |
+| `b` | merged pull requests since `a` was last raised | every merge into main |
+| `c` | `Feature` commits since the last merged pull request | `Feature:` / `feat:` |
+| `d` | fix-type commits since the last `Feature` | `Fix:` `Refactor:` `Perf:` `Draft:`, and reverts |
+
+`Testing:`, `Docs:`, `Infrastructure:`, `Setup:` and `Release:` commits bump nothing, because nothing shipped changes. A higher segment going up resets the ones after it. So a branch shows its own work while you build and test it (`0.15.6.2`), and merging it folds that work into the pull request (`0.16.0.0`). A commit's version is never lower than its parent's, which is what Chrome's update check needs.
+
+What this relies on:
+
+- **Commit prefixes are the input.** A commit-msg hook (installed by `npm install`, or `npm run hooks:install`) refuses a subject without a known prefix. Lowercase and scoped forms (`feat(popup):`, `fix:`) count the same.
+- **Pull requests are merged with a merge commit.** A squash or rebase merge leaves nothing to count. Merging main into a branch (`Merge branch 'main' into …`) is not counted as a pull request.
+- **The build needs the full history.** A shallow clone fails a production build (`git fetch --unshallow`). A dev build without git still builds, as `a.0.0.0`.
+
+`version_name` (shown on `chrome://extensions`) adds what makes a build differ from its commit, for example `0.15.6.2 (dev, uncommitted changes)`.
 
 To cut a release:
 
 ```bash
-npm version patch   # or minor / major — bumps package.json and creates the git tag
-npm run release:build   # production build + guards (asserts the derived version)
-git push --follow-tags  # publish the tag when you are ready
-# then zip ./dist and upload to the Chrome Web Store
+npm run release:build   # refuses uncommitted changes and a version lower than the latest release tag
+# zip ./dist and upload it to the Chrome Web Store, then record the release:
+git tag -a "v$(npm run -s release:version)" -m "Release $(npm run -s release:version)"
+git push origin --tags
 ```
 
-`npm version` requires a clean working tree (commit or stash first) and runs the `preversion` gate — `typecheck` plus the unit suite — before it bumps and tags, so a release can't be cut over failing checks. It also keeps `package-lock.json` in sync automatically.
-
-Chrome requires the manifest `version` to be 1–4 dot-separated integers and to strictly increase on each store upload. `npm version` guarantees the increment; the build coerces any semver pre-release tag (e.g. `1.4.0-beta.2`) down to the numeric `1.4.0` for `version` while preserving the full string in `version_name`. The `1.4.0-beta.2` form would collide with `1.4.0` at upload — use a numeric build segment for pre-release channels.
+Release from main, or from a branch that contains the latest release. A build from an older branch counts lower, and `release:build` refuses it, because the Chrome Web Store rejects an upload that does not go up.
 
 Two end-to-end testing scenarios exist:
 

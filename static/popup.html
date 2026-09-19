@@ -28,6 +28,8 @@
           <button id="open-menu" class="icon-button" type="button" title="Menu" aria-label="Open menu" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="8" cy="13" r="1.4"/></svg></button>
           <div id="popup-menu" class="popup-menu" role="menu" hidden>
           <button id="discard-rec" class="menu-row menu-row-danger" type="button" role="menuitem" hidden><svg class="menu-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M6.4 4.5V3.3a1 1 0 011-1h1.2a1 1 0 011 1v1.2M4.8 4.5l.5 8a1 1 0 001 .95h3.4a1 1 0 001-.95l.5-8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>Discard recording</button>
+          <!-- The saving screen (d4) keeps one action; cancelling lives here instead. -->
+          <button id="upload-job-cancel" class="menu-row menu-row-danger" type="button" role="menuitem" hidden><svg class="menu-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>Cancel upload</button>
           <button id="open-recordings" class="menu-row" type="button" role="menuitem"><svg class="menu-icon menu-icon-warm" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="5" width="9" height="7" rx="1.5"/><path d="M5.2 3.2h6.3a2 2 0 012 2v5.3"/></svg>Recordings <span id="recordings-count" class="recordings-count" hidden>0</span></button>
           <div class="menu-divider"></div>
           <button id="open-popup-gallery" class="menu-row" type="button" role="menuitem" hidden><svg class="menu-icon menu-icon-warm" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor"/></svg>Popup gallery <span class="menu-badge">DEV</span></button>
@@ -153,10 +155,13 @@
     <!-- ════════ RECORDING DETAIL (pushed from the compact recordings list) ════════ -->
     <section id="view-recording-detail" class="view recording-detail-popup" hidden>
       <header class="recording-detail-header">
-        <button id="recording-detail-back" class="recording-detail-back" type="button" aria-label="Back to recordings">
-          <svg width="8" height="13" viewBox="0 0 9 14" fill="none" aria-hidden="true"><path d="M6.5 1l-5 6 5 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Recordings
-        </button>
+        <!-- The recording names its own screen (d1); the heading becomes the rename field (7H). -->
+        <div id="recording-detail-heading" class="recording-detail-heading">
+          <button id="recording-detail-back" class="recording-detail-back" type="button" title="Back to Recordings" aria-label="Back to recordings">
+            <svg width="11" height="11" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M6.5 2l-3 3 3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <h2 id="recording-detail-title" class="recording-detail-title"></h2>
+        </div>
         <div class="recording-detail-menu-wrap">
           <button id="recording-detail-menu-button" class="icon-button" type="button" title="Recording actions" aria-label="Recording actions" aria-haspopup="menu" aria-expanded="false" aria-controls="recording-detail-menu"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="8" cy="13" r="1.4"/></svg></button>
           <div id="recording-detail-menu" class="popup-menu recording-detail-menu" role="menu" hidden>
@@ -279,12 +284,14 @@
                 d="M4.5 8a.5.5 0 00-1 0 4.5 4.5 0 009 0 .5.5 0 00-1 0 3.5 3.5 0 01-7 0zM7.5 13.5v1.5h1v-1.5a.5.5 0 00-1 0z" />
             </svg></span>
           <div class="srow-main">
-            <div class="srow-title">Microphone <span id="mic-mode-label" class="srow-mode"></span></div>
+            <div class="srow-title">Microphone</div>
             <button id="mic-device-trigger" class="device-trigger" type="button" aria-haspopup="dialog"
               aria-controls="device-picker" title="Change microphone">
-              <span id="mic-device-label" class="srow-device">Connecting…</span>
+              <span id="mic-device-label" class="srow-device">Connecting…</span><svg class="srow-device-chevron" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 3.5L5 6.5l3-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
+          <!-- Where the track goes, beside its switch as in the design (e5). -->
+          <span id="mic-mode-label" class="srow-mode"></span>
           <button id="mute-mic" class="switch on" type="button" aria-pressed="false"
             title="Mute the microphone (records silence) without stopping the recording">
             <span class="knob" aria-hidden="true"></span>
@@ -299,12 +306,14 @@
                 d="M2 4.5A1.5 1.5 0 013.5 3h6A1.5 1.5 0 0111 4.5v1.2l3.2-1.8a.5.5 0 01.8.4v7.4a.5.5 0 01-.8.4L11 10.3v1.2A1.5 1.5 0 019.5 13h-6A1.5 1.5 0 012 11.5v-7z" />
             </svg></span>
           <div class="srow-main">
-            <div class="srow-title">Camera <span id="camera-mode-label" class="srow-mode">720P</span></div>
+            <div class="srow-title">Camera</div>
             <button id="camera-device-trigger" class="device-trigger" type="button" aria-haspopup="dialog"
               aria-controls="device-picker" title="Change camera">
-              <span id="camera-device-label" class="srow-device">Connecting…</span>
+              <span id="camera-device-label" class="srow-device">Connecting…</span><svg class="srow-device-chevron" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 3.5L5 6.5l3-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
+          <!-- Where the track goes, beside its switch as in the design (e5). -->
+          <span id="camera-mode-label" class="srow-mode">720P</span>
           <button id="hide-camera" class="switch on" type="button" aria-pressed="false"
             title="Hide the camera (records black frames) without stopping the recording">
             <span class="knob" aria-hidden="true"></span>
@@ -335,15 +344,20 @@
         </div>
       </div>
 
-      <!-- Shortcut tip (marks-e5). Shown only while the run has no notes yet. -->
-      <p id="note-hint" class="note-hint"><kbd>⌥M</kbd> starts and ends a note without opening this popup.</p>
+      <!-- Shortcut tip (marks-e5). Shown only while the run has no notes yet, and
+           never again once the user has said they have it. -->
+      <div id="note-hint" class="note-hint">
+        <p class="note-hint-text"><kbd>⌥M</kbd> starts and ends a note without opening this popup.</p>
+        <button id="note-hint-dismiss" class="note-hint-dismiss" type="button" title="Got it"
+          aria-label="Dismiss the shortcut tip">✕</button>
+      </div>
 
       <div class="controls">
         <button id="pause-recording" class="btn btn-secondary" type="button" aria-pressed="false"
           title="Pause the whole recording (records nothing); resume joins seamlessly with no gap">
-          <svg width="11" height="12" viewBox="0 0 12 14" fill="currentColor" aria-hidden="true">
-            <rect x="1" y="1" width="3.4" height="12" rx="1" />
-            <rect x="7.6" y="1" width="3.4" height="12" rx="1" />
+          <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="1" width="3.5" height="12" rx="1" />
+            <rect x="7.5" width="3.5" height="12" rx="1" />
           </svg>
           <span data-pause-label>Pause</span>
         </button>
@@ -453,43 +467,36 @@
         <div id="interrupted-list" class="detail-notes-list"></div>
       </div>
 
-      <div class="controls interrupted-actions">
-        <button id="interrupted-discard" class="btn btn-secondary" type="button">Discard</button>
-        <button id="interrupted-done" class="btn btn-primary" type="button">Done</button>
+      <!-- The capture is already saved, so the primary keeps it rather than saving it (n4). -->
+      <div class="interrupted-actions">
+        <button id="interrupted-done" class="btn btn-ink btn-full" type="button">Keep what was captured</button>
+        <button id="interrupted-discard" class="btn btn-secondary btn-full" type="button">Discard</button>
       </div>
     </section>
 
-    <!-- ════════ UPLOAD VIEW (a selected background upload job, ADR-0004) ════════ -->
-    <section id="view-upload" class="view" hidden>
-      <!-- In-progress: linear progress bar (design). -->
-      <div id="upload-progress">
-        <div class="up-head">
-          <svg class="up-head-ico" viewBox="0 0 16 16" fill="#7da4f5" aria-hidden="true">
-            <path d="M4.5 13a3 3 0 01-.3-5.99A4 4 0 0112 6.5a2.75 2.75 0 01-.25 5.5H4.5z" />
-          </svg>
-          <span id="upload-job-label" class="up-head-title" aria-live="polite">Uploading to Drive</span>
-          <span id="upload-job-pct" class="up-head-pct">0%</span>
+    <!-- ════════ UPLOAD VIEW (a selected background upload job, ADR-0004) ════════
+         One screen, four states, set on `data-state`: uploading (d4), saved
+         (n2a/n2c), failed (8A) and partial (8C). -->
+    <section id="view-upload" class="view" data-state="uploading" hidden>
+      <!-- Uploading and saved lead with a head; failed and partial lead with the outcome. -->
+      <div id="upload-head" class="up-head">
+        <span class="up-head-icon" aria-hidden="true">
+          <svg class="up-head-cloud" viewBox="0 0 18 18" fill="none"><path d="M5 14a3.2 3.2 0 01-.4-6.37A4 4 0 0112.3 8.2 3 3 0 0113 14H5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" /></svg>
+          <svg class="up-head-check" viewBox="0 0 16 16" fill="none"><path d="M3.5 8.2l3 3L12.5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </span>
+        <div class="up-head-text">
+          <div id="upload-job-label" class="up-head-title" aria-live="polite">Uploading to Drive</div>
+          <div id="upload-job-sub" class="up-head-sub"></div>
         </div>
-        <div class="up-bar">
-          <div id="upload-bar-fill" class="up-bar-fill" style="width:0%"></div>
-        </div>
-        <div id="upload-job-meta" class="up-meta"></div>
       </div>
-      <!-- Done: saved confirmation. -->
-      <div id="upload-done" class="center" hidden>
-        <span class="done-check"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M6 12.5l4 4 8-9" stroke="#3fb950" stroke-width="2.4" stroke-linecap="round"
-              stroke-linejoin="round" />
-          </svg></span>
-        <div class="finalizing-label">Recording saved</div>
-        <div id="upload-job-sub" class="upload-job-sub"></div>
-      </div>
-      <ul id="upload-job-files" class="meta-list file-list"></ul>
+      <div id="upload-eyebrow" class="up-eyebrow" aria-live="polite" hidden></div>
+      <div id="upload-files-label" class="up-section-label">PROGRESS</div>
+      <ul id="upload-job-files" class="up-files"></ul>
       <!-- The notes sidecar goes up ahead of the media, and says so (d4). -->
       <div id="upload-job-notes-line" class="upload-notes" hidden>
         <span class="upload-notes-label">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z" /></svg>
-          Notes
+          <span id="upload-job-notes-label">Notes</span>
         </span>
         <span class="upload-notes-state">
           <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.2l3 3L12.5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -500,22 +507,16 @@
       <div id="upload-job-notes"></div>
       <button id="upload-job-transcript" class="upload-transcript" type="button" hidden><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v7m0 0 2.5-2.5M8 9 5.5 6.5M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></svg><strong>Transcript</strong><span>VTT</span></button>
       <div class="upload-actions">
-        <button id="upload-job-cancel" class="btn btn-secondary btn-full" type="button" hidden>
-          Cancel upload and download locally
+        <button id="upload-job-retry" class="btn btn-ink btn-full" type="button" hidden>Retry upload</button>
+        <button id="upload-job-open-drive" class="btn btn-ink btn-full" type="button" hidden>
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 13a3 3 0 01-.3-5.99A4 4 0 0112 6.5a2.75 2.75 0 01-.25 5.5H4.5z"/></svg><span id="upload-job-open-drive-label">Open in Google Drive</span>
         </button>
-        <button id="upload-job-open-drive" class="btn btn-primary btn-full" type="button" hidden>
-          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 13a3 3 0 01-.3-5.99A4 4 0 0112 6.5a2.75 2.75 0 01-.25 5.5H4.5z"/></svg>Open in Google Drive
-        </button>
+        <!-- Leaves this screen for Setup; the job carries on (or waits for a retry). -->
         <button id="upload-job-new-recording" class="btn btn-secondary btn-full" type="button" hidden>
           New recording
         </button>
-        <button id="upload-job-retry" class="btn btn-primary" type="button" hidden>
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M13.65 2.35A8 8 0 108 16v-2a6 6 0 114.24-1.76L10 10h6V4l-2.35-1.65z" />
-          </svg>
-          Retry upload
-        </button>
       </div>
+      <p id="upload-recovery-note" class="up-recovery-note" hidden></p>
     </section>
 
     <script src="popup.js"></script>

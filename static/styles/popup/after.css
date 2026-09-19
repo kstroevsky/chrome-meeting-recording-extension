@@ -20,53 +20,101 @@
 .meta-list li span:first-child { color: var(--ink-2); }
 .meta-list li span:last-child { color: var(--ink-3); }
 
-.up-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; }
-.up-head-ico { display: none; }
-.up-head-pct { order: -1; flex: none; color: var(--ink); font-size: 38px; font-weight: 700; line-height: 1; letter-spacing: -.02em; }
-.up-head-title { color: var(--ink-3); font-size: 13px; font-weight: 500; }
-.up-bar { height: 6px; margin: 14px 0 18px; overflow: hidden; border-radius: 999px; background: var(--tile); }
-.up-bar-fill { height: 100%; border-radius: inherit; background: var(--ink); transition: width .3s ease; }
-.up-meta { min-height: 13px; margin: 0 0 12px; color: var(--ink-4); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .14em; text-transform: uppercase; }
-
+/* ══════════ Upload view (ADR-0004) ══════════
+   One screen in four states on `data-state`: uploading (d4), saved (n2a/n2c),
+   failed (8A) and partial (8C). Uploading and saved lead with a head and close
+   on a footer band; failed and partial lead with their outcome and keep their
+   actions inline, as the design's error screens do. */
 #view-upload { padding-top: 0; }
-#view-upload .file-list { margin: 0; }
-#view-upload .file-list li { position: relative; display: flex; align-items: flex-start; min-height: 0; padding: 7px 0; }
-#view-upload .file-ico { display: none; }
-#view-upload .file-main { width: 100%; min-width: 0; }
-#view-upload .file-head { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 10px; }
-#view-upload .file-title { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
-#view-upload .file-sub { flex: 0 0 auto; color: var(--ink-3); font: 500 10.5px 'IBM Plex Mono', monospace; white-space: nowrap; }
-#view-upload .file-status-uploaded .file-sub { color: var(--ready); }
-#view-upload .file-open { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: 0 0 14px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink-2); font-size: 14px; line-height: 1; cursor: pointer; }
-.file-progress { height: 5px; margin-top: 7px; overflow: hidden; border-radius: 999px; background: var(--tile); }
-.file-progress span { display: block; height: 100%; border-radius: inherit; background: var(--ink); }
-.file-status-uploaded .file-progress span { background: var(--ready); }
+.up-head { display: flex; align-items: center; gap: 11px; margin: 0 0 14px; }
+#view-upload[data-state='saved'] .up-head { margin-bottom: 16px; }
+.up-head-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; background: var(--tile); color: var(--warn-label); }
+.up-head-icon svg { width: 16px; height: 16px; }
+.up-head-check { display: none; }
+#view-upload[data-state='saved'] .up-head-icon { background: var(--saved-bed); color: var(--ready); }
+#view-upload[data-state='saved'] .up-head-cloud { display: none; }
+#view-upload[data-state='saved'] .up-head-check { display: block; }
+.up-head-title { color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.up-head-sub { margin-top: 2px; color: var(--ink-3); font: 10.5px 'IBM Plex Mono', monospace; }
+.up-section-label { color: var(--ink-4); font: 600 9.5px 'Space Grotesk', system-ui, sans-serif; letter-spacing: .14em; }
 
+.up-files { margin: 5px 0 16px; padding: 0; list-style: none; }
+#view-upload[data-state='saved'] .up-files { margin-top: 7px; }
+/* The notes band closes the list in d4, so the list's 16px moves below the band. */
+#view-upload:has(#upload-job-notes-line:not([hidden])) .up-files { margin-bottom: 0; }
+#view-upload .upload-notes { margin-bottom: 16px; }
+.up-file-name { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.up-file-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.up-file-state { flex: 0 0 auto; color: var(--ink-3); font: 10px 'IBM Plex Mono', monospace; white-space: nowrap; }
+.up-bar { height: 4px; overflow: hidden; border-radius: 999px; background: var(--bar-track); }
+.up-bar span { display: block; height: 100%; background: var(--ink); transition: width .3s ease; }
+.up-bar--saved span { background: var(--ready); }
+.up-bar--failed span { background: var(--accent); }
+
+/* d4: name and state over a 4px bar, each file on its own. */
+.up-file--progress { padding: 11px 0 12px; border-top: 1px solid var(--divider); }
+.up-file--progress .up-file-head { margin-bottom: 7px; }
+.up-file--saved .up-file-state { color: var(--ready); }
+
+/* n2a: the Drive block — 40px rows, size and an open arrow on the right. */
+.up-file--saved-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 40px; border-top: 1px solid var(--divider); }
+.up-file-meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 9px; }
+.up-file-size { color: var(--ink-4); font: 10.5px 'IBM Plex Mono', monospace; }
+.up-file-open { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
+.up-file-open svg { width: 14px; height: 14px; }
+.up-file-open:hover { color: var(--warn-label); }
+.up-file-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* 8A and 8C lead with the outcome in one mono line. */
+.up-eyebrow { color: var(--rec-label); font: 10.5px 'IBM Plex Mono', monospace; letter-spacing: .14em; }
+#view-upload[data-state='partial'] .up-eyebrow { color: var(--warn-label); }
+#view-upload[data-state='failed'] .up-files,
+#view-upload[data-state='partial'] .up-files { margin: 12px 0 0; border-bottom: 1px solid var(--divider); }
+/* 8A: a 3px square bar under each file; a failed one says why it is still safe. */
+.up-file--outcome { padding: 10px 0; border-top: 1px solid var(--divider); }
+.up-file--outcome .up-file-head { align-items: baseline; gap: 8px; }
+.up-file--outcome .up-file-state { font-size: 9.5px; letter-spacing: .08em; }
+.up-file--done .up-file-state { color: var(--done-ink); }
+.up-file--failed .up-file-state { color: var(--rec-label); }
+.up-file--waiting .up-file-state { color: var(--ink-meta); }
+.up-file--waiting .up-file-reason { color: var(--ink-3); }
+.up-file--outcome .up-bar { height: 3px; margin-top: 6px; border-radius: 0; background: var(--divider); }
+.up-file-reason { display: block; margin-top: 6px; color: var(--rec-label); font-size: 11px; line-height: 1.5; }
+/* 8C: where each file is now, and a retry beside the one that is not in Drive. */
+.up-file--partial { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 44px; border-top: 1px solid var(--divider); }
+.up-file-text { display: flex; flex-direction: column; min-width: 0; }
+.up-file-sub { margin-top: 2px; color: var(--ink-meta); font: 9.5px 'IBM Plex Mono', monospace; }
+.up-file--partial.up-file--failed .up-file-sub { color: var(--rec-label); }
+.up-file-retry { flex: 0 0 auto; height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink-2); font: 600 11.5px 'Space Grotesk', system-ui, sans-serif; cursor: pointer; }
+.up-file-retry:hover { background: var(--control-bg-strong); }
+
+/* Footer band for uploading and saved (d4, n2a): ink primary, outlined secondary. */
 .upload-actions { display: flex; flex-direction: column; gap: 8px; margin: 16px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
-#view-upload:not(:has(#upload-done:not([hidden]))) .upload-actions { margin-top: 5px; }
-#upload-job-cancel { width: 100%; height: 46px; margin: 0; }
-#upload-done { display: grid; grid-template-columns: 34px 1fr; align-items: center; column-gap: 11px; padding: 0 0 21px; text-align: left; }
-#upload-done .done-check { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; grid-row: span 2; margin: 0; border-radius: 50%; background: color-mix(in srgb, var(--ready) 16%, transparent); }
-#upload-done .done-check svg { width: 18px; height: 18px; }
-#upload-done .finalizing-label { margin: 0; font-size: 15px; font-weight: 700; text-align: left; }
+.upload-actions .btn { width: 100%; margin: 0; }
+.upload-actions .btn-ink { height: 48px; }
+.upload-actions .btn-secondary { height: 44px; }
+#upload-job-open-drive { gap: 9px; }
+#upload-job-open-drive svg { display: block; width: 14px; height: 14px; }
+/* Failed and partial keep their actions inline: a 46px primary, a 38px quiet second. */
+#view-upload[data-state='failed'] .upload-actions,
+#view-upload[data-state='partial'] .upload-actions { gap: 6px; margin: 16px 0 0; padding: 0; border: 0; background: transparent; }
+#view-upload[data-state='failed'] .upload-actions .btn-ink,
+#view-upload[data-state='partial'] .upload-actions .btn-ink { height: 46px; }
+#view-upload[data-state='failed'] .upload-actions .btn-secondary,
+#view-upload[data-state='partial'] .upload-actions .btn-secondary,
+#view-upload[data-state='partial'] #upload-job-open-drive { height: 38px; border: 1px solid var(--border); background: var(--tile); color: var(--ink-2); font-size: 12.5px; font-weight: 600; letter-spacing: -.01em; }
+#view-upload[data-state='partial'] #upload-job-open-drive svg { display: none; }
+#view-upload[data-state='partial'] #upload-job-retry { order: -1; }
+.up-recovery-note { margin: 11px 0 0; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
+
 /* The sidecar band is the file list's last row, so the notes section below it
    keeps the same 16px the design puts between the list and the heading. */
 #upload-job-notes .detail-notes { margin-top: 16px; }
-#upload-done .upload-job-sub { margin: 2px 0 0; color: var(--ink-3); font: 500 10.5px 'IBM Plex Mono', monospace; text-align: left; }
-#upload-job-open-drive,
-#upload-job-new-recording { width: 100%; height: 48px; margin: 0; }
-#upload-job-open-drive { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 0; background: var(--ink); color: var(--surface); }
-#upload-job-open-drive svg { display: block; width: 14px; height: 14px; }
-#upload-job-new-recording { height: 44px; }
-.upload-transcript { display: flex; align-items: center; width: 100%; gap: 8px; margin-top: 14px; padding: 11px 13px; border: 0; border-radius: 6px; background: var(--tile); color: var(--ink); font: 600 12.5px 'Space Grotesk', sans-serif; }
+.upload-transcript { display: flex; align-items: center; width: 100%; gap: 8px; margin-top: 16px; padding: 11px 13px; border: 0; border-radius: 6px; background: var(--tile); color: var(--ink); font: 600 12.5px 'Space Grotesk', sans-serif; cursor: pointer; }
+.upload-transcript:hover { background: var(--control-bg-strong); }
 .upload-transcript svg { width: 13px; height: 13px; }
 /* `bolder` against the button's 600 computes to 900; the design keeps it level. */
 .upload-transcript strong { font-weight: inherit; }
-.upload-transcript span { margin-left: auto; color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; }
-#view-upload:has(#upload-done:not([hidden])) .file-list { border-top: 0; }
-#view-upload:has(#upload-done:not([hidden])) .file-list::before { display: block; padding: 0 0 7px; border-bottom: 1px solid var(--divider); color: var(--ink-4); font: 600 9px 'IBM Plex Mono', monospace; letter-spacing: .13em; content: 'IN GOOGLE DRIVE'; }
-#view-upload:has(#upload-done:not([hidden])) .file-list li { align-items: center; min-height: 44px; padding: 0; }
-#view-upload:has(#upload-done:not([hidden])) .file-list .file-sub,
-#view-upload:has(#upload-done:not([hidden])) .file-status-uploaded .file-sub { color: var(--ink-3); }
+.upload-transcript span { margin-left: auto; color: var(--ink-3); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
 
 #view-finalizing .meta-list { display: none; }

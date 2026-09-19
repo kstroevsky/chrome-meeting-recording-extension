@@ -1,7 +1,7 @@
 /** Design card f19: the map, and the rule that makes single keys safe. */
 import {
   KEYBOARD_HELP,
-  adjacentNoteStart,
+  adjacentMarkStart,
   isFieldTarget,
   nextSpeed,
   resolvePlayerAction,
@@ -22,6 +22,7 @@ describe('resolvePlayerAction', () => {
     expect(resolvePlayerAction({ key: 'L' })).toEqual({ kind: 'speed', direction: 1 });
     expect(resolvePlayerAction({ key: 'm' })).toEqual({ kind: 'mute' });
     expect(resolvePlayerAction({ key: 'F' })).toEqual({ kind: 'fullscreen' });
+    expect(resolvePlayerAction({ key: 'c' })).toEqual({ kind: 'subtitles' });
   });
 
   it('walks notes forward, and backward with shift', () => {
@@ -41,7 +42,7 @@ describe('resolvePlayerAction', () => {
     const inField = { inField: true };
 
     it('swallows every bare letter and arrow', () => {
-      for (const key of ['m', 'f', 'j', 'l', 'n', ' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+      for (const key of ['m', 'f', 'c', 'j', 'l', 'n', ' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
         expect(resolvePlayerAction({ key }, inField)).toBeNull();
       }
     });
@@ -102,27 +103,27 @@ describe('nextSpeed', () => {
   });
 });
 
-describe('adjacentNoteStart', () => {
+describe('adjacentMarkStart', () => {
   const starts = [5_000, 20_000, 60_000];
 
   it('finds the next and previous note', () => {
-    expect(adjacentNoteStart(starts, 10_000, 1)).toBe(20_000);
-    expect(adjacentNoteStart(starts, 30_000, -1)).toBe(20_000);
+    expect(adjacentMarkStart(starts, 10_000, 1)).toBe(20_000);
+    expect(adjacentMarkStart(starts, 30_000, -1)).toBe(20_000);
   });
 
   it('returns nothing past either end', () => {
-    expect(adjacentNoteStart(starts, 90_000, 1)).toBeNull();
-    expect(adjacentNoteStart(starts, 0, -1)).toBeNull();
+    expect(adjacentMarkStart(starts, 90_000, 1)).toBeNull();
+    expect(adjacentMarkStart(starts, 0, -1)).toBeNull();
   });
 
   it('does not stick on the note it is already sitting on', () => {
     // Landing exactly on a note and pressing N again must move on.
-    expect(adjacentNoteStart(starts, 20_000, 1)).toBe(60_000);
-    expect(adjacentNoteStart(starts, 20_000, -1)).toBe(5_000);
+    expect(adjacentMarkStart(starts, 20_000, 1)).toBe(60_000);
+    expect(adjacentMarkStart(starts, 20_000, -1)).toBe(5_000);
   });
 
   it('sorts unordered input', () => {
-    expect(adjacentNoteStart([60_000, 5_000, 20_000], 0, 1)).toBe(5_000);
+    expect(adjacentMarkStart([60_000, 5_000, 20_000], 0, 1)).toBe(5_000);
   });
 });
 
@@ -132,5 +133,26 @@ describe('KEYBOARD_HELP', () => {
     for (const fragment of ['Space', '←', 'J', 'M', '↑', 'N', 'F', '?', 'Esc']) {
       expect(documented).toContain(fragment);
     }
+  });
+});
+
+describe('topic navigation (ADR-0007)', () => {
+  it('walks topics with T, and backwards with shift', () => {
+    expect(resolvePlayerAction({ key: 't' })).toEqual({ kind: 'topic', direction: 1 });
+    expect(resolvePlayerAction({ key: 'T', shiftKey: true })).toEqual({ kind: 'topic', direction: -1 });
+  });
+
+  it('never fires while a field has focus', () => {
+    // The rule that makes every bare letter in this map safe.
+    expect(resolvePlayerAction({ key: 't' }, { inField: true })).toBeNull();
+  });
+
+  it('leaves a modified T to the browser', () => {
+    expect(resolvePlayerAction({ key: 't', metaKey: true })).toBeNull();
+    expect(resolvePlayerAction({ key: 't', ctrlKey: true })).toBeNull();
+  });
+
+  it('is described in the map the ? overlay renders', () => {
+    expect(KEYBOARD_HELP.some((row) => row.keys === 'T / ⇧T')).toBe(true);
   });
 });

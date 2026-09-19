@@ -16,15 +16,12 @@
 
 import { RecordingNotesDetail, type RecordingNotesDetailActions } from '../notes/RecordingNotesDetail';
 import type { ConfirmDialog } from '../ConfirmDialog';
-import type { RecordingNameDialog } from '../RecordingNameDialog';
 import { renderUploadDetail } from './uploadDetailPanel';
 import {
   DETAIL_DRIVE_ICON,
-  DETAIL_LINK_ICON,
   DETAIL_OPEN_ICON,
-  DETAIL_RENAME_ICON,
-  recordingDetailDate,
   recordingDetailDuration,
+  recordingDetailWhen,
 } from './historyChrome';
 import { createExternalTab, createRuntimeTab } from '../../platform/chrome/tabs';
 import { sendToBackground } from '../../shared/messages';
@@ -49,13 +46,22 @@ export type RecordingDetailActions = {
   onRemoved: () => void;
 };
 
+const CHECK_ICON = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.2l3 3L12.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CHEVRON_ICON = '<svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M3.5 2l3 3-3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+/** A transcript is a file the recording carries, not one of its media tracks. */
+const isTranscriptFile = (file: RecordingHistoryEntry['files'][number]): boolean => /\.(vtt|txt|srt)$/i.test(file.filename);
+
 export class RecordingDetailView {
   private current: PopupDetailTarget | null = null;
+  /** The saved recording whose files row is open, so a repaint keeps it open. */
+  private filesOpenFor: string | null = null;
+  /** The recording being renamed in the header (7H), and the draft name. */
+  private renaming: { id: string; draft: string } | null = null;
 
   constructor(
     private readonly actions: RecordingDetailActions,
     private readonly confirmDialog: ConfirmDialog,
-    private readonly nameDialog: RecordingNameDialog,
   ) {}
 
   /** The recording on screen, or null when the detail is not showing. */
@@ -106,6 +112,8 @@ export class RecordingDetailView {
   /** Forgets the recording on screen without painting; the caller hides the view. */
   clear(): void {
     this.current = null;
+    this.renaming = null;
+    this.filesOpenFor = null;
     this.closeMenu();
   }
 
@@ -139,7 +147,10 @@ export class RecordingDetailView {
     const content = document.getElementById('recording-detail-content');
     if (!target || !content) return;
     content.replaceChildren();
-    if (target.kind === 'recording') this.renderSaved(content, target.entry);
+    if (this.renaming && (target.kind !== 'recording' || target.entry.id !== this.renaming.id)) this.renaming = null;
+    this.renderHeading(target);
+    if (target.kind === 'recording' && this.renaming) this.renderRenaming(content, target.entry);
+    else if (target.kind === 'recording') this.renderSaved(content, target.entry);
     else renderUploadDetail(content, target.job, (job, button) => void this.cancelUpload(job, button));
 
     const link = this.driveLink();
@@ -153,59 +164,155 @@ export class RecordingDetailView {
     if (diagnostics) diagnostics.hidden = !isDevBuild();
   }
 
-  private renderSaved(content: HTMLElement, entry: RecordingHistoryEntry): void {
-    const titleRow = document.createElement('div');
-    titleRow.className = 'recording-detail-title-row';
+  /**
+   * The header names the recording (d1). While it is being renamed the name
+   * becomes the field and a save button sits beside it (7H).
+   */
+  private renderHeading(target: PopupDetailTarget): void {
+    const heading = document.getElementById('recording-detail-heading');
+    const header = heading?.parentElement;
+    if (!heading) return;
+    heading.querySelectorAll('.recording-detail-title, .recording-detail-name-field, .recording-detail-save-name').forEach((node) => node.remove());
+    header?.classList.toggle('renaming', Boolean(this.renaming));
+    if (this.renaming && target.kind === 'recording') {
+      const field = document.createElement('input');
+      field.className = 'recording-detail-name-field';
+      field.type = 'text';
+      field.maxLength = 200;
+      field.value = this.renaming.draft;
+      field.setAttribute('aria-label', 'Recording name');
+      field.addEventListener('input', () => { if (this.renaming) this.renaming.draft = field.value; });
+      field.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); void this.commitRename(); }
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.cancelRename(); }
+      });
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.className = 'recording-detail-save-name';
+      save.title = 'Save name';
+      save.setAttribute('aria-label', 'Save name');
+      save.innerHTML = CHECK_ICON;
+      save.addEventListener('click', () => void this.commitRename());
+      heading.append(field, save);
+      requestAnimationFrame(() => { if (document.activeElement !== field) { field.focus(); field.select(); } });
+      return;
+    }
     const title = document.createElement('h2');
     title.id = 'recording-detail-title';
     title.className = 'recording-detail-title';
-    title.textContent = entry.name;
-    title.title = entry.name;
-    const rename = document.createElement('button');
-    rename.type = 'button';
-    rename.className = 'recording-detail-rename';
-    rename.setAttribute('aria-label', 'Rename recording');
-    rename.title = 'Rename';
-    rename.innerHTML = DETAIL_RENAME_ICON;
-    rename.addEventListener('click', () => void this.startRename());
-    titleRow.append(title, rename);
+    title.textContent = target.kind === 'recording' ? target.entry.name : target.job.label;
+    title.title = title.textContent;
+    if (target.kind === 'recording') {
+      title.tabIndex = 0;
+      title.setAttribute('role', 'button');
+      title.setAttribute('aria-label', `Rename ${target.entry.name}`);
+      title.addEventListener('click', () => void this.startRename());
+      title.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void this.startRename(); }
+      });
+    }
+    heading.appendChild(title);
+  }
 
-    const meta = document.createElement('p');
-    meta.className = 'recording-detail-meta';
-    const totalBytes = entry.files.reduce((total, file) => total + (file.bytes ?? 0), 0);
-    meta.textContent = `${recordingDetailDate(entry.createdAt)} · ${recordingDetailDuration(entry)} · ${entry.files.length} ${entry.files.length === 1 ? 'FILE' : 'FILES'} · ${totalBytes ? formatBytes(totalBytes) : '—'}`;
+  private renderSaved(content: HTMLElement, entry: RecordingHistoryEntry): void {
+    content.append(this.summary(entry));
 
-    const destination = document.createElement('p');
-    destination.className = 'recording-detail-eyebrow';
-    destination.textContent = entry.files.some((file) => file.destination === 'drive') ? 'IN GOOGLE DRIVE' : 'ON LOCAL DISK';
-    const files = document.createElement('div');
-    files.className = 'recording-detail-files';
-    for (const file of entry.files) files.appendChild(this.renderFile(entry, file));
-    content.append(titleRow, meta, destination, files);
-
-    // Notes for this recording (d1). Loads on its own and stays hidden if the
-    // recording has none, so an unnoted recording looks exactly as before.
+    // The notes are the content (d1): the timeline and the list, or — for a
+    // recording nobody noted — the empty track and the shortcut that would have (f4).
     const notes = new RecordingNotesDetail(entry.id, entry.durationMs, this.actions.notes());
     content.appendChild(notes.element);
     void notes.load();
 
-    const transcript = entry.files.find((file) => /\.(vtt|txt)$/i.test(file.filename));
-    const transcriptButton = document.createElement('button');
-    transcriptButton.type = 'button';
-    transcriptButton.className = 'recording-detail-transcript';
-    transcriptButton.innerHTML = '<span><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.5v6.4M5.3 6.2L8 8.9l2.7-2.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.2 12.5h9.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>Transcript</span><span></span>';
-    const transcriptMeta = transcriptButton.querySelector('span:last-child');
-    if (transcriptMeta) {
-      transcriptMeta.textContent = transcript
-        ? `${transcript.filename.split('.').pop()?.toUpperCase() ?? 'TEXT'} · ${typeof transcript.bytes === 'number' ? formatBytes(transcript.bytes) : '—'}`
-        : 'VTT · —';
-    }
-    transcriptButton.addEventListener('click', () => {
-      if (transcript) void this.openFile(entry, transcript);
-      else this.actions.notify('Transcript is not available for this recording.');
-    });
-    content.appendChild(transcriptButton);
+    content.append(...this.filesDisclosure(entry));
     content.appendChild(this.renderFooter());
+  }
+
+  /** `22:40 · 284 MB · TODAY 10:30` — length first, because the timeline is drawn against it. */
+  private summary(entry: RecordingHistoryEntry): HTMLElement {
+    const meta = document.createElement('p');
+    meta.className = 'recording-detail-meta';
+    const totalBytes = entry.files.reduce((total, file) => total + (file.bytes ?? 0), 0);
+    meta.textContent = [
+      recordingDetailDuration(entry),
+      totalBytes ? formatBytes(totalBytes).toUpperCase() : '—',
+      recordingDetailWhen(entry.createdAt),
+    ].join(' · ');
+    return meta;
+  }
+
+  /**
+   * The files and the transcript fold into one row (d1), so the screen answers
+   * what was noted before it answers what was stored. Opened, it lists them
+   * with their sizes and a way to open each.
+   */
+  private filesDisclosure(entry: RecordingHistoryEntry): HTMLElement[] {
+    const media = entry.files.filter((file) => !isTranscriptFile(file));
+    const transcript = entry.files.find(isTranscriptFile);
+    const open = this.filesOpenFor === entry.id;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'recording-detail-files-toggle';
+    toggle.setAttribute('aria-expanded', String(open));
+    const label = document.createElement('span');
+    label.className = 'recording-detail-files-label';
+    label.textContent = transcript ? 'Files and transcript' : 'Files';
+    const right = document.createElement('span');
+    right.className = 'recording-detail-files-meta';
+    const count = document.createElement('span');
+    count.textContent = transcript
+      ? `${media.length} + ${transcript.filename.split('.').pop()?.toUpperCase() ?? 'TEXT'}`
+      : String(media.length);
+    right.append(count);
+    right.insertAdjacentHTML('beforeend', CHEVRON_ICON);
+    toggle.append(label, right);
+    toggle.addEventListener('click', () => {
+      this.filesOpenFor = this.filesOpenFor === entry.id ? null : entry.id;
+      this.render();
+    });
+    if (!open) return [toggle];
+    const list = document.createElement('div');
+    list.className = 'recording-detail-files';
+    for (const file of [...media, ...(transcript ? [transcript] : [])]) list.appendChild(this.renderFile(entry, file));
+    return [toggle, list];
+  }
+
+  /** 7H: the name is edited in the header; the body says what else the name changes. */
+  private renderRenaming(content: HTMLElement, entry: RecordingHistoryEntry): void {
+    const meta = this.summary(entry);
+    meta.classList.add('recording-detail-meta--renaming');
+    const hint = document.createElement('p');
+    hint.className = 'recording-detail-hint';
+    hint.textContent = 'Enter saves · Esc keeps the old name';
+    const rule = document.createElement('div');
+    rule.className = 'recording-detail-rule';
+    const head = document.createElement('div');
+    head.className = 'recording-detail-files-head';
+    const label = document.createElement('span');
+    label.textContent = 'FILES';
+    const count = document.createElement('span');
+    count.className = 'recording-detail-files-count';
+    count.textContent = String(entry.files.length);
+    head.append(label, count);
+    const list = document.createElement('div');
+    list.className = 'recording-detail-files recording-detail-files--renaming';
+    for (const file of entry.files) {
+      const row = document.createElement('div');
+      row.className = 'recording-detail-file';
+      const name = document.createElement('span');
+      name.className = 'recording-detail-file-name';
+      name.textContent = file.filename;
+      const size = document.createElement('span');
+      size.className = 'recording-detail-file-size';
+      size.textContent = typeof file.bytes === 'number' ? formatBytes(file.bytes) : '—';
+      row.append(name, size);
+      list.appendChild(row);
+    }
+    const note = document.createElement('p');
+    note.className = 'recording-detail-hint';
+    note.textContent = entry.storageMode === 'drive'
+      ? 'File names follow the recording name.'
+      : 'This changes the name shown in recording history.';
+    content.append(meta, hint, rule, head, list, note);
   }
 
   private renderFile(entry: RecordingHistoryEntry, file: RecordingHistoryEntry['files'][number]): HTMLElement {
@@ -234,25 +341,19 @@ export class RecordingDetailView {
     return row;
   }
 
+  /** One action (d1): the Drive link is in the menu, where copying it belongs. */
   private renderFooter(): HTMLElement {
     const footer = document.createElement('footer');
     footer.className = 'recording-detail-footer';
     const link = this.driveLink();
     const open = document.createElement('button');
     open.type = 'button';
-    open.className = 'btn recording-detail-open-drive';
+    open.className = 'btn btn-ink recording-detail-open-drive';
     open.disabled = !link;
     open.innerHTML = DETAIL_DRIVE_ICON;
     open.append('Open in Google Drive');
     open.addEventListener('click', () => { if (link) void createExternalTab(link); });
-    const copy = document.createElement('button');
-    copy.type = 'button';
-    copy.className = 'btn btn-secondary recording-detail-copy-link';
-    copy.disabled = !link;
-    copy.innerHTML = DETAIL_LINK_ICON;
-    copy.append('Copy Drive link');
-    copy.addEventListener('click', () => void this.copyDriveLink());
-    footer.append(open, copy);
+    footer.append(open);
     return footer;
   }
 
@@ -318,25 +419,36 @@ export class RecordingDetailView {
     }
   }
 
+  /** The header rename (7H), for the menu, the title, and a preview. */
+  beginRename(): void {
+    void this.startRename();
+  }
+
   private async startRename(): Promise<void> {
     if (this.current?.kind !== 'recording') return;
     this.closeMenu();
+    this.renaming = { id: this.current.entry.id, draft: this.current.entry.name };
+    this.render();
+  }
+
+  private cancelRename(): void {
+    this.renaming = null;
+    this.render();
+  }
+
+  private async commitRename(): Promise<void> {
     const target = this.current;
-    await this.nameDialog.ask({
-      title: 'Name this recording',
-      message: target.entry.storageMode === 'drive'
-        ? 'The recording folder and every uploaded media file will use this name.'
-        : 'This changes the name shown in recording history.',
-      initialValue: target.entry.name,
-      saveLabel: 'Save name',
-      cancelLabel: 'Cancel',
-      onSave: async (name) => {
-        if (name === target.entry.name) return;
-        const entry = await this.actions.rename(target.entry.id, name);
-        if (entry) this.current = { kind: 'recording', entry };
-        this.render();
-      },
-    });
+    const renaming = this.renaming;
+    if (target?.kind !== 'recording' || !renaming) return;
+    const name = renaming.draft.trim();
+    this.renaming = null;
+    if (!name || name === target.entry.name) {
+      this.render();
+      return;
+    }
+    const entry = await this.actions.rename(target.entry.id, name);
+    if (entry && this.current?.kind === 'recording' && this.current.entry.id === entry.id) this.current = { kind: 'recording', entry };
+    this.render();
   }
 
   private async remove(): Promise<void> {

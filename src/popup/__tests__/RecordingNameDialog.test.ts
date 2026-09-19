@@ -26,13 +26,30 @@ describe('RecordingNameDialog', () => {
     expect(input().selectionEnd).toBe('Default recording'.length);
   });
 
+  it('blocks the save as soon as the name empties, and lets it go again when it returns (7B)', () => {
+    const dialog = new RecordingNameDialog();
+    void dialog.ask({ title: 'Name recording', message: 'Saved to Drive > Google Meet Records', initialValue: 'Team sync', onSave: jest.fn() });
+
+    input().value = '   ';
+    input().dispatchEvent(new Event('input'));
+    expect(save().disabled).toBe(true);
+    expect(document.querySelector('.recording-name-error')?.textContent).toBe('Give the recording a name to save it.');
+    // The error takes the hint's line rather than stacking under it.
+    expect(document.querySelector('.recording-name-hint')?.classList.contains('recording-name-hint--replaced')).toBe(true);
+
+    input().value = 'Team sync — Jul 11';
+    input().dispatchEvent(new Event('input'));
+    expect(save().disabled).toBe(false);
+    expect(document.querySelector<HTMLElement>('.recording-name-error')!.hidden).toBe(true);
+  });
+
   it('validates blank and punctuation-only values without closing', async () => {
     const onSave = jest.fn();
     const dialog = new RecordingNameDialog();
     void dialog.ask({ title: 'Name recording', message: 'Choose a name', initialValue: '', onSave });
 
     save().click();
-    expect(document.querySelector('.recording-name-error')?.textContent).toContain('blank');
+    expect(document.querySelector('.recording-name-error')?.textContent).toBe('Give the recording a name to save it.');
     input().value = '---';
     save().click();
     expect(document.querySelector('.recording-name-error')?.textContent).toContain('letter or number');

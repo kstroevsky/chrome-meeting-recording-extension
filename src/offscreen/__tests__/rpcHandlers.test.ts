@@ -33,6 +33,10 @@ function wire(overrides: Partial<Record<string, any>> = {}) {
     retryUpload: overrides.retryUpload ?? jest.fn().mockReturnValue(true),
     cancelUpload: overrides.cancelUpload ?? jest.fn().mockReturnValue(true),
     acknowledgeUploadState: overrides.acknowledgeUploadState ?? jest.fn().mockResolvedValue(undefined),
+    analyzeTranscript: overrides.analyzeTranscript,
+    listAnalysisWork: overrides.listAnalysisWork,
+    cancelAnalysis: overrides.cancelAnalysis,
+    acknowledgeAnalysisState: overrides.acknowledgeAnalysisState,
     pushState: jest.fn((next: RecordingPhase) => { phase = next; }),
     clearWarnings: jest.fn(),
     log: jest.fn(),
@@ -480,5 +484,135 @@ describe('offscreen rpc handlers', () => {
 
       expect(acknowledgeUploadState).toHaveBeenCalledWith('job-1');
     });
+  });
+});
+
+describe('topic analysis commands (ADR-0007)', () => {
+  const ANALYSIS_CONFIG = {
+    windowUtterances: 4,
+    windowStride: 4,
+    longPauseMs: 3_000,
+    peakNeighbourhood: 2,
+    peakMinProminence: 0.05,
+    minSegmentMs: 15_000,
+    assignmentThreshold: 0.93,
+    mergeThreshold: 0.95,
+    mergeEverySegments: 12,
+    keywordsPerTopic: 4,
+  };
+  const transcript = [{ tStartMs: 0, tEndMs: 2_000, speaker: 'Ada', text: 'the redis pool is saturated' }];
+  const provenance = {
+    pipelineVersion: 2,
+    embeddingModel: 'Xenova/multilingual-e5-small',
+    embeddingModelRevision: 'rev',
+    embeddingDimensions: 384,
+    embeddingDtype: 'q8',
+    configHash: 'abcd1234',
+  };
+
+  const analyze = (overrides: Record<string, unknown> = {}) => ({
+    __id: 'ana-1',
+    type: 'OFFSCREEN_ANALYZE_TRANSCRIPT' as const,
+    historyId: 'rec_1',
+    transcript,
+    config: ANALYSIS_CONFIG,
+    provenance,
+    ...overrides,
+  });
+
+  /** Reads the payload of the response posted for a request id. */
+  function replyFor(port: any, reqId: string) {
+    const call = port.postMessage.mock.calls.find((c: any[]) => c[0]?.__respFor === reqId);
+    return call?.[0]?.payload;
+  }
+
+  it('queues a run and answers with the new job id', async () => {
+    const analyzeTranscript = jest.fn().mockReturnValue('ana_7');
+    const { port, listener } = wire({ analyzeTranscript });
+
+    await listener(analyze());
+
+    expect(analyzeTranscript).toHaveBeenCalledWith('rec_1', transcript, ANALYSIS_CONFIG, provenance);
+    expect(replyFor(port, 'ana-1')).toEqual({ ok: true, jobId: 'ana_7' });
+  });
+
+  it('answers rather than throws when the run is rejected', async () => {
+    const analyzeTranscript = jest.fn(() => {
+      throw new Error('A contextual window must be 3–5 utterances (SEG-02), not 9');
+    });
+    const { port, listener } = wire({ analyzeTranscript });
+
+    await listener(analyze({ config: { ...ANALYSIS_CONFIG, windowUtterances: 9 } }));
+
+    const reply = replyFor(port, 'ana-1');
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain('SEG-02');
+  });
+
+  it('refuses a malformed request instead of queueing an empty run', async () => {
+    const analyzeTranscript = jest.fn();
+    const { port, listener } = wire({ analyzeTranscript });
+
+    await listener(analyze({ __id: 'a', historyId: '' }));
+    expect(replyFor(port, 'a')).toEqual({ ok: false, error: 'Missing historyId' });
+
+    await listener(analyze({ __id: 'b', transcript: undefined }));
+    expect(replyFor(port, 'b')).toEqual({ ok: false, error: 'Missing transcript' });
+
+    await listener(analyze({ __id: 'c', config: undefined }));
+    expect(replyFor(port, 'c')).toEqual({ ok: false, error: 'Missing analysis configuration' });
+
+    // A run that could not say what produced it is refused, not defaulted.
+    await listener(analyze({ __id: 'd', provenance: undefined }));
+    expect(replyFor(port, 'd')).toEqual({ ok: false, error: 'Missing analysis provenance' });
+
+    expect(analyzeTranscript).not.toHaveBeenCalled();
+  });
+
+  it('reports analysis as unavailable when the runtime has no manager', async () => {
+    const { port, listener } = wire();
+    await listener(analyze());
+    expect(replyFor(port, 'ana-1')).toEqual({ ok: false, error: 'Topic analysis is unavailable' });
+  });
+
+  it('cancels a running job, and says so when there is nothing to cancel', async () => {
+    const cancelAnalysis = jest.fn().mockReturnValue(true);
+    const { port, listener } = wire({ cancelAnalysis });
+
+    await listener({ __id: 'c1', type: 'OFFSCREEN_CANCEL_ANALYSIS', jobId: 'ana_7' });
+    expect(cancelAnalysis).toHaveBeenCalledWith('ana_7');
+    expect(replyFor(port, 'c1')).toEqual({ ok: true });
+
+    cancelAnalysis.mockReturnValue(false);
+    await listener({ __id: 'c2', type: 'OFFSCREEN_CANCEL_ANALYSIS', jobId: 'ana_7' });
+    expect(replyFor(port, 'c2')).toEqual({ ok: false, error: 'Analysis is no longer active' });
+  });
+
+  it('releases a held result on acknowledgement', async () => {
+    const acknowledgeAnalysisState = jest.fn().mockResolvedValue(undefined);
+    const { listener } = wire({ acknowledgeAnalysisState });
+
+    await listener({ type: 'OFFSCREEN_ACK_ANALYSIS_STATE', jobId: 'ana_7' });
+    expect(acknowledgeAnalysisState).toHaveBeenCalledWith('ana_7');
+
+    // An empty id would remove nothing and is not worth a storage round-trip.
+    await listener({ type: 'OFFSCREEN_ACK_ANALYSIS_STATE', jobId: '' });
+    expect(acknowledgeAnalysisState).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists every job still keeping the data plane busy', async () => {
+    const listAnalysisWork = jest.fn(() => ['ana_running', 'ana_held']);
+    const { port, listener } = wire({ listAnalysisWork });
+
+    await listener({ __id: 'w1', type: 'OFFSCREEN_LIST_ANALYSIS_WORK' });
+    expect(replyFor(port, 'w1')).toEqual({ ok: true, jobIds: ['ana_running', 'ana_held'] });
+  });
+
+  it('answers an empty list, not an error, when the runtime has no manager', async () => {
+    // Background asks this to decide whether it may reload; "no manager" is a
+    // real answer to that question.
+    const { port, listener } = wire();
+    await listener({ __id: 'w2', type: 'OFFSCREEN_LIST_ANALYSIS_WORK' });
+    expect(replyFor(port, 'w2')).toEqual({ ok: true, jobIds: [] });
   });
 });

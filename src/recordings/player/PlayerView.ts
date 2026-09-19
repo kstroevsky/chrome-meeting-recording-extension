@@ -1,17 +1,26 @@
 /**
  * @file recordings/player/PlayerView.ts
  *
- * The playback modal (design card `f12`: picture controls, no transcript rail).
+ * The playback modal: controls on the picture (design card `f12`), and — for a
+ * recording with a transcript — the rail beside it and subtitles on it (`f10`).
  *
  * The rail is not hidden when a recording has no transcript — it is not
- * rendered, and the video takes the full width. Note marks stay on the
- * scrubber either way, because the notes are the reason to scrub.
+ * rendered, the header loses its toggle, and the video takes the full width.
+ * Note marks stay on the scrubber either way, because the notes are the reason
+ * to scrub.
  */
 
 import type { PlaybackManifest } from '../../shared/playback';
-import { formatClock, seekFraction, toNoteMarks } from './playerFormat';
+import { formatClock, seekFraction, toNoteMarks, toTopicBands } from './playerFormat';
+import { activeSegmentIndex, railItems, sortSegments, toSrt } from './playerTranscript';
+import type { RecordingNotation } from '../../shared/notations';
+import type { TranscriptSegment } from '../../shared/transcript';
 import { audioTracks, shownCount, type TrackDescriptor } from './playerTracks';
+import { describeTopics, recurrenceHint } from './playerTopics';
 import { KEYBOARD_HELP, SKIP_STEPS, SPEED_STEPS } from './playerKeymap';
+
+/** The header dropdowns' chevron (f12): 8px, in the faint ink. */
+const DROPDOWN_CHEVRON = '<svg class="player__files-chevron" width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5l3 3 3-3"/></svg>';
 
 const $ = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) => {
   const el = document.createElement(tag);
@@ -19,8 +28,22 @@ const $ = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) =>
   return el;
 };
 
+/**
+ * Why the picture is empty (f16): what happened, what is still safe, and the
+ * one or two things worth doing about it.
+ */
+export type PlayerStatus = {
+  title: string;
+  body?: string;
+  actions?: Array<'folder' | 'remove'>;
+};
+
 export type PlayerViewCallbacks = {
   close: () => void;
+  /** Present when the page can open the recording's Drive folder. */
+  openFolder?: () => void;
+  /** Present when the page can take the recording out of history. */
+  remove?: () => void;
   seekTo: (ms: number) => void;
   togglePlay: () => void;
   toggleFullscreen: () => void;
@@ -40,21 +63,45 @@ export class PlayerView {
   private readonly title = $('span', 'player__title');
   private readonly date = $('span', 'player__date');
   private readonly stage = $('div', 'player__stage');
-  private readonly status = $('p', 'player__status');
+  private readonly status = $('div', 'player__status');
   private readonly track = $('span', 'player__track');
   private readonly played = $('span', 'player__played');
   private readonly playhead = $('span', 'player__playhead');
   private readonly marks = $('span', 'player__marks');
+  /** Topic spans, a band of their own under the scrubber (ADR-0007 §8). */
+  private readonly topicBand = $('span', 'player__topics-band');
   private readonly clock = $('span', 'player__clock');
   private readonly playButton = document.createElement('button');
   private readonly filesButton = document.createElement('button');
   private readonly filesCount = $('span', 'player__files-count');
   private readonly filesMenu = $('div', 'player__menu player__menu--files');
+  private readonly topicsButton = document.createElement('button');
+  private readonly topicsCount = $('span', 'player__files-count');
+  private readonly topicsMenu = $('div', 'player__menu player__menu--topics');
   private readonly volumeButton = document.createElement('button');
   private readonly volumeMenu = $('div', 'player__menu player__menu--volume');
   private readonly settingsButton = document.createElement('button');
   private readonly settingsMenu = $('div', 'player__menu player__menu--settings');
   private readonly help = $('div', 'player__help');
+  /** The picture and, when there is a transcript, the rail beside it (f10). */
+  private readonly body = $('div', 'player__body');
+  private readonly rail = $('aside', 'player__rail');
+  private readonly railCount = $('span', 'player__rail-count');
+  private readonly railList = $('div', 'player__rail-list');
+  private readonly railToggle = document.createElement('button');
+  private readonly subtitle = $('div', 'player__subtitle');
+  /** Time-sorted transcript lines; empty means no rail at all, not a hidden one. */
+  private segments: TranscriptSegment[] = [];
+  private lineElements: HTMLElement[] = [];
+  private activeIndex = -1;
+  private railOpen = true;
+  private subtitlesOn = true;
+  private transcriptTitle = 'transcript';
+  /** When the user last moved the rail themselves; auto-follow waits it out. */
+  private userScrolledAt = 0;
+  private programmaticScroll = false;
+  /** The last position painted, so a transcript arriving late starts in step. */
+  private positionMs = 0;
   private durationMs = 0;
 
   constructor(private readonly callbacks: PlayerViewCallbacks) {
@@ -85,6 +132,7 @@ export class PlayerView {
     this.filesButton.setAttribute('aria-haspopup', 'true');
     const filesLabel = $('span', 'player__files-label'); filesLabel.textContent = 'FILES';
     this.filesButton.append(filesLabel, this.filesCount);
+    this.filesButton.insertAdjacentHTML('beforeend', DROPDOWN_CHEVRON);
     this.filesButton.addEventListener('click', (event) => {
       event.stopPropagation();
       this.togglePopover(this.filesMenu);
@@ -92,7 +140,26 @@ export class PlayerView {
     const filesWrap = $('span', 'player__popover');
     filesWrap.append(this.filesButton, this.filesMenu);
 
-    header.append(back, this.title, $('span', 'player__divider'), filesWrap, this.date, close);
+    this.topicsButton.className = 'player__files'; this.topicsButton.type = 'button';
+    this.topicsButton.title = 'What this recording was about';
+    this.topicsButton.setAttribute('aria-haspopup', 'true');
+    const topicsLabel = $('span', 'player__files-label'); topicsLabel.textContent = 'TOPICS';
+    this.topicsButton.append(topicsLabel, this.topicsCount);
+    this.topicsButton.insertAdjacentHTML('beforeend', DROPDOWN_CHEVRON);
+    this.topicsButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.togglePopover(this.topicsMenu);
+    });
+    const topicsWrap = $('span', 'player__popover');
+    topicsWrap.append(this.topicsButton, this.topicsMenu);
+
+    // Shown only when there is a transcript: the header loses it otherwise (f11/f12).
+    this.railToggle.className = 'player__rail-toggle'; this.railToggle.type = 'button';
+    this.railToggle.hidden = true;
+    this.railToggle.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M10 3v10"/></svg>';
+    this.railToggle.addEventListener('click', () => this.setRailOpen(!this.railOpen));
+
+    header.append(back, this.title, $('span', 'player__divider'), filesWrap, topicsWrap, this.railToggle, this.date, close);
 
     // Stage — the picture, with every control on it.
     this.video.className = 'player__video';
@@ -105,7 +172,10 @@ export class PlayerView {
     hit.setAttribute('role', 'slider');
     hit.setAttribute('aria-label', 'Seek');
     hit.tabIndex = 0;
-    this.track.append(this.played, this.marks, this.playhead);
+    // Order is paint order: topics sit behind, notes and the playhead in front.
+    // A topic band drawn over a note mark would hide the thing the user is
+    // scrubbing *for*.
+    this.track.append(this.topicBand, this.played, this.marks, this.playhead);
     hit.append(this.track);
     hit.addEventListener('click', (event) => {
       const fraction = seekFraction(event.clientX, hit.getBoundingClientRect());
@@ -158,8 +228,12 @@ export class PlayerView {
       line.append(keys, description);
       this.help.append(line);
     }
-    this.stage.append(scrub, controls, this.help, this.status);
-    this.dialog.append(header, this.stage);
+    this.subtitle.hidden = true;
+    this.subtitle.setAttribute('aria-live', 'off');
+    this.stage.append(this.subtitle, scrub, controls, this.help, this.status);
+    this.buildRail();
+    this.body.append(this.stage, this.rail);
+    this.dialog.append(header, this.body);
     this.overlay.append(this.dialog);
     // Clicking the scrim closes; clicking the dialog must not. Any click inside
     // the dialog also dismisses an open popover, which is what makes them feel
@@ -169,9 +243,10 @@ export class PlayerView {
       this.closePopovers();
     });
     this.filesMenu.hidden = true;
+    this.topicsMenu.hidden = true;
     this.volumeMenu.hidden = true;
     this.settingsMenu.hidden = true;
-    for (const menu of [this.filesMenu, this.volumeMenu, this.settingsMenu]) this.keepOpen(menu);
+    for (const menu of [this.filesMenu, this.topicsMenu, this.volumeMenu, this.settingsMenu]) this.keepOpen(menu);
     this.setPlaying(false);
   }
 
@@ -190,8 +265,16 @@ export class PlayerView {
 
   closePopovers(): void {
     this.filesMenu.hidden = true;
+    this.topicsMenu.hidden = true;
     this.volumeMenu.hidden = true;
     this.settingsMenu.hidden = true;
+  }
+
+  /** Opens the TOPICS list, for the keyboard binding. False when there are none. */
+  toggleTopics(): boolean {
+    if (this.topicsButton.hidden) return false;
+    this.togglePopover(this.topicsMenu);
+    return !this.topicsMenu.hidden;
   }
 
   /** Returns whether the map ended up open, so Escape can close it first. */
@@ -203,12 +286,18 @@ export class PlayerView {
   get helpOpen(): boolean { return !this.help.hidden; }
 
   /**
-   * Renders the settings rows. Subtitles and quality are absent by design —
-   * "rows that do not apply are not rendered", and this player has one
-   * rendition and no subtitle track.
+   * Renders the settings rows. Quality is absent by design — "rows that do not
+   * apply are not rendered", and this player has one rendition — and Subtitles
+   * appears only when the recording has a transcript to draw them from.
    */
   setSettings(skipSeconds: number, speed: number): void {
     this.settingsMenu.replaceChildren();
+    // Subtitles apply once the recording has a transcript to draw them from (f10).
+    if (this.segments.length) {
+      this.settingsMenu.append(this.choiceRow('Subtitles', [true, false].map((on) => ({
+        label: on ? 'On' : 'Off', active: this.subtitlesOn === on, pick: () => { this.setSubtitles(on); this.setSettings(skipSeconds, speed); },
+      }))));
+    }
     this.settingsMenu.append(
       this.choiceRow('Arrow-key skip', SKIP_STEPS.map((step) => ({
         label: `${step}s`, active: step === skipSeconds, pick: () => this.callbacks.setSkipSeconds(step),
@@ -374,12 +463,64 @@ export class PlayerView {
   /** Renders everything the manifest determines; sources are attached separately. */
   render(manifest: PlaybackManifest): void {
     this.title.textContent = manifest.title;
-    this.date.textContent = new Date(manifest.createdAt)
-      .toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-      .toUpperCase();
     this.durationMs = manifest.durationMs ?? 0;
+    // `JUL 19 · 22:40`: the day it was made, and how long it runs (f12).
+    const day = new Date(manifest.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+    this.date.textContent = this.durationMs ? `${day} · ${formatClock(this.durationMs)}` : day;
     this.renderMarks(manifest);
+    this.renderTopics(manifest);
     this.setPosition(0);
+  }
+
+  /**
+   * Draws the topic band and fills the TOPICS list.
+   *
+   * Both disappear entirely when a recording has no current analysis — never
+   * analysed, still running, or stale. An empty "TOPICS 0" would be a promise
+   * the player cannot keep, and the recording is perfectly watchable without
+   * it; this mirrors FILES hiding itself for a single-file recording.
+   */
+  private renderTopics(manifest: PlaybackManifest): void {
+    const topics = describeTopics(manifest.topics);
+    this.topicsButton.hidden = topics.length === 0;
+    this.topicsCount.textContent = String(topics.length);
+
+    this.topicBand.replaceChildren();
+    this.topicBand.hidden = topics.length === 0;
+    for (const band of toTopicBands(manifest.topics, this.durationMs)) {
+      const el = $('span', `player__topic-span player__topic-span--${band.shade}`);
+      el.style.left = `${band.leftPct}%`;
+      el.style.width = `${band.widthPct}%`;
+      el.title = band.label;
+      el.addEventListener('click', (event) => {
+        // A band is a seek target, not part of the track behind it.
+        event.stopPropagation();
+        this.callbacks.seekTo(band.startMs);
+      });
+      this.topicBand.append(el);
+    }
+
+    this.topicsMenu.replaceChildren();
+    for (const topic of topics) {
+      const row = document.createElement('button');
+      row.className = 'player__topic';
+      row.type = 'button';
+      row.setAttribute('role', 'menuitem');
+      const dot = $('span', `player__topic-dot player__topic-dot--${topic.shade}`);
+      const label = $('span', 'player__topic-label'); label.textContent = topic.label;
+      const meta = $('span', 'player__topic-meta');
+      const repeats = recurrenceHint(topic);
+      // "2×" says the conversation came back to this, which is the whole point
+      // of separating global topics from temporal segments (MODEL-04).
+      meta.textContent = repeats ? `${repeats}  ${topic.duration}` : topic.duration;
+      row.append(dot, label, meta);
+      row.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.callbacks.seekTo(topic.seekMs);
+        this.closePopovers();
+      });
+      this.topicsMenu.append(row);
+    }
   }
 
   private renderMarks(manifest: PlaybackManifest): void {
@@ -405,6 +546,150 @@ export class PlayerView {
     this.played.style.width = `${pct}%`;
     this.playhead.style.left = `${pct}%`;
     this.clock.textContent = `${formatClock(positionMs)} / ${formatClock(this.durationMs)}`;
+    this.positionMs = positionMs;
+    this.syncTranscript(positionMs);
+  }
+
+  /**
+   * The rail (f10): a header with the note count and SRT, then the transcript,
+   * each run of lines said during a note under that note's sticky heading.
+   */
+  private buildRail(): void {
+    this.rail.hidden = true;
+    this.rail.setAttribute('aria-label', 'Transcript');
+    const head = $('div', 'player__rail-head');
+    const srt = document.createElement('button');
+    srt.className = 'player__rail-srt'; srt.type = 'button';
+    srt.title = 'Download subtitles · .srt';
+    srt.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 1.6v6.2M3.6 5.6L6 8l2.4-2.4M2.2 10.2h7.6"/></svg>';
+    srt.append('SRT');
+    srt.addEventListener('click', () => this.downloadSrt());
+    head.append(this.railCount, srt);
+    // Only a person scrolling pauses the follow; the rail's own scrolls do not.
+    const userScroll = () => { if (!this.programmaticScroll) this.userScrolledAt = Date.now(); };
+    this.railList.addEventListener('wheel', userScroll, { passive: true });
+    this.railList.addEventListener('scroll', userScroll, { passive: true });
+    this.rail.append(head, this.railList);
+  }
+
+  /** Gives the player its transcript, or leaves the rail absent (null or empty). */
+  setTranscript(segments: TranscriptSegment[] | null, notations: RecordingNotation[], title: string): void {
+    this.segments = segments?.length ? sortSegments(segments) : [];
+    this.transcriptTitle = title || 'transcript';
+    this.activeIndex = -1;
+    this.lineElements = [];
+    this.railList.replaceChildren();
+    const present = this.segments.length > 0;
+    this.railToggle.hidden = !present;
+    this.subtitle.hidden = true;
+    if (!present) {
+      this.rail.hidden = true;
+      this.body.classList.remove('player__body--rail');
+      return;
+    }
+    this.railCount.textContent = notations.length
+      ? `${notations.length} ${notations.length === 1 ? 'NOTE' : 'NOTES'}`
+      : 'TRANSCRIPT';
+    for (const item of railItems(this.segments, notations)) {
+      if (item.kind === 'heading') {
+        const heading = document.createElement('button');
+        heading.type = 'button';
+        heading.className = `player__rail-heading${item.notation.text ? '' : ' player__rail-heading--unnamed'}`;
+        heading.title = 'Play from the start of this note';
+        heading.textContent = item.notation.text || 'Unnamed note';
+        heading.addEventListener('click', () => this.callbacks.seekTo(item.notation.tStartMs));
+        this.railList.append(heading);
+        continue;
+      }
+      const line = document.createElement('button');
+      line.type = 'button';
+      line.className = `player__rail-line${item.noteId ? ' player__rail-line--noted' : ''}`;
+      const gutter = $('span', `player__rail-gutter${item.edge ? ` player__rail-gutter--${item.edge}` : ''}`);
+      const content = $('span', 'player__rail-content');
+      const meta = $('span', 'player__rail-meta');
+      const time = $('span', 'player__rail-time'); time.textContent = formatClock(item.segment.tStartMs);
+      meta.append(time);
+      if (item.segment.speaker) {
+        const tag = $('span', 'player__rail-tag');
+        tag.textContent = item.segment.speaker.length > 18 ? `${item.segment.speaker.slice(0, 17)}…` : item.segment.speaker;
+        tag.title = item.segment.speaker;
+        meta.append(tag);
+      }
+      const text = $('span', 'player__rail-text'); text.textContent = item.segment.text;
+      content.append(meta, text);
+      line.append(gutter, content);
+      line.addEventListener('click', () => this.callbacks.seekTo(item.segment.tStartMs));
+      this.railList.append(line);
+      this.lineElements[item.index] = line;
+    }
+    this.setRailOpen(this.railOpen);
+    this.syncTranscript(this.positionMs);
+  }
+
+  private setRailOpen(open: boolean): void {
+    this.railOpen = open;
+    const present = this.segments.length > 0;
+    this.rail.hidden = !present || !open;
+    this.body.classList.toggle('player__body--rail', present && open);
+    this.railToggle.classList.toggle('player__rail-toggle--open', open);
+    this.railToggle.setAttribute('aria-pressed', String(open));
+    this.railToggle.title = open ? 'Hide transcript' : 'Show transcript';
+    this.railToggle.setAttribute('aria-label', this.railToggle.title);
+  }
+
+  /** The `C` key and the Subtitles row: the band on the picture, not the rail. */
+  toggleSubtitles(): boolean {
+    if (!this.segments.length) return false;
+    this.setSubtitles(!this.subtitlesOn);
+    return true;
+  }
+
+  private setSubtitles(on: boolean): void {
+    this.subtitlesOn = on;
+    this.paintSubtitle();
+  }
+
+  /** Keeps the playing line and the subtitle in step; touches the DOM only on a change. */
+  private syncTranscript(positionMs: number): void {
+    if (!this.segments.length) return;
+    const index = activeSegmentIndex(this.segments, positionMs);
+    if (index === this.activeIndex) return;
+    this.lineElements[this.activeIndex]?.classList.remove('player__rail-line--active');
+    this.activeIndex = index;
+    const line = this.lineElements[index];
+    line?.classList.add('player__rail-line--active');
+    this.paintSubtitle();
+    // Follow the conversation, unless the user is reading elsewhere in it.
+    if (line && !this.rail.hidden && Date.now() - this.userScrolledAt > 4000) {
+      this.programmaticScroll = true;
+      line.scrollIntoView({ block: 'nearest' });
+      requestAnimationFrame(() => { this.programmaticScroll = false; });
+    }
+  }
+
+  private paintSubtitle(): void {
+    const segment = this.segments[this.activeIndex];
+    this.subtitle.hidden = !this.subtitlesOn || !segment;
+    if (!segment) return;
+    const bubble = $('span', 'player__subtitle-bubble');
+    if (segment.speaker) {
+      const tag = $('span', 'player__subtitle-tag');
+      tag.textContent = segment.speaker;
+      bubble.append(tag);
+    }
+    bubble.append(segment.text);
+    this.subtitle.replaceChildren(bubble);
+  }
+
+  private downloadSrt(): void {
+    const url = URL.createObjectURL(new Blob([toSrt(this.segments)], { type: 'application/x-subrip' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${this.transcriptTitle.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'transcript'}.srt`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   setPlaying(playing: boolean): void {
@@ -445,10 +730,35 @@ export class PlayerView {
     this.auxiliaries.replaceChildren();
   }
 
-  /** A message on the picture — the recording is unreachable, not merely paused. */
-  setStatus(message: string | null): void {
-    this.status.textContent = message ?? '';
-    this.status.hidden = !message;
-    this.stage.classList.toggle('player__stage--quiet', Boolean(message));
+  /**
+   * The recording is unreachable, not merely paused: the frame goes quiet and
+   * says why, while the controls stay in place so the view keeps its shape (f16).
+   */
+  setStatus(status: PlayerStatus | null): void {
+    this.status.replaceChildren();
+    this.status.hidden = !status;
+    this.stage.classList.toggle('player__stage--quiet', Boolean(status));
+    if (!status) return;
+    const icon = $('span', 'player__status-icon');
+    icon.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7.4"/><path d="M10 6.4v4.4M10 13.6v.5"/></svg>';
+    const copy = $('span', 'player__status-copy');
+    const title = $('span', 'player__status-title'); title.textContent = status.title;
+    copy.append(title);
+    if (status.body) { const body = $('span', 'player__status-body'); body.textContent = status.body; copy.append(body); }
+    this.status.append(icon, copy);
+    const actions = (status.actions ?? []).filter((action) => (action === 'folder' ? this.callbacks.openFolder : this.callbacks.remove));
+    if (actions.length) {
+      const row = $('span', 'player__status-actions');
+      for (const action of actions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `player__status-action${action === 'remove' ? ' player__status-action--danger' : ''}`;
+        button.textContent = action === 'folder' ? 'Open the folder' : 'Remove from history';
+        button.addEventListener('click', () => (action === 'folder' ? this.callbacks.openFolder?.() : this.callbacks.remove?.()));
+        row.append(button);
+      }
+      this.status.append(row);
+    }
+    this.clock.textContent = `— / ${formatClock(this.durationMs)}`;
   }
 }

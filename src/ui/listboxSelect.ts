@@ -6,10 +6,18 @@
  *
  * Every dropdown in this extension is the same shape: a native `<select>` kept
  * as the data source, a `.select-trigger` button, and a `.select-options`
- * listbox of `role="option"` buttons. Popup and Settings each hand-roll that
- * over static markup, which works because their options are fixed. Drive
- * destinations are not — the user adds and renames them — so the markup has to
- * be generated, and this is the one place that does it.
+ * listbox of `role="option"` buttons.
+ *
+ * Two entry points, because markup comes from two places:
+ *
+ * - `bindListbox` wires the behaviour onto elements that already exist. The
+ *   popup's "Save to" is authored in `popup.html`, and markup in HTML is the
+ *   clearer expression when the options are fixed at build time.
+ * - `createListboxSelect` builds the markup first, then binds. Drive
+ *   destinations are user-authored, so there is nothing to write in HTML.
+ *
+ * Either way the keyboard handling, the outside-click close and the
+ * trigger/native-select synchronisation are this file's, once.
  *
  * The native select stays for the same reason the static surfaces keep theirs:
  * it holds the value, it is what a test or a form reads, and it keeps the
@@ -33,8 +41,22 @@ export type ListboxSelectConfig = {
   doc?: Document;
 };
 
-export type ListboxSelect = {
-  readonly root: HTMLElement;
+/** Elements `bindListbox` adopts; they must already be in the document. */
+export type ListboxElements = {
+  select: HTMLSelectElement;
+  trigger: HTMLButtonElement;
+  list: HTMLElement;
+  doc?: Document;
+};
+
+export type BindListboxConfig = {
+  /** Called after the value changes, in addition to the select's own event. */
+  onChange?: (value: string) => void;
+  /** Runs on every sync, for a trigger that shows more than a label. */
+  onSync?: (elements: { select: HTMLSelectElement; trigger: HTMLButtonElement; list: HTMLElement }) => void;
+};
+
+export type ListboxBinding = {
   /** The value holder, and what a test reads. */
   readonly select: HTMLSelectElement;
   setOptions(options: ListboxOption[], value?: string): void;
@@ -45,6 +67,9 @@ export type ListboxSelect = {
   /** Drops the document-level listeners; call when the host is torn down. */
   destroy(): void;
 };
+
+/** A binding that also owns the markup, so `destroy` takes the DOM with it. */
+export type ListboxSelect = ListboxBinding & { readonly root: HTMLElement };
 
 const CHECK_SVG =
   '<svg class="select-check" width="12" height="10" viewBox="0 0 14 11" fill="none" aria-hidden="true">' +
@@ -86,6 +111,26 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
 
   root.append(select, trigger, list);
 
+  const binding = bindListbox({ select, trigger, list, doc }, { onChange: config.onChange });
+  binding.setOptions(config.options, config.value);
+
+  return {
+    ...binding,
+    root,
+    destroy: () => { binding.destroy(); root.remove(); },
+  };
+}
+
+/**
+ * Wires the behaviour onto an existing trigger/listbox pair. The native select
+ * stays the value holder, and its `change` event still fires, so code that
+ * listens to the select keeps working whether a person used the listbox or the
+ * value was set programmatically.
+ */
+export function bindListbox(elements: ListboxElements, config: BindListboxConfig = {}): ListboxBinding {
+  const { select, trigger, list } = elements;
+  const doc = elements.doc ?? document;
+
   const abort = new AbortController();
   const signal = abort.signal;
 
@@ -93,11 +138,15 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
 
   const sync = () => {
     const selected = select.selectedOptions[0];
-    triggerLabel.textContent = selected?.textContent ?? '';
-    trigger.title = triggerLabel.textContent;
+    const label = trigger.querySelector<HTMLElement>('[data-select-label]');
+    const text = selected?.textContent ?? '';
+    if (label) label.textContent = text;
+    else trigger.textContent = text;
+    trigger.title = text;
     for (const item of items()) {
       item.setAttribute('aria-selected', String(item.dataset.value === select.value));
     }
+    config.onSync?.({ select, trigger, list });
   };
 
   const close = () => {
@@ -120,10 +169,10 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
 
   const choose = (value: string) => {
     select.value = value;
-    sync();
+    select.dispatchEvent(new Event('change', { bubbles: true }));
     close();
     trigger.focus();
-    config.onChange(value);
+    config.onChange?.(value);
   };
 
   trigger.addEventListener('click', () => { if (list.hidden) open(); else close(); }, { signal });
@@ -159,6 +208,7 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
     }
   }, { signal });
 
+  select.addEventListener('change', () => sync(), { signal });
   doc.addEventListener('click', (event) => {
     const target = event.target as Node;
     if (!list.hidden && !list.contains(target) && !trigger.contains(target)) close();
@@ -189,10 +239,9 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
     sync();
   };
 
-  setOptions(config.options, config.value);
+  sync();
 
   return {
-    root,
     select,
     setOptions,
     getValue: () => select.value,
@@ -203,6 +252,6 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
       if (disabled) close();
     },
     close,
-    destroy: () => { abort.abort(); root.remove(); },
+    destroy: () => abort.abort(),
   };
 }

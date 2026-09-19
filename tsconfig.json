@@ -9,6 +9,13 @@
         "noUnusedParameters": true,
         "esModuleInterop": true,
         "types": ["chrome", "jest", "node"],
+        // @huggingface/tokenizers 0.1.3 (a transitive dependency of
+        // @huggingface/transformers) ships .d.ts files referencing unresolved
+        // path aliases (@utils, @static/tokenizer), so checking library
+        // declarations fails on code we do not own. This skips checking *inside*
+        // .d.ts files only — our own code, and our use of those declarations,
+        // stays fully type-checked.
+        "skipLibCheck": true,
         "outDir": "dist",
 
     },

@@ -4,15 +4,18 @@
 
 | Script | npm script | What it does |
 | :--- | :--- | :--- |
-| `check-version-monotonic.mjs` | `check:version` (part of `release:build`) | asserts the release version only ever increases — guards against shipping a non-monotonic Chrome Web Store version |
+| `check-version-monotonic.mjs` | `check:version` (part of `release:build`) | refuses a release with uncommitted changes, or a version lower than the latest release tag — the Chrome Web Store rejects a version that does not go up |
+| `print-release-version.mjs` | `release:version` | prints the checked-out commit's release version (`a.b.c.d`, counted from git) |
+| `check-commit-message.mjs` | the commit-msg hook | refuses a commit subject without a known prefix, since the prefix decides the version |
+| `install-git-hooks.mjs` | `prepare` / `hooks:install` | installs that hook into `.git/hooks` without touching the hooks already there |
 | `check-production-build.mjs` | `test:production-guards` (part of `release:build`) | asserts a production bundle has the exact telemetry host permission and retry alarm and leaked no E2E-only markers — the production-safety gate |
 | `run-real-meet-e2e.mjs` | `test:e2e:real` / `:live` | drives the real-Google-Meet harness against a configured Chrome profile |
 | `setup-real-meet-profile.mjs` | `test:e2e:real:profile` | provisions the stable Chrome profile the real-Meet run reuses |
-| `lib/` | — | shared helpers for manifest versioning, target profiles, and strict telemetry endpoint validation |
+| `lib/` | — | shared helpers for the release version (`releaseVersion.cjs`), Chrome version rules, target profiles, and strict telemetry endpoint validation |
 
 ## Release flow
 
-`npm run release:build` chains the guards: `check:version` → `build` → `test:production-guards`. So a release build can't ship with a stale version or a dev-only permission. (Version itself is single-sourced in `package.json`; see the [versioning protocol](../docs/plans/) and [`static/`](../static/README.md).)
+`npm run release:build` chains the guards: `check:version` → `build` → `test:production-guards`. So a release build can't ship with a stale version or a dev-only permission. (The version is counted from git history; see [Versioning and releasing](../README.md#versioning-and-releasing).)
 
 ## Browser-target profiles
 

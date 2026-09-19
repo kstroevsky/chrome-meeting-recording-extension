@@ -14,6 +14,7 @@ import type {
   UploadJob,
 } from '../shared/recording';
 import type { RecordingHistoryEntry } from '../shared/recordingHistory';
+import type { DriveFolderPreset } from '../shared/settings';
 
 export type PopupPreviewPermissionState = 'granted' | 'denied' | 'prompt' | 'unknown';
 
@@ -38,6 +39,12 @@ export type PopupPreviewState =
       notations?: RecordingNotation[];
       /** Selects a detached upload tab after the session has been rendered. */
       selectedUploadJobId?: string;
+      /** The saved recording's length, which the history list would normally supply. */
+      savedDurationMs?: number;
+      /** Opens the discard confirmation over the recording (n3). */
+      confirmDiscard?: boolean;
+      /** Opens the naming prompt for the selected finished upload, with these folders (9L, 9FL). */
+      naming?: { folders: DriveFolderPreset[] };
       /** A focused setup-only condition owned by the real setup controls. */
       setup?: {
         micPermissionRequired?: boolean;
@@ -63,6 +70,8 @@ export type PopupPreviewState =
       screen: 'recording-detail';
       /** Notes for the previewed recording, which the background would supply. */
       notations?: RecordingNotation[];
+      /** Opens the header rename (7H). */
+      renaming?: boolean;
       target: { kind: 'recording'; entry: RecordingHistoryEntry } | { kind: 'upload'; job: UploadJob };
     };
 

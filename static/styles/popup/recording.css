@@ -6,14 +6,26 @@
 .rec-timer { display: block; margin: 0 0 12px; color: var(--ink); font-size: 38px; font-weight: 700; line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 
 .chips { display: flex; align-items: center; justify-content: center; min-height: 0; gap: 9px; margin: 0 0 16px; padding: 0; border: 0; }
-.chip { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12.5px; }
 .chip-storage-icon { width: 14px; height: 14px; color: var(--warn-label); }
 .chip-state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); }
 .chip.off .chip-state-dot { border: 1.5px solid var(--ink-4); background: transparent; }
 .chip + .chip::before { content: none; }
 #chip-storage { order: -1; color: var(--ink-2); }
-#chip-transcript::before { content: '•'; color: var(--ink-4); }
-#chip-transcript:not(.off) { color: var(--ready); }
+/* The separator is its own glyph in the design, spaced like a chip: the extra
+   3px makes the chip's 6px gap the row's 9px. */
+#chip-transcript::before { margin-right: 3px; color: var(--status-sep); font-weight: 400; content: '·'; }
+#chip-transcript:not(.off) { color: var(--ready); font-weight: 500; }
+
+/* Under a note ribbon the status line steps back (2a): smaller, muted, and the
+   green quietened, so the spans above it carry the eye. */
+#view-recording:has(#note-ribbon:not([hidden])) .chips { gap: 7px; margin-bottom: 11px; }
+#view-recording:has(#note-ribbon:not([hidden])) .chip { gap: 7px; font-size: 11.5px; }
+#view-recording:has(#note-ribbon:not([hidden])) #chip-storage { color: var(--status-muted); }
+#view-recording:has(#note-ribbon:not([hidden])) .chip-storage-icon { width: 12px; height: 12px; }
+#view-recording:has(#note-ribbon:not([hidden])) #chip-transcript::before { margin-right: 0; color: var(--status-sep-muted); }
+#view-recording:has(#note-ribbon:not([hidden])) #chip-transcript:not(.off) { color: var(--ready-muted); font-weight: 400; }
+#view-recording:has(#note-ribbon:not([hidden])) #chip-transcript:not(.off) .chip-state-dot { width: 6px; height: 6px; background: var(--ready); }
 
 .src-list { margin: 0; }
 #view-recording .src-list > .srow:first-child,
@@ -23,18 +35,25 @@
 .srow-ico svg { width: 15px; height: 15px; }
 .srow-main { min-width: 0; flex: 1; }
 .srow-title { display: flex; align-items: center; width: 100%; color: var(--ink-2); font-size: 13.5px; font-weight: 400; }
-.device-trigger { display: block; width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+/* A row naming its device stacks the two lines inside the same 46px (3b):
+   the label steps down to 12.5px and the device is the only clickable part. */
+.srow-main:has(.device-trigger) .srow-title { font-size: 12.5px; line-height: 1.2; }
+.device-trigger { display: inline-flex; align-items: center; max-width: 150px; min-width: 0; gap: 4px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--warn-label); text-align: left; cursor: pointer; }
 .device-trigger:disabled { cursor: default; }
 .device-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-.srow-device { display: block; overflow: hidden; margin-top: 2px; color: var(--ink-3); font-size: 11px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; transition: color .15s ease; }
-.device-trigger:not(:disabled):hover .srow-device,
-.device-trigger:not(:disabled):focus-visible .srow-device { color: var(--ink-2); }
+/* The underline is always drawn and fades in, since an underline itself cannot ease. */
+.srow-device { display: block; overflow: hidden; min-width: 0; color: inherit; font-size: 10.5px; line-height: 1.3; text-decoration: underline transparent; text-overflow: ellipsis; white-space: nowrap; transition: text-decoration-color 180ms var(--ease); }
+.srow-device-chevron { width: 8px; height: 8px; flex: 0 0 auto; }
+.device-trigger:disabled .srow-device-chevron { display: none; }
+.device-trigger:not(:disabled):hover .srow-device { text-decoration-color: currentColor; }
 .srow-mode,
 .srow-sub { margin-left: auto; color: var(--ink-4); font: 400 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
+/* Beside its switch the mode sits 11px off it, one more than the row's gap. */
+.srow > .srow-mode { flex: 0 0 auto; margin-right: 1px; }
 .srow-recdot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--rec); }
 
-.switch { position: relative; width: 34px; height: 20px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 999px; background: var(--control-bg-strong); cursor: pointer; transition: background .15s; }
-.switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.switch { position: relative; width: 34px; height: 20px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 999px; background: var(--control-bg-strong); cursor: pointer; transition: var(--hover-transition); }
+.switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 25%); transition: transform .15s; }
 .switch.on { background: var(--ready); }
 .switch.on .knob { transform: translateX(14px); }
 .switch:disabled { opacity: .5; cursor: not-allowed; }
@@ -42,9 +61,9 @@
 
 .device-picker { position: fixed; inset: 0; z-index: 50; }
 .device-picker-scrim { position: absolute; inset: 0; background: rgb(28 26 23 / 38%); }
-.device-picker-sheet { position: absolute; right: 12px; bottom: 12px; left: 12px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); box-shadow: 0 18px 40px -12px rgb(0 0 0 / 45%); }
+.device-picker-sheet { position: absolute; right: 12px; bottom: 12px; left: 12px; padding: 6px; border: 1px solid var(--border-field); border-radius: 6px; background: var(--sheet-bg); box-shadow: 0 18px 40px -12px rgb(0 0 0 / 45%); }
 .device-picker-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px 7px; }
-.device-picker-title { color: var(--ink-4); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .12em; }
+.device-picker-title { color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .12em; }
 .device-picker-close { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: var(--control-bg); color: var(--ink-3); font-size: 11px; line-height: 1; cursor: pointer; }
 .device-picker-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .device-picker-list { max-height: 72px; overflow-y: auto; }
@@ -60,13 +79,16 @@
 .device-picker-error { color: var(--rec-label); }
 .device-picker-divider { height: 1px; margin: 4px 8px; background: var(--divider); }
 .device-picker-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; color: var(--ink-4); font-size: 11px; }
-#device-picker-mode { color: var(--warn); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
+#device-picker-mode { color: var(--warn-label); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
 
 .controls { display: grid; grid-template-columns: 48px 1fr; gap: 8px; margin: 6px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
 .controls .btn { height: 48px; font-size: 14.5px; }
 /* A secondary in the control bar keeps the secondary size, as in the design:
    it sits a step down from the primary beside it rather than matching it. */
 .controls .btn-secondary { height: 44px; font-size: 13px; }
+/* Pause is a 48px square tile beside the primary (e5), not an outlined secondary. */
+.controls:not(.paused) #pause-recording { width: 48px; height: 48px; padding: 0; background: var(--tile); }
+.controls:not(.paused) #pause-recording:hover:not(:disabled) { background: var(--control-bg-strong); }
 .controls:not(.paused) #pause-recording [data-pause-label] { display: none; }
 .controls .btn-danger { background: var(--ink); color: var(--surface); box-shadow: none; font-size: 14.5px; }
 .controls .btn-danger:hover:not(:disabled) { background: var(--ink-2); }
@@ -81,13 +103,18 @@
 .controls.paused #stop-rec:focus-visible,
 .controls.paused #stop-rec:disabled { display: inline-flex; height: 44px; opacity: 1; border: 1px solid var(--border); background: transparent !important; color: var(--ink-2) !important; box-shadow: none; font: 600 13px 'Space Grotesk', sans-serif; outline: 0; }
 .controls.paused #stop-rec [data-stop-label] { display: inline; }
+.controls.paused #stop-rec { letter-spacing: normal; }
 .controls.paused .btn-danger svg { display: none; }
 /* The meta row is quieter than body copy: --ink-meta, not --ink-3. */
 .paused-meta { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 0 22px; color: var(--ink-meta); font-size: 11.5px; }
 .paused-meta span:nth-child(odd) { display: inline-flex; align-items: center; gap: 5px; }
-.paused-meta svg { width: 12px; height: 12px; }
+.paused-meta span:nth-child(even) { color: var(--paused-sep); }
+.paused-meta svg { width: 12px; height: 12px; color: var(--meta-icon); }
+.paused-meta span:first-child svg { width: 13px; height: 13px; }
 #view-recording:has(.controls.paused) .chips { display: none; }
-#view-recording:has(.controls.paused) .rec-timer { margin-bottom: 10px; color: var(--warn); font-size: 44px; }
+#view-recording:has(.controls.paused) .rec-timer { margin-bottom: 10px; color: var(--paused); font-size: 44px; }
+/* Outranks the ribbon's 9px: a paused ribbon keeps the paused timer's 10px (d3). */
+#view-recording:has(.controls.paused):has(#note-ribbon:not([hidden])) .rec-timer { margin-bottom: 10px; }
 
 /* ══════════ Notes (ADR-0005) ══════════
    The gold accent is --warn-label (#8a6a3f light / #c99a55 dark), which the
@@ -110,14 +137,14 @@
 /* The clicked span lifts and rings gold so you can tell which one you are editing. */
 .note-span.editing { top: 3px; height: 20px; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--warn-label); }
 /* An open span has no end yet: translucent, with a solid leading edge at "now". */
-.note-span.open { border-right: 2px solid var(--warn-label); border-radius: 2px 0 0 2px; background: color-mix(in srgb, var(--warn-label) 40%, transparent); cursor: default; }
+.note-span.open { border-right: 2px solid var(--warn-label); border-radius: 2px 0 0 2px; background: color-mix(in srgb, var(--warn-label) 42%, transparent); cursor: default; }
 /* A span the run sealed on the way out (endedBy: auto). The dashed edge is in
    the stopped colour, not the surface: it says the note ended because the
    recording did, and it has to be visible to say it (n4). */
 .note-span.auto-ended { border-right: 2px dashed var(--rec-label); }
 
 .note-open-timer { flex: 0 0 auto; color: var(--warn-label); font: 600 11px 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
-.note-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--warn-label); border-radius: 6px; background: var(--warn-label); color: var(--surface); cursor: pointer; transition: background .15s, border-color .15s; }
+.note-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--warn-label); border-radius: 6px; background: var(--warn-label); color: var(--surface); cursor: pointer; transition: var(--hover-transition); }
 .note-toggle:hover { border-color: var(--warn-label-hover); background: var(--warn-label-hover); }
 .note-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* Only ever shown while a note is open, so the glyph is always "stop". */
@@ -138,18 +165,22 @@
 .note-name .srow-ico { color: var(--warn-label); }
 /* The same field the rename sheet uses: a bordered input on the page surface,
    set in mono because what is typed here is read back beside timecodes. */
-.note-name-input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font: 12px 'IBM Plex Mono', monospace; }
+.note-name-input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border-field); border-radius: 4px; background: var(--surface); color: var(--ink); font: 12px 'IBM Plex Mono', monospace; }
 .note-name-input::placeholder { color: var(--ink-4); }
 /* :focus, not :focus-visible — a text field should indicate however it was reached. */
 .note-name-input:focus { outline: 0; border-color: var(--focus); }
 /* Where the open note started, carried in the same shape the Microphone and
    Camera rows use for their values. */
-.note-from { flex: 0 0 auto; color: var(--ink-4); font: 400 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; white-space: nowrap; }
+.note-from { flex: 0 0 auto; color: var(--note-from); font: 400 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; white-space: nowrap; }
 
 /* Shortcut tip (marks-e5): guidance, not a warning — hence the tinted band. */
 /* The key chip sits inline in the sentence, not as a block beside it. */
-.note-hint { margin: 0 -18px; padding: 9px 14px 10px 18px; border-top: 1px solid var(--divider); background: var(--note-band); color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
-.note-hint kbd { display: inline-block; padding: 1px 5px; border-radius: 4px; background: var(--control-bg-strong); color: var(--warn-label); font: 10.5px/1.35 'IBM Plex Mono', monospace; vertical-align: baseline; }
+.note-hint { display: flex; align-items: flex-start; gap: 9px; margin: 0 -18px; padding: 9px 14px 10px 18px; border-top: 1px solid var(--divider); background: var(--note-band); color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
+.note-hint-text { flex: 1; margin: 0; }
+.note-hint kbd { display: inline-block; padding: 1px 5px; border-radius: 4px; background: var(--kbd-bg); color: var(--warn-label); font: 10.5px/1.35 'IBM Plex Mono', monospace; vertical-align: baseline; }
+.note-hint-dismiss { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: var(--ink-4); font: 12px/1.3 'IBM Plex Mono', monospace; cursor: pointer; }
+.note-hint-dismiss:hover { color: var(--ink-2); }
+.note-hint-dismiss:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* Message editor. Reuses the device-picker sheet geometry — same overlay idiom. */
 .note-editor-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 7px 6px; }
@@ -175,9 +206,9 @@
 #view-recording:has(.controls.paused) .note-track { height: 22px; }
 #view-recording:has(.controls.paused) .note-track-base { top: 10px; background: var(--note-track); }
 #view-recording:has(.controls.paused) .note-track-elapsed { display: none; }
-#view-recording:has(.controls.paused) .note-track-playhead { top: 1px; height: 20px; background: var(--warn); }
+#view-recording:has(.controls.paused) .note-track-playhead { top: 1px; height: 20px; background: var(--paused); }
 #view-recording:has(.controls.paused) .note-span { top: 5px; height: 12px; background: var(--note-span-held); cursor: default; }
-#view-recording:has(.controls.paused) .note-span.open { border-right: 0; background: color-mix(in srgb, var(--warn) 32%, transparent); }
+#view-recording:has(.controls.paused) .note-span.open { border-right: 0; background: var(--paused-open); }
 #view-recording:has(.controls.paused) .note-open-timer,
 #view-recording:has(.controls.paused) .note-toggle,
 #view-recording:has(.controls.paused) .srow-note,
@@ -185,9 +216,9 @@
 
 /* The held note reads as one line: when it started, what it says, and that it is waiting. */
 .note-held { display: flex; align-items: center; gap: 8px; height: 26px; margin: 0 0 16px; padding: 0 10px; border: 1px solid var(--note-band-border); border-radius: 6px; background: var(--note-band); }
-.note-held-start { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; }
+.note-held-start { flex: 0 0 auto; color: var(--paused); font: 10.5px 'IBM Plex Mono', monospace; }
 .note-held-text { overflow: hidden; flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
-.note-held-state { flex: 0 0 auto; color: var(--warn); font: 10.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+.note-held-state { flex: 0 0 auto; color: var(--paused); font: 10.5px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
 
 /* The notes sidecar's own line on the saving screen (d4). It sits apart from
    the media file list because it is not one of them — and it is already up. */
@@ -208,6 +239,13 @@
 .interrupted-title { margin: 0; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
 .interrupted-sub { margin: 2px 0 0; color: var(--ink-3); font: 10.5px 'IBM Plex Mono', monospace; }
 .interrupted-ribbon { margin-bottom: 14px; }
-.interrupted-actions { margin-top: 16px; }
-.interrupted-actions .btn { height: 48px; font-size: 14px; }
+.interrupted-actions { display: flex; flex-direction: column; gap: 8px; margin: 16px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
+.interrupted-actions .btn-ink { height: 48px; font-size: 14px; }
 .interrupted-actions .btn-secondary { height: 44px; font-size: 13px; }
+/* A report, not a scroller: the sealed row's band has to bleed past the list,
+   so the list neither clips nor draws its own closing line — the last row does. */
+#interrupted-notes .detail-notes-list { overflow: visible; max-height: none; margin-bottom: 16px; border-bottom: 0; }
+#interrupted-notes .detail-notes-row:last-child { border-bottom: 1px solid var(--divider); }
+/* The sealed note bleeds edge to edge in the notes band, its end in the stopped red. */
+#interrupted-notes .detail-notes-row.sealed { gap: 10px; margin: 0 -18px; padding: 0 18px; background: var(--note-band); }
+#interrupted-notes .detail-notes-row.sealed .detail-notes-length { color: var(--rec-label); font-size: 9.5px; letter-spacing: .06em; }

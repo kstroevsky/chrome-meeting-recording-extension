@@ -8,7 +8,7 @@
 .grow-div { height: 1px; margin: 0; background: var(--divider); }
 .native-select { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
 
-.select-trigger { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 132px; gap: 7px; padding: 6px 0 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.select-trigger { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 132px; gap: 7px; padding: 6px 0 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: var(--hover-transition); }
 .select-trigger::after { content: ''; width: 9px; height: 6px; flex: 0 0 auto; background: var(--ink-4); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .select-trigger:hover,
 .select-trigger:focus-visible,
@@ -16,7 +16,7 @@
 .select-drive-icon,
 .select-storage-icon { width: 13px; height: 13px; flex: 0 0 auto; color: #6ba885; }
 .select-options { position: absolute; z-index: 60; top: 40px; right: 0; width: 214px; padding: 5px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); box-shadow: 0 18px 40px -12px rgb(0 0 0 / 45%); }
-.select-options button { display: flex; align-items: center; width: 100%; height: 38px; gap: 8px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 500 12px 'IBM Plex Mono', monospace; text-align: left; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.select-options button { display: flex; align-items: center; width: 100%; height: 38px; gap: 8px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 500 12px 'IBM Plex Mono', monospace; text-align: left; cursor: pointer; transition: var(--hover-transition); }
 .select-options button svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--ink-3); }
 .select-options button[aria-selected='true'] { background: var(--tile); color: var(--ink); font-weight: 600; }
 .select-options button[aria-selected='true'] svg,
@@ -54,7 +54,7 @@
 .cam-warn svg { width: 11px; height: 11px; flex: 0 0 auto; }
 .cam-warn-text { color: var(--warn-label); font-size: 10.5px; }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 46px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 700 14px 'Space Grotesk', sans-serif; letter-spacing: -.01em; line-height: 1; white-space: nowrap; cursor: pointer; transition: background 140ms ease-out, transform 140ms ease-out, box-shadow 140ms ease-out; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 46px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 700 14px 'Space Grotesk', sans-serif; letter-spacing: -.01em; line-height: 1; white-space: nowrap; cursor: pointer; transition: var(--hover-transition), transform 180ms var(--ease); }
 .btn:active:not(:disabled) { transform: scale(.98); }
 .btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
 .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent); }
@@ -62,9 +62,13 @@
 .btn-danger { background: var(--accent); color: #fff; box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent); }
 /* The design's secondary button is one step down from the primary it sits
    beside, everywhere it appears: 13px/600 rather than 14px/700. */
-.btn-secondary { border: 1px solid var(--border); background: transparent; color: var(--ink-2); font-size: 13px; font-weight: 600; }
+.btn-secondary { border: 1px solid var(--border); background: transparent; color: var(--ink-2); font-size: 13px; font-weight: 600; letter-spacing: normal; }
 .btn-secondary:hover:not(:disabled) { background: var(--tile); }
 .btn-full { width: 100%; }
+/* The design's dark primary (Open in Google Drive, Retry, Save): ink fill, and
+   none of the red primary's glow, which only the record actions carry. */
+.btn-ink { background: var(--ink); color: var(--surface); box-shadow: none; }
+.btn-ink:hover:not(:disabled) { background: var(--ink-2); }
 .setup-footer { margin: 16px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
 .start-cta { width: 100%; height: 48px; margin: 0; padding: 0; font-size: 14.5px; }
 .start-cta svg { display: none; }
@@ -74,17 +78,29 @@
 .link-btn { border: 0; background: transparent; color: var(--ink-3); font-size: 11px; }
 
 .popup-recordings-list { margin-top: 6px; border-top: 1px solid var(--divider); }
-.popup-recording-row { display: flex; flex-direction: column; justify-content: center; min-height: 52px; border-bottom: 1px solid var(--divider); cursor: pointer; }
-.popup-recording-row:hover,
-.popup-recording-row:focus-visible { background: var(--secondary-hover); outline: 0; }
+/* A row's hover is a rounded wash reaching 8px past its text on both sides, the
+   library's row language (f1). It floats between the dividers instead of
+   filling them, so the text never sits against its edge. */
+.popup-recording-row { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: center; min-height: 52px; border-bottom: 1px solid var(--divider); cursor: pointer; }
+.popup-recording-row::before,
+.popup-recording-upload::before { position: absolute; z-index: -1; inset: 3px -8px; border-radius: 6px; background: transparent; content: ''; transition: var(--hover-transition); }
+.popup-recording-row:hover::before,
+.popup-recording-row:focus-visible::before,
+.popup-recording-upload:hover::before,
+.popup-recording-upload:focus-visible::before { background: var(--secondary-hover); }
+.popup-recording-row:focus-visible,
+.popup-recording-upload:focus-visible { outline: 0; }
 .popup-recording-title { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.popup-recording-meta { margin-top: 2px; color: var(--ink-4); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; }
+.popup-recording-meta { overflow: hidden; margin-top: 2px; color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+/* The list's CTA sits a half-step under Setup's Start Recording (n1). */
+.recordings-footer .start-cta { gap: 9px; font-size: 13.5px; }
 .popup-recording-open { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: 0 0 14px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
 .popup-recording-open svg { width: 14px; height: 14px; }
 .popup-recordings-empty { display: flex; align-items: center; justify-content: center; min-height: 52px; margin: 0 0 16px; padding: 0; border-top: 1px solid var(--divider); color: var(--ink-3); text-align: center; }
-.popup-recording-upload { padding: 12px 0 13px; border-top: 1px solid var(--divider); cursor: pointer; }
-.popup-recording-upload:hover,
-.popup-recording-upload:focus-visible { background: var(--secondary-hover); outline: 0; }
+/* Holds a row's height while history is read (RecordingsListView.reserveRows). */
+.popup-recording-placeholder { min-height: 52px; border-bottom: 1px solid var(--divider); }
+.popup-recordings-empty.reserving { visibility: hidden; }
+.popup-recording-upload { position: relative; isolation: isolate; padding: 12px 0 13px; border-top: 1px solid var(--divider); cursor: pointer; }
 .popup-recording-upload-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .popup-recording-upload-head span:first-child { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .popup-recording-upload-head span:last-child { flex: 0 0 auto; color: var(--ink-3); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .04em; white-space: nowrap; }
@@ -97,46 +113,65 @@
 
 /* Pushed recording detail — the design's 300px panel is the popup itself. */
 .recording-detail-popup { margin: -18px; }
-.recording-detail-header { display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 14px 0 10px; border-bottom: 1px solid var(--divider); }
-.recording-detail-back { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 5px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 600 13px 'Space Grotesk', sans-serif; cursor: pointer; }
-.recording-detail-back svg { color: var(--warn-label); }
-.recording-detail-back:hover,
-.recording-detail-back:focus-visible { background: var(--secondary-hover); outline: 0; }
-.recording-detail-menu-wrap { position: relative; }
+/* The recording names its own screen (d1): back tile, name, menu. */
+.recording-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 15px 18px 14px; border-bottom: 1px solid var(--divider); }
+.recording-detail-heading { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.recording-detail-back { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 26px; height: 26px; margin-left: -4px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink-2); cursor: pointer; }
+.recording-detail-back svg { width: 11px; height: 11px; }
+.recording-detail-back:hover { background: var(--control-bg-strong); color: var(--ink); }
+.recording-detail-back:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.recording-detail-title { min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.02em; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+.recording-detail-title:focus-visible { border-radius: 4px; outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Renaming in place (7H): the header tightens and the name becomes the field. */
+.recording-detail-header.renaming { gap: 7px; padding: 13px 14px 12px; }
+.recording-detail-header.renaming .recording-detail-heading { flex: 1; gap: 7px; }
+.recording-detail-header.renaming .recording-detail-back { margin-left: 0; }
+.recording-detail-name-field { flex: 1; min-width: 0; height: 32px; padding: 0 9px; border: 1.5px solid var(--ink); border-radius: 6px; background: var(--field-bg); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); font: 700 14px 'Space Grotesk', system-ui, sans-serif; letter-spacing: -.01em; outline: 0; }
+.recording-detail-save-name { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: var(--ink); color: var(--surface); cursor: pointer; }
+.recording-detail-save-name svg { width: 13px; height: 13px; }
+.recording-detail-save-name:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.recording-detail-menu-wrap { position: relative; flex: 0 0 auto; }
 .recording-detail-menu { top: 32px; width: 210px; }
 .recording-detail-popup .menu-row:disabled { opacity: .45; cursor: not-allowed; }
-#recording-detail-content { padding: 0 18px; }
-.recording-detail-title-row { display: flex; align-items: center; gap: 8px; margin: 16px 0 4px; }
-.recording-detail-title { min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.02em; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
-.recording-detail-title-input { width: 100%; height: 28px; min-width: 0; padding: 0 4px; border: 1px solid var(--warn); border-radius: 4px; background: var(--surface); color: var(--ink); font: 700 19px 'Space Grotesk', sans-serif; letter-spacing: -.02em; outline: 0; }
-.recording-detail-rename { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
-.recording-detail-rename:hover,
-.recording-detail-rename:focus-visible { background: var(--secondary-hover); color: var(--ink-2); outline: 0; }
-.recording-detail-rename svg { width: 13px; height: 13px; }
-.recording-detail-meta { min-height: 13px; margin: 0 0 18px; color: var(--ink-meta); font: 500 10.5px 'IBM Plex Mono', monospace; letter-spacing: 0; white-space: nowrap; }
-.recording-detail-eyebrow { margin: 0; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
-.recording-detail-files { margin: 7px 0 16px; }
+#recording-detail-content { padding: 15px 18px 0; }
+.recording-detail-meta { min-height: 13px; margin: 0 0 14px; color: var(--ink-3); font: 10.5px 'IBM Plex Mono', monospace; white-space: nowrap; }
+.recording-detail-meta--renaming { margin-bottom: 0; }
+.recording-detail-hint { margin: 9px 0 0; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
+.recording-detail-rule { height: 1px; margin: 14px 0; background: var(--border); }
+.recording-detail-files-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', system-ui, sans-serif; letter-spacing: .14em; }
+.recording-detail-files-count { font-family: 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+.recording-detail-files--renaming { margin-top: 7px; }
+.recording-detail-files--renaming .recording-detail-file { height: 38px; }
+.recording-detail-files--renaming .recording-detail-file-size { font-size: 10px; }
+/* The notes lead (d1): the timeline sits straight under the summary. */
+#recording-detail-content .detail-notes { margin: 0; }
+#recording-detail-content .detail-notes-empty { margin-bottom: 0; }
+/* A recording nobody noted keeps its track, a step closer to the hint (f4). */
+#recording-detail-content .detail-notes:has(.detail-notes-empty:not([hidden])) .detail-notes-timeline { margin-bottom: 14px; }
+/* Files and transcript, folded into one row (d1). */
+.recording-detail-files-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 10px; margin-top: 16px; padding: 11px 13px; border: 0; border-radius: 6px; background: var(--tile); cursor: pointer; }
+.recording-detail-files-toggle:hover { background: var(--kbd-bg); }
+.recording-detail-files-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.recording-detail-files-label { color: var(--ink); font: 600 12.5px 'Space Grotesk', system-ui, sans-serif; }
+.recording-detail-files-meta { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-3); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
+.recording-detail-files-meta svg { width: 9px; height: 9px; transition: transform .16s cubic-bezier(.32, .72, 0, 1); }
+.recording-detail-files-toggle[aria-expanded='true'] svg { transform: rotate(90deg); }
+.recording-detail-files { margin: 8px 0 0; }
 .recording-detail-file { display: flex; align-items: center; justify-content: space-between; height: 44px; gap: 8px; border-top: 1px solid var(--divider); }
 .recording-detail-file:last-child { border-bottom: 1px solid var(--divider); }
 .recording-detail-file-name { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .recording-detail-file-actions { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 9px; }
-.recording-detail-file-size { color: var(--ink-4); font: 500 10.5px 'IBM Plex Mono', monospace; white-space: nowrap; }
+.recording-detail-file-size { color: var(--ink-4); font: 10.5px 'IBM Plex Mono', monospace; white-space: nowrap; }
 .recording-detail-file-open { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ink); cursor: pointer; }
 .recording-detail-file-open:hover,
 .recording-detail-file-open:focus-visible { background: var(--secondary-hover); outline: 0; }
 .recording-detail-file-open svg { width: 14px; height: 14px; }
-.recording-detail-transcript { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 38px; margin: 0 0 16px; padding: 0 13px; border: 0; border-radius: 11px; background: var(--tile); color: var(--ink); font: 600 12.5px 'Space Grotesk', sans-serif; cursor: pointer; }
-.recording-detail-transcript span:first-child { display: inline-flex; align-items: center; gap: 8px; }
-.recording-detail-transcript span:last-child { color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .06em; }
-.recording-detail-transcript svg { width: 13px; height: 13px; }
 .recording-detail-footer { margin: 16px -18px 0; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
 .recording-detail-footer .btn { width: 100%; }
-.recording-detail-open-drive { height: 48px; background: var(--ink); color: var(--surface); box-shadow: none; }
-.recording-detail-open-drive:hover:not(:disabled) { background: var(--ink-2); }
-.recording-detail-copy-link { height: 44px; margin-top: 8px; font-size: 13px; font-weight: 600; }
-.recording-detail-open-drive svg,
-.recording-detail-copy-link svg { width: 14px; height: 14px; }
-.recording-detail-copy-link svg { width: 13px; height: 13px; }
+.recording-detail-open-drive { height: 48px; gap: 9px; }
+.recording-detail-open-drive svg { width: 14px; height: 14px; }
+.recording-detail-eyebrow { margin: 0; color: var(--ink-4); font: 600 9.5px 'Space Grotesk', system-ui, sans-serif; letter-spacing: .14em; }
+.recording-detail-upload-files { margin-bottom: 0; }
 .recording-detail-upload-progress { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; }
 .recording-detail-upload-percent { color: var(--ink); font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
 .recording-detail-upload-label { color: var(--ink-3); font-size: 12.5px; }
@@ -186,6 +221,7 @@
 .detail-notes-track { position: absolute; top: 5px; right: 0; left: 0; height: 2px; background: var(--divider); }
 .detail-notes-span { position: absolute; top: 0; height: 12px; padding: 0; border: 0; border-radius: 2px; background: var(--warn-label); cursor: pointer; }
 .detail-notes-span.auto-ended { background: var(--note-span-held); border-right: 2px dashed var(--rec-label); }
+.detail-notes-span.unnamed { background: var(--note-pale); }
 .detail-notes-span.selected { box-shadow: 0 0 0 2px var(--warn-label), 0 0 0 4px var(--tile); }
 .detail-notes-span:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .detail-notes-marker { position: absolute; top: -3px; width: 2px; height: 18px; background: var(--ink); }
@@ -242,6 +278,8 @@
 .detail-notes-head-right { display: inline-flex; align-items: center; flex-shrink: 0; gap: 7px; }
 .detail-notes-chevron { width: 9px; height: 9px; transition: transform .15s ease; }
 .detail-notes-toggle[aria-expanded='true'] .detail-notes-chevron { transform: rotate(90deg); }
+/* Folded, the section still closes on the hairline its open list would (n2a). */
+.detail-notes:has(.detail-notes-toggle[aria-expanded='false'])::after { display: block; margin-top: 9px; border-top: 1px solid var(--divider); content: ''; }
 
 /* A recording nobody noted (f4): says so, and teaches the shortcut. */
 .detail-notes-empty { margin: 0 0 16px; padding: 13px 14px; border: 1px dashed var(--note-band-border); border-radius: 6px; background: var(--note-band); }

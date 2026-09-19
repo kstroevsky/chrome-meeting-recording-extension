@@ -22,11 +22,10 @@ test.describe('crash recovery (integration)', () => {
       const RESUME = 'google-meet-resumexy-20200101T0000-recording.webm';
       const ORPHAN = 'google-meet-orphanxy-20200101T0000-recording.webm';
       const FOLDER = 'google-meet-resumexy-20200101T0000';
-      const MARKER_KEY = `pendingDriveUpload:${RESUME}`;
 
       // Seed OPFS with a real WebM (so the duration re-fix succeeds), a pending
       // upload marker (for #1), and an unmarked orphan (for #2).
-      await harness.controlPage.evaluate(async ({ resume, orphan, folder, markerKey }) => {
+      await harness.controlPage.evaluate(async ({ resume, orphan, folder }) => {
         const canvas = document.createElement('canvas');
         canvas.width = 320;
         canvas.height = 240;
@@ -58,14 +57,26 @@ test.describe('crash recovery (integration)', () => {
           await writable.write(webm);
           await writable.close();
         }
-        await chrome.storage.local.set({
-          [markerKey]: { opfsFilename: resume, filename: resume, stream: 'tab', recordingFolderName: folder },
-        });
-      }, { resume: RESUME, orphan: ORPHAN, folder: FOLDER, markerKey: MARKER_KEY });
+      }, { resume: RESUME, orphan: ORPHAN, folder: FOLDER });
 
       await harness.controlPage.waitForFunction(
         () => (window as any).__recoveryTest != null,
         { timeout: 10_000 }
+      );
+
+      // Seeded through the real store rather than written straight into
+      // `chrome.storage.local`. Markers live in IndexedDB now — the offscreen
+      // document that writes them in production has no `chrome.storage` — and
+      // seeding them here through the production code proves this page and that
+      // document really do share one store.
+      await harness.controlPage.evaluate(
+        ({ resume, folder }) => (window as any).__recoveryTest.markPending({
+          opfsFilename: resume,
+          filename: resume,
+          stream: 'tab',
+          recordingFolderName: folder,
+        }),
+        { resume: RESUME, folder: FOLDER },
       );
 
       // #1 — resume the interrupted Drive upload (re-fix raw OPFS, fresh session).
@@ -73,12 +84,12 @@ test.describe('crash recovery (integration)', () => {
       await expect.poll(() => driveStats.sessionsCreated, { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
       expect(driveStats.dataPuts).toBeGreaterThanOrEqual(1);
 
-      // The marker is cleared once the re-upload succeeds.
-      const marker = await harness.controlPage.evaluate(
-        (key) => new Promise((res) => chrome.storage.local.get(key, (v) => res(v[key] ?? null))),
-        MARKER_KEY
+      // The marker is cleared once the re-upload succeeds — read back through
+      // the same store that wrote it.
+      const pending = await harness.controlPage.evaluate(
+        () => (window as any).__recoveryTest.listPending(),
       );
-      expect(marker).toBeNull();
+      expect(pending).toEqual([]);
 
       // #2 — recover the orphan (cutoff in the future so the just-seeded file qualifies).
       await harness.controlPage.evaluate(

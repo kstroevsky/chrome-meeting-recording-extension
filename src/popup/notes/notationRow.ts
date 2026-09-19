@@ -46,6 +46,9 @@ export function notationRow(notation: RecordingNotation, options: NotationRowOpt
   // The whole row is tinted, not just its text — the design bands an unnamed
   // note so it reads as an open item in a list of finished ones.
   row.classList.toggle('untitled', !notation.text);
+  // The note the run sealed on its way out is the news on the interrupted screen:
+  // its row is banded so it reads apart from the notes the user closed (n4).
+  row.classList.toggle('sealed', options.sealedAtMs != null && notation.endedBy === 'auto');
 
   const main = document.createElement(options.actions ? 'button' : 'span');
   main.className = 'detail-notes-row-main';

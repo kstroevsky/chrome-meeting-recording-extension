@@ -68,6 +68,14 @@ test.describe('recordings page notes (integration)', () => {
       await search.fill('nothing matches this');
       await expect(page.locator('.recording-row')).toHaveCount(0);
 
+      // Typing must not cost the user their cursor: the toolbar is built once
+      // and survives the repaint, so the caret stays where they left it.
+      await search.fill('');
+      await search.pressSequentially('pricing');
+      await expect(page.locator('.recording-row')).toHaveCount(1);
+      expect(await page.evaluate(() => document.activeElement?.className)).toContain('recording-search');
+      expect(await search.evaluate((input: HTMLInputElement) => input.selectionStart)).toBe('pricing'.length);
+
       await notesHeader.click();
       await expect(page.locator('.recording-table__header')).toContainText('NOTES');
     } finally {

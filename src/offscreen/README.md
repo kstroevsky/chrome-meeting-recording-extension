@@ -21,7 +21,7 @@ background ──OFFSCREEN_START/STOP (RPC)──▶ rpcHandlers ─▶ Offscree
 offscreen ──OFFSCREEN_STATE { phase, epoch } (status)─────────┘
 ```
 
-`rpcHandlers` validate commands and drive the controller; `OffscreenController` owns the capture phase/warning state and sequences capture finalization; `RecorderEngine` captures/encodes; the storage targets persist; `RecordingFinalizer` delivers local files; and `UploadManager` delivers Drive jobs after capture has returned to idle. Each layer is its own README: [engine](./engine/README.md), [storage](./storage/README.md), [drive](./drive/README.md).
+`rpcHandlers` validate commands and drive the controller; `OffscreenController` owns the capture phase/warning state and sequences capture finalization; `RecorderEngine` captures/encodes; the storage targets persist; `RecordingFinalizer` delivers local files; and `UploadManager` delivers Drive jobs after capture has returned to idle. Each layer is its own README: [engine](./engine/README.md), [storage](./storage/README.md), [drive](./drive/README.md), [analysis](./analysis/README.md).
 
 ## The stop → delivery pipeline
 
@@ -48,7 +48,7 @@ flowchart TD
 
 - **Commands in (RPC over a `chrome.runtime.Port`):** `OFFSCREEN_START` (validate → busy-check → freeze `epoch`/`storageMode`/telemetry run id → `pushState('starting')` → `engine.startFromStreamId`), `OFFSCREEN_STOP`, `OFFSCREEN_DISCARD`, `OFFSCREEN_SET_MIC_MUTED` / `_CAMERA_MUTED` / `_PAUSED`, `OFFSCREEN_RETRY_UPLOAD`, `OFFSCREEN_CANCEL_UPLOAD`, `OFFSCREEN_RENAME_DRIVE_RESOURCES`, and `REVOKE_BLOB_URL`.
 - **Status out:** `pushState` broadcasts `OFFSCREEN_STATE { phase, epoch, warnings?, telemetrySnapshot? }`. The offscreen **self-derives** its capture phase and **echoes** the run `epoch` from `OFFSCREEN_START` — it never reads the background's phase. `UploadManager` independently broadcasts `OFFSCREEN_UPLOAD_STATE { job, telemetryRunId?, telemetrySnapshot? }`; job state is not a recording phase. (The echoed epoch is what the background's [fence](../shared/README.md) matches against; see ADR-0003.)
-- **Readiness & reconnect:** on connect it posts `OFFSCREEN_READY { version }` (the build id — the **version handshake** that lets the background detect and heal SW/offscreen code skew), current capture state, and any active upload jobs. A dropped port reconnects with exponential backoff (1 s → 30 s cap). Terminal jobs are first written to `UploadJobStateOutbox` in `chrome.storage.local`; the entry is replayed until `OFFSCREEN_ACK_UPLOAD_STATE { jobId }` arrives after the background has persisted it.
+- **Readiness & reconnect:** on connect it posts `OFFSCREEN_READY { version }` (the build id — the **version handshake** that lets the background detect and heal SW/offscreen code skew), current capture state, and any active upload jobs. A dropped port reconnects with exponential backoff (1 s → 30 s cap). Terminal jobs are first written to `UploadJobStateOutbox` in **IndexedDB** (`upload-job-outbox`); the entry is replayed until `OFFSCREEN_ACK_UPLOAD_STATE { jobId }` arrives after the background has persisted it. Not `chrome.storage.local`: an offscreen document has no `chrome.storage`, and the wrappers in `platform/chrome/storage.ts` no-op rather than throw, so those writes silently stored nothing.
 
 ## Key invariants & gotchas
 
@@ -71,7 +71,7 @@ flowchart TD
 | `rpcHandlers.ts` | background→offscreen command handlers, Drive metadata rename RPC, upload-state acknowledgement, and reconnect runtime listener |
 | `RuntimeSampler.ts` | cumulative event-loop lag / long-task / heap sampler shared by the local dashboard and bounded production reducer |
 
-Subsystems (own READMEs): [`engine/`](./engine/README.md), [`storage/`](./storage/README.md), [`drive/`](./drive/README.md). Support modules (`RecorderAudio`, `RecorderCapture` — its e2e-only synthetic tab stream lives in the sibling `RecorderCaptureE2EMock` so the production capture path carries no test scaffolding — `RecorderProfiles`, `DriveTarget`, `LocalFileTarget`) sit at this root and are documented by the subsystem that owns them.
+Subsystems (own READMEs): [`engine/`](./engine/README.md), [`storage/`](./storage/README.md), [`drive/`](./drive/README.md), [`analysis/`](./analysis/README.md) — the embedding engine and the analysis job (ADR-0007). Support modules (`RecorderAudio`, `RecorderCapture` — its e2e-only synthetic tab stream lives in the sibling `RecorderCaptureE2EMock` so the production capture path carries no test scaffolding — `RecorderProfiles`, `DriveTarget`, `LocalFileTarget`) sit at this root and are documented by the subsystem that owns them.
 
 ## Observability
 

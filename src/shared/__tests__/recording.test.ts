@@ -333,6 +333,18 @@ describe('background upload jobs (ADR-0004)', () => {
     expect(jobs?.[1]).toMatchObject({ id: 'job-2', status: 'completed', progress: 1, files: [] });
   });
 
+  it('keeps a file\'s committed upload bytes and drops a non-positive count', () => {
+    const [job] = normalizeUploadJobs([{
+      ...validJob,
+      files: [
+        { stream: 'tab', filename: 'tab.webm', status: 'uploading', bytes: 100, uploadedBytes: 67 },
+        { stream: 'mic', filename: 'mic.webm', status: 'uploading', bytes: 100, uploadedBytes: 0 },
+      ],
+    }])!;
+    expect(job.files[0].uploadedBytes).toBe(67);
+    expect(job.files[1]).not.toHaveProperty('uploadedBytes');
+  });
+
   it('returns undefined for an empty or non-array list', () => {
     expect(normalizeUploadJobs([])).toBeUndefined();
     expect(normalizeUploadJobs(undefined)).toBeUndefined();
