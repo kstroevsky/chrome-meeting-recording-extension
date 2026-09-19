@@ -1,4 +1,4 @@
-import { formatClock, seekFraction, toNoteMarks } from '../playerFormat';
+import { formatClock, mergeNoteMarks, seekFraction, toNoteMarks } from '../playerFormat';
 import type { RecordingNotation } from '../../../shared/notations';
 
 const note = (over: Partial<RecordingNotation>): RecordingNotation =>
@@ -71,5 +71,27 @@ describe('seekFraction', () => {
 
   it('is zero for a track with no width rather than dividing by zero', () => {
     expect(seekFraction(10, { left: 0, width: 0 })).toBe(0);
+  });
+});
+
+describe('mergeNoteMarks (f20)', () => {
+  const marks = (starts: number[]) => toNoteMarks(starts.map((s, i) => note({ id: `n${i}`, tStartMs: s * 1000, text: `N${i}` })), 1_000_000);
+
+  it('keeps apart marks with room between them', () => {
+    expect(mergeNoteMarks(marks([0, 100, 500])).map((group) => group.notes.length)).toEqual([1, 1, 1]);
+  });
+
+  it('folds marks that would overlap into one, spanning all of them', () => {
+    // 0.6% ticks 0.3% apart overlap; the third is far away.
+    const groups = mergeNoteMarks(marks([100, 103, 106, 500]));
+    expect(groups.map((group) => group.notes.map((n) => n.id))).toEqual([['n0', 'n1', 'n2'], ['n3']]);
+    expect(groups[0].leftPct).toBe(10);
+    expect(groups[0].widthPct).toBeCloseTo(1.2);
+  });
+
+  it('is pale only when every note in it is unnamed', () => {
+    const notes = [note({ id: 'a', tStartMs: 100_000, text: '' }), note({ id: 'b', tStartMs: 101_000, text: 'Named' })];
+    expect(mergeNoteMarks(toNoteMarks(notes, 1_000_000))[0].named).toBe(true);
+    expect(mergeNoteMarks(toNoteMarks([notes[0]], 1_000_000))[0].named).toBe(false);
   });
 });

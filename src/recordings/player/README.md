@@ -51,6 +51,12 @@ The manifest carries no vectors. Centroids and segment embeddings stay in the `a
 
 A recording with a persisted transcript (ADR-0007, `manifest.transcriptStatus === 'ready'`) gets the design's `f10` rail beside the picture: the video keeps 462px and the rail lists every line with its time and speaker, the line being spoken banded and its time in the playhead's red, and a subtitle band on the picture shows the same line. Lines said during a note sit under that note's sticky heading, joined by a gold rail in the gutter; a line belongs to the earliest-starting note whose range holds its start (`playerTranscript.railItems`). Clicking a line or a heading seeks there. The header's panel toggle hides and restores the rail, `C` and the Subtitles row toggle the band, and SRT downloads the transcript as SubRip.
 
+The rail is also where a note is renamed (`f18`): hovering a heading reveals a pencil, and clicking it or the heading's name turns the heading into a mono field. Enter or the tick keeps the name, Escape puts the old one back, and the scrubber mark keeps its place, since a name never touches the timing. `R` renames the note under the playhead, opening the rail to do it. The write is the same `UPDATE_RECORDING_NOTATION` the details dialog makes, supplied by the page as `renameNotation`; without it the headings only play.
+
+A long rail reads as an index (`f20`). From `RAIL_INDEX_NOTES` (12) notes up, the rail gains a search field under its header and every heading carries its start time on the right. Search keeps a line by its words or speaker and a heading by its name; a matching heading keeps its lines and a matching line keeps its heading, so every hit still says which note it sits in. `/` goes to the search. On the scrubber, marks that would overlap merge into one taller mark with an inset edge (`playerFormat.mergeNoteMarks`); a merged mark cannot know which note was meant, so clicking it brings its notes into view in the rail instead of seeking. Marks are drawn in the fixed on-picture gold `#c99a55` in both themes.
+
+Fullscreen keeps the rail (`f15`). With the popup header gone, the name and date move onto the picture, top left, and the rail becomes a dark translucent 250px panel over the picture's right edge, with its own hide button and a `TRANSCRIPT` label. Everything on the picture — scrim, subtitles, scrubber, controls, self view — stops 20px short of it. A rail hidden in fullscreen comes back from a button among the picture controls, which only exists there. The panel keeps the picture's colours in either theme by overriding the page tokens locally.
+
 Without a transcript the rail is **absent**, not hidden, and the header loses its toggle — `f11`/`f12`. The transcript is read beside playback rather than before it (`GET_RECORDING_TRANSCRIPT`), so a failure costs the rail and says nothing on the picture. Speaker names come from Meet's captions; the design's `TAB` / `MIC` source tags have no equivalent in a caption transcript.
 
 ## Synchronization
@@ -89,7 +95,7 @@ The Drive retry is **exactly once per open**. A retry loop against a genuinely d
 | `playerKeymap.ts` | The `f19` map, resolved as data |
 | `playerTracks.ts` | What FILES and the volume popup are lists of |
 | `playerTopics.ts` | What TOPICS is a list of |
-| `playerTranscript.ts` | What the rail is a list of: note grouping, the playing line, SRT |
+| `playerTranscript.ts` | What the rail is a list of: note grouping, the playing line, the note under the playhead, SRT |
 
 ## Testing notes
 

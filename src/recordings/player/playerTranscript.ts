@@ -71,6 +71,14 @@ export function railItems(segments: TranscriptSegment[], notations: RecordingNot
 }
 
 /**
+ * The note being played at `positionMs`: the earliest-starting one whose reach
+ * holds it, by the same rule the rail groups lines with. `R` renames this one.
+ */
+export function noteAt(notations: RecordingNotation[], positionMs: number): RecordingNotation | null {
+  return noteRanges(notations).find((range) => range.from <= positionMs && positionMs < range.to)?.notation ?? null;
+}
+
+/**
  * The line being spoken at `positionMs`, or -1 between lines. Binary search:
  * an hour-long call is a few thousand lines, and this runs on every tick.
  */

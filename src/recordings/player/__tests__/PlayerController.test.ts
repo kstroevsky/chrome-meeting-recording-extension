@@ -243,3 +243,147 @@ describe('transcript rail (f10)', () => {
     expect(statusText(controller)).not.toMatch(/transcript cannot|could not read/i);
   });
 });
+
+describe('the rail as an index (f18, f20)', () => {
+  const flushAll = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+  const note = (id: string, startS: number, text: string) =>
+    ({ id, tStartMs: startS * 1000, tEndMs: startS * 1000 + 5_000, endedBy: 'user' as const, text });
+  const lineAt = (startS: number, text: string) => ({ tStartMs: startS * 1000, tEndMs: startS * 1000 + 2_000, speaker: 'Alex', text });
+
+  async function openWith(notations: ReturnType<typeof note>[], over: Partial<PlayerControllerDeps> = {}) {
+    const segments = notations.map((n) => lineAt(n.tStartMs / 1000 + 1, `Said during ${n.text || 'nothing'}`));
+    const { controller } = make({
+      getManifest: jest.fn(async () => manifest([], { transcriptStatus: 'ready', durationMs: 3_600_000, notations })),
+      getTranscript: jest.fn(async () => ({ source: 'meet-captions' as const, segments })),
+      ...over,
+    });
+    await controller.open('r1');
+    await flushAll();
+    return controller;
+  }
+  const headingNames = (controller: PlayerController) =>
+    Array.from(controller.element.querySelectorAll('.player__rail-heading-name'), (name) => name.textContent);
+  const press = (target: EventTarget, key: string) =>
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+
+  it('renames a note from its heading, and its mark follows (f18)', async () => {
+    const renameNotation = jest.fn(async () => []);
+    const controller = await openWith([note('n1', 100, 'Pricing objection')], { renameNotation });
+
+    controller.element.querySelector<HTMLElement>('.player__rail-heading-name')!.click();
+    const input = controller.element.querySelector<HTMLInputElement>('.player__rail-rename-input')!;
+    expect(input.value).toBe('Pricing objection');
+    input.value = 'Price pushback';
+    press(input, 'Enter');
+    await flushAll();
+
+    expect(renameNotation).toHaveBeenCalledWith('r1', 'n1', 'Price pushback');
+    expect(headingNames(controller)).toEqual(['Price pushback']);
+    expect(controller.element.querySelector<HTMLElement>('.player__mark')!.title).toBe('Price pushback');
+  });
+
+  it('puts the old name back on Escape, without closing the player', async () => {
+    const renameNotation = jest.fn(async () => []);
+    const controller = await openWith([note('n1', 100, 'Pricing objection')], { renameNotation });
+
+    controller.element.querySelector<HTMLButtonElement>('.player__rail-rename')!.click();
+    const input = controller.element.querySelector<HTMLInputElement>('.player__rail-rename-input')!;
+    input.value = 'Something else';
+    press(input, 'Escape');
+    await flushAll();
+
+    expect(renameNotation).not.toHaveBeenCalled();
+    expect(headingNames(controller)).toEqual(['Pricing objection']);
+    expect(controller.element.isConnected).toBe(true);
+  });
+
+  it('puts the old name back when the write fails', async () => {
+    const renameNotation = jest.fn(async () => { throw new Error('storage unavailable'); });
+    const controller = await openWith([note('n1', 100, 'Pricing objection')], { renameNotation });
+
+    controller.element.querySelector<HTMLElement>('.player__rail-heading-name')!.click();
+    const input = controller.element.querySelector<HTMLInputElement>('.player__rail-rename-input')!;
+    input.value = 'Price pushback';
+    press(input, 'Enter');
+    await flushAll();
+
+    expect(headingNames(controller)).toEqual(['Pricing objection']);
+  });
+
+  it('renames the note under the playhead on R', async () => {
+    const controller = await openWith([note('n1', 100, 'First'), note('n2', 200, 'Second')], { renameNotation: jest.fn(async () => []) });
+    controller.element.querySelector<HTMLVideoElement>('.player__video')!.currentTime = 202;
+
+    press(document.body, 'r');
+
+    const editing = controller.element.querySelector<HTMLElement>('.player__rail-heading--editing')!;
+    expect(editing.dataset.noteId).toBe('n2');
+  });
+
+  it('offers no rename where the page cannot write one: the heading only plays', async () => {
+    const controller = await openWith([note('n1', 100, 'Pricing objection')]);
+    expect(controller.element.querySelector('.player__rail-rename')).toBeNull();
+    controller.element.querySelector<HTMLElement>('.player__rail-heading-name')!.click();
+    expect(controller.element.querySelector('.player__rail-rename-input')).toBeNull();
+  });
+
+  it('keeps a short rail plain, with no search and no heading times (f10)', async () => {
+    const controller = await openWith([note('n1', 100, 'One'), note('n2', 200, 'Two')]);
+    expect(controller.element.querySelector<HTMLElement>('.player__rail-search')!.hidden).toBe(true);
+    expect(controller.element.querySelector('.player__rail-heading-time')).toBeNull();
+  });
+
+  it('gives a long rail a search and start times, and / goes to the search (f20)', async () => {
+    const notes = Array.from({ length: 12 }, (_, i) => note(`n${i}`, 100 + i * 60, i === 3 ? 'Queue migration' : `Point ${i}`));
+    const controller = await openWith(notes);
+
+    expect(controller.element.querySelector<HTMLElement>('.player__rail-search')!.hidden).toBe(false);
+    expect(controller.element.querySelector('.player__rail-heading-time')?.textContent).toBe('01:40');
+
+    press(document.body, '/');
+    const query = controller.element.querySelector<HTMLInputElement>('.player__rail-query')!;
+    expect(document.activeElement).toBe(query);
+
+    query.value = 'queue';
+    query.dispatchEvent(new Event('input'));
+    const shown = Array.from(controller.element.querySelectorAll<HTMLElement>('.player__rail-heading'))
+      .filter((heading) => !heading.hidden)
+      .map((heading) => heading.querySelector('.player__rail-heading-name')!.textContent);
+    expect(shown).toEqual(['Queue migration']);
+    // A matching heading keeps the lines said under it.
+    const lines = Array.from(controller.element.querySelectorAll<HTMLElement>('.player__rail-line')).filter((line) => !line.hidden);
+    expect(lines.map((line) => line.querySelector('.player__rail-text')!.textContent)).toEqual(['Said during Queue migration']);
+  });
+
+  it('merges marks that would overlap, and a merged mark opens its notes instead of seeking (f20)', async () => {
+    // 15 s apart in an hour: closer than a mark is wide.
+    const controller = await openWith([note('n1', 600, 'First'), note('n2', 615, 'Second'), note('n3', 2400, 'Alone')]);
+    const marks = Array.from(controller.element.querySelectorAll<HTMLElement>('.player__mark'));
+    expect(marks).toHaveLength(2);
+    expect(marks[0].classList.contains('player__mark--merged')).toBe(true);
+    expect(marks[0].title).toBe('2 notes here · zoom or use the list');
+
+    const video = controller.element.querySelector<HTMLVideoElement>('.player__video')!;
+    video.currentTime = 5;
+    marks[0].click();
+    expect(video.currentTime).toBe(5);
+    expect(controller.element.querySelectorAll('.player__rail-heading--revealed')).toHaveLength(2);
+
+    marks[1].click();
+    expect(video.currentTime).toBe(2400);
+  });
+
+  it('swaps the fullscreen button for a way out while fullscreen (f15)', async () => {
+    const controller = await openWith([note('n1', 100, 'One')]);
+    const button = () => controller.element.querySelector<HTMLButtonElement>('.player__controls .player__icon:last-child')!;
+    expect(button().title).toBe('Fullscreen');
+
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => controller.element });
+    document.dispatchEvent(new Event('fullscreenchange'));
+    expect(button().title).toBe('Leave fullscreen');
+
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+    document.dispatchEvent(new Event('fullscreenchange'));
+    expect(button().title).toBe('Fullscreen');
+  });
+});

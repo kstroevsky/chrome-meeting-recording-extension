@@ -46,6 +46,9 @@
   --quiet-track: #e4ded1;
   --quiet-clock: #b3ab9c;
   --note-border: #e0d6c2;
+  /* Rail heading hover (f18) and the fields on the page (f18, f20, f21). */
+  --detail-hover: #6f5430;
+  --border-field: #e3ddd0;
   /*
    * TOPICS (ADR-0007 §8). Four shades a topic keeps across every span it
    * occupies, so a subject the conversation returns to looks like the same
@@ -100,6 +103,8 @@
   --quiet-track: #3a342d;
   --quiet-clock: #6f695f;
   --note-border: #3d3527;
+  --detail-hover: #d9ab68;
+  --border-field: #3a332a;
   --drive-icon: #6ba885;
   --local-icon: #8a7f68;
   --selection: #241f18;
@@ -141,6 +146,8 @@
     --quiet-track: #3a342d;
     --quiet-clock: #6f695f;
     --note-border: #3d3527;
+    --detail-hover: #d9ab68;
+    --border-field: #3a332a;
     --drive-icon: #6ba885;
     --local-icon: #8a7f68;
     --selection: #241f18;
@@ -289,7 +296,7 @@ button { -webkit-font-smoothing: antialiased; }
    the picture takes the full width. Colours on the picture are fixed rather
    than tokenised: they sit on video, not on the page surface. */
 .player-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 22px; background: var(--overlay); }
-.player { width: min(760px, calc(100vw - 44px)); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--modal-shadow); overflow: hidden; }
+.player { width: min(654px, calc(100vw - 44px)); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--modal-shadow); overflow: hidden; }
 
 .player__header { display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 12px 0 8px; }
 .player__title { flex: 1; min-width: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -346,8 +353,10 @@ button { -webkit-font-smoothing: antialiased; }
 .player__track { position: absolute; left: 0; right: 0; top: 5.5px; height: 5px; border-radius: 2px; background: rgba(250, 248, 244, .26); }
 .player__played { position: absolute; left: 0; top: 0; height: 100%; border-radius: 2px; background: #faf8f4; }
 .player__marks { position: absolute; inset: 0; }
-.player__mark { position: absolute; top: 0; height: 100%; border-radius: 2px; background: var(--detail); cursor: pointer; }
+.player__mark { position: absolute; top: 0; height: 100%; border-radius: 2px; background: #c99a55; cursor: pointer; }
 .player__mark--unnamed { background: rgba(250, 248, 244, .5); }
+/* Several notes too close to tell apart (f20): one taller mark with an inset edge. */
+.player__mark--merged { top: -2px; height: 9px; box-shadow: inset 0 0 0 1px rgba(28, 26, 23, .35); }
 .player__playhead { position: absolute; top: -4px; width: 4px; height: 13px; margin-left: -2px; border-radius: 2px; background: #faf8f4; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
 /*
  * Topic band: its own 3px strip under the rail, inside the existing 16px hit
@@ -429,15 +438,70 @@ button { -webkit-font-smoothing: antialiased; }
 .player__help-keys { flex: 0 0 84px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; color: #f2ede3; }
 .player__help-text { font-size: 12px; color: #d8d1c4; }
 
-/* Fullscreen (design f15): the picture takes the screen; chrome stays legible. */
+/* The picture's own copy of the name, and its way back to the rail: fullscreen only (f15). */
+.player__picture-title, .player__picture-rail { display: none; }
+
+/* Fullscreen (f15): the picture takes the screen and there is no popup header,
+   so the name moves onto the picture, top left. The rail stays, as a dark
+   translucent panel over the picture's right edge, and everything on the
+   picture ends at that edge instead of sliding under it. */
 .player-overlay:fullscreen { padding: 0; background: #000; }
 .player-overlay:fullscreen .player { width: 100%; height: 100%; border: 0; border-radius: 0; display: flex; flex-direction: column; box-shadow: none; }
-.player-overlay:fullscreen .player__body { flex: 1; height: auto; border-top: 0; }
+.player-overlay:fullscreen .player__header { display: none; }
+.player-overlay:fullscreen .player__body { position: relative; flex: 1; height: auto; border-top: 0; }
 .player-overlay:fullscreen .player__stage,
 .player-overlay:fullscreen .player__body--rail .player__stage { flex: 1; height: auto; }
-/* Fullscreen is for the picture; the rail steps out and returns on exit. */
-.player-overlay:fullscreen .player__rail { display: none; }
 .player-overlay:fullscreen .player__video { height: 100%; }
+.player-overlay:fullscreen .player__picture-title { position: absolute; z-index: 1; top: 16px; left: 20px; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 180px); pointer-events: none; }
+.player-overlay:fullscreen .player__picture-name { overflow: hidden; min-width: 0; color: #f2ede3; font: 600 12.5px 'IBM Plex Mono', ui-monospace, monospace; text-overflow: ellipsis; text-shadow: 0 1px 6px rgba(0, 0, 0, .6); white-space: nowrap; }
+.player-overlay:fullscreen .player__picture-date { flex-shrink: 0; color: #a49c8e; font: 9.5px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .1em; }
+.player-overlay:fullscreen .player__selfcam { top: 14px; right: 20px; width: 120px; height: 68px; }
+.player-overlay:fullscreen .player__scrim { height: 170px; background: linear-gradient(rgba(10, 9, 8, 0) 0%, rgba(10, 9, 8, .56) 48%, rgba(10, 9, 8, .9) 100%); }
+.player-overlay:fullscreen .player__subtitle { right: 24px; bottom: 90px; left: 24px; }
+.player-overlay:fullscreen .player__subtitle-bubble { gap: 9px; padding: 9px 13px; font-size: 14px; }
+.player-overlay:fullscreen .player__subtitle-tag { font-size: 9px; }
+.player-overlay:fullscreen .player__scrub { right: 20px; bottom: 56px; left: 20px; }
+.player-overlay:fullscreen .player__controls { right: 20px; bottom: 16px; left: 20px; gap: 9px; }
+.player-overlay:fullscreen .player__play,
+.player-overlay:fullscreen .player__icon--on-picture { width: 32px; height: 32px; border-radius: 7px; }
+.player-overlay:fullscreen .player__icon--on-picture { background: rgba(250, 248, 244, .12); }
+.player-overlay:fullscreen .player__icon--on-picture:hover { background: rgba(250, 248, 244, .2); }
+.player-overlay:fullscreen .player__clock { font-size: 11px; }
+.player-overlay:fullscreen .player__picture-rail { display: inline-flex; }
+/* With the rail open, the picture's chrome stops 20px short of it. */
+.player-overlay:fullscreen .player__body--rail .player__selfcam,
+.player-overlay:fullscreen .player__body--rail .player__scrub,
+.player-overlay:fullscreen .player__body--rail .player__controls { right: 270px; }
+.player-overlay:fullscreen .player__body--rail .player__scrim { right: 250px; }
+.player-overlay:fullscreen .player__body--rail .player__subtitle { right: 274px; }
+.player-overlay:fullscreen .player__rail {
+  /* The panel sits on the picture, so it keeps the picture's colours in either theme. */
+  --raised: rgba(16, 14, 12, .92);
+  --divider: rgba(250, 248, 244, .12);
+  --detail: #c99a55;
+  --detail-hover: #d9ab68;
+  --faint: #8b8474;
+  --idle: #7d7768;
+  --body: #c2bbac;
+  --ink: #f6f3ec;
+  --accent: #f0a99c;
+  --note-band: rgba(250, 248, 244, .09);
+  --note-chip: rgba(250, 248, 244, .06);
+  --note-icon: #6f695c;
+  --border-field: rgba(250, 248, 244, .16);
+  --surface: rgba(250, 248, 244, .05);
+  --focus: #c99a55;
+  position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: 250px;
+}
+.player-overlay:fullscreen .player__rail-head { height: 38px; }
+.player-overlay:fullscreen .player__rail-name { display: inline; color: #8b8474; font-size: 9.5px; font-weight: 600; letter-spacing: .14em; }
+.player-overlay:fullscreen .player__rail-count { flex-shrink: 0; color: #6f695c; font-weight: 400; letter-spacing: .06em; }
+.player-overlay:fullscreen .player__rail:not(.player__rail--counted) .player__rail-count,
+.player-overlay:fullscreen .player__rail-srt { display: none; }
+.player-overlay:fullscreen .player__rail-hide { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #8b8474; cursor: pointer; }
+.player-overlay:fullscreen .player__rail-hide:hover { color: #c99a55; }
+.player-overlay:fullscreen .player__rail-hide:focus-visible { outline: 2px solid #c99a55; outline-offset: 2px; }
+.player-overlay:fullscreen .player__rail-list { scrollbar-color: rgba(250, 248, 244, .16) transparent; }
 /* Auxiliary tracks: audio is invisible, the camera renders as the PiP. */
 .player__aux { position: absolute; inset: 0; pointer-events: none; }
 .player__aux audio { display: none; }
@@ -577,15 +641,48 @@ button { -webkit-font-smoothing: antialiased; }
 .player__rail-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .player__rail { display: flex; flex: 1; flex-direction: column; min-width: 0; border-left: 1px solid var(--divider); background: var(--raised); }
 .player__rail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 34px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--divider); }
-.player__rail-count { overflow: hidden; flex: 1; min-width: 0; color: var(--faint); font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; white-space: nowrap; text-overflow: ellipsis; }
+.player__rail-label { display: inline-flex; flex: 1; align-items: baseline; gap: 7px; min-width: 0; }
+/* The panel names itself only in fullscreen (f15), where no header does it. */
+.player__rail-name, .player__rail-hide { display: none; }
+.player__rail-count { overflow: hidden; min-width: 0; color: var(--faint); font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; white-space: nowrap; text-overflow: ellipsis; }
 .player__rail-srt { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--detail); cursor: pointer; font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .08em; transition: var(--hover-transition); }
 .player__rail-srt:hover { background: var(--note-chip); }
 .player__rail-srt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .player__rail-list { flex: 1; overflow-y: auto; padding: 0 12px 12px; scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
-.player__rail-heading { position: sticky; z-index: 1; top: 0; display: block; width: 100%; padding: 9px 0 5px 12px; border: 0; background: var(--raised); color: var(--detail); cursor: pointer; font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; text-align: left; text-transform: uppercase; transition: var(--hover-transition); }
-.player__rail-heading:hover { color: color-mix(in srgb, var(--detail) 80%, var(--ink)); }
-.player__rail-heading--unnamed { color: var(--faint); }
+/* A note's heading (f10): the row plays from the note; its name and the pencil
+   that hovering reveals rename it (f18); a long rail adds its start time (f20). */
+.player__rail-heading { position: sticky; z-index: 1; top: 0; display: flex; align-items: baseline; padding: 9px 0 5px 12px; background: var(--raised); color: var(--detail); cursor: pointer; font: 600 9px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; transition: var(--hover-transition); }
+.player__rail-heading:hover { color: var(--detail-hover); }
+.player__rail-heading--unnamed { color: var(--idle); }
 .player__rail-heading:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.player__rail-heading-name { overflow: hidden; min-width: 0; white-space: nowrap; text-overflow: ellipsis; }
+.player__rail-rename { display: inline-flex; flex-shrink: 0; align-self: center; width: 9px; height: 9px; margin-left: 7px; padding: 0; border: 0; background: transparent; color: var(--note-icon); cursor: pointer; opacity: 0; }
+.player__rail-rename svg { display: block; }
+.player__rail-heading:hover .player__rail-rename,
+.player__rail-heading:focus-within .player__rail-rename { opacity: 1; }
+.player__rail-rename:hover { color: var(--detail); }
+.player__rail-rename:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; opacity: 1; }
+.player__rail-heading-time { flex-shrink: 0; margin-left: auto; padding-left: 8px; color: var(--idle); font-weight: 400; letter-spacing: 0; }
+/* Renaming (f18): the heading becomes the same mono field the rename sheet uses. */
+.player__rail-heading--editing { padding: 7px 0 6px 9px; cursor: default; }
+.player__rail-rename-field { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--border-field); border-radius: 4px; background: var(--surface); }
+.player__rail-rename-input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; caret-color: var(--detail); color: var(--ink); font: 600 9.5px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.player__rail-rename-input::placeholder { color: var(--faint); opacity: 1; }
+.player__rail-rename-save { display: inline-flex; flex-shrink: 0; padding: 0; border: 0; background: transparent; color: var(--detail); cursor: pointer; }
+.player__rail-rename-save svg { display: block; }
+.player__rail-rename-save:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* A merged mark's notes, flashed where they sit in the list (f20). */
+.player__rail-heading--revealed { animation: rail-reveal 1400ms var(--ease); }
+@keyframes rail-reveal { 0%, 35% { background: var(--note-band); } 100% { background: var(--raised); } }
+/* Search (f20): a long rail's own field, under its header. */
+.player__rail-search { flex-shrink: 0; padding: 8px 12px; border-bottom: 1px solid var(--divider); }
+.player__rail-search-field { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px; border: 1px solid var(--border-field); border-radius: 4px; background: var(--surface); color: var(--faint); cursor: text; transition: var(--hover-transition); }
+.player__rail-search-field svg { flex-shrink: 0; }
+.player__rail-search-field:focus-within { border-color: var(--detail); box-shadow: 0 0 0 3px color-mix(in srgb, var(--detail) 16%, transparent); }
+.player__rail-query { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: 10px 'IBM Plex Mono', ui-monospace, monospace; appearance: none; }
+.player__rail-query::placeholder { color: var(--faint); opacity: 1; }
+.player__rail-query::-webkit-search-cancel-button { appearance: none; }
+.player__rail-empty { margin: 0; padding: 24px 0; color: var(--faint); font: 500 9.5px/1.5 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .1em; text-align: center; }
 .player__rail-line { display: grid; grid-template-columns: 3px minmax(0, 1fr); gap: 9px; width: calc(100% + 12px); margin: 0 -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; transition: var(--hover-transition); }
 .player__rail-line:hover { background: var(--note-chip); }
 .player__rail-line:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }

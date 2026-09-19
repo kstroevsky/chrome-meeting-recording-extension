@@ -27,6 +27,37 @@ export type SourceResolverDeps = {
   revokeObjectURL?: (url: string) => void;
 };
 
+/** What turning a track into a playable URL needs from the page. */
+export type PlaybackUrlDeps = {
+  prepareDriveSource: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
+  resolver?: SourceResolverDeps;
+  warn?: (...args: unknown[]) => void;
+};
+
+/**
+ * A URL a media element can load for `track`: the retained copy when there is
+ * one, else a prepared Drive stream; undefined when neither can be reached.
+ * `refresh` skips the retained copy and re-mints the Drive lease, which is how
+ * an expired token is recovered. Shared by the player and the note editor.
+ */
+export async function playbackUrl(
+  recordingId: string,
+  track: PlaybackTrack,
+  deps: PlaybackUrlDeps,
+  refresh = false,
+): Promise<{ url: string; revoke?: () => void } | undefined> {
+  if (!refresh && track.sources.some((source) => source.kind === 'opfs')) {
+    const resolved = await resolveTrackSource(track, deps.resolver);
+    if (resolved.kind === 'opfs') return { url: resolved.url, revoke: resolved.revoke };
+  }
+  if (track.sources.some((source) => source.kind === 'drive')) {
+    const url = await deps.prepareDriveSource(recordingId, track.fileId, refresh)
+      .catch((error) => { deps.warn?.('Drive playback preparation failed', error); return undefined; });
+    if (url) return { url };
+  }
+  return undefined;
+}
+
 export async function resolveTrackSource(
   track: PlaybackTrack,
   deps: SourceResolverDeps = {},

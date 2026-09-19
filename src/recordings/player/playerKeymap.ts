@@ -22,6 +22,8 @@ export type PlayerAction =
   | { kind: 'topic'; direction: -1 | 1 }
   | { kind: 'fullscreen' }
   | { kind: 'subtitles' }
+  | { kind: 'rename' }
+  | { kind: 'search' }
   | { kind: 'help' }
   | { kind: 'escape' };
 
@@ -60,6 +62,7 @@ export function resolvePlayerAction(event: KeyLike, options: KeymapOptions = {})
 
   // `?` is shifted on most layouts, so match the character rather than the key.
   if (event.key === '?') return { kind: 'help' };
+  if (event.key === '/') return { kind: 'search' };
 
   const skip = options.skipSeconds ?? 10;
   switch (event.key) {
@@ -78,6 +81,7 @@ export function resolvePlayerAction(event: KeyLike, options: KeymapOptions = {})
     case 'm': return { kind: 'mute' };
     case 'f': return { kind: 'fullscreen' };
     case 'c': return { kind: 'subtitles' };
+    case 'r': return { kind: 'rename' };
     case 'n': return { kind: 'note', direction: event.shiftKey ? -1 : 1 };
     // Same shape as N, because it is the same gesture against the other set of
     // marks: walk the conversation by subject rather than by note (ADR-0007).
@@ -131,6 +135,8 @@ export const KEYBOARD_HELP: ReadonlyArray<{ keys: string; description: string }>
   { keys: 'T / ⇧T', description: 'Next or previous topic' },
   { keys: 'F', description: 'Fullscreen' },
   { keys: 'C', description: 'Subtitles' },
+  { keys: 'R', description: 'Rename the note being played' },
+  { keys: '/', description: 'Search the transcript' },
   { keys: '?', description: 'This map' },
   { keys: 'Esc', description: 'Leave fullscreen, then close' },
 ];

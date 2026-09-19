@@ -23,6 +23,13 @@ describe('resolvePlayerAction', () => {
     expect(resolvePlayerAction({ key: 'm' })).toEqual({ kind: 'mute' });
     expect(resolvePlayerAction({ key: 'F' })).toEqual({ kind: 'fullscreen' });
     expect(resolvePlayerAction({ key: 'c' })).toEqual({ kind: 'subtitles' });
+    expect(resolvePlayerAction({ key: 'R' })).toEqual({ kind: 'rename' });
+  });
+
+  it('sends / to the rail search, but not from inside a field (f19)', () => {
+    expect(resolvePlayerAction({ key: '/' })).toEqual({ kind: 'search' });
+    expect(resolvePlayerAction({ key: '/' }, { inField: true })).toBeNull();
+    expect(resolvePlayerAction({ key: 'r' }, { inField: true })).toBeNull();
   });
 
   it('walks notes forward, and backward with shift', () => {

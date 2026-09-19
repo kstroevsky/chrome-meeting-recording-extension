@@ -99,6 +99,11 @@ export class RecordingsController {
         remove: (id) => {
           void this.view.askToRemove(id).then((removed) => { if (removed) player.close(); });
         },
+        renameNotation: async (recordingId, id, text) => {
+          const response = await sendToBackground({ type: 'UPDATE_RECORDING_NOTATION', recordingId, id, text });
+          if (!response.ok) throw new Error(response.error || 'Could not rename the note');
+          return response.notations;
+        },
       });
       this.player = player;
       document.body.append(player.element);

@@ -1,4 +1,4 @@
-import { activeSegmentIndex, railItems, sortSegments, toSrt, type RailItem } from '../playerTranscript';
+import { activeSegmentIndex, noteAt, railItems, sortSegments, toSrt, type RailItem } from '../playerTranscript';
 import type { RecordingNotation } from '../../../shared/notations';
 import type { TranscriptSegment } from '../../../shared/transcript';
 
@@ -76,5 +76,15 @@ describe('toSrt', () => {
 
   it('is empty for an empty transcript', () => {
     expect(toSrt([])).toBe('');
+  });
+});
+
+describe('noteAt', () => {
+  it('finds the note under the playhead by the rail\'s own rule', () => {
+    const notes = [note('open', 5, undefined), note('closed', 20, 30)];
+    expect(noteAt(notes, 10_000)?.id).toBe('open');
+    expect(noteAt(notes, 25_000)?.id).toBe('closed');
+    expect(noteAt(notes, 40_000)).toBeNull();
+    expect(noteAt(notes, 1_000)).toBeNull();
   });
 });
