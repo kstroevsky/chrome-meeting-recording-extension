@@ -285,7 +285,17 @@ export class PopupController {
     if (preview.devicePicker) this.devicePicker.showPreview(preview.devicePicker.device, preview.devicePicker.options);
     if (preview.confirmDiscard) void this.commands.askDiscard().confirmation;
     const namingJob = preview.naming && preview.session.uploadJobs?.find((job) => job.id === preview.selectedUploadJobId);
-    if (preview.naming && namingJob) void this.recordingNameDialog.ask(previewDriveNaming(namingJob, preview.naming.folders));
+    if (preview.naming && namingJob) {
+      const { folders, picked, open, query } = preview.naming;
+      void this.recordingNameDialog.ask(previewDriveNaming(namingJob, folders, picked ?? null));
+      // The picker's own controls, driven the way a person would (9FD, 7D).
+      if (open) document.querySelector<HTMLButtonElement>('.recording-name-destination__select .select-trigger')?.click();
+      const search = document.querySelector<HTMLInputElement>('.recording-name-destination__select .select-search-input');
+      if (open && query && search) {
+        search.value = query;
+        search.dispatchEvent(new Event('input'));
+      }
+    }
   }
 
   /** Wires the controller-owned interactions that are safe inside a static preview. */

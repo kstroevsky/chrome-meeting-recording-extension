@@ -150,8 +150,9 @@ export class CompletedNamingPrompt {
 }
 
 /** A title for the gallery: the Drive prompt with its real copy, and no writes. */
-export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
-  return driveNamingOptions(job, presets, async () => {});
+export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[], pickedId: string | null = null): RecordingNameDialogOptions {
+  const options = driveNamingOptions(job, presets, async () => {});
+  return options.destinations ? { ...options, destinations: { ...options.destinations, initialId: pickedId } } : options;
 }
 
 function driveNamingOptions(

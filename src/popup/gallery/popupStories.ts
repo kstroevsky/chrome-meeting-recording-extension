@@ -418,6 +418,35 @@ export const POPUP_STORIES: PopupStory[] = [
     },
   })),
   {
+    id: 'naming-folders-open', title: 'Naming · folder list open', group: 'Overlays',
+    description: '9FD — open, the list takes the field\'s place in the flow; the picked folder is tinted and ticked.',
+    preview: {
+      screen: 'session',
+      session: session({ uploadJobs: [{ ...uploadJob('completed', 1), label: 'Team sync — Jul 11', namingStatus: 'pending', historyId: 'gallery-history-alex' }] }),
+      selectedUploadJobId: uploadJob('completed', 1).id,
+      naming: {
+        folders: [{ id: 'weekly', name: 'Weekly meetings' }, { id: 'clients', name: 'Client calls' }, { id: 'interviews', name: 'Interviews' }],
+        picked: 'weekly',
+        open: true,
+      },
+    },
+  },
+  {
+    id: 'naming-folders-search', title: 'Naming · many folders, searched', group: 'Overlays',
+    description: '7D — past eight folders the list gains a search row, and says how many it kept.',
+    preview: {
+      screen: 'session',
+      session: session({ uploadJobs: [{ ...uploadJob('completed', 1), label: 'Team sync — Jul 11', namingStatus: 'pending', historyId: 'gallery-history-alex' }] }),
+      selectedUploadJobId: uploadJob('completed', 1).id,
+      naming: {
+        folders: ['Weekly meetings', 'Weekly 1-1s', 'Weekly review — eng', 'Biweekly design crit', 'Client calls', 'Interviews', 'Hiring loop', 'Board prep', 'Quarterly planning', 'Sales demos', 'Onboarding', 'Retros', 'Standups', 'Design reviews', 'Security', 'Legal', 'Finance', 'Support escalations', 'Partner calls', 'Research', 'All hands', 'Offsite', 'Vendor calls', 'Product sync', 'Marketing', 'Customer advisory'].map((name, index) => ({ id: `folder-${index}`, name })),
+        picked: 'folder-0',
+        open: true,
+        query: 'wee',
+      },
+    },
+  },
+  {
     id: 'discard-confirm', title: 'Discard confirmation', group: 'Overlays',
     description: 'n3 — the stake in bold, and the notes a discard would take, named rather than implied.',
     preview: {

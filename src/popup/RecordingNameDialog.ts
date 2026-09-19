@@ -195,6 +195,8 @@ export class RecordingNameDialog {
     const destinationSelect = createListboxSelect({
       label: 'Google Drive destination',
       className: 'recording-name-destination__select',
+      // A long list gains a search row (7D); a short one stays a plain list (9FD).
+      search: { minOptions: 8, placeholder: 'Search folders', noun: 'FOLDERS' },
       options: [],
       onChange: () => {},
       doc: this.doc,

@@ -43,8 +43,12 @@ export type PopupPreviewState =
       savedDurationMs?: number;
       /** Opens the discard confirmation over the recording (n3). */
       confirmDiscard?: boolean;
-      /** Opens the naming prompt for the selected finished upload, with these folders (9L, 9FL). */
-      naming?: { folders: DriveFolderPreset[] };
+      /**
+       * Opens the naming prompt for the selected finished upload, with these
+       * folders (9L, 9FL). `picked` preselects one, `open` shows the list in
+       * the flow (9FD), and `query` types into its search (7D).
+       */
+      naming?: { folders: DriveFolderPreset[]; picked?: string; open?: boolean; query?: string };
       /** A focused setup-only condition owned by the real setup controls. */
       setup?: {
         micPermissionRequired?: boolean;

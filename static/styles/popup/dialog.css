@@ -42,8 +42,27 @@ body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: a
 .recording-name-destination__select .select-trigger[aria-expanded='true'] { border-color: var(--ink); background: var(--field-bg); }
 .recording-name-destination__select .select-trigger [data-select-label] { overflow: hidden; min-width: 0; white-space: nowrap; text-overflow: ellipsis; }
 .recording-name-destination__select .select-trigger:disabled { opacity: .6; cursor: progress; }
-.recording-name-destination__select .select-options { top: calc(100% + 4px); right: 0; left: 0; width: auto; max-height: 216px; overflow-y: auto; }
-.recording-name-destination__select .select-options button { height: 36px; font: 13px 'Space Grotesk', system-ui, sans-serif; }
+/* Open (9FD), the list takes the field's place in the flow instead of floating
+   over the buttons: an ink-edged box of folder rows, the picked one tinted and ticked. */
+.recording-name-destination__select .select-trigger[aria-expanded='true'] { display: none; }
+.recording-name-destination__select .select-options { position: static; width: auto; padding: 5px; border: 1.5px solid var(--ink); border-radius: 6px; background: var(--field-bg); box-shadow: none; }
+.recording-name-destination__select .select-options button { gap: 9px; height: 36px; padding: 0 7px; color: var(--ink-2); font: 13px 'Space Grotesk', system-ui, sans-serif; }
+.recording-name-destination__select .select-options button::before { width: 14px; height: 14px; flex: 0 0 auto; background: var(--pick-icon); content: ''; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 5.2A1.2 1.2 0 013.2 4h2.4l1.2 1.6h5A1.2 1.2 0 0113 6.8v4.8a1.2 1.2 0 01-1.2 1.2H3.2A1.2 1.2 0 012 11.6V5.2z' fill='none' stroke='black' stroke-width='1.3'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 5.2A1.2 1.2 0 013.2 4h2.4l1.2 1.6h5A1.2 1.2 0 0113 6.8v4.8a1.2 1.2 0 01-1.2 1.2H3.2A1.2 1.2 0 012 11.6V5.2z' fill='none' stroke='black' stroke-width='1.3'/%3E%3C/svg%3E") center / contain no-repeat; }
+.recording-name-destination__select .select-option-label { overflow: hidden; flex: 1; min-width: 0; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+.recording-name-destination__select .select-options .select-check { display: none; }
+.recording-name-destination__select .select-options button[aria-selected='true'] { background: var(--pick-bg); color: var(--ink); font-weight: 400; }
+.recording-name-destination__select .select-options button[aria-selected='true']::before { background: var(--warn-label); }
+.recording-name-destination__select .select-options button[aria-selected='true']::after { width: 13px; height: 13px; flex: 0 0 auto; background: var(--done-ink); content: ''; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-6.5' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-6.5' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
+.recording-name-destination__select .select-options button:hover,
+.recording-name-destination__select .select-options button:focus-visible { background: var(--pick-bg); color: var(--ink); }
+/* Past eight folders the list gains a search row and a count (7D); rows tighten to 34px. */
+.recording-name-destination__select.listbox--searchable .select-options { max-height: 260px; overflow-y: auto; }
+.recording-name-destination__select.listbox--searchable .select-options button { height: 34px; }
+.recording-name-destination__select .select-search { position: sticky; z-index: 1; top: -5px; display: flex; align-items: center; gap: 8px; height: 34px; margin-bottom: 4px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--field-bg); }
+.recording-name-destination__select .select-search-icon { width: 13px; height: 13px; flex: 0 0 auto; color: var(--pick-icon); }
+.recording-name-destination__select .select-search-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; caret-color: var(--ink); color: var(--ink); font: 12.5px 'Space Grotesk', system-ui, sans-serif; }
+.recording-name-destination__select .select-search-input::placeholder { color: var(--pick-icon); opacity: 1; }
+.recording-name-destination__select .select-count { padding: 6px 7px 2px; color: var(--pick-icon); font: 9.5px 'IBM Plex Mono', monospace; letter-spacing: .08em; }
 /* A 46px ink primary; the way out is quiet text beneath it. */
 .recording-name-card .modal-actions { gap: 6px; margin-top: 16px; }
 .recording-name-card .modal-actions .btn-ink { height: 46px; }

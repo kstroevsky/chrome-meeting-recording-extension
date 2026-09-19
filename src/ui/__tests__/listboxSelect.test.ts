@@ -118,3 +118,82 @@ describe('createListboxSelect', () => {
     expect(other.root.isConnected).toBe(false);
   });
 });
+
+describe('createListboxSelect with search (7D)', () => {
+  const many = Array.from({ length: 10 }, (_, i) => ({ value: `f${i}`, label: i < 3 ? `Weekly ${i}` : `Folder ${i}` }));
+  const setup = (options = many) => {
+    document.body.replaceChildren();
+    const onChange = jest.fn();
+    const listbox = createListboxSelect({
+      label: 'Folder', options, onChange,
+      search: { minOptions: 8, placeholder: 'Search folders', noun: 'FOLDERS' },
+    });
+    document.body.append(listbox.root);
+    const trigger = listbox.root.querySelector<HTMLButtonElement>('.select-trigger')!;
+    const search = () => listbox.root.querySelector<HTMLInputElement>('.select-search-input');
+    const shown = () => Array.from(listbox.root.querySelectorAll<HTMLButtonElement>('[role="option"]')).filter((o) => !o.hidden);
+    const count = () => listbox.root.querySelector<HTMLElement>('.select-count')!;
+    const type = (text: string) => { search()!.value = text; search()!.dispatchEvent(new Event('input')); };
+    const key = (k: string) => search()!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    return { listbox, onChange, trigger, search, shown, count, type, key };
+  };
+
+  it('stays a plain list at eight options or fewer', () => {
+    const { search, trigger } = setup(many.slice(0, 8));
+    trigger.click();
+    expect(search()).toBeNull();
+  });
+
+  it('opens into the search, filters as you type, and says how many it kept', () => {
+    const { search, trigger, shown, count, type } = setup();
+    trigger.click();
+    expect(document.activeElement).toBe(search());
+    expect(count().hidden).toBe(true);
+
+    type('wee');
+    expect(shown().map((o) => o.textContent)).toEqual(['Weekly 0', 'Weekly 1', 'Weekly 2']);
+    expect(count().hidden).toBe(false);
+    expect(count().textContent).toBe('3 OF 10 FOLDERS');
+  });
+
+  it('takes the first match on Enter', () => {
+    const { listbox, onChange, trigger, type, key } = setup();
+    trigger.click();
+    type('folder 7');
+    key('Enter');
+    expect(onChange).toHaveBeenCalledWith('f7');
+    expect(listbox.getValue()).toBe('f7');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('clears the search on the first Escape and closes on the second', () => {
+    const { trigger, type, key, shown } = setup();
+    trigger.click();
+    type('wee');
+    key('Escape');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(shown()).toHaveLength(10);
+    key('Escape');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('walks only the options the search kept', () => {
+    const { listbox, trigger, type, key } = setup();
+    trigger.click();
+    type('wee');
+    key('ArrowDown');
+    expect(document.activeElement?.textContent).toBe('Weekly 0');
+    listbox.root.querySelector<HTMLElement>('.select-options')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }));
+    expect(document.activeElement?.textContent).toBe('Weekly 2');
+  });
+
+  it('keeps the search across a rebuild of the options', () => {
+    const { listbox, trigger, search } = setup();
+    listbox.setOptions(many.slice(0, 9));
+    trigger.click();
+    expect(search()).not.toBeNull();
+    listbox.setOptions(many.slice(0, 4));
+    expect(listbox.root.querySelector('.select-search')).toBeNull();
+  });
+});
