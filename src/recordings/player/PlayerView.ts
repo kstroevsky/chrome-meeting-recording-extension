@@ -668,7 +668,7 @@ export class PlayerView {
     }
     this.railCount.textContent = notations.length
       ? `${notations.length} ${notations.length === 1 ? 'NOTE' : 'NOTES'}`
-      : 'TRANSCRIPT';
+      : 'NO NOTES';
     this.rail.classList.toggle('player__rail--counted', notations.length > 0);
     const indexed = notations.length >= RAIL_INDEX_NOTES;
     this.railSearch.hidden = !indexed;
@@ -843,6 +843,13 @@ export class PlayerView {
       mark.title = text || 'Name this one';
       mark.classList.toggle('player__mark--unnamed', !text);
     }
+  }
+
+  /** `T`, and the header's panel button: the rail, when there is one to show. */
+  toggleRail(): boolean {
+    if (!this.segments.length) return false;
+    this.setRailOpen(!this.railOpen);
+    return true;
   }
 
   /** `R`: renames the note under the playhead, opening the rail to do it. */

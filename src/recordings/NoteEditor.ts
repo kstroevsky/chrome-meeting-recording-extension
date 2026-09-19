@@ -121,6 +121,8 @@ export class NoteEditor {
   private busy = false;
   /** A drag over transcript lines: where it began, and whether it has left that line. */
   private lineDrag: { from: number; moved: boolean } | null = null;
+  /** Where the current span was begun, so Shift can extend it from there. */
+  private anchor: number | null = null;
   /** A grab handle being dragged on the timeline. */
   private handleDrag: 'start' | 'end' | null = null;
   private readonly listeners = new AbortController();
@@ -247,7 +249,16 @@ export class NoteEditor {
     this.linesHost.addEventListener('mouseover', (event) => this.onLinesOver(event));
     this.linesHost.addEventListener('dblclick', (event) => {
       const index = this.lineIndexAt(event.target);
-      if (index != null) this.startDraft(spanOfLines(this.lines, this.lines.findIndex((line) => line.index === index), this.lines.findIndex((line) => line.index === index)));
+      if (index != null) this.spanTo(index, index);
+    });
+    // The same reach without a mouse (f19): Enter plays the focused line, Shift+Enter marks from it.
+    this.linesHost.addEventListener('keydown', (event) => {
+      const index = this.lineIndexAt(event.target);
+      if (index == null || event.target !== this.lineRows.get(index)) return;
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      if (event.shiftKey) this.spanTo(this.anchor ?? index, index, false);
+      else this.seek(this.lines.find((line) => line.index === index)!.segment.tStartMs);
     });
     this.empty.textContent = 'No notes yet. NOTE opens one at the playhead.';
     this.empty.hidden = true;
@@ -319,6 +330,19 @@ export class NoteEditor {
 
   // ─── State changes ──────────────────────────────────────────────────────────
 
+  /** The span from one line to another, as a drag, a double-click or Shift makes it. */
+  private spanTo(fromIndex: number, toIndex: number, focusName = true): void {
+    const from = this.lines.findIndex((line) => line.index === fromIndex);
+    const to = this.lines.findIndex((line) => line.index === toIndex);
+    if (from < 0 || to < 0) return;
+    this.anchor = fromIndex;
+    const text = this.draft?.noteId ? '' : this.draft?.text ?? '';
+    this.draft = { ...spanOfLines(this.lines, from, to), noteId: null, text };
+    this.nameField.value = text;
+    this.render();
+    if (focusName) this.nameField.focus();
+  }
+
   private startDraft(span: DraftSpan, from?: RecordingNotation): void {
     this.draft = { ...span, noteId: from?.id ?? null, text: from?.text ?? this.draft?.text ?? '' };
     this.nameField.value = this.draft.text;
@@ -338,6 +362,7 @@ export class NoteEditor {
 
   private discard(): void {
     this.draft = null;
+    this.anchor = null;
     this.nameField.value = '';
     this.render();
   }
@@ -412,6 +437,8 @@ export class NoteEditor {
     const index = this.lineIndexAt(target);
     if (index == null) return;
     event.preventDefault();
+    // Shift takes the span from where the last one began to here, no drag needed.
+    if (event.shiftKey) { this.spanTo(this.anchor ?? index, index); return; }
     this.lineDrag = { from: index, moved: false };
   }
 
@@ -420,10 +447,7 @@ export class NoteEditor {
     const index = this.lineIndexAt(event.target);
     if (index == null || (index === this.lineDrag.from && !this.lineDrag.moved)) return;
     this.lineDrag.moved = true;
-    const from = this.lines.findIndex((line) => line.index === this.lineDrag!.from);
-    const to = this.lines.findIndex((line) => line.index === index);
-    this.draft = { ...spanOfLines(this.lines, from, to), noteId: null, text: this.draft?.noteId ? '' : this.draft?.text ?? '' };
-    this.render();
+    this.spanTo(this.lineDrag.from, index, false);
   }
 
   private onPointerMove(event: PointerEvent): void {
@@ -502,6 +526,8 @@ export class NoteEditor {
     const rows = this.lines.map((line) => {
       const row = $('div', `note-editor__line${line.noteId ? ' note-editor__line--noted' : ''}`);
       row.dataset.index = String(line.index);
+      row.tabIndex = 0;
+      row.title = 'Play from here · Shift to mark a span from the last one';
       const name = $('span', 'note-editor__note');
       if (line.noteName != null && line.noteId) {
         const label = $('button', `note-editor__note-name${line.noteName ? '' : ' note-editor__note-name--unnamed'}`);

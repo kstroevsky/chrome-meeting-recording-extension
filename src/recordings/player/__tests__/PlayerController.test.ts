@@ -251,7 +251,10 @@ describe('the rail as an index (f18, f20)', () => {
   const lineAt = (startS: number, text: string) => ({ tStartMs: startS * 1000, tEndMs: startS * 1000 + 2_000, speaker: 'Alex', text });
 
   async function openWith(notations: ReturnType<typeof note>[], over: Partial<PlayerControllerDeps> = {}) {
-    const segments = notations.map((n) => lineAt(n.tStartMs / 1000 + 1, `Said during ${n.text || 'nothing'}`));
+    // One line per note, and a line of its own when there are no notes to hang them on.
+    const segments = notations.length
+      ? notations.map((n) => lineAt(n.tStartMs / 1000 + 1, `Said during ${n.text || 'nothing'}`))
+      : [lineAt(30, 'Said with nothing noted')];
     const { controller } = make({
       getManifest: jest.fn(async () => manifest([], { transcriptStatus: 'ready', durationMs: 3_600_000, notations })),
       getTranscript: jest.fn(async () => ({ source: 'meet-captions' as const, segments })),
@@ -325,6 +328,18 @@ describe('the rail as an index (f18, f20)', () => {
     expect(controller.element.querySelector('.player__rail-rename')).toBeNull();
     controller.element.querySelector<HTMLElement>('.player__rail-heading-name')!.click();
     expect(controller.element.querySelector('.player__rail-rename-input')).toBeNull();
+  });
+
+  it('says NO NOTES when a transcript carries none, and T shows or hides the rail (f14, f19)', async () => {
+    const controller = await openWith([]);
+    expect(controller.element.querySelector('.player__rail-count')?.textContent).toBe('NO NOTES');
+
+    const rail = controller.element.querySelector<HTMLElement>('.player__rail')!;
+    expect(rail.hidden).toBe(false);
+    press(document.body, 't');
+    expect(rail.hidden).toBe(true);
+    press(document.body, 't');
+    expect(rail.hidden).toBe(false);
   });
 
   it('keeps a short rail plain, with no search and no heading times (f10)', async () => {

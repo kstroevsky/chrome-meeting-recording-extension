@@ -87,6 +87,8 @@ export class RecordingsView {
   private selected = new Set<string>();
   /** Note counts + searchable note text per recording (ADR-0005). */
   private noteSummaries: Record<string, RecordingNotationSummary> = {};
+  /** Until the digest lands, the column stays blank rather than claiming a dash. */
+  private noteSummariesRead = false;
   /** Topic keywords per recording, for the column and the search (ADR-0007). */
   private topicSummaries: Record<string, RecordingTopicSummary> = {};
 
@@ -96,6 +98,7 @@ export class RecordingsView {
    */
   setNoteSummaries(summaries: Record<string, RecordingNotationSummary>): void {
     this.noteSummaries = summaries;
+    this.noteSummariesRead = true;
   }
 
   /**
@@ -433,7 +436,7 @@ export class RecordingsView {
       withHit(preview, `${formatDurationMs(summary.firstAtMs)} ${label}`, this.query.trim().toLocaleLowerCase());
       notes.append(chip, preview);
       notes.title = summary.count === 1 ? '1 note' : `${summary.count} notes`;
-    } else {
+    } else if (this.noteSummariesRead) {
       notes.classList.add('recording-row__notes--none');
       notes.textContent = '—';
     }

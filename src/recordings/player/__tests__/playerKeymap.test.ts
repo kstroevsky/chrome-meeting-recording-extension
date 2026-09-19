@@ -144,9 +144,13 @@ describe('KEYBOARD_HELP', () => {
 });
 
 describe('topic navigation (ADR-0007)', () => {
-  it('walks topics with T, and backwards with shift', () => {
-    expect(resolvePlayerAction({ key: 't' })).toEqual({ kind: 'topic', direction: 1 });
-    expect(resolvePlayerAction({ key: 'T', shiftKey: true })).toEqual({ kind: 'topic', direction: -1 });
+  it('walks topics with G, and backwards with shift', () => {
+    expect(resolvePlayerAction({ key: 'g' })).toEqual({ kind: 'topic', direction: 1 });
+    expect(resolvePlayerAction({ key: 'G', shiftKey: true })).toEqual({ kind: 'topic', direction: -1 });
+  });
+
+  it('gives T to the transcript itself, as the map says (f19)', () => {
+    expect(resolvePlayerAction({ key: 't' })).toEqual({ kind: 'transcript' });
   });
 
   it('never fires while a field has focus', () => {
@@ -160,6 +164,7 @@ describe('topic navigation (ADR-0007)', () => {
   });
 
   it('is described in the map the ? overlay renders', () => {
-    expect(KEYBOARD_HELP.some((row) => row.keys === 'T / ⇧T')).toBe(true);
+    expect(KEYBOARD_HELP.some((row) => row.keys === 'G / ⇧G')).toBe(true);
+    expect(KEYBOARD_HELP.some((row) => row.keys === 'T')).toBe(true);
   });
 });

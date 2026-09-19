@@ -174,6 +174,7 @@ export class PlayerController {
         if (this.view.toggleSubtitles()) this.view.setSettings(this.skipSeconds, this.speed);
         return;
       }
+      case 'transcript': { this.view.toggleRail(); return; }
       case 'rename': { this.view.renameNoteAt(video.currentTime * 1000); return; }
       case 'search': { this.view.focusSearch(); return; }
       case 'help': { this.view.toggleHelp(); return; }

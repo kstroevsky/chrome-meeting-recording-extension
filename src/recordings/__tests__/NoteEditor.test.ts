@@ -87,6 +87,23 @@ describe('NoteEditor with a transcript (f5)', () => {
     expect(q('.note-editor__clock').textContent).toBe('00:50');
   });
 
+  it('plays a focused line on Enter, and marks a span from it with Shift', async () => {
+    const { editor, q } = make();
+    await editor.open();
+    const key = (row: HTMLElement, shift: boolean) =>
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: shift, bubbles: true, cancelable: true }));
+
+    key(rows()[2], false);
+    expect(q('.note-editor__clock').textContent).toBe('00:40');
+    expect(q('.note-editor__composer').hidden).toBe(true);
+
+    key(rows()[2], true);
+    key(rows()[3], true);
+    expect(q('.note-editor__range').textContent).toBe('00:40 → 00:52');
+    // The rows keep the focus, so the next Shift+Enter can widen the span.
+    expect(document.activeElement).not.toBe(q('.note-editor__name'));
+  });
+
   it('opens a saved note for editing only through its name, and writes it back', async () => {
     const { editor, deps, q } = make();
     await editor.open();
