@@ -38,6 +38,8 @@
         "build:opera": "webpack --mode=production --env target=opera",
         "redirect-uri": "node scripts/print-redirect-uri.mjs",
         "preversion": "npm run typecheck && npm run test:unit",
+        "prepare": "node scripts/install-git-hooks.mjs",
+        "hooks:install": "node scripts/install-git-hooks.mjs",
         "release:version": "node scripts/print-release-version.mjs",
         "check:version": "node scripts/check-version-monotonic.mjs",
         "release:build": "npm run check:version && npm run build && npm run test:production-guards",
