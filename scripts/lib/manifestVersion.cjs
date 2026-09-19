@@ -3,10 +3,10 @@
 /**
  * @file scripts/lib/manifestVersion.cjs
  *
- * Single source of truth for the extension version is package.json. The Chrome /
- * Edge manifest `version` is *derived* from it at build time so the two can never
- * drift. Chrome requires 1–4 dot-separated integers (each 0–65535) and rejects
- * semver pre-release / build suffixes, so this coerces:
+ * Chrome's rules for a manifest `version`: 1–4 dot-separated integers, each
+ * 0–65535, with no semver pre-release / build suffix. The release version itself
+ * is counted from git history (releaseVersion.cjs), which checks its result here.
+ * This coerces:
  *   "1.4.2"        -> "1.4.2"
  *   "1.4.2-beta.3" -> "1.4.2"   (full string is kept in manifest.version_name)
  *   "1.4.2+ci.7"   -> "1.4.2"

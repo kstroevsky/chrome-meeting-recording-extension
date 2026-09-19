@@ -4,7 +4,7 @@ const webpack = require('webpack')
 const CopyWebpackPlugin = require('copy-webpack-plugin')
 const { CleanWebpackPlugin } = require('clean-webpack-plugin')
 const pkg = require('./package.json')
-const { toChromeManifestVersion } = require('./scripts/lib/manifestVersion.cjs')
+const { readReleaseVersion, hasUncommittedChanges, releaseVersionName, majorOf } = require('./scripts/lib/releaseVersion.cjs')
 const {
   TARGET_PROFILES,
   DEFAULT_TARGET,
@@ -83,17 +83,36 @@ function resolveBrowserTarget(rawTarget) {
   return target
 }
 
-function transformManifest(content, oauthClientId, isDevBuild, browserTarget, telemetryEndpoint) {
+/**
+ * The release version a.b.c.d, counted from git history (scripts/lib/releaseVersion.cjs);
+ * package.json only supplies the major. A dev build without git history still
+ * builds, as a.0.0.0; a production build must be able to count.
+ */
+function resolveReleaseVersion(isDevBuild) {
+  try {
+    const version = readReleaseVersion({ cwd: __dirname, packageVersion: pkg.version })
+    const name = releaseVersionName(version, { dev: isDevBuild, dirty: hasUncommittedChanges(__dirname) })
+    return { version, name }
+  } catch (error) {
+    if (!isDevBuild) {
+      throw new Error(`Production builds count the release version from git history, which failed: ${error.message}`)
+    }
+    const version = `${majorOf(pkg.version)}.0.0.0`
+    console.warn(`[build] cannot count the release version from git (${error.message}); using ${version}`)
+    return { version, name: releaseVersionName(version, { dev: true, fromGit: false }) }
+  }
+}
+
+function transformManifest(content, oauthClientId, isDevBuild, browserTarget, telemetryEndpoint, release) {
   const manifest = JSON.parse(content.toString('utf8'))
   // Per-target manifest decisions (oauth2 / key) live in the tested profile model
   // (scripts/lib/manifestTargets.cjs), keyed off browser family + auth capability.
   applyTargetToManifest(manifest, browserTarget, { oauthClientId })
-  // package.json is the single source of truth for the release version; the
-  // numeric Chrome `version` is derived here so the two can never drift, and the
-  // full semver (incl. any pre-release tag) is preserved for display in
-  // `version_name`. The value in static/manifest.json is an ignored placeholder.
-  manifest.version = toChromeManifestVersion(pkg.version)
-  manifest.version_name = isDevBuild ? `${pkg.version} (dev)` : pkg.version
+  // The version is counted from git history at build time; `version_name` adds
+  // what makes this build differ from that commit (dev, uncommitted changes).
+  // The value in static/manifest.json is an ignored placeholder.
+  manifest.version = release.version
+  manifest.version_name = release.name
   // Dev-only diagnostics: system-wide CPU sampling via chrome.system.cpu. Never
   // shipped to production so the store listing keeps a minimal permission set
   // and avoids a permission re-review prompt for users.
@@ -138,6 +157,8 @@ module.exports = (_env, argv) => {
     throw new Error(`${TELEMETRY_ENDPOINT_ENV_KEY} is required for production builds`)
   }
   telemetryHostPermission(telemetryEndpoint)
+  const release = resolveReleaseVersion(isDevBuild)
+  console.log(`[build] release version ${release.name}`)
 
   if (targetProfile.auth === 'chrome-identity' && !configuredGoogleOauthClientId) {
     console.warn(
@@ -241,7 +262,7 @@ module.exports = (_env, argv) => {
           {
             from: path.join(STATIC_DIR, 'manifest.json'),
             to: 'manifest.json',
-            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild, browserTarget, telemetryEndpoint),
+            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild, browserTarget, telemetryEndpoint, release),
           },
           { from: path.join(STATIC_DIR, 'popup.html'),     to: 'popup.html' },
           ...(isDevBuild ? [{ from: path.join(STATIC_DIR, 'popup-gallery.html'), to: 'popup-gallery.html' }] : []),

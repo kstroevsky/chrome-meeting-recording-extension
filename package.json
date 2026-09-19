@@ -1,6 +1,6 @@
 {
     "name": "google-meet-caption-extension",
-    "version": "0.9.2",
+    "version": "0.0.0",
     "description": "Chrome (Manifest V3) extension that records Google Meet calls — tab audio/video, microphone, and camera — and scrapes the live caption transcript, saving locally to OPFS or uploading to Google Drive.",
     "keywords": [
         "chrome-extension",
@@ -38,6 +38,7 @@
         "build:opera": "webpack --mode=production --env target=opera",
         "redirect-uri": "node scripts/print-redirect-uri.mjs",
         "preversion": "npm run typecheck && npm run test:unit",
+        "release:version": "node scripts/print-release-version.mjs",
         "check:version": "node scripts/check-version-monotonic.mjs",
         "release:build": "npm run check:version && npm run build && npm run test:production-guards",
         "build:e2e:mock": "npm run analysis:model && webpack --mode=development --env e2eMockCapture=1 --env e2eMockDrive=1 --env outputPath=dist-e2e",

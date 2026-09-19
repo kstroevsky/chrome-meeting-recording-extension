@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { toChromeManifestVersion } = require('./lib/manifestVersion.cjs');
+const { readReleaseVersion } = require('./lib/releaseVersion.cjs');
 const { ANALYSIS_MODEL } = require('./lib/analysisModel.cjs');
 const pkg = require('../package.json');
 const telemetryEndpoint = process.env.TELEMETRY_ENDPOINT?.trim() ?? '';
@@ -49,10 +49,15 @@ for (const file of files.filter((candidate) => candidate.endsWith('.js'))) {
   }
 }
 
-// The Chrome manifest version is derived from package.json at build time; assert
-// the built artifact actually reflects that so a stale or un-derived version can
-// never reach the store.
-const expectedVersion = toChromeManifestVersion(pkg.version);
+// The Chrome manifest version is counted from git history at build time; assert
+// the built artifact carries the count for the commit checked out now, so a
+// stale build (made before the last commit) or an uncounted one never ships.
+let expectedVersion = null;
+try {
+  expectedVersion = readReleaseVersion({ cwd: process.cwd(), packageVersion: pkg.version });
+} catch (error) {
+  violations.push(`cannot count the release version from git: ${error.message}`);
+}
 try {
   const manifest = JSON.parse(await fs.readFile(path.join(distDir, 'manifest.json'), 'utf8'));
   const csp = manifest.content_security_policy?.extension_pages ?? '';
@@ -60,9 +65,9 @@ try {
     violations.push("dist/manifest.json extension_pages CSP is missing 'wasm-unsafe-eval' — ONNX Runtime cannot instantiate");
   }
   if (manifest.version === '0.0.0') {
-    violations.push('dist/manifest.json version is the 0.0.0 placeholder — the build did not derive it from package.json');
-  } else if (manifest.version !== expectedVersion) {
-    violations.push(`dist/manifest.json version "${manifest.version}" != package.json-derived "${expectedVersion}"`);
+    violations.push('dist/manifest.json version is the 0.0.0 placeholder — the build did not count it from git');
+  } else if (expectedVersion && manifest.version !== expectedVersion) {
+    violations.push(`dist/manifest.json version "${manifest.version}" != "${expectedVersion}" counted for this commit — rebuild`);
   }
   if (telemetryOrigin && !manifest.host_permissions?.includes(`${telemetryOrigin}/*`)) {
     violations.push(`dist/manifest.json is missing the exact telemetry host permission ${telemetryOrigin}/*`);
