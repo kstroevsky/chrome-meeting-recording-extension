@@ -9,6 +9,9 @@
 
 :root {
   color-scheme: light dark;
+  /* One easing for every hover and state change, so the popup moves as one thing. */
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --hover-transition: background-color 180ms var(--ease), border-color 180ms var(--ease), color 180ms var(--ease), box-shadow 180ms var(--ease), opacity 180ms var(--ease);
   --surface: #faf8f4;
   --raised: #f6f2ea;
   --tile: #f1ece2;
@@ -196,6 +199,9 @@ body { position: relative; width: 300px; margin: 0; padding: 18px; background: v
 button,
 select { font: inherit; }
 [hidden] { display: none !important; }
+/* Anything that reacts to the pointer eases into its hover. `:where` keeps this
+   at zero specificity, so a rule that animates transform or size still wins. */
+:where(button, a, input, select, textarea, [role='button'], [role='option'], [tabindex]) { transition: var(--hover-transition); }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 /* Sticky so the wordmark, the menu and the upload-return control stay reachable
@@ -221,12 +227,12 @@ body:has(#view-recording:not([hidden]) .controls.paused) .pp-header { margin-bot
 .icon-button svg { width: 15px; height: 15px; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .menu-wrap { position: relative; }
-.upload-navigation { --upload-progress: 0; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--accent); font: 600 11px 'IBM Plex Mono', monospace; cursor: pointer; transition: background 140ms ease, border-color 140ms ease, transform 140ms ease; }
+.upload-navigation { --upload-progress: 0; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--accent); font: 600 11px 'IBM Plex Mono', monospace; cursor: pointer; transition: var(--hover-transition), transform 180ms var(--ease); }
 .upload-navigation:hover,
 .upload-navigation:focus-visible { border-color: var(--control-bg-strong); background: var(--control-bg-strong); outline: 0; }
 .upload-navigation:active { transform: scale(.97); }
 .upload-navigation-ring { position: relative; display: block; width: 15px; height: 15px; flex: 0 0 auto; border-radius: 50%; background: conic-gradient(var(--accent) calc(var(--upload-progress) * 1%), #ddd6c8 0); }
-.upload-navigation-ring::after { position: absolute; inset: 3px; border-radius: inherit; background: var(--tile); content: ''; transition: background 140ms ease; }
+.upload-navigation-ring::after { position: absolute; inset: 3px; border-radius: inherit; background: var(--tile); content: ''; transition: var(--hover-transition); }
 .upload-navigation:hover .upload-navigation-ring::after,
 .upload-navigation:focus-visible .upload-navigation-ring::after { background: var(--control-bg-strong); }
 :root[data-theme='dark'] .upload-navigation-ring { background: conic-gradient(var(--accent) calc(var(--upload-progress) * 1%), #3a342d 0); }

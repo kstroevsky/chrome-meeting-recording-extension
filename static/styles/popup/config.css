@@ -8,7 +8,7 @@
 .grow-div { height: 1px; margin: 0; background: var(--divider); }
 .native-select { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
 
-.select-trigger { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 132px; gap: 7px; padding: 6px 0 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.select-trigger { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 132px; gap: 7px; padding: 6px 0 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: var(--hover-transition); }
 .select-trigger::after { content: ''; width: 9px; height: 6px; flex: 0 0 auto; background: var(--ink-4); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .select-trigger:hover,
 .select-trigger:focus-visible,
@@ -16,7 +16,7 @@
 .select-drive-icon,
 .select-storage-icon { width: 13px; height: 13px; flex: 0 0 auto; color: #6ba885; }
 .select-options { position: absolute; z-index: 60; top: 40px; right: 0; width: 214px; padding: 5px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); box-shadow: 0 18px 40px -12px rgb(0 0 0 / 45%); }
-.select-options button { display: flex; align-items: center; width: 100%; height: 38px; gap: 8px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 500 12px 'IBM Plex Mono', monospace; text-align: left; cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.select-options button { display: flex; align-items: center; width: 100%; height: 38px; gap: 8px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 500 12px 'IBM Plex Mono', monospace; text-align: left; cursor: pointer; transition: var(--hover-transition); }
 .select-options button svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--ink-3); }
 .select-options button[aria-selected='true'] { background: var(--tile); color: var(--ink); font-weight: 600; }
 .select-options button[aria-selected='true'] svg,
@@ -54,7 +54,7 @@
 .cam-warn svg { width: 11px; height: 11px; flex: 0 0 auto; }
 .cam-warn-text { color: var(--warn-label); font-size: 10.5px; }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 46px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 700 14px 'Space Grotesk', sans-serif; letter-spacing: -.01em; line-height: 1; white-space: nowrap; cursor: pointer; transition: background 140ms ease-out, transform 140ms ease-out, box-shadow 140ms ease-out; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 46px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font: 700 14px 'Space Grotesk', sans-serif; letter-spacing: -.01em; line-height: 1; white-space: nowrap; cursor: pointer; transition: var(--hover-transition), transform 180ms var(--ease); }
 .btn:active:not(:disabled) { transform: scale(.98); }
 .btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
 .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent); }
@@ -78,9 +78,18 @@
 .link-btn { border: 0; background: transparent; color: var(--ink-3); font-size: 11px; }
 
 .popup-recordings-list { margin-top: 6px; border-top: 1px solid var(--divider); }
-.popup-recording-row { display: flex; flex-direction: column; justify-content: center; min-height: 52px; border-bottom: 1px solid var(--divider); cursor: pointer; }
-.popup-recording-row:hover,
-.popup-recording-row:focus-visible { background: var(--secondary-hover); outline: 0; }
+/* A row's hover is a rounded wash reaching 8px past its text on both sides, the
+   library's row language (f1). It floats between the dividers instead of
+   filling them, so the text never sits against its edge. */
+.popup-recording-row { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: center; min-height: 52px; border-bottom: 1px solid var(--divider); cursor: pointer; }
+.popup-recording-row::before,
+.popup-recording-upload::before { position: absolute; z-index: -1; inset: 3px -8px; border-radius: 6px; background: transparent; content: ''; transition: var(--hover-transition); }
+.popup-recording-row:hover::before,
+.popup-recording-row:focus-visible::before,
+.popup-recording-upload:hover::before,
+.popup-recording-upload:focus-visible::before { background: var(--secondary-hover); }
+.popup-recording-row:focus-visible,
+.popup-recording-upload:focus-visible { outline: 0; }
 .popup-recording-title { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .popup-recording-meta { overflow: hidden; margin-top: 2px; color: var(--ink-4); font: 10px 'IBM Plex Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 /* The list's CTA sits a half-step under Setup's Start Recording (n1). */
@@ -88,9 +97,10 @@
 .popup-recording-open { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: 0 0 14px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
 .popup-recording-open svg { width: 14px; height: 14px; }
 .popup-recordings-empty { display: flex; align-items: center; justify-content: center; min-height: 52px; margin: 0 0 16px; padding: 0; border-top: 1px solid var(--divider); color: var(--ink-3); text-align: center; }
-.popup-recording-upload { padding: 12px 0 13px; border-top: 1px solid var(--divider); cursor: pointer; }
-.popup-recording-upload:hover,
-.popup-recording-upload:focus-visible { background: var(--secondary-hover); outline: 0; }
+/* Holds a row's height while history is read (RecordingsListView.reserveRows). */
+.popup-recording-placeholder { min-height: 52px; border-bottom: 1px solid var(--divider); }
+.popup-recordings-empty.reserving { visibility: hidden; }
+.popup-recording-upload { position: relative; isolation: isolate; padding: 12px 0 13px; border-top: 1px solid var(--divider); cursor: pointer; }
 .popup-recording-upload-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .popup-recording-upload-head span:first-child { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .popup-recording-upload-head span:last-child { flex: 0 0 auto; color: var(--ink-3); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .04em; white-space: nowrap; }
