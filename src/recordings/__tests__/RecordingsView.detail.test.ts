@@ -163,3 +163,74 @@ describe('RecordingsView detail (f2, f17)', () => {
     expect(list.querySelectorAll('.detail-notes__row')).toHaveLength(2);
   });
 });
+
+describe('RecordingsView note editor entry (f2 → f5)', () => {
+  function mountEditable(initial: RecordingNotation[] = NOTES) {
+    let notes = [...initial];
+    const notesChanged = jest.fn();
+    const callbacks = {
+      rename: jest.fn(), note: jest.fn(), remove: jest.fn(), removeMany: jest.fn(),
+      openLocal: jest.fn(), fileTo: jest.fn(), play: jest.fn(), loadMore: jest.fn(),
+      notes: {
+        load: jest.fn(async () => notes),
+        rename: jest.fn(async () => notes),
+        remove: jest.fn(async () => notes),
+        add: jest.fn(async (_recording: string, note: { tStartMs: number; tEndMs?: number; text: string }) => {
+          notes = [...notes, { id: 'added', endedBy: 'user' as const, ...note }];
+          return notes;
+        }),
+        update: jest.fn(async () => notes),
+      },
+      editor: { transcript: jest.fn(async () => undefined), notesChanged },
+    } satisfies RecordingsViewCallbacks;
+    const list = document.createElement('div');
+    const empty = document.createElement('div');
+    const error = document.createElement('div');
+    const loadMore = document.createElement('button');
+    document.body.replaceChildren(list, empty, error, loadMore);
+    const view = new RecordingsView(list, empty, error, loadMore, callbacks);
+    return { view, list, callbacks, notesChanged };
+  }
+
+  it('offers no ADD where the page cannot edit notes', async () => {
+    const { view, list } = mount();
+    view.render([entry()]);
+    await open(list);
+    expect(list.querySelector('.detail-notes__add')).toBeNull();
+  });
+
+  it('keeps the empty track and ADD on a recording nobody noted (f4)', async () => {
+    const { view, list } = mountEditable([]);
+    view.render([entry()]);
+    await open(list);
+    const section = list.querySelector<HTMLElement>('.detail-notes')!;
+    expect(section.hidden).toBe(false);
+    expect(section.classList.contains('detail-notes--empty')).toBe(true);
+    expect(list.querySelector('.detail-notes__count')?.textContent).toBe('0');
+    expect(list.querySelector('.detail-notes__add')).not.toBeNull();
+  });
+
+  it('opens the editor in the details dialog\'s place, and Done returns to Details with the new note', async () => {
+    const { view, list, notesChanged } = mountEditable();
+    view.render([entry()]);
+    await open(list);
+
+    list.querySelector<HTMLButtonElement>('.detail-notes__add')!.click();
+    await flush();
+    expect(list.querySelector('.recording-detail')).toBeNull();
+    const editor = document.querySelector<HTMLElement>('.note-editor')!;
+    expect(editor.getAttribute('aria-label')).toBe('Add notes to Weekly sync');
+
+    editor.querySelector<HTMLButtonElement>('.note-editor__span-button')!.click();
+    editor.querySelector<HTMLButtonElement>('.note-editor__span-button')!.click();
+    await flush();
+    editor.querySelector<HTMLButtonElement>('.note-editor__done')!.click();
+    await flush();
+    await flush();
+
+    expect(document.querySelector('.note-editor')).toBeNull();
+    expect(notesChanged).toHaveBeenCalled();
+    expect(list.querySelector('.recording-detail')).not.toBeNull();
+    expect(list.querySelector('.detail-notes__count')?.textContent).toBe('3');
+  });
+});

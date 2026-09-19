@@ -18,6 +18,7 @@ import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 import { RecordingNotesSection, type RecordingNotesSectionActions } from './RecordingNotesSection';
+import { NoteEditor, type NoteEditorDeps } from './NoteEditor';
 
 export type RecordingsViewCallbacks = {
   rename: (id: string, name: string) => void;
@@ -29,7 +30,9 @@ export type RecordingsViewCallbacks = {
   play: (recordingId: string) => void;
   loadMore: () => void;
   /** The open recording's notes (f2); the view supplies the undo toast itself. */
-  notes: Omit<RecordingNotesSectionActions, 'offerUndo'>;
+  notes: Omit<RecordingNotesSectionActions, 'offerUndo' | 'openEditor'> & Partial<Pick<NoteEditorDeps['notes'], 'add' | 'update'>>;
+  /** What the note editor (f5, f6) reads besides notes; without it there is no ADD. */
+  editor?: Pick<NoteEditorDeps, 'transcript' | 'playback'> & { notesChanged?: () => void };
 };
 
 const WARNING_ICON = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7.4"/><path d="M10 6.4v4.4M10 13.6v.5"/></svg>';
@@ -111,6 +114,8 @@ export class RecordingsView {
   private notesSection: { id: string; section: RecordingNotesSection; loaded: Promise<void> } | null = null;
   /** The recording waiting on its notes to open, so a slow one cannot open over a later click. */
   private pendingOpenId: string | null = null;
+  /** The note editor (f5, f6), while it is open. */
+  private editor: NoteEditor | null = null;
   /** The page's one toast, for UNDO after a note is deleted (f17). */
   private toast: { element: HTMLElement; settle: (undone: boolean) => void } | null = null;
   /** The remove-from-history confirmation (f17), while it is open. */
@@ -511,12 +516,47 @@ export class RecordingsView {
     this.redraw();
   }
 
+  private canEditNotes(): boolean {
+    return Boolean(this.callbacks.editor && this.callbacks.notes.add && this.callbacks.notes.update);
+  }
+
+  /**
+   * ADD beside the note count (f2 → f5): the editor takes the details dialog's
+   * place, and returns to it rather than closing, since naming and deleting
+   * the rest still happen there.
+   */
+  private async openEditor(entry: RecordingHistoryEntry): Promise<void> {
+    const { add, update } = this.callbacks.notes;
+    const editorDeps = this.callbacks.editor;
+    if (!add || !update || !editorDeps) return;
+    this.editor?.close();
+    this.closeDetail();
+    const finish = (details: boolean) => {
+      editor.close();
+      if (this.editor === editor) this.editor = null;
+      editorDeps.notesChanged?.();
+      if (details) void this.openDetail(entry);
+    };
+    const editor = new NoteEditor({
+      recording: { id: entry.id, name: entry.name, ...(durationOf(entry) ? { durationMs: durationOf(entry) } : {}) },
+      notes: { ...this.callbacks.notes, add, update, offerUndo: (message, windowMs) => this.offerUndo(message, windowMs) },
+      ...(editorDeps.transcript ? { transcript: editorDeps.transcript } : {}),
+      ...(editorDeps.playback ? { playback: editorDeps.playback } : {}),
+      onDetails: () => finish(true),
+      onClose: () => finish(false),
+    });
+    this.editor = editor;
+    document.body.append(editor.element);
+    await editor.open();
+  }
+
   /** The recording's notes section, started on first use and then kept. */
   private notesFor(entry: RecordingHistoryEntry): { section: RecordingNotesSection; loaded: Promise<void> } {
     if (this.notesSection?.id !== entry.id) {
       const section = new RecordingNotesSection(entry.id, durationOf(entry), {
         ...this.callbacks.notes,
         offerUndo: (message, windowMs) => this.offerUndo(message, windowMs),
+        ...(this.canEditNotes() ? { openEditor: () => void this.openEditor(entry) } : {}),
       });
       this.notesSection = { id: entry.id, section, loaded: section.load() };
     }

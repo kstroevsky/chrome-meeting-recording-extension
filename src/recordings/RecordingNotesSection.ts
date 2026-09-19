@@ -20,6 +20,26 @@ export type RecordingNotesSectionActions = {
   remove: (recordingId: string, id: string) => Promise<RecordingNotation[]>;
   /** Shows the page's UNDO toast; resolves true when the user took it back. */
   offerUndo: (message: string, windowMs: number) => Promise<boolean>;
+  /** Opens the note editor (f5, f6): ADD beside the count. Absent, there is no ADD. */
+  openEditor?: () => void;
+};
+
+export type RecordingNotesSectionOptions = {
+  /**
+   * The list alone, always open (f6): the note editor supplies its own
+   * timeline and header, so this section's would be a second copy.
+   */
+  bare?: boolean;
+};
+
+/** A span being made in the editor, listed among the saved notes while it runs (f6). */
+export type OpenSpanRow = {
+  tStartMs: number;
+  text: string;
+  /** Its pencil: the name is typed in the editor's composer, so this goes there. */
+  onRename?: () => void;
+  /** Its ×: throws the span away. */
+  onDiscard?: () => void;
 };
 
 /** How long a deleted note can be taken back (f17). */
@@ -27,6 +47,7 @@ export const NOTE_UNDO_MS = 8_000;
 
 const PENCIL = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 const CROSS = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M1.6 1.6l6.8 6.8M8.4 1.6l-6.8 6.8"/></svg>';
+const PLUS = '<svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M5 1.5v7M1.5 5h7"/></svg>';
 const CHEVRON = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5l3 3 3-3"/></svg>';
 
 /** A note nobody named is an invitation in this list, as it is everywhere (d1). */
@@ -66,13 +87,17 @@ export class RecordingNotesSection {
   private renamingId: string | null = null;
   /** Notes deleted but still inside their undo window: hidden, not yet written. */
   private readonly pendingDelete = new Set<string>();
+  private openSpan: OpenSpanRow | null = null;
+  private readonly bare: boolean;
 
   constructor(
     private readonly recordingId: string,
     private readonly durationMs: number | undefined,
     private readonly actions: RecordingNotesSectionActions,
+    options: RecordingNotesSectionOptions = {},
   ) {
-    this.element.className = 'detail-notes';
+    this.bare = options.bare === true;
+    this.element.className = `detail-notes${this.bare ? ' detail-notes--bare' : ''}`;
     this.element.hidden = true;
     this.timeline.className = 'detail-notes__timeline';
     const track = document.createElement('span');
@@ -98,9 +123,22 @@ export class RecordingNotesSection {
     this.toggle.append(label, this.count);
     this.toggle.addEventListener('click', () => { this.open = !this.open; this.render(); });
     this.header.append(this.toggle);
+    if (actions.openEditor) {
+      // ADD beside the count opens the editor (f2 → f5).
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'detail-notes__add';
+      add.title = 'Add a note to this recording';
+      add.innerHTML = PLUS;
+      add.append('ADD');
+      add.addEventListener('click', () => actions.openEditor?.());
+      this.header.append(add);
+    }
     this.range.className = 'detail-notes__range';
     this.list.className = 'detail-notes__list';
-    this.element.append(this.timeline, this.header, this.range, this.list);
+    // Bare, the editor's own timeline and footer stand in for these (f6).
+    if (this.bare) this.element.append(this.list);
+    else this.element.append(this.timeline, this.header, this.range, this.list);
   }
 
   async load(): Promise<void> {
@@ -117,10 +155,38 @@ export class RecordingNotesSection {
     return this.notations.filter((notation) => !this.pendingDelete.has(notation.id));
   }
 
+  /** Lists the editor's span in progress among the saved notes, or takes it away (f6). */
+  setOpenSpan(span: OpenSpanRow | null): void {
+    this.openSpan = span;
+    this.render();
+  }
+
+  /** The saved notes as this section last read them. */
+  get notes(): RecordingNotation[] {
+    return this.visible();
+  }
+
   private render(): void {
     const notes = this.visible();
-    this.element.hidden = notes.length === 0;
-    if (!notes.length) { this.ribbon.clear(); return; }
+    // With nothing noted the track stays, empty, beside ADD, so the absence is
+    // legible rather than hidden (f4); without ADD there is nothing to show.
+    const empty = notes.length === 0 && !(this.bare && this.openSpan);
+    this.element.hidden = empty && (!this.actions.openEditor || this.bare);
+    this.element.classList.toggle('detail-notes--empty', empty);
+    if (empty) {
+      this.ribbon.clear();
+      this.count.textContent = '0';
+      this.toggle.disabled = true;
+      this.range.hidden = true;
+      this.list.hidden = true;
+      return;
+    }
+    this.toggle.disabled = false;
+    if (this.bare) {
+      this.list.hidden = false;
+      this.list.replaceChildren(...this.rows(notes));
+      return;
+    }
     const scale = Math.max(this.durationMs ?? 0, ...notes.map((n) => n.tEndMs ?? n.tStartMs), 1);
     this.ribbon.draw(notes, { scaleMs: scale, activeId: this.selectedId });
     this.count.textContent = String(notes.length);
@@ -132,7 +198,44 @@ export class RecordingNotesSection {
     this.range.textContent = `${position(first.tStartMs)} → ${position(last.tStartMs)} · ${notes.length - unnamed} named${unnamed ? `, ${unnamed} unnamed` : ''}`;
     this.range.hidden = this.open;
     this.list.hidden = !this.open;
-    if (this.open) this.list.replaceChildren(...notes.map((notation) => this.row(notation)));
+    if (this.open) this.list.replaceChildren(...this.rows(notes));
+  }
+
+  /** The saved rows, with the editor's running span slotted in at its start. */
+  private rows(notes: RecordingNotation[]): HTMLElement[] {
+    const rows = notes.map((notation) => this.row(notation));
+    if (!this.openSpan) return rows;
+    const at = notes.findIndex((notation) => notation.tStartMs > this.openSpan!.tStartMs);
+    rows.splice(at < 0 ? rows.length : at, 0, this.openRow(this.openSpan));
+    return rows;
+  }
+
+  /** The span being made (f6): tinted, its start in bold, `running` where the length goes. */
+  private openRow(span: OpenSpanRow): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'detail-notes__row detail-notes__row--open';
+    row.title = 'Open, being named below';
+    const main = document.createElement('span');
+    main.className = 'detail-notes__main';
+    const at = document.createElement('span');
+    at.className = 'detail-notes__at';
+    at.textContent = position(span.tStartMs);
+    const text = document.createElement('span');
+    text.className = `detail-notes__text${span.text ? '' : ' detail-notes__text--unnamed'}`;
+    text.textContent = span.text || UNNAMED;
+    main.append(at, text);
+    const side = document.createElement('span');
+    side.className = 'detail-notes__side';
+    const running = document.createElement('span');
+    running.className = 'detail-notes__length';
+    running.textContent = 'running';
+    side.append(
+      running,
+      this.iconButton('detail-notes__edit', PENCIL, 'Name this note', () => span.onRename?.()),
+      this.iconButton('detail-notes__delete', CROSS, 'Discard this note', () => span.onDiscard?.()),
+    );
+    row.append(main, side);
+    return row;
   }
 
   private row(notation: RecordingNotation): HTMLElement {

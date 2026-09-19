@@ -49,6 +49,9 @@
   /* Rail heading hover (f18) and the fields on the page (f18, f20, f21). */
   --detail-hover: #6f5430;
   --border-field: #e3ddd0;
+  /* A span being made in the note editor (f5, f6), and its warm chips. */
+  --span-open: #f4e9d4;
+  --span-chip: #f6efe1;
   /*
    * TOPICS (ADR-0007 §8). Four shades a topic keeps across every span it
    * occupies, so a subject the conversation returns to looks like the same
@@ -105,6 +108,8 @@
   --note-border: #3d3527;
   --detail-hover: #d9ab68;
   --border-field: #3a332a;
+  --span-open: #33291b;
+  --span-chip: #2c241a;
   --drive-icon: #6ba885;
   --local-icon: #8a7f68;
   --selection: #241f18;
@@ -148,6 +153,8 @@
     --note-border: #3d3527;
     --detail-hover: #d9ab68;
     --border-field: #3a332a;
+    --span-open: #33291b;
+    --span-chip: #2c241a;
     --drive-icon: #6ba885;
     --local-icon: #8a7f68;
     --selection: #241f18;
@@ -546,6 +553,14 @@ button { -webkit-font-smoothing: antialiased; }
 .detail-notes__span--selected { box-shadow: 0 0 0 2px var(--detail), 0 0 0 4px var(--raised); }
 .detail-notes__span:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .detail-notes__header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 -8px 2px; }
+/* ADD beside the count opens the note editor (f2 → f5). */
+.detail-notes__add { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--detail); cursor: pointer; font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .08em; }
+.detail-notes__add:hover { background: var(--note-chip); }
+.detail-notes__add:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Nothing noted yet: the empty track and ADD stay, so the absence reads (f4). */
+.detail-notes--empty .detail-notes__toggle { cursor: default; }
+.detail-notes--empty .detail-notes__toggle svg { visibility: hidden; }
+.detail-notes--empty .detail-notes__toggle:hover { background: transparent; }
 .detail-notes__toggle { display: inline-flex; align-items: center; flex: 1; min-width: 0; gap: 7px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; transition: var(--hover-transition); }
 .detail-notes__toggle:hover { background: var(--field); }
 .detail-notes__toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -707,3 +722,122 @@ button { -webkit-font-smoothing: antialiased; }
 .player__subtitle-bubble { display: inline-flex; align-items: baseline; gap: 8px; max-width: 100%; padding: 7px 11px; border-radius: 6px; background: rgba(10, 9, 8, .7); color: #f6f3ec; font-size: 12.5px; line-height: 1.45; }
 .player__subtitle-tag { flex-shrink: 0; color: #c9bfa9; font: 600 8px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .14em; text-transform: uppercase; }
 .player__stage--quiet .player__subtitle { display: none; }
+
+/* ── Note editor (f5, f6) ─────────────────────────────────────────────────────
+   Adding notes to a finished recording. With a transcript the lines are the
+   editor (f5); without one the timeline is (f6). Same frame as the player. */
+.note-editor-overlay { position: fixed; z-index: 20; inset: 0; display: flex; align-items: center; justify-content: center; padding: 22px; background: var(--overlay); }
+.note-editor { display: flex; flex-direction: column; width: min(654px, calc(100vw - 44px)); max-height: calc(100vh - 44px); overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--modal-shadow); }
+.note-editor__header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px 9px 9px; border-bottom: 1px solid var(--divider); }
+.note-editor__header-left { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.note-editor__header-right { display: inline-flex; flex-shrink: 0; align-items: center; gap: 10px; }
+.note-editor__back { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--detail); cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.note-editor__back:hover { background: var(--note-chip); }
+.note-editor__divider { width: 1px; height: 16px; flex-shrink: 0; background: var(--divider); }
+.note-editor__title { overflow: hidden; min-width: 0; color: var(--ink); font: 600 12.5px 'IBM Plex Mono', ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.note-editor__video-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--divider); border-radius: 6px; background: transparent; color: var(--quiet-clock); cursor: pointer; font: 600 10px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .08em; }
+.note-editor__video-chip--on { border-color: var(--note-border); background: var(--span-chip); color: var(--detail); }
+.note-editor__no-transcript { color: var(--faint); font: 9.5px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .1em; }
+.note-editor__close { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--idle); cursor: pointer; font-size: 15px; line-height: 1; }
+.note-editor__close:hover { color: var(--body); }
+.note-editor__back:focus-visible, .note-editor__video-chip:focus-visible, .note-editor__close:focus-visible, .note-editor__play:focus-visible, .note-editor__span-button:focus-visible, .note-editor__secondary:focus-visible, .note-editor__primary:focus-visible, .note-editor__done:focus-visible, .note-editor__note-name:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* VIDEO (f5): the picture beside the line under the playhead. */
+.note-editor__strip { display: flex; flex-shrink: 0; align-items: center; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--divider); background: var(--raised); }
+.note-editor__picture { position: relative; flex-shrink: 0; width: 232px; height: 130px; overflow: hidden; border-radius: 6px; background: repeating-linear-gradient(135deg, #242019 0 14px, #1c1a17 14px 28px); }
+.note-editor__video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.note-editor__strip-copy { display: flex; flex: 1; flex-direction: column; gap: 7px; min-width: 0; }
+.note-editor__strip-meta { display: inline-flex; align-items: baseline; gap: 9px; }
+.note-editor__strip-time { color: var(--accent); font: 10.5px 'IBM Plex Mono', ui-monospace, monospace; }
+.note-editor__strip-tag { color: var(--idle); font: 600 8.5px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.note-editor__strip-text { color: var(--ink); font-size: 13.5px; line-height: 1.5; }
+
+/* Transport: play, the clock, the live timeline, the length, NOTE or END. */
+.note-editor__transport { display: flex; flex-shrink: 0; align-items: center; gap: 11px; padding: 11px 16px; border-bottom: 1px solid var(--divider); background: var(--raised); }
+.note-editor__play { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: var(--ink); color: var(--surface); cursor: pointer; }
+.note-editor__play:hover { background: var(--watch-hover); }
+.note-editor__play:disabled { cursor: not-allowed; opacity: .4; }
+.note-editor__clock, .note-editor__duration { flex-shrink: 0; font: 10.5px 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.note-editor__clock { color: var(--body); }
+.note-editor__duration { color: var(--muted); }
+.note-editor__scrub { position: relative; flex: 1; height: 16px; cursor: pointer; touch-action: none; }
+.note-editor__track { position: absolute; top: 7px; right: 0; left: 0; height: 3px; border-radius: 2px; background: var(--quiet-track); }
+.note-editor__marks { position: absolute; inset: 0; }
+/* Saved notes sit at half height, where they cannot be trimmed by accident. */
+.note-editor__mark { position: absolute; top: 2px; height: 13px; border-radius: 2px; background: color-mix(in srgb, var(--detail) 50%, transparent); }
+.note-editor__mark--unnamed { background: var(--note-pale); }
+/* The span being made: full height, ringed; an open one has a flat right edge. */
+.note-editor__draft { position: absolute; top: 0; height: 17px; border-radius: 2px; background: var(--detail); box-shadow: 0 0 0 2px color-mix(in srgb, var(--detail) 22%, transparent); }
+.note-editor__draft--running { border-radius: 2px 0 0 2px; }
+.note-editor__playhead { position: absolute; top: -1px; width: 2px; height: 19px; background: var(--accent); pointer-events: none; }
+.note-editor__handle { position: absolute; z-index: 1; top: -5px; width: 7px; height: 27px; margin-left: -3.5px; border-radius: 3px; background: var(--detail); box-shadow: 0 0 0 2px var(--surface); cursor: ew-resize; touch-action: none; }
+.note-editor__grip { position: absolute; top: 8px; left: 2.5px; width: 2px; height: 11px; border-radius: 1px; background: rgba(250, 248, 244, .7); }
+.note-editor__bubble { position: absolute; z-index: 2; bottom: calc(100% + 10px); display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--ink); color: var(--surface); font: 9.5px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .06em; pointer-events: none; transform: translateX(-50%); white-space: nowrap; }
+.note-editor__bubble-length { color: var(--faint); }
+.note-editor__span-button { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--note-border); border-radius: 6px; background: var(--span-chip); color: var(--detail); cursor: pointer; font: 600 10px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .08em; }
+.note-editor__span-button:hover { background: var(--note-chip); }
+.note-editor__span-button:disabled { cursor: default; opacity: .5; }
+.note-editor__span-button--end { border-color: var(--detail); background: var(--detail); color: var(--surface); }
+.note-editor__span-button--end:hover { background: color-mix(in srgb, var(--detail) 88%, #000); }
+.note-editor__stop { width: 8px; height: 8px; border-radius: 1.5px; background: currentColor; }
+
+/* The lines (f5): gutter name, gold rail, time, speaker, words. */
+.note-editor__body { flex: 0 1 262px; min-height: 120px; overflow-y: auto; padding: 8px 16px 14px; scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
+.note-editor:not(.note-editor--transcript) .note-editor__body { flex-basis: 296px; padding-bottom: 12px; }
+.note-editor__lines { user-select: none; }
+/* The speaker column is 44px, not the design's 26px: it holds a name, not TAB or MIC. */
+.note-editor__line { display: grid; grid-template-columns: 92px 3px 44px 44px minmax(0, 1fr); align-items: start; gap: 10px; margin: 0 -8px; padding: 0 8px; border-radius: 6px; cursor: pointer; transition: var(--hover-transition); }
+.note-editor__line:hover { background: var(--raised); }
+.note-editor__note { min-width: 0; }
+.note-editor__note-name { display: block; width: 100%; padding: 9px 0; border: 0; background: transparent; color: var(--detail); cursor: pointer; font: 600 10px/1.4 'IBM Plex Mono', ui-monospace, monospace; text-align: right; overflow-wrap: anywhere; }
+.note-editor__note-name:hover { color: var(--detail-hover); }
+.note-editor__note-name--unnamed { color: var(--idle); }
+.note-editor__gutter { align-self: stretch; }
+.note-editor__line--noted .note-editor__gutter { background: var(--detail); }
+.note-editor__gutter[data-edge='first'] { margin-top: 4px; border-radius: 2px 2px 0 0; }
+.note-editor__gutter[data-edge='last'] { margin-bottom: 4px; border-radius: 0 0 2px 2px; }
+.note-editor__gutter[data-edge='single'] { margin: 4px 0; border-radius: 2px; }
+.note-editor__time { padding: 9px 0; color: var(--faint); font: 10.5px 'IBM Plex Mono', ui-monospace, monospace; }
+.note-editor__line--noted .note-editor__time { color: var(--detail); }
+.note-editor__tag { overflow: hidden; padding: 9px 0; color: var(--idle); font: 600 8.5px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.note-editor__text { padding: 9px 0; color: var(--body); font-size: 12.5px; line-height: 1.5; }
+/* A selection in progress is warmer than the page, and its rail is ticked rather
+   than solid, so it never reads as an extension of the saved note above it. */
+.note-editor__line--draft, .note-editor__line--draft:hover { border-radius: 0; background: var(--span-open); }
+.note-editor__line--draft-first { border-radius: 6px 6px 0 0; }
+.note-editor__line--draft-last { border-radius: 0 0 6px 6px; }
+.note-editor__line--draft-first.note-editor__line--draft-last { border-radius: 6px; }
+.note-editor__line--draft .note-editor__gutter { margin: 0; border-radius: 0; background: repeating-linear-gradient(var(--detail) 0 5px, color-mix(in srgb, var(--detail) 18%, transparent) 5px 9px); }
+.note-editor__line--draft-first .note-editor__gutter { margin-top: 5px; border-radius: 2px 2px 0 0; }
+.note-editor__line--draft-last .note-editor__gutter { margin-bottom: 5px; border-radius: 0 0 2px 2px; }
+.note-editor__line--draft-first.note-editor__line--draft-last .note-editor__gutter { border-radius: 2px; }
+.note-editor__line--draft .note-editor__time { color: var(--detail); }
+.note-editor__line--draft .note-editor__text { color: var(--ink); }
+/* Without a transcript (f6) the saved notes take the lines' place, in their f2 rows. */
+.detail-notes--bare .detail-notes__row { height: 40px; border-bottom: 0; margin: 0 -8px; padding: 0 8px; border-radius: 6px; }
+.detail-notes--bare .detail-notes__row:hover { background: var(--note-chip); }
+.detail-notes__row--open, .detail-notes__row--open:hover { background: var(--span-open); }
+.detail-notes__row--open .detail-notes__at { font-weight: 600; }
+.detail-notes__text--unnamed { color: var(--faint); }
+.note-editor__empty { margin: 0; padding: 48px 0; color: var(--faint); font: 10px/1.6 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .06em; text-align: center; }
+
+/* The composer: the range, its length, and the name — the popup's own field. */
+.note-editor__composer { display: flex; flex-shrink: 0; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--note-border); background: var(--note-band); }
+.note-editor__range { flex-shrink: 0; color: var(--detail); font: 600 10px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .06em; }
+.note-editor__length { flex-shrink: 0; color: var(--faint); font: 10px 'IBM Plex Mono', ui-monospace, monospace; }
+.note-editor__field { display: inline-flex; flex: 1; align-items: center; min-width: 0; height: 34px; padding: 0 11px; border-radius: 6px; background: var(--field); box-shadow: 0 0 0 1px color-mix(in srgb, var(--detail) 45%, transparent); }
+.note-editor__name { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; caret-color: var(--detail); color: var(--ink); font-size: 12.5px; }
+.note-editor__name::placeholder { color: var(--faint); opacity: 1; }
+.note-editor__secondary, .note-editor__primary, .note-editor__done { flex-shrink: 0; height: 34px; border-radius: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.note-editor__secondary { padding: 0 12px; border: 1px solid var(--border); background: transparent; color: var(--body); }
+.note-editor__secondary:hover, .note-editor__done:hover { background: var(--note-chip); }
+.note-editor__primary { padding: 0 14px; border: 0; background: var(--ink); color: var(--surface); }
+.note-editor__primary:hover { background: var(--watch-hover); }
+.note-editor__primary:disabled { cursor: progress; opacity: .6; }
+
+/* Footer: what to do next, the count, and Done. */
+.note-editor__footer { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--divider); background: var(--raised); }
+.note-editor__hint { color: var(--faint); font: 10px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .06em; }
+.note-editor__footer-side { display: inline-flex; align-items: center; gap: 12px; }
+.note-editor__count { color: var(--muted); font: 10px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .06em; }
+.note-editor__done { padding: 0 14px; border: 1px solid var(--border); background: var(--field); color: var(--body); }

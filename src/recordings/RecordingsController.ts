@@ -67,6 +67,32 @@ export class RecordingsController {
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
+  /** How this page reaches a recording's media, shared by the player and the note editor. */
+  readonly playback = {
+    getManifest: async (id: string) => {
+      const response = await sendToBackground({ type: 'GET_RECORDING_PLAYBACK_MANIFEST', recordingId: id });
+      return response.ok ? response.manifest : undefined;
+    },
+    prepareDriveSource: async (id: string, fileId: string, refresh?: boolean) => {
+      const response = await sendToBackground(refresh
+        ? { type: 'REFRESH_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId }
+        : { type: 'PREPARE_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId, source: 'drive' });
+      return response.ok ? response.url : undefined;
+    },
+    warn: (...args: unknown[]) => console.warn('[recordings]', ...args),
+  };
+
+  /** A recording's persisted transcript (ADR-0007), for the player's rail and the note editor. */
+  async transcript(id: string) {
+    const response = await sendToBackground({ type: 'GET_RECORDING_TRANSCRIPT', recordingId: id });
+    return response.ok ? response.transcript : undefined;
+  }
+
+  /** Notes were added or changed elsewhere on the page: the NOTES column catches up. */
+  notesChanged(): void {
+    void this.refreshNoteSummaries();
+  }
+
   /**
    * Opens the playback modal. The player is a modal on this page rather than a
    * page of its own, so it shares this document's tab — which is what lets
@@ -76,21 +102,8 @@ export class RecordingsController {
     try {
       this.player?.close();
       const player = new PlayerController({
-        getManifest: async (id) => {
-          const response = await sendToBackground({ type: 'GET_RECORDING_PLAYBACK_MANIFEST', recordingId: id });
-          return response.ok ? response.manifest : undefined;
-        },
-        prepareDriveSource: async (id, fileId, refresh) => {
-          const response = await sendToBackground(refresh
-            ? { type: 'REFRESH_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId }
-            : { type: 'PREPARE_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId, source: 'drive' });
-          return response.ok ? response.url : undefined;
-        },
-        warn: (...args) => console.warn('[recordings]', ...args),
-        getTranscript: async (id) => {
-          const response = await sendToBackground({ type: 'GET_RECORDING_TRANSCRIPT', recordingId: id });
-          return response.ok ? response.transcript : undefined;
-        },
+        ...this.playback,
+        getTranscript: (id) => this.transcript(id),
         // f16: the way to the folder the video should have been in, and the way out of history.
         openFolder: (id) => {
           const folderId = this.entries.find((entry) => entry.id === id)?.driveFolderId;
