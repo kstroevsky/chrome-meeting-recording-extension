@@ -17,11 +17,18 @@
 import { ModalShell } from '../ui/modalShell';
 
 /** One line in the dialog's "what you are about to lose" list. */
-export type ConfirmDialogDetail = { at: string; text: string };
+export type ConfirmDialogDetail = {
+  at: string;
+  text: string;
+  /** A note nobody named reads quieter than the ones with words (n3). */
+  muted?: boolean;
+};
 
 export type ConfirmDialogOptions = {
   title: string;
   message: string;
+  /** Set in bold ahead of the message — the stake the sentence is about (n3's `22:40`). */
+  lead?: string;
   confirmLabel: string;
   cancelLabel: string;
   /** `danger` paints the confirm button with the destructive accent. */
@@ -64,7 +71,7 @@ export class ConfirmDialog {
 
     const parts = this.parts ?? (this.parts = this.build());
     parts.shell.title.textContent = options.title;
-    parts.shell.message.textContent = options.message;
+    this.paintMessage(parts, options.message, options.lead);
     parts.confirmBtn.textContent = options.confirmLabel;
     parts.cancelBtn.textContent = options.cancelLabel;
     parts.confirmBtn.className = `btn ${options.tone === 'danger' ? 'btn-danger' : 'btn-primary'}`;
@@ -82,8 +89,19 @@ export class ConfirmDialog {
   }
 
   /** Updates the visible explanatory copy without closing an active prompt. */
-  updateMessage(message: string): void {
-    if (this.pending && this.parts) this.parts.shell.message.textContent = message;
+  updateMessage(message: string, lead?: string): void {
+    if (this.pending && this.parts) this.paintMessage(this.parts, message, lead);
+  }
+
+  private paintMessage(parts: DialogParts, message: string, lead?: string): void {
+    if (!lead) {
+      parts.shell.message.textContent = message;
+      return;
+    }
+    const strong = this.doc.createElement('strong');
+    strong.className = 'modal-lead';
+    strong.textContent = lead;
+    parts.shell.message.replaceChildren(strong, ` ${message}`);
   }
 
   /** Closes an open dialog and resolves its pending `ask` with `false`. */
@@ -109,6 +127,7 @@ export class ConfirmDialog {
       doc: this.doc,
       role: 'alertdialog',
       idPrefix: 'modal',
+      cardClass: 'confirm-card',
       iconSvg: TRASH_ICON,
       onDismiss: () => this.close(false),
     });
@@ -145,7 +164,7 @@ export class ConfirmDialog {
 
     for (const detail of details.slice(0, MAX_DETAILS)) {
       const row = this.doc.createElement('div');
-      row.className = 'modal-detail';
+      row.className = `modal-detail${detail.muted ? ' modal-detail--muted' : ''}`;
       const at = this.doc.createElement('span');
       at.className = 'modal-detail-at';
       at.textContent = detail.at;

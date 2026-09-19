@@ -10,7 +10,8 @@
  * list's business.
  */
 
-import { DETAIL_OPEN_ICON, detailPercent } from './historyChrome';
+import { DETAIL_OPEN_ICON, detailPercent, recordingListDay } from './historyChrome';
+import { formatBytes } from '../../shared/format';
 import { formatDuration, formatPosition } from '../popupStatus';
 import { sendToBackground } from '../../shared/messages';
 import { describeNotationForList, type RecordingNotation } from '../../shared/notations';
@@ -105,7 +106,12 @@ export class RecordingsListView {
     title.textContent = entry.name;
     const meta = document.createElement('div');
     meta.className = 'popup-recording-meta';
-    meta.textContent = `${entry.files.length} ${entry.files.length === 1 ? 'FILE' : 'FILES'} · ${new Date(entry.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }).toUpperCase()}`;
+    const bytes = entry.files.reduce((total, file) => total + (file.bytes ?? 0), 0);
+    meta.textContent = [
+      `${entry.files.length} ${entry.files.length === 1 ? 'FILE' : 'FILES'}`,
+      ...(bytes ? [formatBytes(bytes).toUpperCase()] : []),
+      recordingListDay(entry.createdAt),
+    ].join(' · ');
     copy.append(title, meta);
     const open = document.createElement('button');
     open.type = 'button';

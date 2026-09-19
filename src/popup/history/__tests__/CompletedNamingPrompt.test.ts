@@ -179,9 +179,11 @@ describe('CompletedNamingPrompt destinations', () => {
 
       // The upload job is claimed first and keeps the Drive wording; the local
       // recording is then asked about in turn rather than being skipped.
-      expect(askedAt(0).message).toContain('uploaded media file');
+      expect(askedAt(0).title).toBe('Name this recording');
       expect(askedAt(0).destinations?.unfiledLabel).toBe('Google Meet Records');
-      expect(askedAt(1).message).toBe('The saved file will use this name.');
+      // The local prompt is the save itself (9L); with folders offered, FOLDER replaces the hint.
+      expect(askedAt(1).title).toBe('Save recording');
+      expect(askedAt(1).message).toBe('');
       expect(askedAt(1).destinations?.unfiledLabel).toBe('Downloads');
     });
   });

@@ -68,19 +68,17 @@ export const DISCARD_CONFIRM_TEXT = {
 } as const;
 
 /**
- * Builds the discard confirmation body. The elapsed time makes the stakes
- * concrete — it is the one number that tells the user how much they are about
- * to lose — and is omitted when the timer has not produced one yet.
+ * Builds the discard confirmation body (n3). The elapsed time leads, in bold —
+ * it is the one number that tells the user how much they are about to lose —
+ * and reads 0:00 when the timer has not produced one yet.
  */
-export function buildDiscardConfirmMessage(elapsed?: string, noteCount = 0): string {
+export function buildDiscardConfirmMessage(elapsed?: string, noteCount = 0): { lead: string; message: string } {
   const raw = elapsed?.trim() || '0:00';
-  const captured = raw.replace(/^00:/, '').replace(/^0(?=\d:)/, '');
+  const lead = raw.replace(/^00:/, '').replace(/^0(?=\d:)/, '');
   // Notes are named only when there are some to lose; listing them otherwise
   // would invent stakes that do not exist.
-  const what = noteCount > 0
-    ? 'video, audio, the live transcript, and your notes'
-    : 'video, audio, and the live transcript';
-  return `You'll lose ${captured} of ${what}. This can't be undone.`;
+  const what = noteCount > 0 ? 'video, audio, transcript and notes' : 'video, audio and transcript';
+  return { lead, message: `of ${what}. This can't be undone.` };
 }
 
 /** Returns the user-facing mic-permission error for the active microphone mode. */

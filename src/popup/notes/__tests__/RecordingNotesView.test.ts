@@ -11,7 +11,7 @@ function build(): { el: RecordingNotesElements; root: HTMLElement } {
     <button id="toggle"><span data-note-toggle-label></span></button>
     <div id="row"><button id="startButton"><span id="startLabel"></span></button><span id="count"></span>
       <label id="nameRow" hidden><input id="nameInput"></label><span id="from" hidden></span></div>
-    <p id="hint"></p>
+    <div id="hint"><button id="hintDismiss"></button></div>
     <div id="editor" hidden><div data-note-editor-dismiss></div>
       <span id="editorIndex"></span><span id="editorRange"></span><span id="editorLength"></span>
       <input id="editorText"><button id="editorSave"></button>
@@ -25,7 +25,7 @@ function build(): { el: RecordingNotesElements; root: HTMLElement } {
       openTimer: q('openTimer'), held: q('held'), heldStart: q('heldStart'), heldText: q('heldText'),
       toggle: q<HTMLButtonElement>('toggle'), row: q('row'),
       startButton: q<HTMLButtonElement>('startButton'), startLabel: q('startLabel'),
-      count: q('count'), hint: q('hint'), editor: q('editor'),
+      count: q('count'), hint: q('hint'), hintDismiss: q<HTMLButtonElement>('hintDismiss'), editor: q('editor'),
       nameRow: q('nameRow'), nameInput: q<HTMLInputElement>('nameInput'), from: q('from'),
       editorIndex: q('editorIndex'), editorRange: q('editorRange'), editorLength: q('editorLength'),
       editorText: q<HTMLInputElement>('editorText'), editorSave: q<HTMLButtonElement>('editorSave'),
@@ -62,6 +62,26 @@ describe('RecordingNotesView', () => {
     expect(el.hint!.hidden).toBe(false);
     expect(el.ribbon!.hidden).toBe(true);
     expect(spans(root)).toHaveLength(0);
+  });
+
+  it('keeps the shortcut tip dismissed once the user says they have it', () => {
+    localStorage.removeItem('meetRecorder.noteHintDismissed');
+    const first = build();
+    const view = new RecordingNotesView(first.el, actions());
+    view.sync('recording', recording(10_000));
+    view.setNotations([]);
+    expect(first.el.hint!.hidden).toBe(false);
+
+    first.el.hintDismiss!.click();
+    expect(first.el.hint!.hidden).toBe(true);
+
+    // A fresh popup (a new view over new elements) still does not show it.
+    const next = build();
+    const reopened = new RecordingNotesView(next.el, actions());
+    reopened.sync('recording', recording(20_000));
+    reopened.setNotations([]);
+    expect(next.el.hint!.hidden).toBe(true);
+    localStorage.removeItem('meetRecorder.noteHintDismissed');
   });
 
   it('retires the tip and reveals the ribbon once a note exists', () => {

@@ -126,13 +126,11 @@ describe('PopupController', () => {
       // Session tabs + per-job upload view
       sessionTabs: document.createElement('nav'),
       viewUpload: document.createElement('section'),
-      uploadProgress: document.createElement('div'),
-      uploadDone: document.createElement('div'),
+      uploadHead: document.createElement('div'),
       uploadJobLabel: document.createElement('div'),
-      uploadJobPct: document.createElement('span'),
-      uploadBarFill: document.createElement('div'),
-      uploadJobMeta: document.createElement('div'),
       uploadJobSub: document.createElement('div'),
+      uploadEyebrow: document.createElement('div'),
+      uploadFilesLabel: document.createElement('div'),
       uploadJobFiles: document.createElement('ul'),
       uploadJobOpenDrive: document.createElement('button'),
       uploadJobRetry: document.createElement('button'),
@@ -253,7 +251,7 @@ describe('PopupController', () => {
     expect(elements.uploadJobFiles.textContent).toContain('quarterly-review-recording.webm');
   });
 
-  it('reuses the naming modal for a later local recording rename', async () => {
+  it('renames a local recording in the detail header, in place (7H)', async () => {
     const entry = {
       id: 'recording:local', name: 'Original title', createdAt: 1, storageMode: 'local', status: 'complete',
       files: [{ id: 'recording:local:tab', stream: 'tab', filename: 'original-recording.webm', destination: 'local', status: 'available', downloadId: 9 }],
@@ -261,25 +259,31 @@ describe('PopupController', () => {
     mockSendMessage.mockImplementation(async (message: any) => message.type === 'RENAME_RECORDING_HISTORY'
       ? { ok: true, entry: { ...entry, name: message.name, userNamed: true } }
       : { session: { phase: 'idle', runConfig: null, updatedAt: 1 } });
-    // The detail screen owns the recording on view; this test is about the name
-    // dialog it reuses, so it drives that view directly rather than the DOM.
+    const view = document.createElement('section');
+    view.id = 'view-recording-detail';
+    view.innerHTML = '<header><div id="recording-detail-heading"></div></header><div id="recording-detail-content"></div>';
+    document.body.appendChild(view);
     const detail = (controller as any).detail;
-    detail.current = { kind: 'recording', entry };
+    detail.show({ kind: 'recording', entry });
 
-    const rename = detail.startRename();
+    detail.beginRename();
     await flush();
-    const input = document.querySelector<HTMLInputElement>('.recording-name-input')!;
-    expect(input.value).toBe('Original title');
-    expect(document.querySelector('.recording-name-card')?.textContent).toContain('history');
-    input.value = 'New display title';
-    document.querySelector<HTMLButtonElement>('[data-recording-name-save]')!.click();
-    await rename;
+    const field = document.querySelector<HTMLInputElement>('.recording-detail-name-field')!;
+    expect(field.value).toBe('Original title');
+    // A local rename only relabels history, and the body says so.
+    expect(document.getElementById('recording-detail-content')?.textContent).toContain('recording history');
+    field.value = 'New display title';
+    field.dispatchEvent(new Event('input'));
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
     await flush();
 
     expect(mockSendMessage).toHaveBeenCalledWith({
       type: 'RENAME_RECORDING_HISTORY', id: 'recording:local', name: 'New display title',
     });
     expect(detail.target.entry.files[0].filename).toBe('original-recording.webm');
+    expect(document.querySelector('.recording-detail-name-field')).toBeNull();
+    expect(document.getElementById('recording-detail-title')?.textContent).toBe('New display title');
+    view.remove();
   });
 
   it('defers completed-upload naming during an active recording and opens it once idle', async () => {
@@ -524,12 +528,15 @@ describe('PopupController', () => {
 
       expect(elements.viewUpload.hidden).toBe(false);
       expect(elements.viewConfig.hidden).toBe(true);
-      expect(elements.uploadJobPct.textContent).toBe('42%');
-      expect(elements.uploadBarFill.style.width).toBe('42%');
-      expect(elements.uploadProgress.hidden).toBe(false);
-      expect(elements.uploadDone.hidden).toBe(true);
-      expect(elements.uploadJobLabel.textContent).toBe('to Google Drive');
+      // d4: the head leads, and each file carries its own state.
+      expect(elements.viewUpload.dataset.state).toBe('uploading');
+      expect(elements.uploadHead.hidden).toBe(false);
+      expect(elements.uploadEyebrow.hidden).toBe(true);
+      expect(elements.uploadJobLabel.textContent).toBe('Uploading to Drive');
+      expect(elements.uploadJobSub.textContent).toBe('0 OF 1 FILE');
+      expect(elements.uploadFilesLabel.textContent).toBe('PROGRESS');
       expect(elements.uploadJobFiles.children).toHaveLength(1);
+      expect(elements.uploadJobFiles.textContent).toContain('QUEUED');
       // An in-flight upload tab has no × close affordance.
       expect(elements.sessionTabs.querySelector('.session-tab-close')).toBeNull();
     });
@@ -542,8 +549,9 @@ describe('PopupController', () => {
       await new Promise(process.nextTick);
 
       (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
-      expect(elements.uploadDone.hidden).toBe(false);
-      expect(elements.uploadProgress.hidden).toBe(true);
+      expect(elements.viewUpload.dataset.state).toBe('saved');
+      expect(elements.uploadJobLabel.textContent).toBe('Recording saved');
+      expect(elements.uploadFilesLabel.textContent).toBe('IN GOOGLE DRIVE');
 
       // Re-query after the select re-rendered the bar; the finished tab carries a ×.
       const close = elements.sessionTabs.querySelector('.session-tab-close') as HTMLElement;
@@ -610,7 +618,7 @@ describe('PopupController', () => {
       // Live (last) is selected; ArrowRight wraps to the first (job) tab and activates it.
       elements.sessionTabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
       expect(elements.viewUpload.hidden).toBe(false);
-      expect(elements.uploadJobLabel.textContent).toBe('to Google Drive');
+      expect(elements.uploadJobLabel.textContent).toBe('Uploading to Drive');
     });
 
     it('dismisses a focused finished tab with the Delete key', async () => {
@@ -636,7 +644,10 @@ describe('PopupController', () => {
 
       (elements.sessionTabs.querySelectorAll('.session-tab')[0] as HTMLButtonElement).click();
       expect(elements.uploadJobRetry.hidden).toBe(false);
-      expect(elements.uploadJobLabel.textContent).toContain('Upload failed');
+      // 8A: the outcome leads in place of the head.
+      expect(elements.viewUpload.dataset.state).toBe('failed');
+      expect(elements.uploadHead.hidden).toBe(true);
+      expect(elements.uploadEyebrow.textContent).toBe('SAVING · STOPPED AT 1 OF 1');
 
       mockSendMessage.mockClear();
       mockSendMessage.mockResolvedValueOnce({ ok: true, session: { phase: 'idle', runConfig: null, updatedAt: Date.now() } });
@@ -986,7 +997,8 @@ describe('PopupController', () => {
     await flush();
 
     const message = document.querySelector('.modal-message')?.textContent ?? '';
-    expect(message).toContain("You'll lose");
+    expect(message).toContain("This can't be undone.");
+    expect(document.querySelector('.modal-message .modal-lead')).not.toBeNull();
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
 
     document.querySelector<HTMLButtonElement>('[data-confirm-cancel]')!.click();

@@ -14,7 +14,7 @@
 
 import { detailPercent } from '../history/historyChrome';
 import type { PopupElements } from '../popupView';
-import type { RecordingPhase, RecordingStatusView } from '../../shared/recording';
+import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
 
 export type PopupStatusElements = Pick<
   PopupElements,
@@ -63,17 +63,41 @@ export class PopupStatusView {
     this.el.ppHeader?.classList.toggle('recording-active', active && !paused);
     this.el.ppHeader?.classList.toggle('recording-paused', active && paused);
     this.el.ppHeader?.classList.remove('recording-saved');
+    this.el.ppHeader?.classList.remove('recording-stopped');
     this.el.ppHeader?.classList.remove('permission-blocked');
   }
 
-  /** Updates the header tone while a detached upload detail is visible. */
-  syncHeaderUpload(completed: boolean): void {
+  /**
+   * The header while one upload job's screen is showing: SAVING while it runs
+   * (d4), SAVED once it lands (n2a). A failed or partial job says nothing here —
+   * its own screen leads with what went wrong (8A, 8C). The progress chip is
+   * dropped for the job on screen, since the screen itself is that progress.
+   */
+  syncHeaderUpload(job: Pick<UploadJob, 'id' | 'status'>): void {
     const label = document.getElementById('header-phase');
     if (!label) return;
-    label.hidden = true;
-    this.el.ppHeader?.classList.toggle('recording-active', !completed);
+    const uploading = job.status === 'uploading';
+    const completed = job.status === 'completed';
+    label.hidden = !uploading && !completed;
+    label.textContent = completed ? 'SAVED' : 'SAVING';
+    label.dataset.tone = completed ? 'saved' : 'saving';
+    this.el.ppHeader?.classList.toggle('recording-active', uploading);
     this.el.ppHeader?.classList.remove('recording-paused');
-    this.el.ppHeader?.classList.toggle('recording-saved', completed);
+    this.el.ppHeader?.classList.remove('recording-stopped');
+    this.el.ppHeader?.classList.toggle('recording-saved', !uploading);
+    const chip = document.getElementById('open-upload-navigation');
+    if (chip && chip.dataset.jobId === job.id) chip.hidden = true;
+  }
+
+  /** A run that ended without being asked to (n4): the header says STOPPED. */
+  syncHeaderInterrupted(): void {
+    const label = document.getElementById('header-phase');
+    if (!label) return;
+    label.hidden = false;
+    label.textContent = 'STOPPED';
+    label.dataset.tone = 'stopped';
+    this.el.ppHeader?.classList.remove('recording-active', 'recording-paused', 'recording-saved');
+    this.el.ppHeader?.classList.add('recording-stopped');
   }
 
   /** Header-level one-tap return to the latest in-flight upload. */

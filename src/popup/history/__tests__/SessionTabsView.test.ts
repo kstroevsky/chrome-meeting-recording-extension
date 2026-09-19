@@ -12,13 +12,14 @@ const flush = async () => {
 
 const makeEl = (): PopupElements => ({
   sessionTabs: document.createElement('div'),
-  uploadProgress: document.createElement('div'),
-  uploadDone: document.createElement('div'),
+  viewUpload: document.createElement('section'),
+  uploadHead: document.createElement('div'),
   uploadJobLabel: document.createElement('div'),
-  uploadJobPct: document.createElement('span'),
-  uploadBarFill: document.createElement('div'),
-  uploadJobMeta: document.createElement('div'),
   uploadJobSub: document.createElement('div'),
+  uploadEyebrow: document.createElement('div'),
+  uploadFilesLabel: document.createElement('div'),
+  uploadJobNewRecording: document.createElement('button'),
+  uploadRecoveryNote: document.createElement('p'),
   uploadJobFiles: document.createElement('ul'),
   uploadJobNotesLine: document.createElement('div'),
   uploadJobNotesState: document.createElement('span'),
@@ -110,7 +111,7 @@ describe('SessionTabsView', () => {
 
     view.renderJobView(job({ status: 'canceled', progress: 1, files: [{ stream: 'tab', filename: 'tab.webm', status: 'fallback' }] }));
     expect(el.uploadJobCancel!.hidden).toBe(true);
-    expect(el.uploadJobLabel!.textContent).toBe('Upload canceled — saved locally');
+    expect(el.uploadEyebrow!.textContent).toBe('UPLOAD CANCELED · KEPT ON THIS DEVICE');
   });
 
   it('renders a retained recovery as retry-pending without offering an unavailable in-memory retry', () => {
@@ -121,8 +122,8 @@ describe('SessionTabsView', () => {
       files: [{ stream: 'tab', filename: 'tab.webm', status: 'retry-pending', error: 'network down' }],
     }));
 
-    expect(el.uploadJobLabel!.textContent).toContain('retrying when the recorder starts');
-    expect(el.uploadJobFiles!.textContent).toContain('Retry pending');
+    expect(el.uploadEyebrow!.textContent).toBe('UPLOAD PAUSED · RETRIES WHEN THE RECORDER STARTS');
+    expect(el.uploadJobFiles!.querySelector('.up-file-state')!.textContent).toBe('WAITING');
     expect(el.uploadJobRetry!.hidden).toBe(true);
   });
 
@@ -133,7 +134,7 @@ describe('SessionTabsView', () => {
       files: [{ stream: 'tab', filename: 'tab.webm', status: 'unavailable', error: 'OPFS file missing' }],
     }));
 
-    expect(el.uploadJobLabel!.textContent).toBe('Upload failed — recovery source is unavailable');
+    expect(el.uploadEyebrow!.textContent).toBe('UPLOAD FAILED · RECOVERY SOURCE UNAVAILABLE');
     expect(el.uploadJobFiles!.textContent).toContain('OPFS file missing');
     expect(el.uploadJobRetry!.hidden).toBe(true);
   });
@@ -151,43 +152,93 @@ describe('SessionTabsView', () => {
       ],
     }));
 
-    expect(el.uploadProgress!.hidden).toBe(true);
-    expect(el.uploadDone!.hidden).toBe(false);
+    expect(el.viewUpload!.dataset.state).toBe('saved');
+    expect(el.uploadHead!.hidden).toBe(false);
     expect(el.uploadJobLabel!.textContent).toBe('Recording saved');
-    expect(el.uploadJobSub!.textContent).toBe('3 files · 138 MB · Google Drive');
+    expect(el.uploadJobSub!.textContent).toBe('3 FILES · 138 MB');
+    expect(el.uploadFilesLabel!.textContent).toBe('IN GOOGLE DRIVE');
     expect(el.uploadJobFiles!.querySelectorAll('li')).toHaveLength(3);
     expect(el.uploadJobFiles!.textContent).toContain('meet-tab.webm');
     expect(el.uploadJobFiles!.textContent).toContain('meet-mic.webm');
     expect(el.uploadJobFiles!.textContent).toContain('meet-camera.webm');
     expect(el.uploadJobFiles!.textContent).toContain('92 MB');
-    expect(el.uploadJobFiles!.querySelectorAll('.file-open')).toHaveLength(3);
-    expect(el.uploadJobFiles!.querySelectorAll('.file-head .file-open')).toHaveLength(3);
+    expect(el.uploadJobFiles!.querySelectorAll('.up-file-open')).toHaveLength(3);
     expect(el.uploadJobOpenDrive!.hidden).toBe(false);
     expect(el.uploadJobRetry!.hidden).toBe(true);
+    expect(el.uploadJobNewRecording!.textContent).toBe('New recording');
 
-    (el.uploadJobFiles!.querySelector('.file-open') as HTMLButtonElement).click();
+    (el.uploadJobFiles!.querySelector('.up-file-open') as HTMLButtonElement).click();
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://drive.google.com/file/d/tab/view' });
     el.uploadJobOpenDrive!.click();
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://drive.google.com/drive/folders/folder-1' });
   });
 
-  it('renders an in-progress job as a linear bar with a real aggregate + background button', () => {
+  it('renders an in-progress job file by file: saved, uploading with its share, or queued (d4)', () => {
     view.wireEvents();
     view.renderJobView(job({
       status: 'uploading',
       progress: 0.42,
       files: [
-        { stream: 'tab', filename: 'tab.webm', status: 'uploaded', bytes: 90 * 1024 * 1024 },
-        { stream: 'mic', filename: 'mic.webm', status: 'uploading' },
+        { stream: 'mic', filename: 'mic.webm', status: 'uploaded', bytes: 12 * 1024 * 1024 },
+        { stream: 'tab', filename: 'tab.webm', status: 'uploading', bytes: 100, uploadedBytes: 67 },
+        { stream: 'self-video', filename: 'camera.webm', status: 'uploading', bytes: 100 },
       ],
     }));
 
-    expect(el.uploadProgress!.hidden).toBe(false);
-    expect(el.uploadDone!.hidden).toBe(true);
-    expect(el.uploadJobPct!.textContent).toBe('42%');
-    expect(el.uploadBarFill!.style.width).toBe('42%');
-    expect(el.uploadJobMeta!.textContent).toBe('2 files');
+    expect(el.viewUpload!.dataset.state).toBe('uploading');
+    expect(el.uploadJobLabel!.textContent).toBe('Uploading to Drive');
+    expect(el.uploadJobSub!.textContent).toBe('1 OF 3 FILES');
+    const states = Array.from(el.uploadJobFiles!.querySelectorAll('.up-file-state')).map((s) => s.textContent);
+    expect(states).toEqual(['SAVED', 'UPLOADING 67%', 'QUEUED']);
+    const fills = Array.from(el.uploadJobFiles!.querySelectorAll<HTMLElement>('.up-bar span')).map((f) => f.style.width);
+    expect(fills).toEqual(['100%', '67%', '0%']);
     expect(el.uploadJobOpenDrive!.hidden).toBe(true);
+    expect(el.uploadJobCancel!.hidden).toBe(false);
+    expect(el.uploadJobNewRecording!.textContent).toBe('Keep uploading in background');
+  });
+
+  it('leads a failed job with where it stopped, and says each file is still safe (8A)', () => {
+    view.renderJobView(job({
+      status: 'failed',
+      progress: 1,
+      files: [
+        { stream: 'tab', filename: 'tab.webm', status: 'uploaded', bytes: 100 },
+        { stream: 'mic', filename: 'mic.webm', status: 'fallback', bytes: 100 },
+      ],
+    }));
+
+    expect(el.viewUpload!.dataset.state).toBe('failed');
+    expect(el.uploadHead!.hidden).toBe(true);
+    expect(el.uploadEyebrow!.textContent).toBe('SAVING · STOPPED AT 2 OF 2');
+    expect(Array.from(el.uploadJobFiles!.querySelectorAll('.up-file-state')).map((s) => s.textContent)).toEqual(['DONE', 'FAILED']);
+    expect(el.uploadJobFiles!.textContent).toContain('Nothing was lost');
+    expect(el.uploadJobRetry!.hidden).toBe(false);
+    expect(el.uploadJobRetry!.textContent).toBe('Retry upload');
+    expect(el.uploadJobNewRecording!.textContent).toBe('Retry later');
+    expect(el.uploadRecoveryNote!.hidden).toBe(false);
+  });
+
+  it('offers a partial job its one retry in place and the files that landed (8C)', () => {
+    view.wireEvents();
+    view.renderJobView(job({
+      status: 'partial',
+      progress: 1,
+      folderWebViewLink: 'https://drive.google.com/drive/folders/folder-1',
+      files: [
+        { stream: 'tab', filename: 'tab.webm', status: 'uploaded', bytes: 100, webViewLink: 'https://drive.google.com/file/d/tab/view' },
+        { stream: 'self-video', filename: 'camera.webm', status: 'uploaded', bytes: 100, webViewLink: 'https://drive.google.com/file/d/cam/view' },
+        { stream: 'mic', filename: 'mic.webm', status: 'fallback', bytes: 100 },
+      ],
+    }));
+
+    expect(el.uploadEyebrow!.textContent).toBe('SAVED WITH 1 PROBLEM');
+    expect(el.uploadJobRetry!.textContent).toBe('Retry the audio file');
+    expect(el.uploadJobOpenDrive!.hidden).toBe(false);
+    expect(el.uploadJobNewRecording!.hidden).toBe(true);
+    expect(el.uploadRecoveryNote!.textContent).toBe('The two files above are already shareable.');
+    mockSend.mockResolvedValue({ ok: true } as never);
+    (el.uploadJobFiles!.querySelector('.up-file-retry') as HTMLButtonElement).click();
+    expect(mockSend).toHaveBeenCalledWith({ type: 'RETRY_UPLOAD_JOB', jobId: 'j1' });
   });
 
   it('dismissing a finished tab via its × sends DISMISS and applies the new session', async () => {
@@ -236,7 +287,7 @@ describe('SessionTabsView', () => {
       expect(el.uploadJobFiles!.children).toHaveLength(1);
       expect(el.uploadJobFiles!.textContent).toContain('tab.webm');
       expect(el.uploadJobFiles!.textContent).not.toContain('meet-notes.vtt');
-      expect(el.uploadJobMeta!.textContent).toContain('1 file');
+      expect(el.uploadJobSub!.textContent).toBe('0 OF 1 FILE');
       expect(el.uploadJobSub!.textContent).not.toContain('1.0 MB · 400');
     });
 

@@ -17,7 +17,8 @@
  * leaves it in the built-in folder rather than guessing a destination.
  */
 
-import type { RecordingNameDialog } from '../RecordingNameDialog';
+import { formatBytes } from '../../shared/format';
+import type { RecordingNameDialog, RecordingNameDialogOptions } from '../RecordingNameDialog';
 import { sendToBackground } from '../../shared/messages';
 import type { DriveFolderPreset } from '../../shared/settings';
 import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
@@ -78,12 +79,13 @@ export class CompletedNamingPrompt {
     this.pending = next.id;
     const presets = this.actions.localFolders();
     try {
+      // The local prompt really is the save (9L): the name becomes the file.
       const outcome = await this.dialog.ask({
-        title: 'Name this recording',
-        message: 'The saved file will use this name.',
+        title: 'Save recording',
+        message: presets.length ? '' : 'Saved to Downloads',
         initialValue: next.name,
-        saveLabel: 'Save name',
-        cancelLabel: 'Skip',
+        saveLabel: 'Save recording',
+        cancelLabel: 'Keep the default name',
         destinations: presets.length
           ? { presets, unfiledLabel: 'Downloads', initialId: null }
           : undefined,
@@ -107,6 +109,15 @@ export class CompletedNamingPrompt {
     }
   }
 
+  private driveOptions(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
+    return driveNamingOptions(job, presets, async (name, destinationId) => {
+      // Rename first: filing moves the folder this rename just retitled,
+      // and a failed move must not cost the user the name they typed.
+      await this.actions.rename(job.historyId!, name);
+      if (destinationId) await this.actions.fileTo(job.historyId!, destinationId);
+    });
+  }
+
   private async openNext(phase: RecordingPhase, session?: RecordingStatusView): Promise<void> {
     if (this.actions.suspended() || this.pending || this.dialog.isOpen()) return;
     // A run in progress owns the screen; naming waits for it to finish.
@@ -121,22 +132,7 @@ export class CompletedNamingPrompt {
     this.actions.reveal(job.id);
     const presets = this.actions.destinations();
     try {
-      const outcome = await this.dialog.ask({
-        title: 'Name this recording',
-        message: 'The recording folder and every uploaded media file will use this name.',
-        initialValue: job.label,
-        saveLabel: 'Save name',
-        cancelLabel: 'Skip',
-        destinations: presets.length
-          ? { presets, unfiledLabel: 'Google Meet Records', initialId: null }
-          : undefined,
-        onSave: async (name, destinationId) => {
-          // Rename first: filing moves the folder this rename just retitled,
-          // and a failed move must not cost the user the name they typed.
-          await this.actions.rename(job.historyId!, name);
-          if (destinationId) await this.actions.fileTo(job.historyId!, destinationId);
-        },
-      });
+      const outcome = await this.dialog.ask(this.driveOptions(job, presets));
       if (outcome === 'canceled') {
         // Skipping is recorded, so this recording is not asked about again.
         const response = await sendToBackground({ type: 'SKIP_RECORDING_NAMING', jobId: job.id });
@@ -151,6 +147,35 @@ export class CompletedNamingPrompt {
       this.queue(latestPhase, latestSession);
     }
   }
+}
+
+/** A title for the gallery: the Drive prompt with its real copy, and no writes. */
+export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
+  return driveNamingOptions(job, presets, async () => {});
+}
+
+function driveNamingOptions(
+  job: UploadJob,
+  presets: DriveFolderPreset[],
+  onSave: RecordingNameDialogOptions['onSave'],
+): RecordingNameDialogOptions {
+  const media = (job.files ?? []).filter((file) => file.kind !== 'notes');
+  const bytes = media.reduce((total, file) => total + (file.bytes ?? 0), 0);
+  return {
+    title: 'Name this recording',
+    // Without folders to choose from, the hint says where it already is (9L).
+    message: presets.length ? '' : 'Saved to Drive > Google Meet Records',
+    summary: media.length
+      ? [`${media.length} ${media.length === 1 ? 'FILE' : 'FILES'}`, ...(bytes ? [formatBytes(bytes).toUpperCase()] : [])].join(' · ')
+      : undefined,
+    initialValue: job.label,
+    saveLabel: 'Save name',
+    cancelLabel: 'Keep the default name',
+    destinations: presets.length
+      ? { presets, unfiledLabel: 'Google Meet Records', initialId: null }
+      : undefined,
+    onSave,
+  };
 }
 
 /** The earliest finished upload still waiting for a name. */
