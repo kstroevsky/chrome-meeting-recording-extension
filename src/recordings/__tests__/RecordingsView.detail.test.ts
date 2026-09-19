@@ -1,4 +1,4 @@
-import { RecordingsView, type RecordingsViewCallbacks } from '../RecordingsView';
+import { NOTES_WAIT_MS, RecordingsView, type RecordingsViewCallbacks } from '../RecordingsView';
 import { NOTE_UNDO_MS } from '../RecordingNotesSection';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 import type { RecordingNotation } from '../../shared/notations';
@@ -59,6 +59,40 @@ describe('RecordingsView detail (f2, f17)', () => {
     expect(list.querySelector('.detail-section-label')?.textContent).toBe('DESCRIPTION');
     list.querySelector<HTMLButtonElement>('.modal-button--watch')!.click();
     expect(callbacks.play).toHaveBeenCalledWith('weekly');
+  });
+
+  it('opens once the notes are in, so the modal never grows after it appears', async () => {
+    const { view, list, callbacks } = mount();
+    let answer!: (notes: RecordingNotation[]) => void;
+    callbacks.notes.load.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    view.render([entry()]);
+
+    list.querySelector<HTMLElement>('.recording-row')!.click();
+    await flush();
+    expect(list.querySelector('.recording-detail')).toBeNull();
+
+    answer(NOTES);
+    await flush();
+    expect(list.querySelector('.recording-detail')).not.toBeNull();
+    expect(list.querySelectorAll('.detail-notes__row')).toHaveLength(2);
+  });
+
+  it('opens anyway when the notes are slow, and lets them follow', async () => {
+    jest.useFakeTimers();
+    const { view, list, callbacks } = mount();
+    let answer!: (notes: RecordingNotation[]) => void;
+    callbacks.notes.load.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    view.render([entry()]);
+
+    list.querySelector<HTMLElement>('.recording-row')!.click();
+    jest.advanceTimersByTime(NOTES_WAIT_MS);
+    await flush();
+    expect(list.querySelector('.recording-detail')).not.toBeNull();
+    expect(list.querySelectorAll('.detail-notes__row')).toHaveLength(0);
+
+    answer(NOTES);
+    await flush();
+    expect(list.querySelectorAll('.detail-notes__row')).toHaveLength(2);
   });
 
   it('lists the notes under a spoiler that folds to a one-line range', async () => {

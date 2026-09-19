@@ -68,6 +68,13 @@ const $ = (tag: string, className?: string): HTMLElement => {
  */
 const SEARCH_REPAINT_MS = 120;
 
+/**
+ * How long opening a recording waits for its notes. They normally arrive well
+ * inside this, and then the modal opens at its full height instead of growing
+ * after it appears; a slow read opens it anyway and the notes follow.
+ */
+export const NOTES_WAIT_MS = 200;
+
 /** DOM-only renderer for the standalone, paged recordings history. */
 export class RecordingsView {
   private entries: RecordingHistoryEntry[] = [];
@@ -101,7 +108,9 @@ export class RecordingsView {
   private destinationListbox: ListboxSelect | null = null;
   private editingId: string | null = null;
   /** The open recording's notes, kept across redraws so they load once. */
-  private notesSection: { id: string; section: RecordingNotesSection } | null = null;
+  private notesSection: { id: string; section: RecordingNotesSection; loaded: Promise<void> } | null = null;
+  /** The recording waiting on its notes to open, so a slow one cannot open over a later click. */
+  private pendingOpenId: string | null = null;
   /** The page's one toast, for UNDO after a note is deleted (f17). */
   private toast: { element: HTMLElement; settle: (undone: boolean) => void } | null = null;
   /** The remove-from-history confirmation (f17), while it is open. */
@@ -179,7 +188,8 @@ export class RecordingsView {
     this.syncToolbar(visible.length);
     this.tableHost!.replaceChildren(this.table(visible));
     const openEntry = this.entries.find((entry) => entry.id === this.openId);
-    if (!openEntry) this.notesSection = null;
+    // A redraw while a recording waits to open must not drop the notes it waits on.
+    if (!openEntry && this.notesSection?.id !== this.pendingOpenId) this.notesSection = null;
     this.detailHost!.replaceChildren(...(openEntry ? [this.detail(openEntry)] : []));
   }
 
@@ -386,7 +396,7 @@ export class RecordingsView {
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
     row.setAttribute('aria-label', `Open ${entry.name}`);
-    const open = () => { this.openId = entry.id; this.editingId = null; this.redraw(); };
+    const open = () => { void this.openDetail(entry); };
     row.addEventListener('click', open);
     row.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
@@ -489,6 +499,30 @@ export class RecordingsView {
     this.redraw();
   }
 
+  /** Opens a recording's modal once its notes are in, or once the wait runs out. */
+  private async openDetail(entry: RecordingHistoryEntry): Promise<void> {
+    this.pendingOpenId = entry.id;
+    const { loaded } = this.notesFor(entry);
+    await Promise.race([loaded, new Promise<void>((resolve) => { setTimeout(resolve, NOTES_WAIT_MS); })]);
+    if (this.pendingOpenId !== entry.id) return;
+    this.pendingOpenId = null;
+    this.openId = entry.id;
+    this.editingId = null;
+    this.redraw();
+  }
+
+  /** The recording's notes section, started on first use and then kept. */
+  private notesFor(entry: RecordingHistoryEntry): { section: RecordingNotesSection; loaded: Promise<void> } {
+    if (this.notesSection?.id !== entry.id) {
+      const section = new RecordingNotesSection(entry.id, durationOf(entry), {
+        ...this.callbacks.notes,
+        offerUndo: (message, windowMs) => this.offerUndo(message, windowMs),
+      });
+      this.notesSection = { id: entry.id, section, loaded: section.load() };
+    }
+    return this.notesSection;
+  }
+
   private detail(entry: RecordingHistoryEntry): HTMLElement {
     const overlay = $('div', 'recording-detail-overlay');
     overlay.addEventListener('click', (event) => {
@@ -531,16 +565,8 @@ export class RecordingsView {
 
     // The notes come first (f2): the timeline and the spoiler list, above
     // everything that describes where the recording is stored.
-    if (this.notesSection?.id !== entry.id) {
-      const section = new RecordingNotesSection(entry.id, durationOf(entry), {
-        ...this.callbacks.notes,
-        offerUndo: (message, windowMs) => this.offerUndo(message, windowMs),
-      });
-      this.notesSection = { id: entry.id, section };
-      void section.load();
-    }
     const notes = $('div', 'recording-detail__notes');
-    notes.append(this.notesSection.section.element);
+    notes.append(this.notesFor(entry).section.element);
     dialog.append(body, notes);
 
     const more = $('div', 'recording-detail__body recording-detail__body--more');
