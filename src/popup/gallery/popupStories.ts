@@ -421,6 +421,15 @@ export const POPUP_STORIES: PopupStory[] = [
     },
   })),
   {
+    id: 'unsaved-recording', title: 'Unsaved recording found', group: 'Overlays',
+    description: '8D — a crash left a recording on this device; name it and keep it, or throw it away.',
+    preview: {
+      screen: 'session',
+      session: session({}),
+      unsavedRecording: { filename: 'google-meet-team-sync-20260711T1430-recording.webm', sizeBytes: 63 * 1024 * 1024 },
+    },
+  },
+  {
     id: 'naming-folders-open', title: 'Naming · folder list open', group: 'Overlays',
     description: '9FD — open, the list takes the field\'s place in the flow; the picked folder is tinted and ticked.',
     preview: {

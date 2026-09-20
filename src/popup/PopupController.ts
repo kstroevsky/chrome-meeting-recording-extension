@@ -22,6 +22,7 @@ import { RecordingControlsView } from './recording/RecordingControlsView';
 import { PopupStatusView } from './recording/PopupStatusView';
 import { PopupNotations } from './notes/PopupNotations';
 import { CompletedNamingPrompt, previewDriveNaming } from './history/CompletedNamingPrompt';
+import { UnsavedRecordingPrompt } from './history/UnsavedRecordingPrompt';
 import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
@@ -96,6 +97,8 @@ export class PopupController {
   private readonly devicePicker: DevicePickerView;
   private readonly commands: RecordingCommands;
   private readonly naming: CompletedNamingPrompt;
+  /** Offers back a recording a crash left behind (8D). */
+  private readonly unsaved: UnsavedRecordingPrompt;
   private readonly notations: PopupNotations;
   private readonly status: PopupStatusView;
   private readonly controls: RecordingControlsView;
@@ -124,6 +127,20 @@ export class PopupController {
   constructor(el: PopupElements) {
     this.el = el;
     this.timer = new RecordingTimer(el.recTimer);
+    this.unsaved = new UnsavedRecordingPrompt({
+      list: async () => {
+        const response = await sendToBackground({ type: 'LIST_UNSAVED_RECORDINGS' });
+        return response.ok ? response.recordings ?? [] : [];
+      },
+      resolve: async (key, action, name) => {
+        const response = await sendToBackground({
+          type: 'RESOLVE_UNSAVED_RECORDING', key, action, ...(name ? { name } : {}),
+        });
+        if (response.ok === false) throw new Error(response.error || 'Could not save that recording');
+      },
+      notify: (message) => this.toast(message),
+      suspended: () => this.destroyed || this.previewing,
+    });
     this.naming = new CompletedNamingPrompt(this.recordingNameDialog, {
       notify: (message) => this.toast(message),
       rename: (historyId, name) => this.renameRecording(historyId, name),
@@ -247,7 +264,10 @@ export class PopupController {
     });
     this.sessionTabs.wireEvents();
     void this.recordingsList.refreshCount();
-    void this.state.refreshInitialState();
+    // Chained after the state refresh rather than raced with it: the popup
+    // should paint first, and asking any earlier would also mean asking before
+    // the session's phase is known — and a capture in flight owns staging.
+    void this.state.refreshInitialState().then(() => this.unsaved.offerNext());
   }
 
   /**
@@ -299,6 +319,17 @@ export class PopupController {
     this.renderPreviewSetup(preview.setup);
     if (preview.devicePicker) this.devicePicker.showPreview(preview.devicePicker.device, preview.devicePicker.options);
     if (preview.confirmDiscard) void this.commands.askDiscard().confirmation;
+    if (preview.unsavedRecording) {
+      const { filename, sizeBytes } = preview.unsavedRecording;
+      // Its own prompt rather than the shared one, with stubbed actions: a
+      // story must show the dialog without writing to anyone's Drive.
+      void new UnsavedRecordingPrompt({
+        list: async () => [{ key: `staging/${filename}`, filename, sizeBytes, lastModifiedMs: 0 }],
+        resolve: async () => {},
+        notify: () => {},
+        suspended: () => false,
+      }).offerNext();
+    }
     const namingJob = preview.naming && preview.session.uploadJobs?.find((job) => job.id === preview.selectedUploadJobId);
     if (preview.naming && namingJob) {
       const { folders, picked, open, query } = preview.naming;
@@ -327,6 +358,7 @@ export class PopupController {
     this.sessionTabs.dispose();
     this.confirmDialog.dispose();
     this.recordingNameDialog.dispose();
+    this.unsaved.dispose();
     this.devicePicker.close(false);
   }
 

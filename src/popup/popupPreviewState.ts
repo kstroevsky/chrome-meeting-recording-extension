@@ -43,6 +43,8 @@ export type PopupPreviewState =
       savedDurationMs?: number;
       /** Opens the discard confirmation over the recording (n3). */
       confirmDiscard?: boolean;
+      /** Offers back a recording a crash left behind (8D), at this size. */
+      unsavedRecording?: { filename: string; sizeBytes: number };
       /**
        * Opens the naming prompt for the selected finished upload, with these
        * folders (9L, 9FL). `picked` preselects one, `open` shows the list in
