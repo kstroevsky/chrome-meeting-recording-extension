@@ -27,6 +27,32 @@ export function slugifyRecordingTitle(title: string): string {
  * with: it carries a media stream only so the upload can order it, and naming it
  * after that stream made it collide with the real file of the same stream.
  */
+/**
+ * The name a recording would take when one of that name already exists (design
+ * 7C): `Team sync — Jul 11` becomes `Team sync — Jul 11 (2)`. Returns null when
+ * the name is free.
+ *
+ * Saving keeps both rather than refusing or overwriting. Two meetings really do
+ * share a name — a weekly sync is called the same thing every week — so a
+ * collision is normal, and the only wrong answers are losing one of them or
+ * making the user invent a name they did not want.
+ *
+ * Compared case-insensitively and on trimmed text, because `team sync` and
+ * `Team sync ` are the same name to everyone except a string comparison.
+ */
+export function suffixedRecordingName(name: string, taken: readonly string[]): string | null {
+  const wanted = name.trim();
+  if (!wanted) return null;
+  const used = new Set(taken.map((existing) => existing.trim().toLocaleLowerCase()));
+  if (!used.has(wanted.toLocaleLowerCase())) return null;
+  // Starts at 2 because the one already there is, in effect, the first.
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${wanted} (${n})`;
+    if (!used.has(candidate.toLocaleLowerCase())) return candidate;
+  }
+  return null;
+}
+
 export function buildRenamedRecordingFilename(
   title: string,
   stream: RecordingStream,

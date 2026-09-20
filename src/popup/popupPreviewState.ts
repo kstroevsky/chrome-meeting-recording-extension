@@ -45,6 +45,8 @@ export type PopupPreviewState =
       confirmDiscard?: boolean;
       /** Offers back a recording a crash left behind (8D), at this size. */
       unsavedRecording?: { filename: string; sizeBytes: number };
+      /** Names already in the library, so the naming prompt can warn (7C). */
+      takenNames?: string[];
       /**
        * Opens the naming prompt for the selected finished upload, with these
        * folders (9L, 9FL). `picked` preselects one, `open` shows the list in

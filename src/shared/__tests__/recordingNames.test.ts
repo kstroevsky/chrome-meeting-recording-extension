@@ -1,4 +1,6 @@
-import { buildRenamedRecordingFilename, slugifyRecordingTitle } from '../recordingNames';
+import { buildRenamedRecordingFilename, slugifyRecordingTitle,
+  suffixedRecordingName,
+} from '../recordingNames';
 
 describe('recording names', () => {
   it('creates lowercase dash-separated Unicode-safe slugs', () => {
@@ -37,3 +39,32 @@ describe('recording names', () => {
     expect(notes).not.toBe(mic);
   });
 });
+
+/**
+ * Two meetings really do share a name — a weekly sync is called the same thing
+ * every week — so a collision is normal and both are kept (7C).
+ */
+describe('suffixedRecordingName', () => {
+  it('leaves a free name alone', () => {
+    expect(suffixedRecordingName('Team sync', ['Something else'])).toBeNull();
+    expect(suffixedRecordingName('Team sync', [])).toBeNull();
+  });
+
+  it('numbers from two, because the one already there is the first', () => {
+    expect(suffixedRecordingName('Team sync — Jul 11', ['Team sync — Jul 11']))
+      .toBe('Team sync — Jul 11 (2)');
+  });
+
+  it('keeps counting past the ones already taken', () => {
+    expect(suffixedRecordingName('Sync', ['Sync', 'Sync (2)', 'Sync (3)'])).toBe('Sync (4)');
+  });
+
+  it('matches the way people read names, not the way strings compare', () => {
+    expect(suffixedRecordingName('  Team sync  ', ['team SYNC'])).toBe('Team sync (2)');
+  });
+
+  it('has nothing to say about a blank name', () => {
+    expect(suffixedRecordingName('   ', ['Team sync'])).toBeNull();
+  });
+});
+

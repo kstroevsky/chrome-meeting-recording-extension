@@ -23,6 +23,7 @@ import { PopupStatusView } from './recording/PopupStatusView';
 import { PopupNotations } from './notes/PopupNotations';
 import { CompletedNamingPrompt, previewDriveNaming } from './history/CompletedNamingPrompt';
 import { UnsavedRecordingPrompt } from './history/UnsavedRecordingPrompt';
+import { suffixedRecordingName } from '../shared/recordingNames';
 import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
@@ -119,6 +120,12 @@ export class PopupController {
   /** Drive destinations offered when naming; empty until settings load. */
   private destinations: DriveFolderPreset[] = [];
   private driveRootFolder = DEFAULT_DRIVE_ROOT_FOLDER_NAME;
+  /**
+   * Names already in the library, for the naming prompt's "that name is taken"
+   * line (7C). Read from history rather than Drive: it is the same answer, it
+   * works offline, and offline is exactly when a recording finishes.
+   */
+  private recordingNames: string[] = [];
   /** Download sub-folders offered when naming a local recording. */
   private localFolders: DriveFolderPreset[] = [];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
@@ -147,6 +154,7 @@ export class PopupController {
       destinations: () => this.destinations,
       driveRootFolder: () => this.driveRootFolder,
       createDestination: (name) => this.createDestination(name),
+      recordingNames: () => this.recordingNames,
       fileTo: (historyId, presetId) => this.fileRecordingToDestination(historyId, presetId),
       localFolders: () => this.localFolders,
       pendingLocal: () => this.pendingLocal,
@@ -267,7 +275,9 @@ export class PopupController {
     // Chained after the state refresh rather than raced with it: the popup
     // should paint first, and asking any earlier would also mean asking before
     // the session's phase is known — and a capture in flight owns staging.
-    void this.state.refreshInitialState().then(() => this.unsaved.offerNext());
+    void this.state.refreshInitialState()
+      .then(() => this.loadRecordingNames())
+      .then(() => this.unsaved.offerNext());
   }
 
   /**
@@ -333,7 +343,12 @@ export class PopupController {
     const namingJob = preview.naming && preview.session.uploadJobs?.find((job) => job.id === preview.selectedUploadJobId);
     if (preview.naming && namingJob) {
       const { folders, picked, open, query } = preview.naming;
-      void this.recordingNameDialog.ask(previewDriveNaming(namingJob, folders, picked ?? null));
+      void this.recordingNameDialog.ask({
+        ...previewDriveNaming(namingJob, folders, picked ?? null),
+        ...(preview.takenNames
+          ? { duplicateOf: (name: string) => suffixedRecordingName(name, preview.takenNames!) }
+          : {}),
+      });
       // The picker's own controls, driven the way a person would (9FD, 7D).
       if (open) document.querySelector<HTMLButtonElement>('.recording-name-destination__select .select-trigger')?.click();
       const search = document.querySelector<HTMLInputElement>('.recording-name-destination__select .select-search-input');
@@ -721,6 +736,26 @@ export class PopupController {
     this.savedExtras = { historyId, durationMs, notes };
     const current = this.lastSession?.uploadJobs?.find((candidate) => candidate.id === job.id) ?? job;
     this.paintSavedExtras(current);
+  }
+
+  /**
+   * Reads the names already in use, once per popup open. A page is enough: a
+   * collision the user will recognise is a recent one, and the prompt warns
+   * rather than enforces, so a name missed off the end costs nothing.
+   */
+  private async loadRecordingNames(): Promise<void> {
+    if (this.previewing) return;
+    try {
+      const response = await sendToBackground({ type: 'LIST_RECORDING_HISTORY' });
+      if (!response.ok) return;
+      this.recordingNames = response.entries
+        .filter((entry) => !entry.deletedAt)
+        .map((entry) => entry.name)
+        .filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
+    } catch {
+      // Without the list nothing is claimed to be taken, which is the safe way
+      // to be wrong: the save still works and keeps the typed name.
+    }
   }
 
   /** A just-finished recording is always on the first history page. */

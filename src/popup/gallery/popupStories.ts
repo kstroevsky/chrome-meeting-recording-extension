@@ -421,6 +421,17 @@ export const POPUP_STORIES: PopupStory[] = [
     },
   })),
   {
+    id: 'naming-taken', title: 'Naming · that name is taken', group: 'Overlays',
+    description: '7C — the name is already used; saving keeps both and says what this one becomes.',
+    preview: {
+      screen: 'session',
+      session: session({ uploadJobs: [{ ...uploadJob('completed', 1), label: 'Team sync — Jul 11', namingStatus: 'pending', historyId: 'gallery-history-alex' }] }),
+      selectedUploadJobId: uploadJob('completed', 1).id,
+      naming: { folders: [] },
+      takenNames: ['Team sync — Jul 11'],
+    },
+  },
+  {
     id: 'unsaved-recording', title: 'Unsaved recording found', group: 'Overlays',
     description: '8D — a crash left a recording on this device; name it and keep it, or throw it away.',
     preview: {

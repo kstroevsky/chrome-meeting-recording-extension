@@ -22,6 +22,7 @@ import type { RecordingNameDialog, RecordingNameDialogOptions } from '../Recordi
 import { sendToBackground } from '../../shared/messages';
 import type { DriveFolderPreset } from '../../shared/settings';
 import { DEFAULT_DRIVE_ROOT_FOLDER_NAME, DRIVE_DEFAULT_DESTINATION_NAME } from '../../shared/settings';
+import { suffixedRecordingName } from '../../shared/recordingNames';
 import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
 
 export type CompletedNamingActions = {
@@ -34,6 +35,8 @@ export type CompletedNamingActions = {
   driveRootFolder: () => string;
   /** Adds a folder from the dialog (7A); null when the name was refused. */
   createDestination: (name: string) => Promise<DriveFolderPreset | null>;
+  /** Names already in the library, so the prompt can say a name is taken (7C). */
+  recordingNames: () => readonly string[];
   /** Files the recording's Drive folder into the chosen destination. */
   fileTo: (historyId: string, presetId: string) => Promise<unknown>;
   /** Local folders offered to a recording that has not been written yet. */
@@ -86,6 +89,7 @@ export class CompletedNamingPrompt {
     try {
       // The local prompt really is the save (9L): the name becomes the file.
       const outcome = await this.dialog.ask({
+        duplicateOf: (name) => suffixedRecordingName(name, this.actions.recordingNames()),
         title: 'Save recording',
         message: presets.length ? '' : 'Saved to Downloads',
         initialValue: next.name,
@@ -137,7 +141,10 @@ export class CompletedNamingPrompt {
     this.actions.reveal(job.id);
     const presets = this.actions.destinations();
     try {
-      const outcome = await this.dialog.ask(this.driveOptions(job, presets));
+      const outcome = await this.dialog.ask({
+        ...this.driveOptions(job, presets),
+        duplicateOf: (name) => suffixedRecordingName(name, this.actions.recordingNames()),
+      });
       if (outcome === 'canceled') {
         // Skipping is recorded, so this recording is not asked about again.
         const response = await sendToBackground({ type: 'SKIP_RECORDING_NAMING', jobId: job.id });

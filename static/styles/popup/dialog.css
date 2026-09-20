@@ -63,6 +63,12 @@ body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: a
 .recording-name-destination__select .select-search-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; caret-color: var(--ink); color: var(--ink); font: 12.5px 'Space Grotesk', system-ui, sans-serif; }
 .recording-name-destination__select .select-search-input::placeholder { color: var(--pick-icon); opacity: 1; }
 .recording-name-destination__select .select-count { padding: 6px 7px 2px; color: var(--pick-icon); font: 9.5px 'IBM Plex Mono', monospace; letter-spacing: .08em; }
+/* That name is taken (7C). The field takes the caution tone, not the refusal
+   one: nothing is wrong, two recordings are simply allowed to share a name. */
+.recording-name-input--taken { border-color: var(--warn-label); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn-label) 16%, transparent); }
+.recording-name-taken { margin: 7px 0 0; color: var(--warn-label); font-size: 11px; line-height: 1.5; }
+.recording-name-taken__name { color: var(--ink); }
+
 /* Unsaved recording found (8D): the save dialog's card, marked in the caution
    gold rather than the saved green — this is a question, not a confirmation. */
 .recording-name-card .unsaved-recording-icon { background: color-mix(in srgb, var(--warn-label) 18%, transparent); color: var(--warn-label); }
