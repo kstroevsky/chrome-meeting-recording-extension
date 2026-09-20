@@ -36,7 +36,12 @@ import { toWireAnalysis } from './shared/analysis/storedAnalysis';
 import { isTerminalAnalysisJob } from './shared/analysis/job';
 import { renameDriveResources } from './offscreen/drive/DriveMetadataRenamer';
 import { resumePendingDriveUploadsWithChrome } from './offscreen/drive/resumePendingUploads';
-import { recoverOrphanRecordingsWithChrome } from './offscreen/storage/recoverOrphanRecordings';
+import { listOrphanRecordingsWithChrome, recoverOrphanRecordingsWithChrome } from './offscreen/storage/recoverOrphanRecordings';
+import { retitleRecordingFilename } from './offscreen/drive/folderNaming';
+import { readFileByKey, removeByKey } from './offscreen/storage/opfsLayout';
+import type { CompletedRecordingArtifact } from './offscreen/engine/RecorderEngineTypes';
+import type { RecordingStream } from './shared/recording';
+import { slugifyRecordingTitle } from './shared/recordingNames';
 import { RuntimeSampler } from './offscreen/RuntimeSampler';
 import { OffscreenController } from './offscreen/OffscreenController';
 import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
@@ -206,6 +211,10 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     onDiscardRequested: controller.onDiscardRequested,
     retryUpload: (jobId) => uploadManager.retry(jobId),
     openRetained: (key: string) => retainedMediaStore.read(key),
+    // The same cutoff the recovery scan uses, so the two agree on what counts
+    // as this session's own file and never offer it.
+    listUnsaved: () => listOrphanRecordingsWithChrome(offscreenStartedAtMs, pendingUploadStore),
+    resolveUnsaved: (key, action, name, storageMode) => resolveUnsavedRecording(key, action, name, storageMode),
     cancelUpload: (jobId) => uploadManager.cancel(jobId),
     acknowledgeUploadState: (jobId) => uploadJobStateOutbox.remove(jobId),
     analyzeTranscript: (historyId, transcript, config, provenance) =>
@@ -525,6 +534,64 @@ void (async () => {
     L.warn('Orphan recording recovery failed', describeRuntimeError(e));
   }
 })();
+
+/**
+ * Acts on a recording a crash left behind, once the user has said what to do
+ * with it (8D).
+ *
+ * Saving routes it through the same delivery the recording would have taken had
+ * it finished — an upload job for Drive, a download for local — rather than a
+ * private path of its own, so a recovered recording ends up indistinguishable
+ * from one that was never interrupted.
+ */
+async function resolveUnsavedRecording(
+  key: string,
+  action: 'save' | 'discard',
+  name?: string,
+  storageMode: 'local' | 'drive' = 'drive',
+): Promise<void> {
+  const root = await navigator.storage.getDirectory();
+  if (action === 'discard') {
+    await removeByKey(root, key);
+    return;
+  }
+
+  const raw = await readFileByKey(root, key);
+  if (!raw || raw.size === 0) throw new Error('Those bytes are no longer on this device');
+  const original = key.slice(key.lastIndexOf('/') + 1);
+  // Best-effort, exactly as the unattended recovery seals: a truncated file
+  // still yields a valid partial duration, and raw bytes play regardless.
+  let sealed: Blob = raw;
+  try {
+    const { default: fixWebmDuration } = await import('webm-duration-fix');
+    sealed = await fixWebmDuration(raw as File);
+  } catch { /* deliver the raw bytes */ }
+
+  const title = name?.trim();
+  const filename = (title && retitleRecordingFilename(original, slugifyRecordingTitle(title))) || original;
+  const stream: RecordingStream = /-mic\.(?:webm|m4a)$/.test(original)
+    ? 'mic'
+    : /-self-video\.(?:webm|mp4)$/.test(original) ? 'self-video' : 'tab';
+  const artifact: CompletedRecordingArtifact = {
+    stream,
+    artifact: {
+      filename,
+      file: sealed,
+      opfsFilename: key,
+      durationFixed: true,
+      // The delivery paths remove the OPFS file once the bytes are safely
+      // elsewhere, so cleanup here would drop them while that is still in
+      // flight — and a failed save has to be retryable.
+      cleanup: async () => {},
+    },
+  };
+
+  if (storageMode === 'drive') {
+    uploadManager.enqueue([artifact]);
+    return;
+  }
+  requestSave({ stream, filename, blobUrl: URL.createObjectURL(sealed), opfsFilename: key });
+}
 
 // ─── Runtime diagnostics sampling ─────────────────────────────────────────────
 

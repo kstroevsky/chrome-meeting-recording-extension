@@ -20,6 +20,7 @@ import {
 } from '../platform/chrome/tabs';
 import { isE2ERealCaptureTabBuild } from '../shared/build';
 import { loadExtensionSettingsFromStorage, loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
+import { markCaptureStarted } from './unsavedCaptureFlag';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { getPerfSettingsSnapshot } from '../shared/perf';
 import { type CommandResult, type NotationResult } from '../shared/protocol';
@@ -160,6 +161,9 @@ export class RecordingController {
         // Fencing token (ADR-0003): the offscreen echoes this in OFFSCREEN_STATE.
         epoch: started.epoch ?? 0,
       } as const;
+      // Before the RPC, not after: if the worker dies between the two, the
+      // capture may already be writing bytes, and an unset flag would hide them.
+      await markCaptureStarted();
       const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>(startRequest);
       await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);
 

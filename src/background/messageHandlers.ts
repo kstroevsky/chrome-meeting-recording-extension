@@ -66,6 +66,10 @@ export type MessageHandlersDeps = {
   fileToDestination?: (recordingId: string, presetId: string | null) => Promise<void>;
   /** Renames the folder every recording lives under, so Drive matches the setting. */
   renameDriveRootFolder?: (from: string, to: string) => Promise<import('./DriveRootFolder').RootRenameResult>;
+  /** What a crash left behind, or nothing when no capture is unaccounted for (8D). */
+  listUnsavedRecordings?: () => Promise<import('../offscreen/storage/recoverOrphanRecordings').UnsavedRecording[]>;
+  /** Saves one of those under a name, or throws it away (8D). */
+  resolveUnsavedRecording?: (key: string, action: 'save' | 'discard', name?: string) => Promise<void>;
   /** Storage the retained library occupies, and whether it is exempt from eviction. */
   storageUsage?: () => Promise<import('../shared/playback').StorageUsage>;
   /** Recordings whose bytes are retained but not yet written to the download directory. */
@@ -91,7 +95,7 @@ function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean 
   return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
 }
 
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, analyses, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, renameDriveRootFolder, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, analyses, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, renameDriveRootFolder, listUnsavedRecordings, resolveUnsavedRecording, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -318,6 +322,16 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
       if (msg.type === 'GET_STORAGE_USAGE') {
         if (!storageUsage) throw new Error('Storage usage is unavailable');
         sendResponse({ ok: true, usage: await storageUsage() });
+        return;
+      }
+      if (msg.type === 'LIST_UNSAVED_RECORDINGS') {
+        sendResponse({ ok: true, recordings: (await listUnsavedRecordings?.()) ?? [] });
+        return;
+      }
+      if (msg.type === 'RESOLVE_UNSAVED_RECORDING') {
+        if (!resolveUnsavedRecording) throw new Error('Recovery is unavailable');
+        await resolveUnsavedRecording(msg.key, msg.action, msg.name);
+        sendResponse({ ok: true });
         return;
       }
       if (msg.type === 'LIST_PENDING_LOCAL_DELIVERIES') {

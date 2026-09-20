@@ -19,6 +19,7 @@ import {
 export {
   loadExtensionSettingsFromStorage,
   saveExtensionSettingsToStorage,
+  toStorageMode,
   resetExtensionSettingsToDefaults,
   buildRecorderRuntimeSettingsSnapshot,
   buildDefaultRunConfigFromSettings,

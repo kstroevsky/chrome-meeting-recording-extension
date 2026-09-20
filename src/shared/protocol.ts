@@ -127,6 +127,19 @@ export type SettingsRenameDriveRootFolder = {
   from: string;
   to: string;
 };
+/**
+ * Recordings a crash left in OPFS, for the popup to offer (8D). Answers with an
+ * empty list — and wakes nothing — unless a capture is known to be unaccounted
+ * for, because answering otherwise means creating the offscreen document.
+ */
+export type PopupListUnsavedRecordings = { type: 'LIST_UNSAVED_RECORDINGS' };
+/** Saves a recording a crash left behind, or throws it away (8D). */
+export type PopupResolveUnsavedRecording = {
+  type: 'RESOLVE_UNSAVED_RECORDING';
+  key: string;
+  action: 'save' | 'discard';
+  name?: string;
+};
 export type PopupListPendingLocalDeliveries = { type: 'LIST_PENDING_LOCAL_DELIVERIES' };
 /** Writes a deferred local recording into the chosen folder; null means Downloads itself. */
 export type PopupDeliverLocalRecording = {
@@ -203,6 +216,8 @@ export type PopupToBg =
   | PopupFileRecordingToDestination
   | PopupGetStorageUsage
   | SettingsRenameDriveRootFolder
+  | PopupListUnsavedRecordings
+  | PopupResolveUnsavedRecording
   | PopupListPendingLocalDeliveries
   | PopupDeliverLocalRecording
   | PopupPreparePlaybackSource
@@ -244,6 +259,10 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ? { ok: true; usage: import('./playback').StorageUsage } | { ok: false; error: string } :
   T extends SettingsRenameDriveRootFolder
     ? { ok: true; result: import('../background/DriveRootFolder').RootRenameResult } | { ok: false; error: string } :
+  T extends PopupListUnsavedRecordings
+    ? { ok: true; recordings: import('../offscreen/storage/recoverOrphanRecordings').UnsavedRecording[] }
+      | { ok: false; error: string } :
+  T extends PopupResolveUnsavedRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupListPendingLocalDeliveries
     ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :
@@ -417,6 +436,25 @@ export type BgToOffscreenRpc =
    * URL here rather than holding a stale one.
    */
   | RpcRequest<{ type: 'OFFSCREEN_OPEN_RETAINED'; key: string }>
+  /**
+   * Lists recordings a crash left in OPFS, without touching them (8D). Asked
+   * only when the unsaved-capture flag is set, because asking means creating
+   * this document.
+   */
+  | RpcRequest<{ type: 'OFFSCREEN_LIST_UNSAVED' }>
+  /**
+   * Acts on one of those: saves it under a name to the configured destination,
+   * or throws it away. The decision is the user's, so nothing here happens
+   * until they make it (8D).
+   */
+  | RpcRequest<{
+      type: 'OFFSCREEN_RESOLVE_UNSAVED';
+      key: string;
+      action: 'save' | 'discard';
+      /** The title to save it under; ignored when discarding. */
+      name?: string;
+      storageMode?: 'local' | 'drive';
+    }>
   | RpcRequest<{ type: 'OFFSCREEN_CANCEL_UPLOAD'; jobId: string }>
   | RpcRequest<{
       type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES';

@@ -15,7 +15,7 @@
  */
 
 import { DriveDestinationFiler } from './background/DriveDestinationFiler';
-import { loadExtensionSettingsFromStorage } from './shared/settings';
+import { loadExtensionSettingsFromStorage, toStorageMode } from './shared/settings';
 import { DRIVE_DEFAULT_DESTINATION_NAME } from './shared/settings';
 import { DriveRootFolder } from './background/DriveRootFolder';
 import { DriveArtifactResolver } from './background/DriveArtifactResolver';
@@ -71,6 +71,8 @@ import {
 } from './shared/recording';
 import { TIMEOUTS } from './shared/timeouts';
 import { TelemetryRuntime } from './background/TelemetryRuntime';
+import { captureMayBeUnsaved, markCaptureSettled } from './background/unsavedCaptureFlag';
+import type { UnsavedRecording } from './offscreen/storage/recoverOrphanRecordings';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
@@ -329,6 +331,53 @@ const gatherDriveDestinations = async () => {
   );
 };
 
+/**
+ * What a crash left behind (8D).
+ *
+ * The flag is checked first and the offscreen document is only created when it
+ * is set: the scan is cheap, but reaching it is not, and the popup asks this on
+ * every open. A clean run clears the flag, so the usual answer costs one
+ * storage read.
+ */
+const listUnsavedRecordings = async () => {
+  if (!await captureMayBeUnsaved()) return [];
+  // A capture in flight owns staging; asking mid-run would describe the file
+  // being written as though it were abandoned.
+  if (session.getSnapshot().phase !== 'idle') return [];
+  try {
+    await offscreen.ensureReady();
+    const response = await offscreen.rpc<{ ok: boolean; recordings?: UnsavedRecording[] }>({ type: 'OFFSCREEN_LIST_UNSAVED' });
+    const recordings = response?.recordings ?? [];
+    // Nothing there means the flag was set by a run that finished after all —
+    // a worker death after delivery, say — so stop asking.
+    if (!recordings.length) await markCaptureSettled();
+    return recordings;
+  } catch (error) {
+    L.warn('Could not look for unsaved recordings:', error);
+    return [];
+  }
+};
+
+/**
+ * Acts on one, once the user has decided. The storage mode is read here rather
+ * than sent from the popup: it is where this recording would have gone had it
+ * finished, and that is settings' answer to give, not the dialog's.
+ */
+const resolveUnsavedRecording = async (key: string, action: 'save' | 'discard', name?: string) => {
+  const settings = await loadExtensionSettingsFromStorage();
+  await offscreen.ensureReady();
+  const response = await offscreen.rpc<{ ok: boolean; error?: string }>({
+    type: 'OFFSCREEN_RESOLVE_UNSAVED',
+    key,
+    action,
+    ...(name ? { name } : {}),
+    storageMode: toStorageMode(settings.basic.recordingMode),
+  });
+  if (!response?.ok) throw new Error(response?.error || 'Could not save that recording');
+  // Decided either way, so it is no longer unaccounted for.
+  await markCaptureSettled();
+};
+
 const telemetry = new TelemetryRuntime();
 
 
@@ -537,6 +586,10 @@ offscreen.onStateChanged = (msg) => {
     return;
   }
   session.applyOffscreenPhase(msg);
+  // Idle means every artifact of that run is delivered, downloaded, or handed
+  // to an upload job with its own recovery marker — so nothing is unaccounted
+  // for, and the next popup open need not go looking.
+  if (msg.phase === 'idle') void markCaptureSettled();
   if (msg.telemetrySnapshot) {
     void telemetry.receive(msg.telemetrySnapshot, true).then(() => {
       if (msg.phase === 'idle') {
@@ -729,6 +782,8 @@ registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: cr
   transcripts, analyses, transcriptCapture,
   playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination,
   renameDriveRootFolder: (from, to) => driveRootFolder.rename(from, to),
+  listUnsavedRecordings,
+  resolveUnsavedRecording,
   listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
   storageUsage: () => readStorageUsage(async () => {
     const files = await listLibraryFiles(await navigator.storage.getDirectory());
