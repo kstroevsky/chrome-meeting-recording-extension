@@ -149,4 +149,90 @@ describe('DriveFolderResolver', () => {
     resolveFetch(jsonResponse({ files: [{ id: 'root-folder' }] }));
     await expect(second).resolves.toBe('root-folder');
   });
+
+  /**
+   * The destination folder is what keeps a library in one place: created under
+   * the root, it means opening one folder finds every recording. Created beside
+   * it — directly under My Drive — it scatters them, which is what this used to do.
+   */
+  describe('the destination between the root and the recording', () => {
+    const bodyOf = (call: number) => JSON.parse(((global.fetch as jest.Mock).mock.calls[call][1] as RequestInit).body as string);
+    const urlOf = (call: number) => decodeURIComponent(String((global.fetch as jest.Mock).mock.calls[call][0]));
+
+    it('creates the destination inside the root, and the recording inside the destination', async () => {
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce(jsonResponse({ files: [] }))
+        .mockResolvedValueOnce(jsonResponse({ id: 'root-id' }))
+        .mockResolvedValueOnce(jsonResponse({ files: [] }))
+        .mockResolvedValueOnce(jsonResponse({ id: 'rest-id' }))
+        .mockResolvedValueOnce(jsonResponse({ files: [] }))
+        .mockResolvedValueOnce(jsonResponse({ id: 'recording-id' }));
+
+      const resolver = new DriveFolderResolver(jest.fn().mockResolvedValue('token'));
+      await expect(resolver.resolveUploadParentId({
+        rootFolderName: 'Recordings Nested',
+        destinationFolderName: 'Rest',
+        recordingFolderName: 'google-meet-sync-20260920T1430',
+      })).resolves.toBe('recording-id');
+
+      // Only the root is created at the top of Drive; everything else has a parent.
+      expect(bodyOf(1)).toEqual({ name: 'Recordings Nested', mimeType: expect.any(String) });
+      expect(bodyOf(3)).toMatchObject({ name: 'Rest', parents: ['root-id'] });
+      expect(bodyOf(5)).toMatchObject({ name: 'google-meet-sync-20260920T1430', parents: ['rest-id'] });
+      expect(urlOf(2)).toContain("'root-id' in parents");
+      expect(urlOf(4)).toContain("'rest-id' in parents");
+    });
+
+    it('reuses folders that are already there rather than making second copies', async () => {
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'root-id' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'rest-id' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'recording-id' }] }));
+
+      const resolver = new DriveFolderResolver(jest.fn().mockResolvedValue('token'));
+      await expect(resolver.resolveUploadParentId({
+        rootFolderName: 'Recordings Existing',
+        destinationFolderName: 'Therapy',
+        recordingFolderName: 'google-meet-session-20260920T0900',
+      })).resolves.toBe('recording-id');
+
+      expect(global.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('leaves the recording in the root when no destination is named, as it did before', async () => {
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'root-id' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'recording-id' }] }));
+
+      const resolver = new DriveFolderResolver(jest.fn().mockResolvedValue('token'));
+      await expect(resolver.resolveUploadParentId({
+        rootFolderName: 'Recordings Unnested',
+        recordingFolderName: 'google-meet-legacy-20260101T1200',
+      })).resolves.toBe('recording-id');
+
+      expect(urlOf(1)).toContain("'root-id' in parents");
+    });
+
+    it('keeps two destinations apart when their recording folders share a name', async () => {
+      (global.fetch as jest.Mock)
+        .mockResolvedValue(jsonResponse({ files: [] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'root-id' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'rest-id' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'in-rest' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'root-id' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'work-id' }] }))
+        .mockResolvedValueOnce(jsonResponse({ files: [{ id: 'in-work' }] }));
+
+      const shared = 'google-meet-standup-20260920T1000';
+      const inRest = await new DriveFolderResolver(jest.fn().mockResolvedValue('token')).resolveUploadParentId({
+        rootFolderName: 'Recordings Collide', destinationFolderName: 'Rest', recordingFolderName: shared,
+      });
+      const inWork = await new DriveFolderResolver(jest.fn().mockResolvedValue('token')).resolveUploadParentId({
+        rootFolderName: 'Recordings Collide', destinationFolderName: 'Work', recordingFolderName: shared,
+      });
+
+      expect(inRest).toBe('in-rest');
+      expect(inWork).toBe('in-work');
+    });
+  });
 });

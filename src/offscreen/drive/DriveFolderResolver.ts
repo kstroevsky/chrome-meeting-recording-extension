@@ -2,7 +2,7 @@
  * @file offscreen/drive/DriveFolderResolver.ts
  *
  * Resolves and creates Google Drive folder hierarchy for uploads:
- *   rootFolderName / recordingFolderName
+ *   rootFolderName / destinationFolderName / recordingFolderName
  *
  * This is extracted from DriveTarget so upload streaming logic remains focused
  * on resumable session creation and chunk flushing.
@@ -13,6 +13,13 @@ import { fetchWithAuthRetry, fetchWithTimeout, type TokenProvider } from './requ
 
 export type DriveFolderHierarchy = {
   rootFolderName?: string;
+  /**
+   * The destination inside the root that holds this recording's folder. Every
+   * upload lands in the default one; filing later moves the folder to another.
+   * Absent leaves the recording's folder directly in the root, which only the
+   * paths that predate destinations do.
+   */
+  destinationFolderName?: string;
   recordingFolderName?: string;
 };
 
@@ -36,17 +43,26 @@ export class DriveFolderResolver {
         if (!rootFolderName) return null;
 
         const rootFolderId = await this.getOrCreateFolder(rootFolderName, null, setupSignal);
+        // The destination sits between the root and the recording, so the root
+        // holds folders and never loose files.
+        const destinationFolderName = hierarchy.destinationFolderName?.trim();
+        const parentId = destinationFolderName
+          ? await this.getOrCreateFolder(destinationFolderName, rootFolderId, setupSignal)
+          : rootFolderId;
+
         const recordingFolderName = hierarchy.recordingFolderName?.trim();
         if (!recordingFolderName) {
-          this.resolvedUploadParentId = rootFolderId;
-          return rootFolderId;
+          this.resolvedUploadParentId = parentId;
+          return parentId;
         }
 
-        const cacheKey = `${rootFolderId}:${recordingFolderName}`;
+        // Keyed by the folder it goes in, not by the root: two destinations may
+        // each hold a recording folder of the same name.
+        const cacheKey = `${parentId}:${recordingFolderName}`;
         let folderFlight = DriveFolderResolver.recordingFolderCache.get(cacheKey);
         if (!folderFlight) {
           folderFlight = new SharedAbortableFlight((folderSignal) =>
-            this.getOrCreateFolder(recordingFolderName, rootFolderId, folderSignal)
+            this.getOrCreateFolder(recordingFolderName, parentId, folderSignal)
           );
           DriveFolderResolver.recordingFolderCache.set(cacheKey, folderFlight);
           void folderFlight.promise.catch(() => {

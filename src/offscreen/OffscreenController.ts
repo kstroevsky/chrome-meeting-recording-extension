@@ -29,6 +29,14 @@ export type NotesSidecar = { vtt: string };
 export type Sidecars = { notes?: NotesSidecar; transcript?: NotesSidecar };
 
 /**
+ * What a detached upload needs beyond the artifacts. The root folder name rides
+ * along because it comes from settings, which only background can read, and it
+ * is frozen per job so a change made while an upload is in flight cannot
+ * re-aim it.
+ */
+export type UploadHandoffContext = RecordingArtifactContext & { driveRootFolderName?: string };
+
+/**
  * Wraps the rendered VTT as an artifact the finalizer can deliver like any
  * other. The name is derived from a media artifact rather than sent with the
  * text, so filenames stay built in one place. It has no OPFS source — it was
@@ -92,7 +100,7 @@ export class OffscreenController {
   private finalizeRunPromise: Promise<void> | null = null;
   private engine: FinalizableEngine | null = null;
   private finalizer: ArtifactFinalizer | null = null;
-  private enqueueUpload: ((artifacts: CompletedRecordingArtifact[], context: RecordingArtifactContext) => void) | null = null;
+  private enqueueUpload: ((artifacts: CompletedRecordingArtifact[], context: UploadHandoffContext) => void) | null = null;
   private readonly now: () => number;
 
   constructor(private readonly deps: OffscreenControllerDeps) {
@@ -107,7 +115,7 @@ export class OffscreenController {
   attachServices(
     engine: FinalizableEngine,
     finalizer: ArtifactFinalizer,
-    enqueueUpload?: (artifacts: CompletedRecordingArtifact[], context: RecordingArtifactContext) => void
+    enqueueUpload?: (artifacts: CompletedRecordingArtifact[], context: UploadHandoffContext) => void
   ): void {
     this.engine = engine;
     this.finalizer = finalizer;
@@ -134,7 +142,9 @@ export class OffscreenController {
     if (this.phase !== 'idle') this.pushState(this.phase);
   };
 
-  onStopRequested = (sidecars?: Sidecars): void => { void this.finalize(sidecars); };
+  onStopRequested = (sidecars?: Sidecars, driveRootFolderName?: string): void => {
+    void this.finalize(sidecars, driveRootFolderName);
+  };
   onDiscardRequested = (): Promise<void> => this.discard();
 
   /** Advances the broadcast phase, rebaselining the lag clock on a new active phase. */
@@ -170,7 +180,7 @@ export class OffscreenController {
    * Stops capture, uploads or saves the sealed artifacts, and returns the
    * session to idle. Concurrent calls share one in-flight run.
    */
-  finalize(sidecars: Sidecars = {}): Promise<void> {
+  finalize(sidecars: Sidecars = {}, driveRootFolderName?: string): Promise<void> {
     if (this.finalizeRunPromise) return this.finalizeRunPromise;
     const engine = this.engine;
     const finalizer = this.finalizer;
@@ -197,7 +207,7 @@ export class OffscreenController {
           // ADR-0004: capture is sealed — hand it to the background upload manager
           // and return to idle at once so a new recording can start while it uploads.
           if (!this.enqueueUpload) throw new Error('Drive finalize requires an upload manager');
-          this.enqueueUpload(artifacts, { historyId: this.historyId, telemetryRunId: this.telemetryRunId });
+          this.enqueueUpload(artifacts, { historyId: this.historyId, telemetryRunId: this.telemetryRunId, driveRootFolderName });
         } else {
           // Local saves are instant; finalize inline.
           await finalizer.finalize({ artifacts, storageMode: 'local', historyId: this.historyId });

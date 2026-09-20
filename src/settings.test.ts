@@ -10,7 +10,7 @@ const settingsHtml = readFileSync(
 
 describe('settings page', () => {
   const savedSettings: ExtensionSettings = {
-    storage: { driveFolderPresets: [], localFolderPresets: [] },
+    storage: { driveRootFolderName: 'Recordings', driveFolderPresets: [], localFolderPresets: [] },
     privacy: {
       anonymousDiagnostics: true,
     },

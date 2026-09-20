@@ -30,7 +30,7 @@ export type RpcHandlerDeps = {
   currentPhase: () => RecordingPhase;
   isFinalizing: () => boolean;
   onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number, historyId: string, telemetryRunId?: string) => void;
-  onStopRequested: (sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } }) => void;
+  onStopRequested: (sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } }, driveRootFolderName?: string) => void;
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
   retryUpload: (jobId: string) => boolean | Promise<boolean>;
@@ -101,7 +101,7 @@ async function handleOffscreenStart(
 }
 
 async function handleOffscreenStop(
-  msg: { notesSidecar?: { vtt: string }; transcriptSidecar?: { vtt: string } },
+  msg: { notesSidecar?: { vtt: string }; transcriptSidecar?: { vtt: string }; driveRootFolderName?: string },
   deps: RpcHandlerDeps
 ): Promise<{ ok: boolean; error?: string }> {
   if (!deps.engine.isRecording()) {
@@ -111,7 +111,7 @@ async function handleOffscreenStop(
   void deps.onStopRequested({
     ...(msg.notesSidecar ? { notes: msg.notesSidecar } : {}),
     ...(msg.transcriptSidecar ? { transcript: msg.transcriptSidecar } : {}),
-  });
+  }, msg.driveRootFolderName);
   return { ok: true };
 }
 

@@ -34,6 +34,13 @@ export type PendingUpload = {
   filename: string;
   stream: RecordingStream;
   recordingFolderName: string;
+  /**
+   * Where the interrupted upload was headed, so resuming it lands in the same
+   * place rather than wherever today's settings point. Absent on markers
+   * written before the root folder was a setting.
+   */
+  rootFolderName?: string;
+  destinationFolderName?: string;
   /** Recording aggregate to reconcile after crash recovery; absent on legacy markers. */
   historyId?: string;
   /** Detached upload job to reconcile after crash recovery; absent on legacy markers. */
@@ -54,6 +61,8 @@ function isPendingUpload(value: unknown): value is PendingUpload {
     && typeof (value as PendingUpload).filename === 'string'
     && typeof (value as PendingUpload).stream === 'string'
     && typeof (value as PendingUpload).recordingFolderName === 'string'
+    && (typeof (value as PendingUpload).rootFolderName === 'undefined' || typeof (value as PendingUpload).rootFolderName === 'string')
+    && (typeof (value as PendingUpload).destinationFolderName === 'undefined' || typeof (value as PendingUpload).destinationFolderName === 'string')
     && (typeof (value as PendingUpload).historyId === 'undefined' || typeof (value as PendingUpload).historyId === 'string')
     && (typeof (value as PendingUpload).jobId === 'undefined' || typeof (value as PendingUpload).jobId === 'string')
   );

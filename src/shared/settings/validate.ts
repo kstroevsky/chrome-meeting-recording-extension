@@ -143,6 +143,15 @@ export function validateDriveFolderPresets(
   return validatePresets(value, limits, DRIVE_FORBIDDEN);
 }
 
+/**
+ * The root folder's name. Falls back rather than accepting an empty one: a
+ * blank root would scatter every recording across the top of My Drive, which is
+ * the arrangement this folder exists to prevent.
+ */
+export function validateDriveRootFolderName(value: unknown, fallback: string, maxNameLength: number): string {
+  return sanitizeFolderName(value, maxNameLength, DRIVE_FORBIDDEN) || fallback;
+}
+
 /** Same shape as the Drive list, stricter about what a path segment may contain. */
 export function validateLocalFolderPresets(
   value: unknown,

@@ -477,7 +477,8 @@ const engine = new RecorderEngine({
   },
 });
 
-controller.attachServices(engine, finalizer, (artifacts, context) => uploadManager.enqueue(artifacts, context.historyId, context.telemetryRunId));
+controller.attachServices(engine, finalizer, (artifacts, context) =>
+  uploadManager.enqueue(artifacts, context.historyId, context.telemetryRunId, context.driveRootFolderName));
 
 // Captured during synchronous module load — before any OFFSCREEN_START RPC can
 // create this session's recording files — so orphan recovery can tell a stale

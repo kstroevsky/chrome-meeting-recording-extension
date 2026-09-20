@@ -77,6 +77,7 @@ export class DriveTarget {
     this.folderResolver = shared?.folderResolver ?? new DriveFolderResolver(this.getUploadToken);
     this.hierarchy = {
       rootFolderName: options.rootFolderName,
+      destinationFolderName: options.destinationFolderName,
       recordingFolderName: options.recordingFolderName,
     };
     this.log = shared?.log ?? (() => {});

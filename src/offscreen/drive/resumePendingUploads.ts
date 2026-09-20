@@ -185,7 +185,11 @@ export function resumePendingDriveUploadsWithChrome(opts: {
     },
     uploadFile: async (file, entry) => {
       const target = new DriveTarget(entry.filename, opts.getDriveToken, () => {}, {
-        rootFolderName: DRIVE_ROOT_FOLDER_NAME,
+        // A marker written before the root folder was a setting belongs to an
+        // installation still on the legacy name, and to a recording that has no
+        // destination folder above it.
+        rootFolderName: entry.rootFolderName ?? DRIVE_ROOT_FOLDER_NAME,
+        ...(entry.destinationFolderName ? { destinationFolderName: entry.destinationFolderName } : {}),
         recordingFolderName: entry.recordingFolderName,
         shared: { getUploadToken, folderResolver, log: opts.log },
       });

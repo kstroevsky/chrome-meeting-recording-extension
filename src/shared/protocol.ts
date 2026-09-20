@@ -384,6 +384,12 @@ export type BgToOffscreenRpc =
        * the media. Absent when the recording has no transcript.
        */
       transcriptSidecar?: { vtt: string };
+      /**
+       * The Drive folder everything lives under, from settings. The offscreen
+       * document has no `chrome.storage` to read it from, so the stop message
+       * carries it; absent falls back to the name the constant used to hold.
+       */
+      driveRootFolderName?: string;
     }>
   | RpcRequest<{ type: 'OFFSCREEN_DISCARD' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>

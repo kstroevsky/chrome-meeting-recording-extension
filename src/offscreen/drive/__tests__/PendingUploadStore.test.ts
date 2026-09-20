@@ -119,4 +119,24 @@ describe('the store the offscreen document can actually write', () => {
     await expect(new PendingUploadStore(area(broken)).put(entry('staging/tab.webm')))
       .rejects.toThrow('disk I/O error');
   });
+
+  /**
+   * Markers outlive the build that wrote them: one written before the root
+   * folder became a setting has no folder names on it, and dropping it as
+   * malformed would strand the recording it was protecting.
+   */
+  it('keeps a marker written before the folder names existed, and reads back the ones that have them', async () => {
+    const area = fakeArea();
+    const store = new PendingUploadStore(area);
+
+    await store.put(entry('legacy.webm'));
+    await store.put({ ...entry('current.webm'), rootFolderName: 'Recordings', destinationFolderName: 'Rest' });
+
+    const list = await store.list();
+    expect(list).toHaveLength(2);
+    const legacy = list.find((e) => e.opfsFilename === 'legacy.webm');
+    expect(legacy?.rootFolderName).toBeUndefined();
+    expect(list.find((e) => e.opfsFilename === 'current.webm'))
+      .toMatchObject({ rootFolderName: 'Recordings', destinationFolderName: 'Rest' });
+  });
 });

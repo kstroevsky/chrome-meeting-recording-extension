@@ -19,7 +19,7 @@ import {
   getTab,
 } from '../platform/chrome/tabs';
 import { isE2ERealCaptureTabBuild } from '../shared/build';
-import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
+import { loadExtensionSettingsFromStorage, loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { getPerfSettingsSnapshot } from '../shared/perf';
 import { type CommandResult, type NotationResult } from '../shared/protocol';
@@ -213,6 +213,7 @@ export class RecordingController {
     }
     const notesSidecar = await this.buildNotesSidecar(historyId);
     const transcriptSidecar = await this.buildTranscriptSidecar(historyId);
+    const driveRootFolderName = await this.driveRootFolderName();
 
     try {
       await this.offscreen.ensureReady();
@@ -220,6 +221,7 @@ export class RecordingController {
         type: 'OFFSCREEN_STOP',
         ...(notesSidecar ? { notesSidecar } : {}),
         ...(transcriptSidecar ? { transcriptSidecar } : {}),
+        ...(driveRootFolderName ? { driveRootFolderName } : {}),
       });
       if (!r?.ok) {
         this.session.fail(r?.error || 'Stop failed in offscreen');
@@ -462,6 +464,21 @@ export class RecordingController {
       return { vtt: transcriptToWebVtt(transcript) };
     } catch (error) {
       this.L.warn('Could not export the transcript for this recording:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * The folder the user's recordings live under. Read here because the
+   * offscreen document cannot: its `chrome` object is runtime-only. Best-effort
+   * — a settings read that fails should cost the upload its folder name, not
+   * the recording, and the offscreen falls back to the legacy name.
+   */
+  private async driveRootFolderName(): Promise<string | undefined> {
+    try {
+      return (await loadExtensionSettingsFromStorage()).storage.driveRootFolderName;
+    } catch (error) {
+      this.L.warn('Could not read the Drive folder name for this recording:', error);
       return undefined;
     }
   }
