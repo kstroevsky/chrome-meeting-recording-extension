@@ -40,6 +40,7 @@ function makeActions(over: Partial<CompletedNamingActions> = {}): jest.Mocked<Co
     rename: jest.fn(async () => undefined),
     destinations: jest.fn(() => [{ id: 'dest-a', name: 'Psychotherapy' }]),
     driveRootFolder: jest.fn(() => 'Recordings'),
+    createDestination: jest.fn(async (name: string) => ({ id: 'dest-new', name })),
     fileTo: jest.fn(async () => undefined),
     localFolders: jest.fn(() => [{ id: 'local-a', name: 'Therapy 2026' }]),
     pendingLocal: jest.fn(() => []),
@@ -65,7 +66,18 @@ describe('CompletedNamingPrompt destinations', () => {
       presets: [{ id: 'dest-a', name: 'Psychotherapy' }],
       unfiledLabel: 'Rest',
       initialId: null,
+      onCreate: expect.any(Function),
     });
+  });
+
+  it('makes a folder from the dialog and hands it back to be selected (7A)', async () => {
+    const { dialog, asked } = stubDialog();
+    const actions = makeActions();
+    new CompletedNamingPrompt(dialog, actions).queue('idle', session());
+    await flush();
+
+    await expect(asked().destinations!.onCreate!('Standups')).resolves.toEqual({ id: 'dest-new', name: 'Standups' });
+    expect(actions.createDestination).toHaveBeenCalledWith('Standups');
   });
 
   it('omits the picker when no destinations are configured', async () => {

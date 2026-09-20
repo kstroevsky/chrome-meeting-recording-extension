@@ -101,7 +101,11 @@ export type ListboxBinding = {
 };
 
 /** A binding that also owns the markup, so `destroy` takes the DOM with it. */
-export type ListboxSelect = ListboxBinding & { readonly root: HTMLElement };
+export type ListboxSelect = ListboxBinding & {
+  readonly root: HTMLElement;
+  /** Shows or hides the create row; a caller that cannot create hides it. */
+  setCreateEnabled(enabled: boolean): void;
+};
 
 const SEARCH_SVG =
   '<svg class="select-search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
@@ -177,6 +181,7 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
     setOptions,
     root,
     close: () => { creator?.reset(); binding.close(); },
+    setCreateEnabled: (enabled: boolean) => { creator?.setEnabled(enabled); },
     destroy: () => { binding.destroy(); root.remove(); },
   };
 }
@@ -212,6 +217,7 @@ function createCreator(
   form.append(input);
 
   let busy = false;
+  let enabled = true;
   const reset = () => {
     busy = false;
     input.value = '';
@@ -254,8 +260,15 @@ function createCreator(
   });
 
   return {
-    mount: () => { list.append(row, form); },
+    mount: () => { if (enabled) list.append(row, form); },
     reset,
+    setEnabled: (next: boolean) => {
+      enabled = next;
+      if (next) { list.append(row, form); return; }
+      reset();
+      row.remove();
+      form.remove();
+    },
   };
 }
 

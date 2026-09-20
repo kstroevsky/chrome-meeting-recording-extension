@@ -63,6 +63,17 @@ body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: a
 .recording-name-destination__select .select-search-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; caret-color: var(--ink); color: var(--ink); font: 12.5px 'Space Grotesk', system-ui, sans-serif; }
 .recording-name-destination__select .select-search-input::placeholder { color: var(--pick-icon); opacity: 1; }
 .recording-name-destination__select .select-count { padding: 6px 7px 2px; color: var(--pick-icon); font: 9.5px 'IBM Plex Mono', monospace; letter-spacing: .08em; }
+/* The last row makes a folder instead of choosing one (7A). Below the folders
+   and behind a hairline, drawn quieter than them: choosing is the point of the
+   picker, and making one is the other thing you can do from here. */
+.recording-name-destination__select .select-options .select-create { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; margin-top: 4px; padding: 0 7px; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--pick-icon); font: 12.5px 'Space Grotesk', system-ui, sans-serif; text-align: left; cursor: pointer; }
+.recording-name-destination__select .select-options .select-create::before, .recording-name-destination__select .select-options .select-create::after { content: none; }
+.recording-name-destination__select .select-options .select-create:hover, .recording-name-destination__select .select-options .select-create:focus-visible { background: transparent; color: var(--ink); outline: 0; }
+.recording-name-destination__select .select-create-icon { width: 13px; height: 13px; flex: 0 0 auto; }
+.recording-name-destination__select .select-create-form { margin-top: 4px; padding-top: 5px; border-top: 1px solid var(--border); }
+.recording-name-destination__select .select-create-input { box-sizing: border-box; width: 100%; height: 34px; padding: 0 9px; border: 1.5px solid var(--ink); border-radius: 6px; background: var(--field-bg); color: var(--ink); font: 13px 'Space Grotesk', system-ui, sans-serif; outline: 0; }
+/* A refused name keeps what was typed and says so in the warning tone (7C). */
+.recording-name-destination__select .select-create-input[aria-invalid='true'] { border-color: var(--warn-label); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn-label) 16%, transparent); }
 /* A 46px ink primary; the way out is quiet text beneath it. */
 .recording-name-card .modal-actions { gap: 6px; margin-top: 16px; }
 .recording-name-card .modal-actions .btn-ink { height: 46px; }

@@ -197,3 +197,101 @@ describe('createListboxSelect with search (7D)', () => {
     expect(listbox.root.querySelector('.select-search')).toBeNull();
   });
 });
+
+/**
+ * The create row is an action, not a choice (7A). Everything here is about it
+ * staying out of the way of choosing: never filtered, never selected, never
+ * counted among the options.
+ */
+describe('createListboxSelect with a create row', () => {
+  const build = (onCreate: (name: string) => Promise<{ value: string; label: string } | null>) => {
+    document.body.replaceChildren();
+    const onChange = jest.fn();
+    const listbox = createListboxSelect({
+      label: 'Destination',
+      options: OPTIONS,
+      onChange,
+      create: { label: 'New folder…', placeholder: 'Folder name', onCreate },
+    });
+    document.body.append(listbox.root);
+    return { listbox, onChange };
+  };
+  const row = () => document.querySelector<HTMLButtonElement>('.select-create')!;
+  const field = () => document.querySelector<HTMLInputElement>('.select-create-input')!;
+  const form = () => document.querySelector<HTMLElement>('.select-create-form')!;
+  const enter = () => field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+
+  it('sits after the options without being one of them', () => {
+    const { listbox } = build(async () => null);
+    const options = Array.from(listbox.root.querySelectorAll('[role="option"]'));
+    expect(options).toHaveLength(3);
+    expect(row().getAttribute('role')).toBeNull();
+    // Last in the list, under the folders it is offered beneath.
+    expect(listbox.root.querySelector('.select-options')!.lastElementChild)
+      .toBe(document.querySelector('.select-create-form'));
+  });
+
+  it('becomes a field, and adds what was typed as the selected option', async () => {
+    const { listbox, onChange } = build(async (name) => ({ value: 'new-id', label: name }));
+    row().click();
+    expect(form().hidden).toBe(false);
+    field().value = 'Standups';
+    enter();
+    await flush();
+
+    expect(Array.from(listbox.select.options, (o) => o.value)).toEqual(['', 'a', 'b', 'new-id']);
+    expect(listbox.getValue()).toBe('new-id');
+    expect(onChange).toHaveBeenCalledWith('new-id');
+  });
+
+  it('keeps a refused name in the field to be edited rather than retyped', async () => {
+    const { listbox } = build(async () => null);
+    row().click();
+    field().value = 'Work meetings';
+    enter();
+    await flush();
+
+    expect(field().value).toBe('Work meetings');
+    expect(field().getAttribute('aria-invalid')).toBe('true');
+    expect(Array.from(listbox.select.options)).toHaveLength(3);
+  });
+
+  it('writes nothing on a blank name', async () => {
+    const onCreate = jest.fn(async () => null);
+    build(onCreate);
+    row().click();
+    field().value = '   ';
+    enter();
+    await flush();
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it('gives the row back on Escape, without closing the list', async () => {
+    build(async () => null);
+    row().click();
+    field().value = 'Half typed';
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+    expect(row().hidden).toBe(false);
+    expect(form().hidden).toBe(true);
+    expect(field().value).toBe('');
+  });
+
+  it('is hidden entirely when the caller cannot create', () => {
+    const { listbox } = build(async () => null);
+    listbox.setCreateEnabled(false);
+    expect(document.querySelector('.select-create')).toBeNull();
+    listbox.setCreateEnabled(true);
+    expect(document.querySelector('.select-create')).not.toBeNull();
+  });
+
+  it('survives a rebuild of the options, staying last', () => {
+    const { listbox } = build(async () => null);
+    listbox.setOptions([...OPTIONS, { value: 'c', label: 'Therapy' }], 'c');
+    expect(document.querySelectorAll('.select-create')).toHaveLength(1);
+    expect(listbox.root.querySelector('.select-options')!.lastElementChild)
+      .toBe(document.querySelector('.select-create-form'));
+  });
+});
+

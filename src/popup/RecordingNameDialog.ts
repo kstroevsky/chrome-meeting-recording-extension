@@ -12,6 +12,13 @@ export type RecordingNameDialogDestinations = {
   /** Reads as the built-in folder, which is where an unfiled recording is. */
   unfiledLabel: string;
   initialId: string | null;
+  /**
+   * Makes a folder without leaving the dialog (7A), returning it to be selected
+   * — or null when the name was refused. Absent hides the row: choosing an
+   * existing folder is the point of the picker, and creating one is the
+   * secondary thing you can also do from here.
+   */
+  onCreate?: (name: string) => Promise<DriveFolderPreset | null>;
 };
 
 export type RecordingNameDialogOptions = {
@@ -197,6 +204,17 @@ export class RecordingNameDialog {
       className: 'recording-name-destination__select',
       // A long list gains a search row (7D); a short one stays a plain list (9FD).
       search: { minOptions: 8, placeholder: 'Search folders', noun: 'FOLDERS' },
+      // The last row makes a folder rather than choosing one (7A). It reads the
+      // handler off the open request, because the control outlives each ask.
+      create: {
+        label: 'New folder\u2026',
+        placeholder: 'Folder name',
+        onCreate: async (name) => {
+          const make = this.pending?.options.destinations?.onCreate;
+          const preset = await make?.(name);
+          return preset ? { value: preset.id, label: preset.name } : null;
+        },
+      },
       options: [],
       onChange: () => {},
       doc: this.doc,
@@ -241,6 +259,7 @@ export class RecordingNameDialog {
       parts.destinationSelect.setOptions([]);
       return;
     }
+    parts.destinationSelect.setCreateEnabled(Boolean(destinations.onCreate));
     parts.destinationSelect.setOptions([
       { value: '', label: destinations.unfiledLabel },
       ...destinations.presets.map((preset) => ({ value: preset.id, label: preset.name })),

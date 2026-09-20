@@ -26,7 +26,11 @@ import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import type { DriveFolderPreset } from '../shared/settings';
-import { DEFAULT_DRIVE_ROOT_FOLDER_NAME } from '../shared/settings';
+import {
+  DEFAULT_DRIVE_ROOT_FOLDER_NAME,
+  loadExtensionSettingsFromStorage,
+  saveExtensionSettingsToStorage,
+} from '../shared/settings';
 import { SessionTabsView } from './history/SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
 import type {
@@ -125,6 +129,7 @@ export class PopupController {
       rename: (historyId, name) => this.renameRecording(historyId, name),
       destinations: () => this.destinations,
       driveRootFolder: () => this.driveRootFolder,
+      createDestination: (name) => this.createDestination(name),
       fileTo: (historyId, presetId) => this.fileRecordingToDestination(historyId, presetId),
       localFolders: () => this.localFolders,
       pendingLocal: () => this.pendingLocal,
@@ -601,6 +606,30 @@ export class PopupController {
       type: 'FILE_RECORDING_TO_DESTINATION', recordingId, presetId,
     });
     if (response.ok === false) throw new Error(response.error || 'Could not file this recording');
+  }
+
+  /**
+   * Adds a Drive folder from the naming dialog (7A) and hands it back to be
+   * selected.
+   *
+   * Written to settings, which is the one list of folders — so a folder made
+   * here is the same kind of thing as one added in Settings, and appears there.
+   * The saved settings are read back rather than trusted: the normalizer is
+   * what decides whether a name is usable and whether there is room for
+   * another, and a folder it dropped must not be offered as though it existed.
+   */
+  private async createDestination(name: string): Promise<DriveFolderPreset | null> {
+    const settings = await loadExtensionSettingsFromStorage();
+    const preset = { id: `dest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name };
+    const saved = await saveExtensionSettingsToStorage({
+      ...settings,
+      storage: {
+        ...settings.storage,
+        driveFolderPresets: [...settings.storage.driveFolderPresets, preset],
+      },
+    });
+    this.destinations = saved.storage.driveFolderPresets;
+    return this.destinations.find((candidate) => candidate.id === preset.id) ?? null;
   }
 
   /**

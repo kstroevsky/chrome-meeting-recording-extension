@@ -32,6 +32,8 @@ export type CompletedNamingActions = {
   destinations: () => DriveFolderPreset[];
   /** The Drive folder they all live in, so the prompt can say where a recording went. */
   driveRootFolder: () => string;
+  /** Adds a folder from the dialog (7A); null when the name was refused. */
+  createDestination: (name: string) => Promise<DriveFolderPreset | null>;
   /** Files the recording's Drive folder into the chosen destination. */
   fileTo: (historyId: string, presetId: string) => Promise<unknown>;
   /** Local folders offered to a recording that has not been written yet. */
@@ -113,7 +115,7 @@ export class CompletedNamingPrompt {
   }
 
   private driveOptions(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
-    return driveNamingOptions(job, presets, this.actions.driveRootFolder(), async (name, destinationId) => {
+    return driveNamingOptions(job, presets, this.actions.driveRootFolder(), (name) => this.actions.createDestination(name), async (name, destinationId) => {
       // Rename first: filing moves the folder this rename just retitled,
       // and a failed move must not cost the user the name they typed.
       await this.actions.rename(job.historyId!, name);
@@ -154,7 +156,15 @@ export class CompletedNamingPrompt {
 
 /** A title for the gallery: the Drive prompt with its real copy, and no writes. */
 export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[], pickedId: string | null = null): RecordingNameDialogOptions {
-  const options = driveNamingOptions(job, presets, DEFAULT_DRIVE_ROOT_FOLDER_NAME, async () => {});
+  // The create row is part of what there is to look at (7A), so the story keeps
+  // it — it just mints a folder that lives as long as the story does.
+  const options = driveNamingOptions(
+    job,
+    presets,
+    DEFAULT_DRIVE_ROOT_FOLDER_NAME,
+    async (name) => ({ id: `preview-${name}`, name }),
+    async () => {},
+  );
   return options.destinations ? { ...options, destinations: { ...options.destinations, initialId: pickedId } } : options;
 }
 
@@ -162,6 +172,7 @@ function driveNamingOptions(
   job: UploadJob,
   presets: DriveFolderPreset[],
   rootFolderName: string,
+  onCreate: ((name: string) => Promise<DriveFolderPreset | null>) | undefined,
   onSave: RecordingNameDialogOptions['onSave'],
 ): RecordingNameDialogOptions {
   const media = (job.files ?? []).filter((file) => file.kind !== 'notes');
@@ -177,7 +188,7 @@ function driveNamingOptions(
     saveLabel: 'Save name',
     cancelLabel: 'Keep the default name',
     destinations: presets.length
-      ? { presets, unfiledLabel: DRIVE_DEFAULT_DESTINATION_NAME, initialId: null }
+      ? { presets, unfiledLabel: DRIVE_DEFAULT_DESTINATION_NAME, initialId: null, ...(onCreate ? { onCreate } : {}) }
       : undefined,
     onSave,
   };
