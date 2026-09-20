@@ -5,10 +5,11 @@
 import { UnsavedRecordingPrompt, type UnsavedRecordingActions } from '../UnsavedRecordingPrompt';
 
 const RECORDING = {
-  key: 'staging/google-meet-team-sync-20260711T1430-recording.webm',
-  filename: 'google-meet-team-sync-20260711T1430-recording.webm',
+  key: 'staging/meet-team-sync-20260711T1430-recording.webm',
+  filename: 'meet-team-sync-20260711T1430-recording.webm',
   sizeBytes: 63 * 1024 * 1024,
   lastModifiedMs: 1_000,
+  approxDurationMs: 32 * 60_000,
 };
 
 const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
@@ -39,11 +40,11 @@ describe('offering back an unsaved recording', () => {
     await flush();
 
     expect(text('#unsaved-recording-modal-title')).toBe('Unsaved recording found');
-    expect(text('.recording-name-summary')).toBe('63 MB · THE MEETING ENDED');
+    expect(text('.recording-name-summary')).toBe('~32m · 63 MB · THE MEETING ENDED');
     expect(text('.recording-name-hint'))
       .toBe('The tab closed before this one was saved. It was kept on this device.');
     // The generated name, made readable, so there is something to accept.
-    expect(input().value).toBe('Team Sync — 07/11 14:30');
+    expect(input().value).toBe('Meet Team Sync — 07/11 14:30');
   });
 
   it('stays silent when there is nothing to offer', async () => {
@@ -132,4 +133,14 @@ describe('offering back an unsaved recording', () => {
     await expect(prompt.offerNext()).resolves.toBeUndefined();
     expect(card()).toBeNull();
   });
+
+  it('leaves the length out rather than guessing when the name cannot be read', async () => {
+    const { prompt } = make({
+      list: jest.fn(async () => [{ ...RECORDING, approxDurationMs: undefined }]),
+    });
+    await prompt.offerNext();
+    await flush();
+    expect(text('.recording-name-summary')).toBe('63 MB · THE MEETING ENDED');
+  });
 });
+

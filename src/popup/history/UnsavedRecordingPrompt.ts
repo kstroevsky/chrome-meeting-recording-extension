@@ -14,10 +14,11 @@
  * recovery takes over only after a week (ORPHAN_DECISION_WINDOW_MS).
  */
 
-import { formatBytes } from '../../shared/format';
+import { formatApproximateDuration, formatBytes } from '../../shared/format';
 import { ModalShell } from '../../ui/modalShell';
 import { slugifyRecordingTitle } from '../../shared/recording';
 import type { UnsavedRecording } from '../../offscreen/storage/recoverOrphanRecordings';
+import { parseRecordingFilename } from '../../shared/recordingFilename';
 
 export type UnsavedRecordingActions = {
   /** What a crash left behind; empty in the ordinary case. */
@@ -78,9 +79,14 @@ export class UnsavedRecordingPrompt {
     const { shell, parts } = this.build();
     shell.title.textContent = 'Unsaved recording found';
     shell.message.textContent = 'The tab closed before this one was saved. It was kept on this device.';
-    // Size and the reason it ended; a capture that never sealed has no duration
-    // to show, so the line says what is actually known.
-    parts.summary.textContent = `${formatBytes(recording.sizeBytes).toUpperCase()} · THE MEETING ENDED`;
+    // How long it ran, how big it is, and why it stopped. The length is
+    // inferred from the file rather than measured, so it is shown at the
+    // resolution it is actually known to.
+    parts.summary.textContent = [
+      ...(recording.approxDurationMs != null ? [formatApproximateDuration(recording.approxDurationMs)] : []),
+      formatBytes(recording.sizeBytes).toUpperCase(),
+      'THE MEETING ENDED',
+    ].join(' · ');
     parts.input.value = defaultTitle(recording.filename);
     this.setBusy(false);
     this.syncBlank();
@@ -201,11 +207,19 @@ export class UnsavedRecordingPrompt {
   }
 }
 
-/** The generated name, made readable, so the field opens with something usable. */
+/**
+ * The generated name, made readable, so the field opens with something usable.
+ *
+ * No prefix is assumed and the slug may be absent: it is whatever the tab was
+ * called — `meet-abc-defg-hij` for a meeting, the page's title elsewhere, and
+ * nothing at all for a page with no usable one.
+ */
 function defaultTitle(filename: string): string {
-  const match = filename.match(/^google-meet-(.+)-(\d{8})T(\d{4})-/);
-  if (!match) return 'Recovered recording';
-  const [, slug, date, time] = match;
-  const readable = slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  return `${readable} — ${date.slice(4, 6)}/${date.slice(6, 8)} ${time.slice(0, 2)}:${time.slice(2)}`;
+  const parsed = parseRecordingFilename(filename);
+  if (!parsed) return 'Recovered recording';
+  const [date, time] = parsed.stamp.split('T');
+  const when = `${date.slice(4, 6)}/${date.slice(6, 8)} ${time.slice(0, 2)}:${time.slice(2, 4)}`;
+  if (!parsed.slug) return `Recovered recording — ${when}`;
+  const readable = parsed.slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return `${readable} — ${when}`;
 }

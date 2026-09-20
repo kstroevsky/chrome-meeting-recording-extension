@@ -75,7 +75,12 @@ import {
 } from './shared/recording';
 import { TIMEOUTS } from './shared/timeouts';
 import { TelemetryRuntime } from './background/TelemetryRuntime';
-import { captureMayBeUnsaved, markCaptureSettled } from './background/unsavedCaptureFlag';
+import {
+  captureMayBeUnsaved,
+  markCaptureSettled,
+  noteCaptureProgress,
+  recordedCaptureDurationMs,
+} from './background/unsavedCaptureFlag';
 import type { UnsavedRecording } from './offscreen/storage/recoverOrphanRecordings';
 import { plannedFolderRenames } from './background/driveFolderNameRepair';
 
@@ -352,7 +357,13 @@ const listUnsavedRecordings = async () => {
   try {
     await offscreen.ensureReady();
     const response = await offscreen.rpc<{ ok: boolean; recordings?: UnsavedRecording[] }>({ type: 'OFFSCREEN_LIST_UNSAVED' });
-    const recordings = response?.recordings ?? [];
+    const found = response?.recordings ?? [];
+    // The run's own clock beats the estimate the filename allows: it excludes
+    // paused spans, and it was measured rather than inferred.
+    const recordings = await Promise.all(found.map(async (recording) => {
+      const recorded = await recordedCaptureDurationMs(recording.lastModifiedMs);
+      return recorded != null ? { ...recording, approxDurationMs: recorded } : recording;
+    }));
     // Nothing there means the flag was set by a run that finished after all —
     // a worker death after delivery, say — so stop asking.
     if (!recordings.length) await markCaptureSettled();
@@ -507,6 +518,16 @@ const transcriptCapture = new RecordingTranscriptCapture({
 
 const session = new RecordingSession(
   async (snapshot) => {
+    // The run's clock, mirrored where a browser restart cannot clear it. The
+    // snapshot below goes to storage.session, which is exactly what a crash
+    // takes with it — and its elapsed time is what says "~32m" rather than
+    // nothing when the recording is offered back (8D).
+    if (snapshot.phase === 'recording' || snapshot.phase === 'stopping') {
+      void noteCaptureProgress({
+        recordedMs: snapshot.recordedMs ?? 0,
+        runningSince: snapshot.paused === true ? null : snapshot.runningSince ?? null,
+      });
+    }
     try {
       await setSessionStorageValues({ [RECORDING_SESSION_STORAGE_KEY]: snapshot });
     } catch (error) {

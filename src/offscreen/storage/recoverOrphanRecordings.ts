@@ -20,7 +20,7 @@
  */
 
 import { describeRuntimeError } from '../errors';
-import { isRecordingFilename } from '../drive/folderNaming';
+import { approximateRecordingDurationMs, isRecordingFilename } from '../drive/folderNaming';
 import { recordingStreamOf } from '../../shared/recordingFilename';
 import type { PendingUploadStore } from '../drive/PendingUploadStore';
 import type { LocalSaveRequest } from '../RecordingFinalizer';
@@ -114,6 +114,12 @@ export type UnsavedRecording = {
   filename: string;
   sizeBytes: number;
   lastModifiedMs: number;
+  /**
+   * Roughly how long it ran, from the moment in its name to its last write.
+   * Absent when the name cannot be read. Never precise — see
+   * {@link approximateRecordingDurationMs}.
+   */
+  approxDurationMs?: number;
 };
 
 /**
@@ -136,7 +142,9 @@ export async function listOrphanRecordings(deps: OrphanListingDeps): Promise<Uns
     const sizeBytes = await deps.fileSize(candidate.key);
     // A zero-byte file is a capture that never wrote anything; there is nothing
     // to offer and nothing worth naming.
-    if (sizeBytes > 0) out.push({ ...candidate, sizeBytes });
+    if (sizeBytes <= 0) continue;
+    const approxDurationMs = approximateRecordingDurationMs(candidate.filename, candidate.lastModifiedMs);
+    out.push({ ...candidate, sizeBytes, ...(approxDurationMs != null ? { approxDurationMs } : {}) });
   }
   return out;
 }
@@ -275,3 +283,4 @@ export function recoverOrphanRecordingsWithChrome(opts: {
 function streamFromRecordingFilename(filename: string): RecordingStream {
   return recordingStreamOf(filename);
 }
+
