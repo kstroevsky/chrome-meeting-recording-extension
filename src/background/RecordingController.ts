@@ -32,6 +32,7 @@ import type { RecordingTranscriptCapture } from './RecordingTranscriptCapture';
 import type { TelemetryRuntime } from './TelemetryRuntime';
 import { createTelemetryId } from '../shared/telemetry';
 import { hasExportableNotations, toWebVtt } from '../shared/notationExport';
+import { hasExportableTranscript, transcriptToWebVtt } from '../shared/transcriptExport';
 
 export type RecordingControllerDeps = {
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
@@ -211,12 +212,14 @@ export class RecordingController {
         .catch((error) => this.L.warn('Could not flush captions at the stop boundary:', error));
     }
     const notesSidecar = await this.buildNotesSidecar(historyId);
+    const transcriptSidecar = await this.buildTranscriptSidecar(historyId);
 
     try {
       await this.offscreen.ensureReady();
       const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
         type: 'OFFSCREEN_STOP',
         ...(notesSidecar ? { notesSidecar } : {}),
+        ...(transcriptSidecar ? { transcriptSidecar } : {}),
       });
       if (!r?.ok) {
         this.session.fail(r?.error || 'Stop failed in offscreen');
@@ -439,6 +442,26 @@ export class RecordingController {
       return { vtt: toWebVtt(notations, { durationMs: this.session.runDurationMs(historyId) }) };
     } catch (error) {
       this.L.warn('Could not export notes for this recording:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * The run's transcript as a WebVTT sidecar, rendered here because the
+   * background owns the transcript (ADR-0007) and the offscreen owns delivery.
+   * Read after the caption flush above, so it holds the whole run.
+   *
+   * Best-effort, as the notes sidecar is: a recording must still save when its
+   * transcript cannot be read.
+   */
+  private async buildTranscriptSidecar(historyId: string | undefined): Promise<{ vtt: string } | undefined> {
+    if (!historyId || !this.transcripts) return undefined;
+    try {
+      const transcript = await this.transcripts.get(historyId);
+      if (!transcript || !hasExportableTranscript(transcript)) return undefined;
+      return { vtt: transcriptToWebVtt(transcript) };
+    } catch (error) {
+      this.L.warn('Could not export the transcript for this recording:', error);
       return undefined;
     }
   }
