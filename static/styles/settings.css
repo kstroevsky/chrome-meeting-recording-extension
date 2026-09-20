@@ -102,3 +102,15 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
 .destination-add:hover { background: var(--tile); }
 .destination-add:disabled { opacity: .5; cursor: default; }
 .destinations-note { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); }
+/* The nesting is the whole point of this section, so it is drawn rather than
+   described: a labelled group, indented behind a rule, holding the folders that
+   live inside the one above it. */
+.destinations-group-label { margin: 0 0 6px; color: var(--subtle); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
+.destinations-note--quiet { margin: 6px 0 0; }
+.destinations-inside { margin-top: 18px; padding-left: 14px; border-left: 2px solid var(--border); }
+/* The default folder is shown, not editable: it is where unsorted recordings
+   go, and removing it would leave them nowhere. The padding stands in for the
+   remove button the editable rows have, so every tile ends on the same edge. */
+.destination-row--fixed { padding-right: 40px; }
+.destination-name--fixed { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); }
+.destination-fixed-tag { flex-shrink: 0; color: var(--subtle); font: 600 9px 'Space Grotesk', sans-serif; letter-spacing: .12em; }

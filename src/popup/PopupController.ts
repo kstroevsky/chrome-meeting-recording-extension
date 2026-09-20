@@ -26,6 +26,7 @@ import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import type { DriveFolderPreset } from '../shared/settings';
+import { DEFAULT_DRIVE_ROOT_FOLDER_NAME } from '../shared/settings';
 import { SessionTabsView } from './history/SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
 import type {
@@ -110,6 +111,7 @@ export class PopupController {
   private previewing = false;
   /** Drive destinations offered when naming; empty until settings load. */
   private destinations: DriveFolderPreset[] = [];
+  private driveRootFolder = DEFAULT_DRIVE_ROOT_FOLDER_NAME;
   /** Download sub-folders offered when naming a local recording. */
   private localFolders: DriveFolderPreset[] = [];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
@@ -122,6 +124,7 @@ export class PopupController {
       notify: (message) => this.toast(message),
       rename: (historyId, name) => this.renameRecording(historyId, name),
       destinations: () => this.destinations,
+      driveRootFolder: () => this.driveRootFolder,
       fileTo: (historyId, presetId) => this.fileRecordingToDestination(historyId, presetId),
       localFolders: () => this.localFolders,
       pendingLocal: () => this.pendingLocal,
@@ -155,6 +158,7 @@ export class PopupController {
       onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
       onSettings: (settings) => {
         this.destinations = settings.storage.driveFolderPresets;
+        this.driveRootFolder = settings.storage.driveRootFolderName;
         this.localFolders = settings.storage.localFolderPresets;
       },
       onToast: (msg) => this.toast(msg),

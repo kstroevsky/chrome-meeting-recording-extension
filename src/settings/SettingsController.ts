@@ -9,6 +9,7 @@
 
 import {
   DEFAULT_EXTENSION_SETTINGS,
+  DRIVE_DEFAULT_DESTINATION_NAME,
   MAX_DRIVE_FOLDER_NAME_LENGTH,
   MAX_LOCAL_FOLDER_PRESETS,
   MAX_LOCAL_FOLDER_NAME_LENGTH,
@@ -40,6 +41,8 @@ export type SettingsElements = {
   tabContentType: HTMLSelectElement | null;
   tabResolutionPreset: HTMLSelectElement | null;
   tabMaxFrameRate: HTMLInputElement | null;
+  driveRootFolder?: HTMLInputElement | null;
+  driveDefaultDestination?: HTMLElement | null;
   destinationsList?: HTMLElement | null;
   destinationAdd?: HTMLButtonElement | null;
   destinationsNote?: HTMLElement | null;
@@ -109,12 +112,18 @@ export class SettingsController {
   private readonly localFolders: FolderPresetList;
 
   constructor(private readonly el: SettingsElements) {
+    // Matched to what the normalizer will keep, so the field cannot accept a
+    // name that silently shortens on save.
+    if (el.driveRootFolder) el.driveRootFolder.maxLength = MAX_DRIVE_FOLDER_NAME_LENGTH;
+    // Named from the constant the uploader uses, so the page cannot claim a
+    // folder name the recordings do not actually go to.
+    if (el.driveDefaultDestination) el.driveDefaultDestination.textContent = DRIVE_DEFAULT_DESTINATION_NAME;
     this.driveFolders = new FolderPresetList({
       elements: { list: el.destinationsList, add: el.destinationAdd, note: el.destinationsNote },
       maxPresets: MAX_DRIVE_FOLDER_PRESETS,
       maxNameLength: MAX_DRIVE_FOLDER_NAME_LENGTH,
       placeholder: 'e.g. Work meetings',
-      noun: 'Destination',
+      noun: 'Folder',
       idPrefix: 'dest',
     });
     this.localFolders = new FolderPresetList({
@@ -185,6 +194,7 @@ export class SettingsController {
     // Repainted here rather than only at load, so "Reset to defaults" actually
     // clears the lists instead of leaving rows the reset just erased.
     this.driveFolders.apply(settings.storage.driveFolderPresets);
+    if (el.driveRootFolder) el.driveRootFolder.value = settings.storage.driveRootFolderName;
     this.localFolders.apply(settings.storage.localFolderPresets);
     if (el.anonymousDiagnostics) el.anonymousDiagnostics.checked = settings.privacy.anonymousDiagnostics;
     if (el.theme) el.theme.value = settings.appearance.theme;
@@ -236,6 +246,7 @@ export class SettingsController {
         selfVideoUseAutoResolution: !!el.selfVideoAutoResolution?.checked,
       },
       storage: {
+        driveRootFolderName: el.driveRootFolder?.value,
         driveFolderPresets: this.driveFolders.read(),
         localFolderPresets: this.localFolders.read(),
       },

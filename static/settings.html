@@ -136,14 +136,34 @@
       </section>
 
       <section class="settings-section" aria-labelledby="destinations-heading">
-        <h2 id="destinations-heading" class="section-eyebrow">GOOGLE DRIVE DESTINATIONS</h2>
+        <h2 id="destinations-heading" class="section-eyebrow">GOOGLE DRIVE</h2>
         <p class="destinations-intro">
-          Every recording uploads to <strong>Google Meet Records</strong> first. Name the
-          destinations you sort them into, and pick one when you name the recording.
+          Everything this extension saves goes in one folder in your Drive. Inside it you keep
+          folders to sort recordings into &mdash; pick one when you name a recording, or change
+          it later from the recordings page.
         </p>
-        <div id="destinations-list" class="destinations-list"></div>
-        <button id="destination-add" class="destination-add" type="button">Add destination</button>
-        <p id="destinations-note" class="destinations-note" hidden></p>
+
+        <p class="destinations-group-label" id="drive-root-folder-label">FOLDER NAME</p>
+        <div class="destination-row">
+          <input id="drive-root-folder" class="destination-name" type="text" autocomplete="off"
+                 aria-labelledby="drive-root-folder-label" aria-describedby="drive-root-folder-note">
+        </div>
+        <p id="drive-root-folder-note" class="destinations-note destinations-note--quiet">
+          Renaming it here renames it in Drive too, and everything inside comes along.
+        </p>
+
+        <div class="destinations-inside">
+          <p class="destinations-group-label">FOLDERS INSIDE IT</p>
+          <div class="destination-row destination-row--fixed">
+            <span class="destination-name destination-name--fixed">
+              <span id="drive-default-destination"></span>
+              <span class="destination-fixed-tag">UNSORTED RECORDINGS GO HERE</span>
+            </span>
+          </div>
+          <div id="destinations-list" class="destinations-list"></div>
+          <button id="destination-add" class="destination-add" type="button">Add folder</button>
+          <p id="destinations-note" class="destinations-note" hidden></p>
+        </div>
       </section>
 
       <section class="settings-section" aria-labelledby="local-folders-heading">

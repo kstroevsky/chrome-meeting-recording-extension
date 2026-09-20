@@ -45,7 +45,7 @@ Everything runs in your browser. Capture is **local-first**: recording data stre
 
 **State-driven popup** — a different layout per capture phase: a clean **configuration** screen before recording, a **recording** screen with a red banner, a pause-aware elapsed **timer** (counts recorded time only — it freezes on pause and equals the saved file's duration), a read-only live **mic meter**, status chips (a Transcript indicator that tracks whether Meet captions are actually on, plus the storage target), mic/camera **toggle rows**, and a short **finalizing** screen while capture seals.
 
-**Local or Google Drive output** — finalized files download locally or enter a detached background upload to `Google Meet Records/<meeting-id>-<timestamp>/` in Drive. Capture returns to idle as soon as a Drive job is queued, so another recording can start; the job has its own progress tab, is retryable briefly after a fallback, and falls back per file to a local download on failure or cancellation. After a successful Drive upload, the popup offers a one-time naming prompt: saving renames the Drive folder and every uploaded media file, while Skip leaves their original names unchanged.
+**Local or Google Drive output** — finalized files download locally or enter a detached background upload to `<root>/Rest/<meeting-id>-<timestamp>/` in Drive, where `<root>` is the folder named in Settings. Capture returns to idle as soon as a Drive job is queued, so another recording can start; the job has its own progress tab, is retryable briefly after a fallback, and falls back per file to a local download on failure or cancellation. After a successful Drive upload, the popup offers a one-time naming prompt: saving renames the Drive folder and every uploaded media file, while Skip leaves their original names unchanged.
 
 **Recording history** — the popup opens a paginated, IndexedDB-backed history page for local and Drive artifacts. A local recording rename changes its history label; a modern Drive recording rename updates the remote folder and uploaded filenames before committing the matching history projection, rolling completed remote changes back if a later rename fails. Open a confirmed local download or Drive file, or hide its history entry without deleting the underlying file. Pending and unavailable recovery outcomes are shown honestly rather than reported as saved.
 
@@ -220,7 +220,7 @@ All filenames include the Google Meet meeting ID suffix and a UTC timestamp.
 | Self-video | `google-meet-self-video-<meet-suffix>-<timestamp>.webm` (default) or `.mp4` |
 | Transcript | `google-meet-transcript-<meet-suffix>-<timestamp>.txt` |
 
-In Drive mode, all artifacts for one recording session are uploaded to a per-recording folder: `Google Meet Records/<meeting-id>-<timestamp>/`. The detached upload tab and recording history expose the folder and per-file Drive links once Drive returns them. Naming a completed Drive recording slugifies the title for the folder and preserves each artifact extension while producing `<slug>-recording.<ext>`, `<slug>-mic.<ext>`, and `<slug>-self-video.<ext>` filenames. The metadata update is sequential and rollback-aware so history is not advanced to names Drive did not accept.
+In Drive mode, all artifacts for one recording session are uploaded to a per-recording folder: `<root>/Rest/<meeting-id>-<timestamp>/`. The detached upload tab and recording history expose the folder and per-file Drive links once Drive returns them. Naming a completed Drive recording slugifies the title for the folder and preserves each artifact extension while producing `<slug>-recording.<ext>`, `<slug>-mic.<ext>`, and `<slug>-self-video.<ext>` filenames. The metadata update is sequential and rollback-aware so history is not advanced to names Drive did not accept.
 
 ---
 
@@ -257,8 +257,13 @@ Each **store-published** build (Chrome Web Store, Edge Add-ons) gets its own sto
 
 **Drive folder structure** — Drive mode auto-creates:
 
-- Root folder: `Google Meet Records` (created once, reused)
+- Root folder: named in Settings (`Recordings` on a fresh install, `Google Meet Records` for an installation that predates the setting), created once and reused
+- Destination folder: one of the user's named destinations, or `Rest` for anything unsorted. Always inside the root, never beside it
 - Per-recording folder: `<meeting-id>-<timestamp>` (created fresh each run)
+
+Filing a recording afterwards moves its per-recording folder between destinations; the media never moves.
+
+Renaming the root folder in Settings renames it in Drive too, before the setting is written — folders resolve by name, so a setting that disagreed with Drive would send the next upload to a second folder. If Drive refuses (offline, signed out, or a folder of that name already exists) nothing is saved and the page says why. Destinations that earlier versions created at the top of My Drive are pulled back inside the root automatically, once — on update, and again after the next filing if that attempt had no Drive token. It moves only folders that both hold one of this extension's recordings and carry a configured destination name, so an unrelated folder of the user's that happens to share a name is never touched.
 
 ---
 

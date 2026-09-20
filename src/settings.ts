@@ -29,6 +29,8 @@ const el: SettingsElements = {
   tabContentType: document.getElementById('tab-content-type') as HTMLSelectElement | null,
   tabResolutionPreset: document.getElementById('tab-resolution-preset') as HTMLSelectElement | null,
   tabMaxFrameRate: document.getElementById('tab-max-frame-rate') as HTMLInputElement | null,
+  driveRootFolder: document.getElementById('drive-root-folder') as HTMLInputElement | null,
+  driveDefaultDestination: document.getElementById('drive-default-destination'),
   destinationsList: document.getElementById('destinations-list'),
   localFoldersList: document.getElementById('local-folders-list'),
   localFolderAdd: document.getElementById('local-folder-add') as HTMLButtonElement | null,

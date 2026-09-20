@@ -1,4 +1,5 @@
 import type { DriveFolderPreset } from '../shared/settings';
+import { DRIVE_DEFAULT_DESTINATION_NAME } from '../shared/settings';
 import { createListboxSelect, type ListboxSelect } from '../ui/listboxSelect';
 import {
   dayLabel,
@@ -465,7 +466,7 @@ export class RecordingsView {
       label: 'Google Drive destination',
       className: 'detail-destination__select',
       options: [
-        { value: '', label: 'Google Meet Records (unfiled)' },
+        { value: '', label: `${DRIVE_DEFAULT_DESTINATION_NAME} (unfiled)` },
         ...this.destinations.map((preset) => ({ value: preset.id, label: preset.name })),
       ],
       value: entry.driveFolderPresetId ?? '',
@@ -479,7 +480,7 @@ export class RecordingsView {
 
     if (!this.destinations.length) {
       const hint = $('p', 'detail-destination__hint');
-      hint.textContent = 'Add destinations in Settings to sort recordings into your own folders.';
+      hint.textContent = 'Add folders in Settings to sort recordings into your own.';
       row.append(hint);
     }
     return row;

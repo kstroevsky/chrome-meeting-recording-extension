@@ -109,7 +109,7 @@ test.describe('Drive destinations (integration)', () => {
 
       // A recording made before it was filed reads as unfiled, not as a guess.
       await expect(trigger).toBeVisible({ timeout: 20_000 });
-      await expect(trigger).toHaveText('Google Meet Records (unfiled)');
+      await expect(trigger).toHaveText('Rest (unfiled)');
 
       await chooseDestination('Psychotherapy');
       await expect.poll(() => Object.values(drive.resources).includes('Psychotherapy'), {
@@ -125,13 +125,13 @@ test.describe('Drive destinations (integration)', () => {
 
       // And it can be unfiled again — back to the built-in folder.
       const movesBefore = drive.folderMoves;
-      await chooseDestination('Google Meet Records (unfiled)');
+      await chooseDestination('Rest (unfiled)');
       await expect.poll(() => drive.folderMoves, { timeout: 20_000 }).toBeGreaterThan(movesBefore);
-      await expect(trigger).toHaveText('Google Meet Records (unfiled)', { timeout: 20_000 });
+      await expect(trigger).toHaveText('Rest (unfiled)', { timeout: 20_000 });
 
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.locator('.recording-row').first().click();
-      await expect(trigger).toHaveText('Google Meet Records (unfiled)');
+      await expect(trigger).toHaveText('Rest (unfiled)');
     } finally {
       await closeHarness(harness);
     }

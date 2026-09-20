@@ -16,7 +16,7 @@
 
 import { DriveDestinationFiler } from './background/DriveDestinationFiler';
 import { loadExtensionSettingsFromStorage } from './shared/settings';
-import { DRIVE_ROOT_FOLDER_NAME } from './offscreen/drive/constants';
+import { DRIVE_DEFAULT_DESTINATION_NAME } from './shared/settings';
 import { DriveArtifactResolver } from './background/DriveArtifactResolver';
 import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
 import { addTabRemovedListener, sendTabMessage } from './platform/chrome/tabs';
@@ -211,29 +211,38 @@ const driveArtifacts = new DriveArtifactResolver({
   },
   warn: L.warn,
 });
-const driveFolders = new DriveDestinationFiler({
-  getFolder: async (id) => {
+/**
+ * The Drive folder operations this extension performs, in one place: the filer
+ * moves a recording between destinations, the renamer renames the root. Shared
+ * so both speak to Drive the same way.
+ */
+const driveFolderPorts = {
+  getFolder: async (id: string) => {
     const { status, body } = await driveJson(
       `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,name,parents`);
     return status === 200 ? body : null;
   },
-  findRootFolder: async (name) => {
+  findFolder: async (name: string, parentId: string | null) => {
     const query = encodeURIComponent(
       `name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder'`
-      + " and 'root' in parents and trashed = false");
+      + ` and '${(parentId ?? 'root').replace(/'/g, "\\'")}' in parents and trashed = false`);
     const { status, body } = await driveJson(
       `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,parents)&pageSize=1`);
     return status === 200 ? (body?.files?.[0] ?? null) : null;
   },
-  createRootFolder: async (name) => {
+  createFolder: async (name: string, parentId: string | null) => {
     const { status, body } = await driveJson('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
-      body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' }),
+      body: JSON.stringify({
+        name,
+        mimeType: 'application/vnd.google-apps.folder',
+        ...(parentId ? { parents: [parentId] } : {}),
+      }),
     });
     if (status !== 200) throw new Error(`Could not create the destination folder (${status})`);
     return body;
   },
-  moveFolder: async (folderId, addParent, removeParents) => {
+  moveFolder: async (folderId: string, addParent: string, removeParents: string[]) => {
     const params = new URLSearchParams({ addParents: addParent, fields: 'id,parents' });
     if (removeParents.length) params.set('removeParents', removeParents.join(','));
     const { status } = await driveJson(
@@ -242,12 +251,13 @@ const driveFolders = new DriveDestinationFiler({
     if (status !== 200) throw new Error(`Could not move the recording folder (${status})`);
   },
   warn: L.warn,
-});
+};
+const driveFolders = new DriveDestinationFiler(driveFolderPorts);
 
 /**
- * Files a recording under a destination, or unfiles it back to the built-in
- * folder. Drive first, history second: a history row claiming a destination the
- * move never reached would be a lie.
+ * Files a recording under a destination, or unfiles it back to the default one.
+ * Drive first, history second: a history row claiming a destination the move
+ * never reached would be a lie.
  */
 const fileRecordingToDestination = async (recordingId: string, presetId: string | null) => {
   const entry = await historyRepository.get(recordingId);
@@ -260,7 +270,11 @@ const fileRecordingToDestination = async (recordingId: string, presetId: string 
     : undefined;
   if (presetId && !preset) throw new Error('That destination no longer exists');
 
-  const result = await driveFolders.file(entry.driveFolderId, preset?.name ?? DRIVE_ROOT_FOLDER_NAME);
+  const result = await driveFolders.file(
+    entry.driveFolderId,
+    preset?.name ?? DRIVE_DEFAULT_DESTINATION_NAME,
+    settings.storage.driveRootFolderName,
+  );
   if (result.status === 'missing') throw new Error('This recording\u2019s folder is no longer in Google Drive');
   await history.setDriveDestination(recordingId, presetId);
 };
