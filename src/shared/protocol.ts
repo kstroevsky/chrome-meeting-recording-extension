@@ -378,6 +378,12 @@ export type BgToOffscreenRpc =
        * Absent when the recording has no notes.
        */
       notesSidecar?: { vtt: string };
+      /**
+       * The run's transcript, rendered to WebVTT by the background (which owns
+       * it, ADR-0007) so the offscreen delivers it beside the notes, ahead of
+       * the media. Absent when the recording has no transcript.
+       */
+      transcriptSidecar?: { vtt: string };
     }>
   | RpcRequest<{ type: 'OFFSCREEN_DISCARD' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
@@ -439,7 +445,7 @@ export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY'; version?: string }
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
-  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
+  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: import('./recordingTypes').RecordingArtifactKind; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
   | { type: 'OFFSCREEN_ANALYSIS_STATE'; job: import('./analysis/job').AnalysisJob }
   /**
    * A completed analysis, on its way to the `analyses` store. Separate from the

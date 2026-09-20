@@ -8,7 +8,7 @@
 import { recordingHistoryFileId } from '../shared/recordingHistory';
 import { pokeRuntime } from '../platform/chrome/runtime';
 import { awaitDownloadSettled, downloadFile } from '../platform/chrome/downloads';
-import type { RecordingStream } from '../shared/recording';
+import type { RecordingArtifactKind, RecordingStream } from '../shared/recording';
 import { awaitsLocalDelivery, type RecordingHistoryFile } from '../shared/recordingHistory';
 
 /**
@@ -65,7 +65,7 @@ export function registerSaveHandler(
    */
   const deliver = async (
     args: {
-      historyId: string; stream: RecordingStream; kind?: 'notes';
+      historyId: string; stream: RecordingStream; kind?: RecordingArtifactKind;
       filename: string; blobUrl: string; retainedKey?: string; opfsFilename?: string;
       /** Prefixed onto the filename, creating a sub-folder of the download directory. */
       folder?: string;

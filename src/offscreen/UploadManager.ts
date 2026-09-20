@@ -14,7 +14,7 @@
  */
 
 import type { CompletedRecordingArtifact } from './engine/RecorderEngineTypes';
-import type { UploadJob, UploadJobFile, UploadJobStatus, UploadSummary } from '../shared/recording';
+import type { RecordingArtifactKind, UploadJob, UploadJobFile, UploadJobStatus, UploadSummary } from '../shared/recording';
 import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { describeRuntimeError } from './errors';
 import type { RecordingStream } from '../shared/recording';
@@ -40,7 +40,7 @@ export interface JobFinalizer {
 type RetainedRetry = {
   key: string;
   stream: RecordingStream;
-  kind?: 'notes';
+  kind?: RecordingArtifactKind;
   filename: string;
   mimeType?: string;
 };

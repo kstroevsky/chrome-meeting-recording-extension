@@ -4,7 +4,7 @@
  * Core type definitions shared across all recorder task files and the engine facade.
  */
 
-import type { CapturedTabResolution, RecordingCaptureDevices, RecordingPhase, RecordingStream } from '../../shared/recording';
+import type { CapturedTabResolution, RecordingArtifactKind, RecordingCaptureDevices, RecordingPhase, RecordingStream } from '../../shared/recording';
 
 export type EngineState = Exclude<RecordingPhase, 'failed'>;
 
@@ -44,7 +44,7 @@ export interface StorageTarget {
 export type CompletedRecordingArtifact = {
   stream: RecordingStream;
   /** Absent for media; `notes` is the WebVTT sidecar, delivered first (ADR-0005). */
-  kind?: 'notes';
+  kind?: RecordingArtifactKind;
   artifact: SealedStorageFile;
 };
 

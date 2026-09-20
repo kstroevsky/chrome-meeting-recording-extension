@@ -188,7 +188,7 @@ export function renderUploadJobPanel(
   // media files: it gets its own line (d4) and is left out of the counts and
   // the size, which describe what is being uploaded.
   const notesFile = job.files.find((file) => file.kind === 'notes');
-  const mediaFiles = job.files.filter((file) => file.kind !== 'notes');
+  const mediaFiles = job.files.filter((file) => !file.kind);
   const missed = mediaFiles.filter(missedDrive);
   const totalBytes = mediaFiles.reduce((sum, f) => sum + (typeof f.bytes === 'number' ? f.bytes : 0), 0);
   if (el.viewUpload) el.viewUpload.dataset.state = state;

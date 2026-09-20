@@ -1,4 +1,4 @@
-import type { RecordingStream } from './recordingTypes';
+import type { RecordingArtifactKind, RecordingStream } from './recordingTypes';
 
 /** What a notes sidecar is called, whatever media stream it was delivered beside. */
 const NOTES_FILENAME_SUFFIX = 'notes';
@@ -31,7 +31,7 @@ export function buildRenamedRecordingFilename(
   title: string,
   stream: RecordingStream,
   currentFilename: string,
-  kind?: 'notes',
+  kind?: RecordingArtifactKind,
 ): string {
   const slug = slugifyRecordingTitle(title);
   if (!slug) throw new Error('Recording name must contain at least one letter or number');

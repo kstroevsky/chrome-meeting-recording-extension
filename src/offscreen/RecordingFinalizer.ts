@@ -7,7 +7,7 @@
  * with bounded concurrency, and falls back to local download per-file if Drive fails.
  */
 
-import type { RecordingArtifactContext, RecordingStream, UploadSummary } from '../shared/recording';
+import type { RecordingArtifactContext, RecordingArtifactKind, RecordingStream, UploadSummary } from '../shared/recording';
 import { recordingHistoryFileId } from '../shared/recordingHistory';
 import { DriveTarget } from './DriveTarget';
 import { DriveFolderResolver } from './drive/DriveFolderResolver';
@@ -64,7 +64,7 @@ export type RecordingFinalizerDeps = {
 export type LocalSaveRequest = RecordingArtifactContext & {
   stream: RecordingStream;
   /** The notes sidecar rides a media stream, so `stream` alone cannot identify it. */
-  kind?: 'notes';
+  kind?: RecordingArtifactKind;
   /**
    * Set once the artifact has been promoted into the retained library. Its
    * presence is what tells the delivery side these bytes are owned rather than
@@ -201,7 +201,7 @@ export class RecordingFinalizer {
     stream: RecordingStream,
     reason: 'local' | 'fallback',
     context: RecordingArtifactContext,
-    kind?: 'notes',
+    kind?: RecordingArtifactKind,
   ) {
     // Ownership transfers *before* delivery is attempted. That ordering is the
     // point: if the download then fails, the recording is still playable from
@@ -241,7 +241,7 @@ export class RecordingFinalizer {
     artifact: SealedStorageFile,
     stream: RecordingStream,
     context: RecordingArtifactContext,
-    kind?: 'notes',
+    kind?: RecordingArtifactKind,
   ): Promise<{ key: string; file: File } | undefined> {
     const stagingKey = artifact.opfsFilename;
     // No history row means nothing owns the bytes long-term (legacy orphan
