@@ -21,6 +21,7 @@
 
 import { describeRuntimeError } from '../errors';
 import { isRecordingFilename } from '../drive/folderNaming';
+import { recordingStreamOf } from '../../shared/recordingFilename';
 import type { PendingUploadStore } from '../drive/PendingUploadStore';
 import type { LocalSaveRequest } from '../RecordingFinalizer';
 import type { RecordingStream } from '../../shared/recording';
@@ -261,7 +262,5 @@ export function recoverOrphanRecordingsWithChrome(opts: {
 }
 
 function streamFromRecordingFilename(filename: string): RecordingStream {
-  if (/-mic\.(?:webm|m4a)$/.test(filename)) return 'mic';
-  if (/-self-video\.(?:webm|mp4)$/.test(filename)) return 'self-video';
-  return 'tab';
+  return recordingStreamOf(filename);
 }

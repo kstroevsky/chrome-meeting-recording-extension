@@ -40,7 +40,7 @@ import { listOrphanRecordingsWithChrome, recoverOrphanRecordingsWithChrome } fro
 import { retitleRecordingFilename } from './offscreen/drive/folderNaming';
 import { readFileByKey, removeByKey } from './offscreen/storage/opfsLayout';
 import type { CompletedRecordingArtifact } from './offscreen/engine/RecorderEngineTypes';
-import type { RecordingStream } from './shared/recording';
+import { recordingStreamOf } from './shared/recordingFilename';
 import { slugifyRecordingTitle } from './shared/recordingNames';
 import { RuntimeSampler } from './offscreen/RuntimeSampler';
 import { OffscreenController } from './offscreen/OffscreenController';
@@ -569,9 +569,7 @@ async function resolveUnsavedRecording(
 
   const title = name?.trim();
   const filename = (title && retitleRecordingFilename(original, slugifyRecordingTitle(title))) || original;
-  const stream: RecordingStream = /-mic\.(?:webm|m4a)$/.test(original)
-    ? 'mic'
-    : /-self-video\.(?:webm|mp4)$/.test(original) ? 'self-video' : 'tab';
+  const stream = recordingStreamOf(original);
   const artifact: CompletedRecordingArtifact = {
     stream,
     artifact: {

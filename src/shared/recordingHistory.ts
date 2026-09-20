@@ -1,3 +1,4 @@
+import { recordingGroupName } from './recordingFilename';
 import type { RecordingStream, StorageMode } from './recording';
 import { isArtifactKind, type RecordingArtifactKind } from './recordingTypes';
 import { contentTypeForRecordingFilename } from './recordingFormats';
@@ -122,7 +123,7 @@ export function createRecordingHistoryId(): string {
 }
 
 export function recordingLabelFromFilename(filename: string): string {
-  return filename.replace(/-(recording|mic|self-video)\.(?:webm|mp4|m4a)$/, '') || filename;
+  return recordingGroupName(filename) ?? filename;
 }
 
 /** Decodes durable history data before it reaches callers. Invalid rows are skipped. */

@@ -93,7 +93,7 @@ export async function startTabRecorder(
     audioBitsPerSecond: 96_000,
   });
 
-  const filename = buildRecordingFilename(suffix, 'recording', encodingProfile.extension);
+  const filename = buildRecordingFilename(suffix, 'tab', encodingProfile.extension);
   const target = await openStorageTarget(filename, encodingProfile.contentType, deps, 'tab');
 
   const finalize = async (label: string) => {

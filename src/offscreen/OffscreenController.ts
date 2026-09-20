@@ -9,6 +9,7 @@
  * the runtime sampler timer, and the concrete engine/finalizer construction.
  */
 
+import { stripStreamSuffix } from '../shared/recordingFilename';
 import { describeRuntimeError } from './errors';
 import type { OffscreenPhaseUpdate } from '../shared/protocol';
 import {
@@ -50,7 +51,10 @@ function sidecarArtifact(
 ): CompletedRecordingArtifact | null {
   const source = media?.artifact.filename;
   if (!source) return null;
-  const filename = `${source.replace(/-(recording|mic|self-video)\.[a-z0-9]+$/i, '')}-${kind}.vtt`;
+  // Named off the media it rides with, so the two sit together. Permissive on
+  // purpose — a recording renamed after the fact no longer carries a stamp —
+  // but the suffix list it strips is the grammar's, not this file's own.
+  const filename = `${stripStreamSuffix(source)}-${kind}.vtt`;
   const file = new File([vtt], filename, { type: 'text/vtt' });
   return {
     stream: media.stream,
