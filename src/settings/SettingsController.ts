@@ -15,7 +15,6 @@ import {
   MAX_LOCAL_FOLDER_NAME_LENGTH,
   MAX_DRIVE_FOLDER_PRESETS,
   loadExtensionSettingsFromStorage,
-  resetExtensionSettingsToDefaults,
   saveExtensionSettingsToStorage,
   type ExtensionSettings,
 } from '../shared/settings';
@@ -110,6 +109,8 @@ export class SettingsController {
    */
   private readonly driveFolders: FolderPresetList;
   private readonly localFolders: FolderPresetList;
+  /** The root folder's name as Drive currently has it, not as the field shows it. */
+  private savedRootFolderName = '';
 
   constructor(private readonly el: SettingsElements) {
     // Matched to what the normalizer will keep, so the field cannot accept a
@@ -160,6 +161,9 @@ export class SettingsController {
         return;
       }
       try {
+        // Drive first: the setting is only true once the folder actually
+        // carries the name, and a rename that fails must not be recorded.
+        if (!await this.renameRootFolderInDrive()) return;
         const saved = await saveExtensionSettingsToStorage(this.readSettingsFromForm());
         this.applySettings(saved);
         this.setStatus('Saved');
@@ -171,7 +175,14 @@ export class SettingsController {
 
     this.el.resetBtn?.addEventListener('click', async () => {
       try {
-        const defaults = await resetExtensionSettingsToDefaults();
+        // Everything else here is a preference; the root folder's name is a
+        // pointer to a folder that exists in Drive and holds the user's
+        // recordings. Resetting it would not move them — it would only stop
+        // us finding them — so it survives the reset.
+        const defaults = await saveExtensionSettingsToStorage({
+          ...DEFAULT_EXTENSION_SETTINGS,
+          storage: { ...DEFAULT_EXTENSION_SETTINGS.storage, driveRootFolderName: this.savedRootFolderName },
+        });
         this.applySettings(defaults);
         this.setStatus('Reset to defaults');
       } catch (error) {
@@ -179,6 +190,33 @@ export class SettingsController {
         this.setStatus('Reset failed', true);
       }
     });
+  }
+
+  /**
+   * Renames the root folder in Drive to match what was typed, and says whether
+   * saving may continue.
+   *
+   * Folders are resolved by name, so a setting that disagrees with Drive is not
+   * a cosmetic mismatch: the next upload would create a second folder and leave
+   * everything recorded so far somewhere nothing looks. When the rename cannot
+   * happen, the typed name stays in the field and the old one stays in storage,
+   * so nothing is lost and nothing is split.
+   */
+  private async renameRootFolderInDrive(): Promise<boolean> {
+    const typed = this.el.driveRootFolder?.value.trim();
+    const current = this.savedRootFolderName;
+    if (!typed || typed === current) return true;
+
+    const response = await sendToBackground({ type: 'RENAME_DRIVE_ROOT_FOLDER', from: current, to: typed });
+    if (response.ok === false) {
+      this.setStatus(`${response.error} The folder was not renamed, so nothing was saved.`, true);
+      return false;
+    }
+    if (response.result.status === 'taken') {
+      this.setStatus(`Drive already has a folder called "${typed}". Rename or remove it first.`, true);
+      return false;
+    }
+    return true;
   }
 
   /** Updates the inline page status message after load/save/reset actions. */
@@ -194,6 +232,8 @@ export class SettingsController {
     // Repainted here rather than only at load, so "Reset to defaults" actually
     // clears the lists instead of leaving rows the reset just erased.
     this.driveFolders.apply(settings.storage.driveFolderPresets);
+    // Kept so a later save knows which folder in Drive to rename *from*.
+    this.savedRootFolderName = settings.storage.driveRootFolderName;
     if (el.driveRootFolder) el.driveRootFolder.value = settings.storage.driveRootFolderName;
     this.localFolders.apply(settings.storage.localFolderPresets);
     if (el.anonymousDiagnostics) el.anonymousDiagnostics.checked = settings.privacy.anonymousDiagnostics;

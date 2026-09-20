@@ -117,6 +117,16 @@ export type PopupFileRecordingToDestination = {
 /** Recordings whose bytes are in the library but not yet written to Downloads. */
 /** Storage the retained library occupies, and whether it is safe from eviction. */
 export type PopupGetStorageUsage = { type: 'GET_STORAGE_USAGE' };
+/**
+ * Renames the folder every recording lives under, in Drive, to match the name
+ * the user just typed in Settings. Sent before the setting is written: folders
+ * resolve by name, so a setting that disagrees with Drive splits the library.
+ */
+export type SettingsRenameDriveRootFolder = {
+  type: 'RENAME_DRIVE_ROOT_FOLDER';
+  from: string;
+  to: string;
+};
 export type PopupListPendingLocalDeliveries = { type: 'LIST_PENDING_LOCAL_DELIVERIES' };
 /** Writes a deferred local recording into the chosen folder; null means Downloads itself. */
 export type PopupDeliverLocalRecording = {
@@ -192,6 +202,7 @@ export type PopupToBg =
   | PopupGetPlaybackManifest
   | PopupFileRecordingToDestination
   | PopupGetStorageUsage
+  | SettingsRenameDriveRootFolder
   | PopupListPendingLocalDeliveries
   | PopupDeliverLocalRecording
   | PopupPreparePlaybackSource
@@ -231,6 +242,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupListRecordingNotations ? NotationListResult :
   T extends PopupGetStorageUsage
     ? { ok: true; usage: import('./playback').StorageUsage } | { ok: false; error: string } :
+  T extends SettingsRenameDriveRootFolder
+    ? { ok: true; result: import('../background/DriveRootFolder').RootRenameResult } | { ok: false; error: string } :
   T extends PopupListPendingLocalDeliveries
     ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :

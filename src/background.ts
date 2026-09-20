@@ -17,6 +17,7 @@
 import { DriveDestinationFiler } from './background/DriveDestinationFiler';
 import { loadExtensionSettingsFromStorage } from './shared/settings';
 import { DRIVE_DEFAULT_DESTINATION_NAME } from './shared/settings';
+import { DriveRootFolder } from './background/DriveRootFolder';
 import { DriveArtifactResolver } from './background/DriveArtifactResolver';
 import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
 import { addTabRemovedListener, sendTabMessage } from './platform/chrome/tabs';
@@ -242,6 +243,12 @@ const driveFolderPorts = {
     if (status !== 200) throw new Error(`Could not create the destination folder (${status})`);
     return body;
   },
+  renameFolder: async (folderId: string, name: string) => {
+    const { status } = await driveJson(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=id,name`,
+      { method: 'PATCH', body: JSON.stringify({ name }) });
+    if (status !== 200) throw new Error(`Could not rename the folder in Google Drive (${status})`);
+  },
   moveFolder: async (folderId: string, addParent: string, removeParents: string[]) => {
     const params = new URLSearchParams({ addParents: addParent, fields: 'id,parents' });
     if (removeParents.length) params.set('removeParents', removeParents.join(','));
@@ -277,6 +284,49 @@ const fileRecordingToDestination = async (recordingId: string, presetId: string 
   );
   if (result.status === 'missing') throw new Error('This recording\u2019s folder is no longer in Google Drive');
   await history.setDriveDestination(recordingId, presetId);
+  // Filing proves there is a working token, which the update-time attempt may
+  // not have had. Deliberately not awaited: tidying old folders must never
+  // delay, or fail, the filing the user actually asked for.
+  void gatherDriveDestinationsOnce();
+};
+
+/**
+ * Renaming in Settings renames in Drive, because folders are resolved by name:
+ * a setting that disagrees with Drive would send the next upload to a second
+ * folder and leave the earlier recordings somewhere nothing looks.
+ */
+const driveRootFolder = new DriveRootFolder(driveFolderPorts);
+
+/**
+ * Pulls destinations made before destinations were nested — they were created
+ * at the top of My Drive — back inside the root folder. Driven from history so
+ * only folders that actually hold recordings are touched.
+ *
+ * A migration, not a feature: it runs itself, once, and then never again. There
+ * is nothing to operate, because a recording's folder being in the right place
+ * is not a thing anyone should have to ask for.
+ */
+const DRIVE_DESTINATIONS_GATHERED_KEY = 'driveDestinationsGathered';
+
+const gatherDriveDestinations = async () => {
+  const settings = await loadExtensionSettingsFromStorage();
+  // Paged through rather than read as one list: a destination folder is only
+  // discoverable through the recordings inside it, and history can be long.
+  const folderIds = new Set<string>();
+  let cursor: RecordingHistoryCursor | undefined;
+  do {
+    const page = await historyRepository.listPage({ limit: 100, ...(cursor ? { cursor } : {}) });
+    for (const entry of page.entries) {
+      if (!entry.deletedAt && entry.driveFolderId) folderIds.add(entry.driveFolderId);
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
+  const recordingFolderIds = [...folderIds];
+  return await driveRootFolder.gather(
+    recordingFolderIds,
+    settings.storage.driveFolderPresets.map((preset) => preset.name),
+    settings.storage.driveRootFolderName,
+  );
 };
 
 const telemetry = new TelemetryRuntime();
@@ -678,6 +728,7 @@ const controller = new RecordingController({ L, offscreen, session, telemetry, n
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
   transcripts, analyses, transcriptCapture,
   playback, playbackLeases, driveArtifacts, fileToDestination: fileRecordingToDestination,
+  renameDriveRootFolder: (from, to) => driveRootFolder.rename(from, to),
   listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
   storageUsage: () => readStorageUsage(async () => {
     const files = await listLibraryFiles(await navigator.storage.getDirectory());
@@ -740,10 +791,30 @@ chrome.runtime.onUpdateAvailable?.addListener(() => {
 
 // On update, discard any stale offscreen document so the next recording runs new code.
 // If work is in flight, defer to a reload after it finishes rather than tearing it down.
+/**
+ * Runs the gather at most once, and only counts it done when Drive actually
+ * answered: a run that failed for want of a token has tidied nothing, so
+ * recording it as done would strand the folders it was meant to move.
+ */
+const gatherDriveDestinationsOnce = async () => {
+  try {
+    const stored = await chrome.storage?.local?.get?.(DRIVE_DESTINATIONS_GATHERED_KEY);
+    if (stored?.[DRIVE_DESTINATIONS_GATHERED_KEY]) return;
+    const result = await gatherDriveDestinations();
+    if (result.failed > 0) return;
+    if (result.moved.length) L.log('Moved destination folders into the recordings folder:', result.moved.join(', '));
+    await chrome.storage?.local?.set?.({ [DRIVE_DESTINATIONS_GATHERED_KEY]: true });
+  } catch (error) {
+    // Nothing was reorganised, so the next attempt can simply try again.
+    L.warn('Could not tidy the Drive destination folders:', error);
+  }
+};
+
 chrome.runtime.onInstalled?.addListener(async (details) => {
   if (details.reason !== 'update') return;
   await sessionHydration;
   L.log('Extension updated; refreshing offscreen document');
+  void gatherDriveDestinationsOnce();
   const closed = await offscreen.closeForUpdate();
   if (!closed) pendingReload = true;
 });

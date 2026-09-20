@@ -64,6 +64,8 @@ export type MessageHandlersDeps = {
   playbackLeases?: PlaybackLeaseManager;
   driveArtifacts?: DriveArtifactResolver;
   fileToDestination?: (recordingId: string, presetId: string | null) => Promise<void>;
+  /** Renames the folder every recording lives under, so Drive matches the setting. */
+  renameDriveRootFolder?: (from: string, to: string) => Promise<import('./DriveRootFolder').RootRenameResult>;
   /** Storage the retained library occupies, and whether it is exempt from eviction. */
   storageUsage?: () => Promise<import('../shared/playback').StorageUsage>;
   /** Recordings whose bytes are retained but not yet written to the download directory. */
@@ -89,7 +91,7 @@ function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean 
   return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
 }
 
-export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, analyses, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, analyses, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, renameDriveRootFolder, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
   chrome.runtime.onMessage.addListener((
     msg: unknown,
     sender: chrome.runtime.MessageSender,
@@ -306,6 +308,11 @@ export function registerMessageHandlers({ L, session, perfDebugStore, controller
           await playbackLeases.acquire(readerTab, manifest.recordingId, keys);
         }
         sendResponse({ ok: true, manifest });
+        return;
+      }
+      if (msg.type === 'RENAME_DRIVE_ROOT_FOLDER') {
+        if (!renameDriveRootFolder) throw new Error('Google Drive is unavailable');
+        sendResponse({ ok: true, result: await renameDriveRootFolder(msg.from, msg.to) });
         return;
       }
       if (msg.type === 'GET_STORAGE_USAGE') {
