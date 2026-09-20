@@ -41,6 +41,20 @@ export type ListboxSearch = {
   noun: string;
 };
 
+/**
+ * An opt-in last row that makes a new option instead of choosing one (design
+ * 7A). Deliberately not a `role="option"`: it is an action, not a choice, so
+ * the search row never filters it away and choosing by keyboard never lands on
+ * it by accident.
+ */
+export type ListboxCreate = {
+  /** The row's own label, e.g. `New folder…`. */
+  label: string;
+  placeholder: string;
+  /** Returns the option to add and select, or null when the name was refused. */
+  onCreate: (name: string) => Promise<ListboxOption | null>;
+};
+
 export type ListboxSelectConfig = {
   /** Accessible name for the trigger and the listbox alike. */
   label: string;
@@ -51,6 +65,8 @@ export type ListboxSelectConfig = {
   className?: string;
   /** Opt-in search row for a long list; see {@link ListboxSearch}. */
   search?: ListboxSearch;
+  /** Opt-in row that creates a new option; see {@link ListboxCreate}. */
+  create?: ListboxCreate;
   onChange: (value: string) => void;
   doc?: Document;
 };
@@ -90,6 +106,10 @@ export type ListboxSelect = ListboxBinding & { readonly root: HTMLElement };
 const SEARCH_SVG =
   '<svg class="select-search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
   '<circle cx="7" cy="7" r="4.2" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2L13.5 13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
+const PLUS_SVG =
+  '<svg class="select-create-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M8 3.4v9.2M3.4 8h9.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
 
 const CHECK_SVG =
   '<svg class="select-check" width="12" height="10" viewBox="0 0 14 11" fill="none" aria-hidden="true">' +
@@ -139,14 +159,103 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
   const setOptions = (options: ListboxOption[], value?: string) => {
     binding.setOptions(options, value);
     search?.decorate();
+    // Last, after the search row's count, so the action stays below the choices.
+    creator?.mount();
   };
+  const creator = config.create
+    ? createCreator(doc, list, config.create, (option) => {
+      const existing = Array.from(select.options).map((o) => ({ value: o.value, label: o.text }));
+      setOptions([...existing, option], option.value);
+      config.onChange(option.value);
+      binding.close();
+    })
+    : null;
   setOptions(config.options, config.value);
 
   return {
     ...binding,
     setOptions,
     root,
+    close: () => { creator?.reset(); binding.close(); },
     destroy: () => { binding.destroy(); root.remove(); },
+  };
+}
+
+/**
+ * The create row, and the field it becomes. Kept outside the options so a
+ * `setOptions` rebuild can put it back at the bottom of the new list.
+ */
+function createCreator(
+  doc: Document,
+  list: HTMLElement,
+  config: ListboxCreate,
+  onCreated: (option: ListboxOption) => void,
+) {
+  const row = doc.createElement('button');
+  row.type = 'button';
+  row.className = 'select-create';
+  row.dataset.selectCreate = '';
+  row.insertAdjacentHTML('afterbegin', PLUS_SVG);
+  const rowLabel = doc.createElement('span');
+  rowLabel.textContent = config.label;
+  row.append(rowLabel);
+
+  const form = doc.createElement('div');
+  form.className = 'select-create-form';
+  form.hidden = true;
+  const input = doc.createElement('input');
+  input.type = 'text';
+  input.className = 'select-create-input';
+  input.autocomplete = 'off';
+  input.placeholder = config.placeholder;
+  input.setAttribute('aria-label', config.label);
+  form.append(input);
+
+  let busy = false;
+  const reset = () => {
+    busy = false;
+    input.value = '';
+    input.removeAttribute('aria-invalid');
+    form.hidden = true;
+    row.hidden = false;
+  };
+  const submit = async () => {
+    const name = input.value.trim();
+    if (!name || busy) return;
+    busy = true;
+    input.setAttribute('aria-busy', 'true');
+    try {
+      const option = await config.onCreate(name);
+      if (!option) {
+        // Refused — a duplicate, or one folder too many. The name stays put so
+        // it can be edited rather than retyped.
+        input.setAttribute('aria-invalid', 'true');
+        return;
+      }
+      reset();
+      onCreated(option);
+    } finally {
+      busy = false;
+      input.removeAttribute('aria-busy');
+    }
+  };
+
+  row.addEventListener('click', (event) => {
+    event.stopPropagation();
+    row.hidden = true;
+    form.hidden = false;
+    input.focus();
+  });
+  input.addEventListener('input', () => input.removeAttribute('aria-invalid'));
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); void submit(); }
+    // Escape gives the row back before the list itself may close.
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); reset(); }
+  });
+
+  return {
+    mount: () => { list.append(row, form); },
+    reset,
   };
 }
 
