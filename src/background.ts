@@ -36,7 +36,11 @@ import { registerRecordingCommands } from './background/recordingCommands';
 import { registerRecordingAutoStop } from './background/recordingAutoStop';
 import { createPhaseWatchdog } from './background/phaseWatchdog';
 import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
-import { pendingLocalDeliveries, type RecordingHistoryCursor } from './shared/recordingHistory';
+import {
+  pendingLocalDeliveries,
+  type RecordingHistoryCursor,
+  type RecordingHistoryEntry,
+} from './shared/recordingHistory';
 import { ensurePersistentStorage, readStorageUsage } from './background/storageDurability';
 import { broadcastToPopup } from './shared/messages';
 import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
@@ -73,6 +77,7 @@ import { TIMEOUTS } from './shared/timeouts';
 import { TelemetryRuntime } from './background/TelemetryRuntime';
 import { captureMayBeUnsaved, markCaptureSettled } from './background/unsavedCaptureFlag';
 import type { UnsavedRecording } from './offscreen/storage/recoverOrphanRecordings';
+import { plannedFolderRenames } from './background/driveFolderNameRepair';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
@@ -289,7 +294,7 @@ const fileRecordingToDestination = async (recordingId: string, presetId: string 
   // Filing proves there is a working token, which the update-time attempt may
   // not have had. Deliberately not awaited: tidying old folders must never
   // delay, or fail, the filing the user actually asked for.
-  void gatherDriveDestinationsOnce();
+  void tidyDriveOnce();
 };
 
 /**
@@ -847,16 +852,56 @@ chrome.runtime.onUpdateAvailable?.addListener(() => {
 // On update, discard any stale offscreen document so the next recording runs new code.
 // If work is in flight, defer to a reload after it finishes rather than tearing it down.
 /**
- * Runs the gather at most once, and only counts it done when Drive actually
- * answered: a run that failed for want of a token has tidied nothing, so
- * recording it as done would strand the folders it was meant to move.
+ * Puts right the folders named after the moment of upload rather than the
+ * meeting, from when the filename pattern and the filename builder disagreed.
+ *
+ * A rename keeps the folder id, so every stored link and file id survives it,
+ * and no bytes move. What it will touch is decided by `plannedFolderRenames`,
+ * which is pure and tested — this half only talks to Drive and to history.
  */
-const gatherDriveDestinationsOnce = async () => {
+const repairDriveFolderNames = async (): Promise<{ repaired: number; failed: number }> => {
+  const entries: RecordingHistoryEntry[] = [];
+  let cursor: RecordingHistoryCursor | undefined;
+  do {
+    const page = await historyRepository.listPage({ limit: 100, ...(cursor ? { cursor } : {}) });
+    entries.push(...page.entries);
+    cursor = page.nextCursor;
+  } while (cursor);
+
+  let repaired = 0;
+  let failed = 0;
+  for (const rename of plannedFolderRenames(entries)) {
+    try {
+      await driveFolderPorts.renameFolder(rename.folderId, rename.to);
+      // History second: a row claiming a name Drive never took would be a lie,
+      // and the next run would think there was nothing left to repair.
+      await historyRepository.update(rename.historyId, (current) => (
+        current ? { ...current, driveFolderName: rename.to } : current
+      ));
+      repaired += 1;
+    } catch (error) {
+      L.warn('Could not rename a recording folder in Google Drive:', error);
+      failed += 1;
+    }
+  }
+  if (repaired) L.log(`Renamed ${repaired} recording folder(s) after the meeting they hold`);
+  return { repaired, failed };
+};
+
+/**
+ * The one-time tidy: destinations pulled back inside the root, and folders
+ * renamed after the meeting they hold rather than the moment they were
+ * uploaded. Run at most once, and counted done only when Drive actually
+ * answered — a run that failed for want of a token has tidied nothing, so
+ * recording it as done would strand what it was meant to put right.
+ */
+const tidyDriveOnce = async () => {
   try {
     const stored = await chrome.storage?.local?.get?.(DRIVE_DESTINATIONS_GATHERED_KEY);
     if (stored?.[DRIVE_DESTINATIONS_GATHERED_KEY]) return;
     const result = await gatherDriveDestinations();
-    if (result.failed > 0) return;
+    const repair = await repairDriveFolderNames();
+    if (result.failed > 0 || repair.failed > 0) return;
     if (result.moved.length) L.log('Moved destination folders into the recordings folder:', result.moved.join(', '));
     await chrome.storage?.local?.set?.({ [DRIVE_DESTINATIONS_GATHERED_KEY]: true });
   } catch (error) {
@@ -869,7 +914,7 @@ chrome.runtime.onInstalled?.addListener(async (details) => {
   if (details.reason !== 'update') return;
   await sessionHydration;
   L.log('Extension updated; refreshing offscreen document');
-  void gatherDriveDestinationsOnce();
+  void tidyDriveOnce();
   const closed = await offscreen.closeForUpdate();
   if (!closed) pendingReload = true;
 });

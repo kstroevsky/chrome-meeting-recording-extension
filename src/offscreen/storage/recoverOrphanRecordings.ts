@@ -35,8 +35,19 @@ import { listFiles, readFileByKey, removeByKey, STAGING_DIR, type OpfsKey } from
  */
 export type OrphanCandidate = { key: OpfsKey; filename: string; lastModifiedMs: number };
 
-/** Recover at most this many orphans per launch; the rest drain on later launches. */
-const MAX_ORPHANS_PER_RUN = 25;
+/**
+ * Recover at most this many orphans per launch, unattended; the rest drain on
+ * later launches.
+ *
+ * Deliberately small. For three months the filename pattern this scan filters
+ * on did not match the names the recorder produced, so every orphan was
+ * invisible and none were ever recovered — a backlog may exist that nobody has
+ * been told about. Draining it twenty-five at a time would drop an armful of
+ * video into someone's Downloads folder with no explanation. The popup offers
+ * them back one at a time instead (8D), with a name and a choice; this path is
+ * only the backstop for a question never answered.
+ */
+const MAX_ORPHANS_PER_RUN = 3;
 /**
  * How long an orphan is left for the user to decide about (design 8D) before
  * it is recovered without asking.
