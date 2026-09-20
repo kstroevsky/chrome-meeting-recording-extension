@@ -188,6 +188,7 @@ export function renderUploadJobPanel(
   // media files: it gets its own line (d4) and is left out of the counts and
   // the size, which describe what is being uploaded.
   const notesFile = job.files.find((file) => file.kind === 'notes');
+  const transcriptFile = job.files.find((file) => file.kind === 'transcript');
   const mediaFiles = job.files.filter((file) => !file.kind);
   const missed = mediaFiles.filter(missedDrive);
   const totalBytes = mediaFiles.reduce((sum, f) => sum + (typeof f.bytes === 'number' ? f.bytes : 0), 0);
@@ -215,7 +216,7 @@ export function renderUploadJobPanel(
     el.uploadFilesLabel.textContent = state === 'saved' ? 'IN GOOGLE DRIVE' : 'PROGRESS';
   }
 
-  renderNotesLine(el, notesFile, state);
+  renderNotesLine(el, notesFile, transcriptFile, state);
   onRendered?.(job);
 
   // Retry is offered only for a job that ended with fallbacks it can still re-send.
@@ -266,22 +267,48 @@ export function renderUploadJobPanel(
       ? shareableNote(mediaFiles.length - missed.length)
       : 'Files stay on this device until they land in Drive.';
   }
-  const transcript = document.getElementById('upload-job-transcript') as HTMLButtonElement | null;
-  if (transcript) transcript.hidden = state !== 'saved';
+  renderTranscriptRow(el, transcriptFile, state);
 }
 
 /**
- * The notes line (d4): says the sidecar went up, and that it went first.
- * Shown only while uploading — once saved, the notes section itself takes over.
+ * The notes line (d4): says the sidecars went up, and that they went first.
+ * Notes are kilobytes and the transcript little more, so both land ahead of the
+ * video — the line says which of them did. Shown only while uploading; once
+ * saved, the notes section itself takes over.
  */
-function renderNotesLine(el: Partial<PopupElements>, notesFile: UploadJobFile | undefined, state: UploadPanelState): void {
+function renderNotesLine(
+  el: Partial<PopupElements>,
+  notesFile: UploadJobFile | undefined,
+  transcriptFile: UploadJobFile | undefined,
+  state: UploadPanelState,
+): void {
   const row = el.uploadJobNotesLine;
   if (!row) return;
-  row.hidden = !notesFile || state !== 'uploading';
-  if (!notesFile) return;
-  const uploaded = notesFile.status === 'uploaded';
+  row.hidden = (!notesFile && !transcriptFile) || state !== 'uploading';
+  if (row.hidden) return;
+  // Both were handed over together, so they land together; either one settling
+  // unsettled leaves the line saying it is still going up.
+  const uploaded = [notesFile, transcriptFile].every((file) => !file || file.status === 'uploaded');
   if (el.uploadJobNotesState) {
     el.uploadJobNotesState.textContent = uploaded ? 'SAVED FIRST' : 'SAVING FIRST';
   }
   row.classList.toggle('upload-notes--saved', uploaded);
+}
+
+/**
+ * The transcript row on the saved screen (n2a): what it is, and what it weighs.
+ * Present only when the recording actually has one — before transcripts were
+ * delivered as files, and for a recording captured without captions, there is
+ * nothing to open.
+ */
+function renderTranscriptRow(el: Partial<PopupElements>, transcriptFile: UploadJobFile | undefined, state: UploadPanelState): void {
+  const row = el.uploadJobTranscript;
+  if (!row) return;
+  row.hidden = !transcriptFile || state !== 'saved';
+  if (row.hidden || !transcriptFile) return;
+  const size = typeof transcriptFile.bytes === 'number' ? ` · ${formatBytes(transcriptFile.bytes).toUpperCase()}` : '';
+  const meta = row.querySelector('span');
+  if (meta) meta.textContent = `VTT${size}`;
+  row.dataset.webViewLink = transcriptFile.webViewLink ?? '';
+  row.title = transcriptFile.webViewLink ? 'Open the transcript in Google Drive' : 'Save the transcript';
 }

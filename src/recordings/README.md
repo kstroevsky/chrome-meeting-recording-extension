@@ -62,6 +62,10 @@ Without a transcript (`f6`) the saved notes take the lines' place in their detai
 
 Notes are written through `ADD_RECORDING_NOTATION` and `UPDATE_RECORDING_NOTATION` (which also moves a note's start and end). Playback reuses the player's source resolution (`player/playbackSource.playbackUrl`). The Drive `notes.vtt` is written once when recording stops, so notes added or re-timed here are not in it.
 
+## Sidecar rows
+
+A recording's notes and transcript are delivered as WebVTT files beside the media (ADR-0005, ADR-0007), so history carries them as rows with a `kind`. They are not playable tracks — the playback manifest keeps only rows with no `kind` — and in the files list they are named for what they are, `NOTES` and `VTT`, since the stream a sidecar rides says nothing about it.
+
 ## Pagination and reconciliation
 
 History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make **Load more** scan every deleted record. `loadMore()` appends only entries not already present, so a repeated response cannot duplicate a card.

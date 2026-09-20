@@ -127,6 +127,7 @@ export function createPopupController(doc: Document = document): PopupController
     uploadJobNotesLine: byId(doc, 'upload-job-notes-line'),
     uploadJobNotesLabel: byId(doc, 'upload-job-notes-label'),
     uploadJobNotesState: byId(doc, 'upload-job-notes-state'),
+    uploadJobTranscript: byId<HTMLButtonElement>(doc, 'upload-job-transcript'),
     uploadJobOpenDrive: byId<HTMLButtonElement>(doc, 'upload-job-open-drive'),
     uploadJobOpenDriveLabel: byId(doc, 'upload-job-open-drive-label'),
     uploadJobNewRecording: byId<HTMLButtonElement>(doc, 'upload-job-new-recording'),

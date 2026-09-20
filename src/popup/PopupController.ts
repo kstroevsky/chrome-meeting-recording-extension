@@ -38,7 +38,7 @@ import {
   POPUP_TOAST_TEXT,
 } from './popupMessages';
 import { setActiveView, type PopupElements } from './popupView';
-import { createRuntimeTab } from '../platform/chrome/tabs';
+import { createExternalTab, createRuntimeTab } from '../platform/chrome/tabs';
 import { sendToBackground } from '../shared/messages';
 import type {
   BgToPopup,
@@ -229,7 +229,13 @@ export class PopupController {
     this.wireUploadNavigation();
     this.detail.wire();
     this.wireDiagnosticsLink();
-    document.getElementById('upload-job-transcript')?.addEventListener('click', () => this.el.saveBtn?.click());
+    // The uploaded transcript opens where it lives; without one, the button
+    // still saves the live transcript it used to (n2a).
+    this.el.uploadJobTranscript?.addEventListener('click', (event) => {
+      const link = (event.currentTarget as HTMLElement).dataset.webViewLink;
+      if (link) void createExternalTab(link);
+      else this.el.saveBtn?.click();
+    });
     this.sessionTabs.wireEvents();
     void this.recordingsList.refreshCount();
     void this.state.refreshInitialState();
@@ -675,8 +681,11 @@ export class PopupController {
       if (extras.notes && uploadPanelState(job) === 'saved') parts.push(`${extras.notes} ${extras.notes === 1 ? 'NOTE' : 'NOTES'}`);
       sub.textContent = parts.join(' · ');
     }
-    if (this.el.uploadJobNotesLabel && extras.notes) {
-      this.el.uploadJobNotesLabel.textContent = `${extras.notes} ${extras.notes === 1 ? 'note' : 'notes'}`;
+    if (this.el.uploadJobNotesLabel) {
+      const notes = extras.notes ? `${extras.notes} ${extras.notes === 1 ? 'note' : 'notes'}` : '';
+      const transcript = job.files.some((file) => file.kind === 'transcript') ? 'transcript' : '';
+      const label = [notes, transcript].filter(Boolean).join(' + ');
+      if (label) this.el.uploadJobNotesLabel.textContent = label;
     }
   }
 

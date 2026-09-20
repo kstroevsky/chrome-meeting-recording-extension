@@ -113,6 +113,8 @@ export type PopupElements = {
   uploadJobNotesLine: HTMLElement | null;
   uploadJobNotesLabel: HTMLElement | null;
   uploadJobNotesState: HTMLElement | null;
+  /** The transcript row on the saved screen (n2a), present only with a transcript. */
+  uploadJobTranscript: HTMLButtonElement | null;
   /** Opens the job's Google Drive folder when Drive returned one. */
   uploadJobOpenDrive: HTMLButtonElement | null;
   uploadJobOpenDriveLabel: HTMLElement | null;

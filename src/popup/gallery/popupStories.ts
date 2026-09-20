@@ -80,6 +80,8 @@ function uploadJob(status: UploadJob['status'] = 'uploading', progress = 0.68): 
           ? { status: 'uploading' as const, uploadedBytes: Math.round(214 * MB * 0.67) }
           : status === 'failed' ? { status: 'fallback' as const } : { status: 'uploaded' as const }) },
       { stream: 'mic', filename: 'microphone.webm', status: status === 'failed' ? 'fallback' : 'uploaded', bytes: 12 * MB, webViewLink: 'https://drive.google.com/file/d/gallery-mic/view' },
+      // Kilobytes, and up before the media: the saved screen lists it under the files (n2a).
+      { stream: 'tab', kind: 'transcript' as const, filename: 'transcript.vtt', status: 'uploaded' as const, bytes: 34_800, webViewLink: 'https://drive.google.com/file/d/gallery-transcript/view' },
       { stream: 'self-video', filename: 'camera.webm', status: done ? 'uploaded' : status === 'uploading' ? 'uploading' : 'fallback', bytes: 58 * MB, ...(done ? { webViewLink: 'https://drive.google.com/file/d/gallery-camera/view' } : {}) },
     ],
   };
@@ -289,9 +291,10 @@ export const POPUP_STORIES: PopupStory[] = [
         uploadJobs: [{
           ...uploadJob('uploading', 0.34),
           historyId: 'gallery-history-alex',
-          // The sidecar is delivered first: d4 shows it already up, media still moving.
+          // The sidecars are delivered first: d4 shows them already up, media still moving.
           files: [
             { stream: 'tab', filename: 'notes.vtt', status: 'uploaded', bytes: 4_100, kind: 'notes' },
+            { stream: 'tab', filename: 'transcript.vtt', status: 'uploaded', bytes: 34_800, kind: 'transcript' },
             ...uploadJob('uploading', 0.34).files,
           ],
         }],

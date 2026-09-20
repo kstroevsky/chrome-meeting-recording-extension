@@ -771,7 +771,10 @@ export class RecordingsView {
 
   private fileRow(entry: RecordingHistoryEntry, file: RecordingHistoryFile): HTMLElement {
     const item = $('li', 'recording-files__row');
-    const kind = $('span', 'file-kind'); kind.textContent = streamLabel(file.stream);
+    // A sidecar rides a media stream, so its stream says nothing: it is named
+    // for what it is. VTT for the transcript, matching the popup's own label.
+    const kind = $('span', 'file-kind');
+    kind.textContent = file.kind === 'notes' ? 'NOTES' : file.kind === 'transcript' ? 'VTT' : streamLabel(file.stream);
     const name = $('span', 'file-name'); name.textContent = file.filename; name.title = file.filename;
     const destination = $('span', `file-destination${file.status === 'available' ? '' : ` file-destination--${file.status}`}`);
     destination.textContent = file.destination.toUpperCase();
