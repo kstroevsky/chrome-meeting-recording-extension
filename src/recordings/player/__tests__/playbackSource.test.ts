@@ -1,6 +1,6 @@
 /** ADR-0006 §14: the page reads OPFS directly; nothing routes bytes through JS. */
 import { createFakeOpfs } from '../../../../tests/helpers/fakeOpfs';
-import { playbackUrl, resolveTrackSource } from '../playbackSource';
+import { createPlaybackTrackResolver, playbackUrl, resolveTrackSource } from '../playbackSource';
 import type { PlaybackSource, PlaybackTrack } from '../../../shared/playback';
 
 const track = (sources: PlaybackSource[]): PlaybackTrack => ({
@@ -72,5 +72,28 @@ describe('resolveTrackSource', () => {
 
   it('reports a track with no sources as missing', async () => {
     expect(await resolveTrackSource(track([]), deps().resolver)).toEqual({ kind: 'missing' });
+  });
+});
+
+describe('createPlaybackTrackResolver', () => {
+  it('keeps Drive refresh mechanics inside the extension adapter', async () => {
+    const prepareDriveSource = jest.fn(async (_recordingId: string, _fileId: string, refresh?: boolean) =>
+      refresh ? 'https://drive.example/fresh' : 'https://drive.example/initial');
+    const resolve = createPlaybackTrackResolver({ prepareDriveSource });
+
+    const initial = await resolve('r1', track([{ kind: 'drive', fileId: 'd1' }]));
+
+    expect(initial?.url).toBe('https://drive.example/initial');
+    expect(initial?.refresh).toBeDefined();
+    await expect(initial?.refresh?.()).resolves.toMatchObject({ url: 'https://drive.example/fresh' });
+    expect(prepareDriveSource).toHaveBeenLastCalledWith('r1', 'r1:tab', true);
+  });
+
+  it('returns protected web media without an extension-specific refresh path', async () => {
+    const resolve = createPlaybackTrackResolver({});
+
+    await expect(resolve('published', track([{ kind: 'remote', url: '/media/recordings/r/tracks/t' }]))).resolves.toEqual({
+      url: '/media/recordings/r/tracks/t',
+    });
   });
 });

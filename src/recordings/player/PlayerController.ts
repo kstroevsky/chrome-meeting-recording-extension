@@ -12,19 +12,14 @@
 import { isStreamableSource, masterTrack, type PlaybackManifest, type PlaybackTrack } from '../../shared/playback';
 import type { RecordingNotation } from '../../shared/notations';
 import type { Transcript } from '../../shared/transcript';
-import { playbackUrl, type SourceResolverDeps } from './playbackSource';
 import { PlayerView, type PlayerStatus } from './PlayerView';
 import { PlaybackClock } from './PlaybackClock';
 import { adjacentMarkStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
 import { clockOffsetMs, describeTracks, toggleShown } from './playerTracks';
+import type { ResolvedTrackUrl, TrackUrlResolver } from './trackResolver';
 
 /** What survives an unreachable video, said on every such status (f16). */
 const KEPT = 'Notes and transcript are kept by the extension and are still available.';
-const DRIVE_UNREACHABLE: PlayerStatus = {
-  title: 'Could not open this recording from Google Drive.',
-  body: `It was deleted or moved, or Drive could not be reached. ${KEPT}`,
-  actions: ['folder', 'remove'],
-};
 const UNPLAYABLE: PlayerStatus = {
   title: 'This recording could not be played.',
   body: 'The file is there, but this browser could not decode it.',
@@ -32,8 +27,10 @@ const UNPLAYABLE: PlayerStatus = {
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
-  /** Extension-only. A remote-only web viewer does not need Drive authorization. */
-  prepareDriveSource?: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
+  /** Platform adapter: the synchronized player never resolves storage/auth itself. */
+  resolveTrack: TrackUrlResolver;
+  /** Optional platform-specific explanation when a track cannot be resolved. */
+  unavailableStatus?: (track: PlaybackTrack) => PlayerStatus | undefined;
   openDownloaded?: (recordingId: string, fileId: string) => void;
   /** Opens the recording's Drive folder, when it has one (f16). */
   openFolder?: (recordingId: string) => void;
@@ -43,7 +40,6 @@ export type PlayerControllerDeps = {
   getTranscript?: (recordingId: string) => Promise<Transcript | undefined>;
   /** Renames a note from its rail heading (f18); the same write the details dialog makes. */
   renameNotation?: (recordingId: string, id: string, text: string) => Promise<RecordingNotation[] | void>;
-  resolver?: SourceResolverDeps;
   warn?: (...args: unknown[]) => void;
 };
 
@@ -69,6 +65,7 @@ export class PlayerController {
   private track: PlaybackTrack | null = null;
   /** One recovery attempt per open — see `onMediaError`. */
   private refreshed = false;
+  private refresh: ResolvedTrackUrl['refresh'] | null = null;
 
   constructor(private readonly deps: PlayerControllerDeps) {
     this.view = new PlayerView({
@@ -337,20 +334,21 @@ export class PlayerController {
    * and every auxiliary, so a Drive recording gets a lease per track rather
    * than playing its picture alone.
    */
-  private async urlFor(track: PlaybackTrack, refresh = false): Promise<{ url: string; revoke?: () => void } | undefined> {
+  private async urlFor(track: PlaybackTrack): Promise<ResolvedTrackUrl | undefined> {
     if (!this.manifest) return undefined;
-    return playbackUrl(this.manifest.recordingId, track, this.deps, refresh);
+    return this.deps.resolveTrack(this.manifest.recordingId, track);
   }
 
-  private async attach(track: PlaybackTrack, refresh = false): Promise<void> {
-    const resolved = await this.urlFor(track, refresh);
+  private async attach(track: PlaybackTrack, supplied?: ResolvedTrackUrl): Promise<void> {
+    const resolved = supplied ?? await this.urlFor(track);
     if (!resolved) {
-      this.view.setStatus(track.sources.some((source) => source.kind === 'drive')
-        ? DRIVE_UNREACHABLE
-        : { title: 'This recording has no playable copy left.', body: KEPT, actions: ['remove'] });
+      this.view.setStatus(this.deps.unavailableStatus?.(track)
+        ?? { title: 'This recording has no playable copy left.', body: KEPT, actions: ['remove'] });
       return;
     }
+    this.revoke?.();
     this.revoke = resolved.revoke ?? null;
+    this.refresh = resolved.refresh ?? null;
     this.view.setStatus(null);
     this.view.video.src = resolved.url;
     this.attached.add(track.fileId);
@@ -369,23 +367,25 @@ export class PlayerController {
   }
 
   /**
-   * A Drive access token is short-lived, so the first media error on a Drive
-   * source is assumed to be expiry: re-mint once, reinstall the rule and reload
-   * from the same position. Exactly once — a retry loop against a genuinely
-   * missing file would hammer Drive.
+   * The resolver may offer one replacement URL for an expiring source. The
+   * player does not know why that URL needs replacing or which backend minted it.
    */
   private async onMediaError(): Promise<void> {
-    if (!this.track || this.refreshed) {
-      this.view.setStatus(UNPLAYABLE);
-      return;
-    }
-    if (!this.track.sources.some((source) => source.kind === 'drive')) {
+    if (!this.track || this.refreshed || !this.refresh) {
       this.view.setStatus(UNPLAYABLE);
       return;
     }
     this.refreshed = true;
     const position = this.view.video.currentTime;
-    await this.attach(this.track, true);
+    const resolved = await this.refresh().catch((error) => {
+      this.deps.warn?.('Could not refresh the playback source', error);
+      return undefined;
+    });
+    if (!resolved) {
+      this.view.setStatus(UNPLAYABLE);
+      return;
+    }
+    await this.attach(this.track, resolved);
     if (this.view.video.src) this.view.video.currentTime = position;
   }
 
@@ -441,6 +441,7 @@ export class PlayerController {
     this.manifest = null;
     this.track = null;
     this.refreshed = false;
+    this.refresh = null;
     this.view.setStatus(null);
   }
 }

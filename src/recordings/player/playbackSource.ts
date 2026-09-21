@@ -12,6 +12,7 @@
 
 import { readFileByKey, type DirectoryHandleLike } from '../../offscreen/storage/opfsLayout';
 import type { PlaybackSource, PlaybackTrack } from '../../shared/playback';
+import type { ResolvedTrackUrl, TrackUrlResolver } from './trackResolver';
 
 export type ResolvedSource =
   | { kind: 'opfs'; url: string; revoke: () => void }
@@ -35,6 +36,28 @@ export type PlaybackUrlDeps = {
   resolver?: SourceResolverDeps;
   warn?: (...args: unknown[]) => void;
 };
+
+/**
+ * Extension adapter for the player core. It owns every OPFS/Drive/source-kind
+ * decision and exposes only a playable URL plus an optional refresh operation.
+ */
+export function createPlaybackTrackResolver(deps: PlaybackUrlDeps): TrackUrlResolver {
+  return async (recordingId, track) => {
+    const resolved = await playbackUrl(recordingId, track, deps);
+    if (!resolved) return undefined;
+
+    const canRefresh = track.sources.some((source) => source.kind === 'drive');
+    return {
+      ...resolved,
+      ...(canRefresh ? {
+        refresh: async (): Promise<ResolvedTrackUrl | undefined> => {
+          const fresh = await playbackUrl(recordingId, track, deps, true);
+          return fresh ? { ...fresh } : undefined;
+        },
+      } : {}),
+    };
+  };
+}
 
 /**
  * A URL a media element can load for `track`: the retained copy when there is
