@@ -34,6 +34,7 @@ import { createPhaseWatchdog } from './background/recording/phaseWatchdog';
 import { LocalDeliveryOrchestrator } from './background/library/history/LocalDeliveryOrchestrator';
 import { isFreshRecordingStart, startKeepAlive } from './background/runtime/KeepAlive';
 import { CriticalWorkCoordinator } from './background/runtime/CriticalWorkCoordinator';
+import { UploadStatePersistence } from './background/runtime/UploadStatePersistence';
 import { ensurePersistentStorage, readStorageUsage } from './background/retention/storageDurability';
 import { broadcastToPopup } from './shared/messages';
 import { RecordingHistoryRepository } from './background/library/history/RecordingHistoryRepository';
@@ -334,56 +335,9 @@ offscreen.onStateChanged = (msg) => {
   }
 };
 
-// ADR-0004: a background upload job changed — persist it on the session (keyed by
-// id, phase-independent) so the popup can render it and "busy" reflects it.
-let uploadStatePersistenceTail: Promise<void> = Promise.resolve();
-offscreen.onUploadJobChanged = (job, telemetryRunId, telemetrySnapshot) => {
-  if (telemetryRunId) telemetry.bindUploadJob(telemetryRunId, job.id);
-  const owningRunId = telemetryRunId ?? telemetry.runIdForUploadJob(job.id);
-  if (job.status !== 'uploading' && owningRunId) {
-    if (telemetrySnapshot) {
-      void telemetry.receive(telemetrySnapshot, true)
-        .then(() => telemetry.flushRun(owningRunId, 'upload_complete'))
-        .catch(() => {});
-    } else {
-      void telemetry.recordRecoveredUploadOutcome(owningRunId, job).catch(() => {});
-    }
-  }
-  // Preserve the order emitted by the offscreen document. In particular, the
-  // initial `uploading` row must reach both durable projections before a fast
-  // terminal report is allowed to acknowledge and clear its replay outbox item.
-  const snapshot = structuredClone(job);
-  uploadStatePersistenceTail = uploadStatePersistenceTail
-    .catch(() => {})
-    .then(() => persistUploadState(snapshot));
-  void uploadStatePersistenceTail.catch(() => {});
-};
 
-async function persistUploadState(job: import('./shared/recording').UploadJob): Promise<void> {
-  try {
-    // A terminal state can trigger the popup's naming modal immediately. Persist its
-    // history entry first so the rename command can never race a missing recording.
-    if (job.status === 'uploading') {
-      session.upsertUploadJob(job);
-      await session.flush();
-      await history.applyUploadJob(job);
-    } else {
-      await history.applyUploadJob(job);
-      session.upsertUploadJob(job);
-      await session.flush();
-    }
-    // applyUploadJob creates the row if it is absent, so the duration is stamped
-    // after it. `runDurationMs` answers whether or not the session has already
-    // returned to idle, so this does not depend on message ordering.
-    if (job.historyId) await history.setDuration(job.historyId, session.runDurationMs(job.historyId));
-    if (job.status !== 'uploading') await offscreen.acknowledgeUploadState?.(job.id);
-  } catch (error) {
-    // Do not acknowledge a terminal outbox item unless both persisted views are
-    // durable. A reconnect will replay it and converge idempotently.
-    L.warn('Could not persist upload state:', error);
-  }
-}
-
+const uploadStatePersistence = new UploadStatePersistence(session, history, offscreen, telemetry, L);
+offscreen.onUploadJobChanged = (...args) => uploadStatePersistence.handleChanged(...args);
 // Liveness backstop for an orphaned `starting`/`stopping` (ADR-0003). Complements
 // the epoch fence: the fence drops *stale* status, this rescues *missing* status —
 // a session left mid-start or mid-stop when the worker died and the offscreen is
