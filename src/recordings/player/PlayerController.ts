@@ -32,7 +32,8 @@ const UNPLAYABLE: PlayerStatus = {
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
-  prepareDriveSource: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
+  /** Extension-only. A remote-only web viewer does not need Drive authorization. */
+  prepareDriveSource?: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
   openDownloaded?: (recordingId: string, fileId: string) => void;
   /** Opens the recording's Drive folder, when it has one (f16). */
   openFolder?: (recordingId: string) => void;

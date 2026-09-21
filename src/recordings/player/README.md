@@ -20,6 +20,7 @@ The player is handed a `PlaybackManifest` ([`shared/playback.ts`](../../shared/p
 | :--- | :--- | :--- |
 | `opfs` | `getFile()` → `createObjectURL` | Preferred. Read in the page, never in the worker. |
 | `drive` | background installs a tab-scoped DNR rule, returns the URL | The page never receives the token. |
+| `remote` | protected HTTP endpoint | Used by published shares; the server/session gates every media request. |
 | `download` | not playable | `chrome.downloads` exposes no bytes; offered as "open the downloaded file". |
 
 Sources are preference-ordered by the manifest, and a miss falls through to the next rather than failing the track.

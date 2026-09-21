@@ -1,6 +1,6 @@
 /** ADR-0006 §14: the page reads OPFS directly; nothing routes bytes through JS. */
 import { createFakeOpfs } from '../../../../tests/helpers/fakeOpfs';
-import { resolveTrackSource } from '../playbackSource';
+import { playbackUrl, resolveTrackSource } from '../playbackSource';
 import type { PlaybackSource, PlaybackTrack } from '../../../shared/playback';
 
 const track = (sources: PlaybackSource[]): PlaybackTrack => ({
@@ -48,6 +48,16 @@ describe('resolveTrackSource', () => {
     const d = deps();
     const resolved = await resolveTrackSource(track([{ kind: 'drive', fileId: 'd1' }]), d.resolver);
     expect(resolved).toEqual({ kind: 'unsupported', reason: 'drive-not-wired' });
+  });
+
+  it('passes a protected remote endpoint straight to the media element', async () => {
+    const resolved = await resolveTrackSource(track([{ kind: 'remote', url: '/media/share/abc/tab' }]), deps().resolver);
+    expect(resolved).toEqual({ kind: 'remote', url: '/media/share/abc/tab' });
+  });
+
+  it('does not require extension Drive dependencies for remote playback', async () => {
+    await expect(playbackUrl('published', track([{ kind: 'remote', url: '/media/share/abc/tab' }]), {}))
+      .resolves.toEqual({ url: '/media/share/abc/tab' });
   });
 
   it('prefers OPFS over Drive when both exist', async () => {
