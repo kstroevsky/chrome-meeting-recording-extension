@@ -10,11 +10,13 @@ jest.mock('../../shared/messages', () => ({
 }));
 
 import {
-  isFreshRecordingStart,
   registerSaveHandler,
+} from '../library/history/LocalDeliveryRuntime';
+import {
+  isFreshRecordingStart,
   startKeepAlive,
   stopKeepAlive,
-} from '../runtime/sessionLifecycle';
+} from '../runtime/KeepAlive';
 import { awaitDownloadSettled, downloadFile } from '../../platform/chrome/downloads';
 import { pokeRuntime } from '../../platform/chrome/runtime';
 import { broadcastToPopup } from '../../shared/messages';

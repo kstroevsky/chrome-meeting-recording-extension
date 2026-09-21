@@ -1,15 +1,15 @@
-/**
- * @file background/runtime/sessionLifecycle.ts
- *
- * Manages the service-worker keep-alive loop and perf diagnostics clearing
- * that are driven by recording session phase transitions.
- */
-
-import { recordingHistoryFileId } from '../../shared/recordingHistory';
-import { pokeRuntime } from '../../platform/chrome/runtime';
-import { awaitDownloadSettled, downloadFile } from '../../platform/chrome/downloads';
-import type { RecordingArtifactKind, RecordingStream } from '../../shared/recording';
-import { awaitsLocalDelivery, type RecordingHistoryFile } from '../../shared/recordingHistory';
+/** Owns OFFSCREEN_SAVE delivery into Chrome Downloads and deferred local delivery. */
+import { awaitDownloadSettled, downloadFile } from '../../../platform/chrome/downloads';
+import { broadcastToPopup } from '../../../shared/messages';
+import { debugPerf, nowMs, roundMs } from '../../../shared/perf';
+import type { RecordingArtifactKind, RecordingStream } from '../../../shared/recording';
+import {
+  awaitsLocalDelivery,
+  recordingHistoryFileId,
+  type RecordingHistoryFile,
+} from '../../../shared/recordingHistory';
+import type { OffscreenManager } from '../../offscreen/OffscreenManager';
+import type { RecordingHistoryService } from './RecordingHistoryService';
 
 /**
  * What actually happened to one artifact. Reported rather than swallowed,
@@ -21,26 +21,6 @@ export type DeliveryOutcome =
   | { status: 'interrupted'; downloadId?: number }
   | { status: 'timeout'; downloadId?: number }
   | { status: 'not-started'; error: string };
-import { isBusyPhase, type RecordingPhase } from '../../shared/recording';
-import { broadcastToPopup } from '../../shared/messages';
-import type { OffscreenManager } from '../offscreen/OffscreenManager';
-import { debugPerf, nowMs, roundMs } from '../../shared/perf';
-import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
-
-let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
-
-/** Keeps the MV3 service worker alive while recording or upload work is active. */
-export function startKeepAlive() {
-  if (keepAliveTimer) return;
-  keepAliveTimer = setInterval(() => pokeRuntime(), 20_000);
-}
-
-/** Stops the keep-alive loop once no busy work remains. */
-export function stopKeepAlive() {
-  if (!keepAliveTimer) return;
-  clearInterval(keepAliveTimer);
-  keepAliveTimer = null;
-}
 
 /**
  * Wires the offscreen OFFSCREEN_SAVE callback, triggering a background-side
@@ -224,15 +204,4 @@ export function registerSaveHandler(
   };
 
   return { deliverDeferred };
-}
-
-/**
- * True when a phase transition begins a fresh recording, so the previous run's
- * diagnostics should be reset. Clearing at start — rather than on idle — lets a
- * finished run's diagnostics survive until the next recording begins, so the
- * debug dashboard can be opened and exported after the fact even if it was never
- * open during the run.
- */
-export function isFreshRecordingStart(previousPhase: RecordingPhase, nextPhase: RecordingPhase): boolean {
-  return !isBusyPhase(previousPhase) && isBusyPhase(nextPhase);
 }

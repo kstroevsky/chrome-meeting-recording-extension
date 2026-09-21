@@ -59,7 +59,7 @@ describe('background notation commands', () => {
     // they still need draining — but they are short, and no longer behind the
     // bootstrap in the same queue.
     for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
-    ({ stopKeepAlive: stopBackgroundKeepAlive } = await import('../src/background/runtime/sessionLifecycle'));
+    ({ stopKeepAlive: stopBackgroundKeepAlive } = await import('../src/background/runtime/KeepAlive'));
     return (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
   }
 

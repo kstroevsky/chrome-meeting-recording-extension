@@ -35,7 +35,8 @@ import { createChromeCpuSampler } from './background/observability/perf/CpuSampl
 import { registerRecordingCommands } from './background/recording/recordingCommands';
 import { registerRecordingAutoStop } from './background/recording/recordingAutoStop';
 import { createPhaseWatchdog } from './background/recording/phaseWatchdog';
-import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/runtime/sessionLifecycle';
+import { registerSaveHandler } from './background/library/history/LocalDeliveryRuntime';
+import { isFreshRecordingStart, startKeepAlive, stopKeepAlive } from './background/runtime/KeepAlive';
 import {
   pendingLocalDeliveries,
   type RecordingHistoryCursor,
