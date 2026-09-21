@@ -19,7 +19,7 @@
  */
 
 import type { PublishedPlaybackManifest } from '../shared/sharing';
-import type { SharePublicationApi } from './SharePublisher';
+import type { SharePublicationApi } from './SharePublicationCoordinator';
 import type { ShareUploadSession, ShareUploadTransport } from './ShareUploadManager';
 
 export type ShareServiceClientDeps = {
@@ -27,6 +27,17 @@ export type ShareServiceClientDeps = {
   /** Authentication/session headers supplied by the eventual account layer. */
   headers?: () => HeadersInit | Promise<HeadersInit>;
 };
+
+export class ShareServiceRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'ShareServiceRequestError';
+  }
+}
 
 export class ShareServiceClient implements SharePublicationApi, ShareUploadTransport {
   private readonly origin: string;
@@ -140,7 +151,11 @@ export class ShareServiceClient implements SharePublicationApi, ShareUploadTrans
     if (!options.statuses.includes(response.status)) {
       const detail = await response.text().catch(() => '');
       const suffix = detail.trim() ? `: ${detail.trim().slice(0, 240)}` : '';
-      throw new Error(`Sharing service ${options.method} ${path} failed (${response.status})${suffix}`);
+      throw new ShareServiceRequestError(
+        `Sharing service ${options.method} ${path} failed (${response.status})${suffix}`,
+        response.status,
+        responseErrorCode(detail),
+      );
     }
     return response;
   }
@@ -200,4 +215,12 @@ function numberField(value: unknown, field: string): number | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const candidate = (value as Record<string, unknown>)[field];
   return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : undefined;
+}
+
+function responseErrorCode(detail: string): string | undefined {
+  try {
+    return stringField(JSON.parse(detail), 'code');
+  } catch {
+    return undefined;
+  }
 }

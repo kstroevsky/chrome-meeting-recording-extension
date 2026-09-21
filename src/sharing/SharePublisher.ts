@@ -14,16 +14,10 @@ import {
   type PublishRecordingOptions,
   type ShareManifestBuilderDeps,
 } from './PublishedManifestBuilder';
-import type { ShareUploadManager } from './ShareUploadManager';
-
-export interface SharePublicationApi {
-  createShare(manifest: PublishedPlaybackManifest): Promise<void>;
-  finalizeShare(shareId: string): Promise<{ shareUrl: string }>;
-}
+import type { SharePublicationCoordinator } from './SharePublicationCoordinator';
 
 export type SharePublisherDeps = {
-  api: SharePublicationApi;
-  uploads: Pick<ShareUploadManager, 'upload' | 'clearShare'>;
+  publications: Pick<SharePublicationCoordinator, 'publishNew'>;
   recordingBuilder?: PublishedManifestBuilderDeps;
   manifestBuilder?: ShareManifestBuilderDeps;
 };
@@ -46,11 +40,10 @@ export class SharePublisher {
       buildPublishedRecording(recording, options, this.deps.recordingBuilder));
     const manifest = buildPublishedManifest(plans, this.deps.manifestBuilder);
 
-    // `manifest` is the only metadata object allowed to cross this boundary.
-    await this.deps.api.createShare(structuredClone(manifest));
-    await this.deps.uploads.upload(manifest.id, plans);
-    const { shareUrl } = await this.deps.api.finalizeShare(manifest.id);
-    await this.deps.uploads.clearShare(manifest.id);
-    return { manifest, shareUrl };
+    const publication = await this.deps.publications.publishNew({ manifest, plans });
+    if (publication.status !== 'active' || !publication.shareUrl) {
+      throw new Error(`Share ${manifest.id} did not become active`);
+    }
+    return { manifest: publication.manifest, shareUrl: publication.shareUrl };
   }
 }
