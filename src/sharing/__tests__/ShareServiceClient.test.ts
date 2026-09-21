@@ -1,0 +1,93 @@
+import type { PublishedPlaybackManifest } from '../../shared/sharing';
+import { ShareServiceClient } from '../ShareServiceClient';
+
+const manifest: PublishedPlaybackManifest = {
+  id: 'share/one',
+  createdAt: 1,
+  recordings: [],
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  const text = JSON.stringify(body);
+  return mockResponse(text, status, async () => body);
+}
+
+function mockResponse(body = '', status = 200, json?: () => Promise<unknown>): Response {
+  return {
+    status,
+    text: async () => body,
+    json: json ?? (async () => JSON.parse(body)),
+  } as Response;
+}
+
+describe('ShareServiceClient', () => {
+  it('creates a draft with the caller-owned share id and auth headers', async () => {
+    const fetcher = jest.fn(async () => mockResponse('', 201));
+    const client = new ShareServiceClient('https://share.example/', {
+      fetch: fetcher as typeof fetch,
+      headers: async () => ({ Authorization: 'Bearer owner-token' }),
+    });
+
+    await client.createShare(manifest);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = (fetcher as jest.Mock).mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://share.example/api/shares/share%2Fone');
+    expect(init.method).toBe('PUT');
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer owner-token');
+    expect(JSON.parse(String(init.body))).toEqual(manifest);
+  });
+
+  it('creates an upload session, sends an idempotent ranged chunk, then completes it', async () => {
+    const fetcher = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ uploadId: 'upl/1', chunkSize: 4, offset: 2 }, 201))
+      .mockResolvedValueOnce(mockResponse('', 204))
+      .mockResolvedValueOnce(mockResponse('', 204));
+    const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
+
+    await expect(client.beginTrackUpload({
+      shareId: 's', recordingId: 'r', trackId: 't', mimeType: 'video/webm', bytes: 10,
+    })).resolves.toEqual({ uploadId: 'upl/1', chunkSize: 4, offset: 2 });
+    await client.uploadTrackChunk({ uploadId: 'upl/1', offset: 4, totalBytes: 10, chunk: new Blob(['1234']) });
+    await client.completeTrackUpload({ uploadId: 'upl/1', totalBytes: 10 });
+
+    expect(fetcher.mock.calls[1][0]).toBe('https://share.example/api/share-uploads/upl%2F1/chunks/4');
+    const chunkHeaders = new Headers(fetcher.mock.calls[1][1].headers);
+    expect(chunkHeaders.get('content-range')).toBe('bytes 4-7/10');
+    expect(fetcher.mock.calls[2][0]).toBe('https://share.example/api/share-uploads/upl%2F1/complete');
+  });
+
+  it('finalizes and revokes a share', async () => {
+    const fetcher = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ shareUrl: 'https://share.example/s/abc' }))
+      .mockResolvedValueOnce(mockResponse('', 204));
+    const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
+
+    await expect(client.finalizeShare('abc')).resolves.toEqual({ shareUrl: 'https://share.example/s/abc' });
+    await client.revokeShare('abc');
+
+    expect(fetcher.mock.calls.map((call) => [call[0], call[1].method])).toEqual([
+      ['https://share.example/api/shares/abc/finalize', 'POST'],
+      ['https://share.example/api/shares/abc', 'DELETE'],
+    ]);
+  });
+
+  it('fails closed on non-HTTPS or path-bearing service URLs and malformed sessions', async () => {
+    expect(() => new ShareServiceClient('http://share.example')).toThrow('bare HTTPS origin');
+    expect(() => new ShareServiceClient('https://share.example/api')).toThrow('bare HTTPS origin');
+
+    const client = new ShareServiceClient('https://share.example', {
+      fetch: (async () => jsonResponse({ uploadId: 'u', chunkSize: 0 }, 201)) as typeof fetch,
+    });
+    await expect(client.beginTrackUpload({
+      shareId: 's', recordingId: 'r', trackId: 't', mimeType: 'video/webm', bytes: 10,
+    })).rejects.toThrow('invalid chunk size');
+  });
+
+  it('includes bounded server error text without accepting an unexpected status', async () => {
+    const client = new ShareServiceClient('https://share.example', {
+      fetch: (async () => mockResponse('not authorized', 401)) as typeof fetch,
+    });
+    await expect(client.createShare(manifest)).rejects.toThrow('failed (401): not authorized');
+  });
+});
