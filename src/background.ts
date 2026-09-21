@@ -14,7 +14,6 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
-import { loadExtensionSettingsFromStorage } from './shared/settings';
 import { DriveLibraryCoordinator } from './background/drive/DriveLibraryCoordinator';
 import { PlaybackLeaseManager } from './background/playback/PlaybackLeaseManager';
 import { addTabRemovedListener, sendTabMessage } from './platform/chrome/tabs';
@@ -32,13 +31,9 @@ import { createChromeCpuSampler } from './background/observability/perf/CpuSampl
 import { registerRecordingCommands } from './background/recording/recordingCommands';
 import { registerRecordingAutoStop } from './background/recording/recordingAutoStop';
 import { createPhaseWatchdog } from './background/recording/phaseWatchdog';
-import { registerSaveHandler } from './background/library/history/LocalDeliveryRuntime';
+import { LocalDeliveryOrchestrator } from './background/library/history/LocalDeliveryOrchestrator';
 import { isFreshRecordingStart, startKeepAlive } from './background/runtime/KeepAlive';
 import { CriticalWorkCoordinator } from './background/runtime/CriticalWorkCoordinator';
-import {
-  pendingLocalDeliveries,
-  type RecordingHistoryCursor,
-} from './shared/recordingHistory';
 import { ensurePersistentStorage, readStorageUsage } from './background/retention/storageDurability';
 import { broadcastToPopup } from './shared/messages';
 import { RecordingHistoryRepository } from './background/library/history/RecordingHistoryRepository';
@@ -416,101 +411,11 @@ const phaseWatchdog = createPhaseWatchdog({
   },
 });
 
-const { deliverDeferred } = registerSaveHandler(
-  offscreen, L, history,
-  (historyId) => session.runDurationMs(historyId),
-  async () => {
-    try {
-      return (await loadExtensionSettingsFromStorage()).storage.localFolderPresets.length;
-    } catch {
-      return 0;
-    }
-  },
-  () => { void scheduleAbandonedDeliverySweep(); },
-);
-
-/**
- * How long a folder prompt may go unanswered before the recording is written to
- * the download directory anyway.
- *
- * A prompt can be abandoned in a way nothing else notices: the popup was open
- * when we asked, so we deferred, and then it closed without answering. No
- * further broadcast is coming, and the startup reconciler runs once per browser
- * session — so without this the file would wait for a browser restart. Chrome
- * clamps sub-minute alarms, so the real delay is about a minute; that is a wait,
- * not a loss, and answering the prompt is always faster.
- */
-const ABANDONED_DELIVERY_ALARM = 'local-delivery-timeout';
-
-const scheduleAbandonedDeliverySweep = async (): Promise<void> => {
-  try {
-    await chrome.alarms?.create?.(ABANDONED_DELIVERY_ALARM, { delayInMinutes: 0.5 });
-  } catch (error) {
-    L.warn('Could not schedule the local delivery sweep:', error);
-  }
-};
-
-chrome.alarms?.onAlarm?.addListener((alarm) => {
-  if (alarm.name === ABANDONED_DELIVERY_ALARM) void deliverAbandonedLocalRecordings();
-});
-
-/** Entries whose bytes are in the library but not yet written to Downloads. */
-const listPendingLocalDeliveries = async (): Promise<{ id: string; name: string }[]> => {
-  // Paged to exhaustion: this is reconciliation, and a recording past an
-  // arbitrary cut-off would simply never be written.
-  const pending: { id: string; name: string }[] = [];
-  let cursor: RecordingHistoryCursor | undefined;
-  for (let page = 0; page < 200; page += 1) {
-    const result = await historyRepository.listPage({ limit: 100, ...(cursor ? { cursor } : {}) });
-    for (const entry of result.entries) {
-      if (pendingLocalDeliveries(entry).length > 0) pending.push({ id: entry.id, name: entry.name });
-    }
-    if (!result.nextCursor) break;
-    cursor = result.nextCursor;
-  }
-  return pending;
-};
-
-const deliverLocalRecording = async (recordingId: string, folderId: string | null): Promise<void> => {
-  const entry = await historyRepository.get(recordingId);
-  if (!entry || entry.deletedAt) throw new Error('This recording is no longer available');
-  let folder: string | undefined;
-  if (folderId) {
-    const settings = await loadExtensionSettingsFromStorage();
-    folder = settings.storage.localFolderPresets.find((preset) => preset.id === folderId)?.name;
-    if (!folder) throw new Error('That folder no longer exists');
-  }
-  const outcomes = await deliverDeferred(entry, folder);
-  // Stamped only when every file actually completed. A failed, interrupted or
-  // still-unsettled download would otherwise leave history claiming a folder
-  // that has nothing in it — and the label is not something the user can check
-  // against the file, because we do not show them the path.
-  const allLanded = outcomes.length > 0 && outcomes.every((outcome) => outcome.status === 'complete');
-  if (allLanded) await history.setLocalFolder(recordingId, folder);
-  else if (outcomes.some((outcome) => outcome.status !== 'complete')) {
-    L.warn(`Local delivery for ${recordingId} did not fully complete:`,
-      outcomes.map((outcome) => outcome.status).join(', '));
-  }
-};
-
-/**
- * Anything still owed to the download directory is written on startup, with no
- * folder. A prompt the user never answered must cost them a delay, not a file.
- */
-const deliverAbandonedLocalRecordings = async (): Promise<void> => {
-  try {
-    for (const pending of await listPendingLocalDeliveries()) {
-      const entry = await historyRepository.get(pending.id);
-      if (entry) await deliverDeferred(entry);
-    }
-  } catch (error) {
-    L.warn('Reconciling deferred local deliveries failed:', error);
-  }
-};
-
 // The recording control plane: every start/stop trigger drives this one seam.
+const localDelivery = new LocalDeliveryOrchestrator(offscreen, history, historyRepository, session, L);
 const unsavedRecovery = new UnsavedRecordingRecovery(offscreen, session, L);
 const controller = new RecordingController({ L, offscreen, session, telemetry, notations, transcripts, transcriptCapture });
+chrome.alarms?.onAlarm?.addListener((alarm) => localDelivery.handleAlarm(alarm));
 
 // Register all popup message handlers.
 registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: createChromeCpuSampler(), history, notations,
@@ -520,7 +425,8 @@ registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: cr
   renameDriveRootFolder: (from, to) => driveLibrary.renameRootFolder(from, to),
   listUnsavedRecordings: () => unsavedRecovery.list(),
   resolveUnsavedRecording: (key, action, name) => unsavedRecovery.resolve(key, action, name),
-  listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
+  listPendingLocal: () => localDelivery.listPending(),
+  deliverLocal: (recordingId, folderId) => localDelivery.deliver(recordingId, folderId),
   storageUsage: () => readStorageUsage(async () => {
     const files = await listLibraryFiles(await navigator.storage.getDirectory());
     return files.reduce((total, file) => total + file.sizeBytes, 0);
@@ -676,7 +582,7 @@ export const sessionHydration = (async () => {
   // made to open the history database just to be told there is nothing to do.
   try {
     if (await hasLibraryDirectory(await navigator.storage.getDirectory())) {
-      await deliverAbandonedLocalRecordings();
+      await localDelivery.reconcileAbandoned();
     }
   } catch (e) {
     L.warn('Reconciling deferred local deliveries failed (non-fatal):', e);
