@@ -1,0 +1,191 @@
+import { fetchDriveTokenWithFallback } from '../drive/driveAuth';
+import { handleMeetingEndedMessage } from '../recording/recordingAutoStop';
+import { isE2EMockDriveBuild } from '../../shared/build';
+import type { PerfEventEntry } from '../../shared/perf';
+import {
+  isE2EDriveFetchMessage,
+  isMeetingEndedMessage,
+  isPerfEventMessage,
+  isTranscriptCaptureStateRequest,
+  isTranscriptUtterancesMessage,
+  type PopupToBg,
+} from '../../shared/protocol';
+import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
+
+export function handleSystemIngress(
+  msg: unknown,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: RuntimeSendResponse,
+  deps: MessageHandlersDeps,
+): boolean | undefined {
+  const {
+    L,
+    controller,
+    cpuSampler,
+    perfDebugStore,
+    session,
+    telemetry,
+    transcriptCapture,
+  } = deps;
+
+  if (msg && typeof msg === 'object' && (msg as any).type === 'TELEMETRY_SNAPSHOT') {
+    void telemetry?.receive((msg as any).snapshot, (msg as any).critical === true)
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (msg && typeof msg === 'object' && (msg as any).type === 'TELEMETRY_FLUSH') {
+    void telemetry?.receiveFlush((msg as any).snapshot, (msg as any).reason)
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (
+    (typeof __E2E_MOCK_DRIVE_BUILD__ !== 'undefined'
+      ? __E2E_MOCK_DRIVE_BUILD__
+      : isE2EMockDriveBuild())
+    && isE2EDriveFetchMessage(msg)
+  ) {
+    if (!msg.url.startsWith('https://www.googleapis.com/')) {
+      sendResponse({ ok: false, error: 'E2E Drive bridge rejected non-Google URL' });
+      return false;
+    }
+    fetch(msg.url, {
+      method: msg.method,
+      headers: msg.headers,
+      body: msg.body,
+    })
+      .then(async (response) => {
+        const headers: Record<string, string> = {};
+        response.headers.forEach((value, name) => {
+          headers[name] = value;
+        });
+        sendResponse({
+          ok: true,
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+          body: await response.text(),
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
+  if (isPerfEventMessage(msg)) {
+    const entry = msg.entry as PerfEventEntry;
+    perfDebugStore.record(entry);
+    if (cpuSampler && entry.scope === 'runtime' && entry.event === 'sample') {
+      void cpuSampler.sample().then((cpuPercent) => {
+        if (cpuPercent != null) {
+          perfDebugStore.record({
+            source: entry.source,
+            scope: 'runtime',
+            event: 'cpu',
+            ts: Date.now(),
+            fields: { cpuPercent },
+          });
+        }
+      });
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (isTranscriptUtterancesMessage(msg)) {
+    void transcriptCapture?.receive(msg.runId, msg.utterances)
+      .catch((error) => L.warn('Could not record pushed caption utterances:', error));
+    return false;
+  }
+  if (isTranscriptCaptureStateRequest(msg)) {
+    sendResponse(transcriptCapture?.captureState() ?? { active: false });
+    return false;
+  }
+  if (isMeetingEndedMessage(msg)) {
+    handleMeetingEndedMessage(msg, sender, { session, controller })
+      .then((result) => sendResponse(result))
+      .catch((error: any) => sendResponse({
+        ok: false,
+        stopped: false,
+        error: error?.message || String(error),
+      }));
+    return true;
+  }
+  return undefined;
+}
+
+export function handleDriveTokenMessage(
+  msg: PopupToBg,
+  sendResponse: RuntimeSendResponse,
+  deps: MessageHandlersDeps,
+): boolean | undefined {
+  if (msg.type !== 'GET_DRIVE_TOKEN') return undefined;
+  fetchDriveTokenWithFallback({ refresh: msg.refresh === true })
+    .then((result) => {
+      if (!result.ok) deps.L.warn('GET_DRIVE_TOKEN failed:', result.error);
+      sendResponse(result);
+    })
+    .catch((error: any) => {
+      const message = error?.message || String(error);
+      deps.L.error('GET_DRIVE_TOKEN unexpected failure:', message);
+      sendResponse({ ok: false, error: message });
+    });
+  return true;
+}
+
+export async function handleSystemPopupMessage(
+  msg: PopupToBg,
+  sendResponse: RuntimeSendResponse,
+  deps: MessageHandlersDeps,
+): Promise<boolean> {
+  if (msg.type === 'RENAME_DRIVE_ROOT_FOLDER') {
+    if (!deps.renameDriveRootFolder) throw new Error('Google Drive is unavailable');
+    sendResponse({
+      ok: true,
+      result: await deps.renameDriveRootFolder(msg.from, msg.to),
+    });
+    return true;
+  }
+  if (msg.type === 'GET_STORAGE_USAGE') {
+    if (!deps.storageUsage) throw new Error('Storage usage is unavailable');
+    sendResponse({ ok: true, usage: await deps.storageUsage() });
+    return true;
+  }
+  if (msg.type === 'LIST_UNSAVED_RECORDINGS') {
+    sendResponse({
+      ok: true,
+      recordings: (await deps.listUnsavedRecordings?.()) ?? [],
+    });
+    return true;
+  }
+  if (msg.type === 'RESOLVE_UNSAVED_RECORDING') {
+    if (!deps.resolveUnsavedRecording) throw new Error('Recovery is unavailable');
+    await deps.resolveUnsavedRecording(msg.key, msg.action, msg.name);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'LIST_PENDING_LOCAL_DELIVERIES') {
+    sendResponse({
+      ok: true,
+      recordings: (await deps.listPendingLocal?.()) ?? [],
+    });
+    return true;
+  }
+  if (msg.type === 'DELIVER_LOCAL_RECORDING') {
+    if (!deps.deliverLocal) throw new Error('Local delivery is unavailable');
+    await deps.deliverLocal(msg.recordingId, msg.folderId);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'FILE_RECORDING_TO_DESTINATION') {
+    if (!deps.fileToDestination) throw new Error('Drive destinations are unavailable');
+    await deps.fileToDestination(msg.recordingId, msg.presetId);
+    sendResponse({ ok: true });
+    return true;
+  }
+  return false;
+}
