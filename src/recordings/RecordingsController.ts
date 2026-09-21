@@ -2,6 +2,9 @@ import { createExternalTab } from '../platform/chrome/tabs';
 import { loadExtensionSettingsFromStorage } from '../shared/settings';
 import { sendToBackground } from '../shared/messages';
 import { PlayerController } from './player/PlayerController';
+import { createPlaybackTrackResolver } from './player/playbackSource';
+import type { PlayerStatus } from './player/PlayerView';
+import type { PlaybackTrack } from '../shared/playback';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
 import { RecordingsView } from './RecordingsView';
 
@@ -82,6 +85,15 @@ export class RecordingsController {
     warn: (...args: unknown[]) => console.warn('[recordings]', ...args),
   };
 
+  private unavailablePlaybackStatus(track: PlaybackTrack): PlayerStatus | undefined {
+    if (!track.sources.some((source) => source.kind === 'drive')) return undefined;
+    return {
+      title: 'Could not open this recording from Google Drive.',
+      body: 'It was deleted or moved, or Drive could not be reached. Notes and transcript are kept by the extension and are still available.',
+      actions: ['folder', 'remove'],
+    };
+  }
+
   /** A recording's persisted transcript (ADR-0007), for the player's rail and the note editor. */
   async transcript(id: string) {
     const response = await sendToBackground({ type: 'GET_RECORDING_TRANSCRIPT', recordingId: id });
@@ -102,7 +114,10 @@ export class RecordingsController {
     try {
       this.player?.close();
       const player = new PlayerController({
-        ...this.playback,
+        getManifest: this.playback.getManifest,
+        resolveTrack: createPlaybackTrackResolver(this.playback),
+        unavailableStatus: (track) => this.unavailablePlaybackStatus(track),
+        warn: this.playback.warn,
         getTranscript: (id) => this.transcript(id),
         // f16: the way to the folder the video should have been in, and the way out of history.
         openFolder: (id) => {

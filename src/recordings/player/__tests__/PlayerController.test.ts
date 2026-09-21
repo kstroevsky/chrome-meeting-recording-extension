@@ -3,8 +3,10 @@
  * Every one of these ends in an honest message rather than a silent dead player.
  */
 import { PlayerController, type PlayerControllerDeps } from '../PlayerController';
+import { createPlaybackTrackResolver, type PlaybackUrlDeps } from '../playbackSource';
+import type { PlayerStatus } from '../PlayerView';
 import { createFakeOpfs } from '../../../../tests/helpers/fakeOpfs';
-import type { PlaybackManifest, PlaybackSource } from '../../../shared/playback';
+import type { PlaybackManifest, PlaybackSource, PlaybackTrack } from '../../../shared/playback';
 
 const manifest = (sources: PlaybackSource[], extra: Partial<PlaybackManifest> = {}): PlaybackManifest => ({
   recordingId: 'r1',
@@ -20,19 +22,39 @@ const manifest = (sources: PlaybackSource[], extra: Partial<PlaybackManifest> = 
   ...extra,
 });
 
-function make(over: Partial<PlayerControllerDeps> = {}) {
+type PlayerTestOverrides = Omit<Partial<PlayerControllerDeps>, 'resolveTrack'>
+  & Partial<PlaybackUrlDeps>
+  & { resolveTrack?: PlayerControllerDeps['resolveTrack'] };
+
+const unavailableStatus = (track: PlaybackTrack): PlayerStatus | undefined =>
+  track.sources.some((source) => source.kind === 'drive')
+    ? {
+        title: 'Could not open this recording from Google Drive.',
+        body: 'It was deleted or moved, or Drive could not be reached. Notes and transcript are kept by the extension and are still available.',
+        actions: ['folder', 'remove'],
+      }
+    : undefined;
+
+function make(over: PlayerTestOverrides = {}) {
   const opfs = createFakeOpfs();
-  const prepareDriveSource = jest.fn(async () => 'https://www.googleapis.com/drive/v3/files/d1?alt=media');
-  const controller = new PlayerController({
-    getManifest: jest.fn(async () => manifest([])),
-    prepareDriveSource,
-    warn: jest.fn(),
-    resolver: {
+  const defaultPrepareDriveSource = jest.fn(async () => 'https://www.googleapis.com/drive/v3/files/d1?alt=media');
+  const {
+    prepareDriveSource = defaultPrepareDriveSource,
+    resolver = {
       getRoot: async () => opfs.root,
       createObjectURL: (file: Blob) => `blob:${(file as File).size}`,
       revokeObjectURL: () => {},
     },
-    ...over,
+    resolveTrack,
+    warn = jest.fn(),
+    ...controllerOverrides
+  } = over;
+  const controller = new PlayerController({
+    getManifest: jest.fn(async () => manifest([])),
+    resolveTrack: resolveTrack ?? createPlaybackTrackResolver({ prepareDriveSource, resolver, warn }),
+    unavailableStatus,
+    warn,
+    ...controllerOverrides,
   });
   document.body.append(controller.element);
   return { controller, opfs, prepareDriveSource };
@@ -135,12 +157,11 @@ describe('closing', () => {
     opfs.seed('library/r1/tab.webm', 64);
     const controller = new PlayerController({
       getManifest: async () => manifest([{ kind: 'opfs', key: 'library/r1/tab.webm' }]),
-      prepareDriveSource: async () => undefined,
-      resolver: {
+      resolveTrack: createPlaybackTrackResolver({ resolver: {
         getRoot: async () => opfs.root,
         createObjectURL: () => 'blob:pinned',
         revokeObjectURL: (url: string) => { revoked.push(url); },
-      },
+      } }),
     });
     document.body.append(controller.element);
 
@@ -158,12 +179,11 @@ describe('autoplay', () => {
     opfs.seed('library/r1/tab.webm', 128);
     const controller = new PlayerController({
       getManifest: async () => manifest([{ kind: 'opfs', key: 'library/r1/tab.webm' }]),
-      prepareDriveSource: async () => undefined,
-      resolver: {
+      resolveTrack: createPlaybackTrackResolver({ resolver: {
         getRoot: async () => opfs.root,
         createObjectURL: () => 'blob:x',
         revokeObjectURL: () => {},
-      },
+      } }),
     });
     document.body.append(controller.element);
     const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
@@ -177,7 +197,7 @@ describe('autoplay', () => {
   it('does not try to play a recording with nothing attached', async () => {
     const controller = new PlayerController({
       getManifest: async () => manifest([]),
-      prepareDriveSource: async () => undefined,
+      resolveTrack: async () => undefined,
     });
     document.body.append(controller.element);
     const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
