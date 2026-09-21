@@ -1,5 +1,5 @@
 /**
- * @file background/RecordingAnalysisCoordinator.ts
+ * @file background/library/analysis/RecordingAnalysisCoordinator.ts
  *
  * The control plane's half of topic analysis (RT-02, HOST-02).
  *
@@ -22,12 +22,13 @@
  */
 
 import { makeLogger } from '../../../shared/logger';
-import { fromWireAnalysis, fromWireProvenance, type WireAnalysis } from '../../../shared/analysis/storedAnalysis';
+import type { WireAnalysis } from '../../../shared/analysis/storedAnalysis';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisProvenance } from '../../../shared/analysis/provenance';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
 import type { Transcript } from '../../../shared/transcript';
 import type { RecordingAnalysisService } from './RecordingAnalysisService';
+import { AnalysisResultCommitter } from './AnalysisResultCommitter';
 
 const L = makeLogger('background');
 
@@ -95,8 +96,18 @@ export class RecordingAnalysisCoordinator {
    * with the result, so this only matters for a data plane that predates that.
    */
   private readonly provenanceByJob = new Map<string, AnalysisProvenance>();
+  private readonly resultCommitter: AnalysisResultCommitter;
 
-  constructor(private readonly deps: RecordingAnalysisCoordinatorDeps) {}
+  constructor(private readonly deps: RecordingAnalysisCoordinatorDeps) {
+    this.resultCommitter = new AnalysisResultCommitter({
+      analyses: deps.analyses,
+      isRecordingDeleted: deps.isRecordingDeleted,
+      isPurged: (historyId) => this.purged.has(historyId),
+      fallbackProvenance: (jobId) => this.provenanceByJob.get(jobId),
+      settle: (job) => this.settle(job),
+      now: deps.now,
+    });
+  }
 
   /**
    * Starts analysis for one recording, unless there is nothing to analyse, one
@@ -242,53 +253,7 @@ export class RecordingAnalysisCoordinator {
    * succeed. Everything else is either done, or cannot be fixed by resending.
    */
   async handleResult(job: AnalysisJob, wire: WireAnalysis, wireProvenance?: unknown): Promise<void> {
-    if (this.purged.has(job.historyId) || await this.deps.isRecordingDeleted(job.historyId)) {
-      // Deleted while this was computing — possibly by a worker instance that
-      // no longer exists, which is why the tombstone is the check that counts.
-      L.log(`Discarding an analysis for deleted recording ${job.historyId}`);
-      this.settle(job);
-      return;
-    }
-
-    const result = fromWireAnalysis(wire);
-    if (!result) {
-      // Resending cannot fix a damaged payload; holding it would replay it forever.
-      L.warn('Discarding an incoherent analysis result', job.historyId, job.id);
-      this.settle(job);
-      return;
-    }
-
-    const provenance = fromWireProvenance(wireProvenance)
-      ?? this.provenanceByJob.get(job.id)
-      ?? this.deps.analyses.provenanceForNewRun();
-
-    try {
-      await this.deps.analyses.save(job.historyId, result, provenance, this.deps.now?.());
-    } catch (error) {
-      if (!isQuotaExceeded(error)) {
-        // Transient. Keep the recording held and the ack withheld, so the data
-        // plane re-offers this result on the next reconnect.
-        L.warn('Could not store an analysis result', job.historyId, error);
-        return;
-      }
-      // Out of space, which retrying cannot fix. Acknowledged so the offscreen
-      // document is not left pinning megabytes of vectors and re-offering them
-      // forever — affordable only because an analysis is derived: the
-      // transcript survives and the recording can be analysed again later.
-      L.warn(
-        `Discarding the analysis for ${job.historyId}: storage is full. `
-        + 'The recording is unaffected and can be analysed again after freeing space.',
-      );
-      this.settle(job);
-      return;
-    }
-
-    // Check again after writing. A deletion that landed between the first
-    // check and the write would otherwise leave a row nothing will remove.
-    if (await this.deps.isRecordingDeleted(job.historyId)) {
-      await this.deps.analyses.removeAll(job.historyId).catch(() => {});
-    }
-    this.settle(job);
+    await this.resultCommitter.commit(job, wire, wireProvenance);
   }
 
   /**
@@ -303,18 +268,4 @@ export class RecordingAnalysisCoordinator {
     this.deps.dataPlane.acknowledgeAnalysisState(job.id);
     this.deps.onSettled?.();
   }
-}
-
-/**
- * Whether a storage failure was "no space left" rather than something a retry
- * could clear.
- *
- * Checked by `name` rather than `instanceof DOMException`: the value that
- * reaches here has crossed a repository boundary and, in the test harness, is
- * not always a real `DOMException`. The name is the part every implementation
- * agrees on.
- */
-function isQuotaExceeded(error: unknown): boolean {
-  const name = (error as { name?: unknown } | null)?.name;
-  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED';
 }
