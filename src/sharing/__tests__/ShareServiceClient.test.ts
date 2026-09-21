@@ -1,5 +1,5 @@
 import type { PublishedPlaybackManifest } from '../../shared/sharing';
-import { ShareServiceClient } from '../ShareServiceClient';
+import { ShareServiceClient, ShareServiceRequestError } from '../ShareServiceClient';
 
 const manifest: PublishedPlaybackManifest = {
   id: 'share/one',
@@ -59,16 +59,18 @@ describe('ShareServiceClient', () => {
 
   it('finalizes and revokes a share', async () => {
     const fetcher = jest.fn()
-      .mockResolvedValueOnce(jsonResponse({ shareUrl: 'https://share.example/s/abc' }))
+      .mockResolvedValueOnce(jsonResponse({ shareUrl: 'https://share.example/s/q4fB9-independent-capability' }))
       .mockResolvedValueOnce(mockResponse('', 204));
     const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
 
-    await expect(client.finalizeShare('abc')).resolves.toEqual({ shareUrl: 'https://share.example/s/abc' });
-    await client.revokeShare('abc');
+    await expect(client.finalizeShare('owner-control-id')).resolves.toEqual({
+      shareUrl: 'https://share.example/s/q4fB9-independent-capability',
+    });
+    await client.revokeShare('owner-control-id');
 
     expect(fetcher.mock.calls.map((call) => [call[0], call[1].method])).toEqual([
-      ['https://share.example/api/shares/abc/finalize', 'POST'],
-      ['https://share.example/api/shares/abc', 'DELETE'],
+      ['https://share.example/api/shares/owner-control-id/finalize', 'POST'],
+      ['https://share.example/api/shares/owner-control-id', 'DELETE'],
     ]);
   });
 
@@ -89,5 +91,21 @@ describe('ShareServiceClient', () => {
       fetch: (async () => mockResponse('not authorized', 401)) as typeof fetch,
     });
     await expect(client.createShare(manifest)).rejects.toThrow('failed (401): not authorized');
+  });
+
+  it('preserves upload-session-gone status and code for resumable recovery', async () => {
+    const client = new ShareServiceClient('https://share.example', {
+      fetch: (async () => mockResponse('{"code":"UPLOAD_SESSION_GONE"}', 410)) as typeof fetch,
+    });
+
+    const error = await client.uploadTrackChunk({
+      uploadId: 'gone',
+      offset: 0,
+      totalBytes: 4,
+      chunk: new Blob(['1234']),
+    }).then(() => undefined, (caught) => caught);
+
+    expect(error).toBeInstanceOf(ShareServiceRequestError);
+    expect(error).toMatchObject({ status: 410, code: 'UPLOAD_SESSION_GONE' });
   });
 });

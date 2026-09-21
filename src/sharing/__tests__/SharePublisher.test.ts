@@ -1,5 +1,5 @@
 import type { PlaybackManifest } from '../../shared/playback';
-import type { PublishedPlaybackManifest } from '../../shared/sharing';
+import type { SharePublication } from '../SharePublicationStore';
 import { SharePublisher } from '../SharePublisher';
 
 const manifest: PlaybackManifest = {
@@ -22,20 +22,24 @@ const manifest: PlaybackManifest = {
 };
 
 describe('SharePublisher', () => {
-  it('sends only sanitized metadata, uploads private sources locally, then finalizes', async () => {
-    const calls: string[] = [];
-    let publicPayload: PublishedPlaybackManifest | undefined;
-    const createShare = jest.fn(async (manifest: PublishedPlaybackManifest) => {
-      publicPayload = manifest;
-      calls.push('create');
+  it('builds one immutable publication plan and delegates its durable lifecycle', async () => {
+    let captured: { manifest: any; plans: any } | undefined;
+    const publishNew = jest.fn(async (input) => {
+      captured = input;
+      return {
+        id: input.manifest.id,
+        status: 'active',
+        manifest: structuredClone(input.manifest),
+        plans: structuredClone(input.plans),
+        sourceRecordingIds: ['private-history-id'],
+        shareUrl: 'https://share.example/s/q4fB9viewerCapability',
+        createdAt: 200,
+        updatedAt: 201,
+      } satisfies SharePublication;
     });
-    const finalizeShare = jest.fn(async () => { calls.push('finalize'); return { shareUrl: 'https://share.example/s/share-id' }; });
-    const upload = jest.fn(async () => { calls.push('upload'); });
-    const clearShare = jest.fn(async () => { calls.push('clear'); });
     const ids = ['pub-recording', 'pub-track', 'share-id'];
     const publisher = new SharePublisher({
-      api: { createShare, finalizeShare },
-      uploads: { upload, clearShare },
+      publications: { publishNew },
       recordingBuilder: {
         newId: () => ids.shift()!,
         mediaEndpoint: (recordingId, trackId) => `/media/${recordingId}/${trackId}`,
@@ -45,33 +49,37 @@ describe('SharePublisher', () => {
 
     const result = await publisher.publish([{ manifest }]);
 
-    expect(calls).toEqual(['create', 'upload', 'finalize', 'clear']);
-    expect(publicPayload).toBeDefined();
-    expect(JSON.stringify(publicPayload)).not.toContain('private-history-id');
-    expect(JSON.stringify(publicPayload)).not.toContain('private-drive-file-id');
-    expect(JSON.stringify(publicPayload)).not.toContain('library/');
-    expect(upload).toHaveBeenCalledWith('share-id', [expect.objectContaining({
+    expect(publishNew).toHaveBeenCalledTimes(1);
+    expect(captured?.manifest.id).toBe('share-id');
+    expect(JSON.stringify(captured?.manifest)).not.toContain('private-history-id');
+    expect(JSON.stringify(captured?.manifest)).not.toContain('private-drive-file-id');
+    expect(JSON.stringify(captured?.manifest)).not.toContain('library/');
+    expect(captured?.plans).toEqual([expect.objectContaining({
       sourceRecordingId: 'private-history-id',
       tracks: [expect.objectContaining({ source: expect.objectContaining({ fileId: 'private-drive-file-id' }) })],
     })]);
-    expect(finalizeShare).toHaveBeenCalledWith('share-id');
-    expect(clearShare).toHaveBeenCalledWith('share-id');
-    expect(result.shareUrl).toBe('https://share.example/s/share-id');
+    expect(result.shareUrl).toBe('https://share.example/s/q4fB9viewerCapability');
   });
 
-  it('does not clear resumable upload state when finalization fails', async () => {
-    const clearShare = jest.fn(async () => {});
+  it('fails if the durable coordinator does not return an active publication', async () => {
     const publisher = new SharePublisher({
-      api: {
-        createShare: async () => {},
-        finalizeShare: async () => { throw new Error('publish failed'); },
+      publications: {
+        publishNew: async (input) => ({
+          id: input.manifest.id,
+          status: 'failed',
+          manifest: structuredClone(input.manifest),
+          plans: structuredClone([...input.plans]),
+          sourceRecordingIds: ['private-history-id'],
+          resumeFrom: 'uploading',
+          error: 'network down',
+          createdAt: 1,
+          updatedAt: 2,
+        }),
       },
-      uploads: { upload: async () => {}, clearShare },
       recordingBuilder: { newId: (() => { const ids = ['r', 't']; return () => ids.shift()!; })() },
       manifestBuilder: { newId: () => 's' },
     });
 
-    await expect(publisher.publish([{ manifest }])).rejects.toThrow('publish failed');
-    expect(clearShare).not.toHaveBeenCalled();
+    await expect(publisher.publish([{ manifest }])).rejects.toThrow('did not become active');
   });
 });
