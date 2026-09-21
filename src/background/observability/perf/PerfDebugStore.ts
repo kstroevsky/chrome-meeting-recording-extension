@@ -1,5 +1,5 @@
 /**
- * @file background/PerfDebugStore.ts
+ * @file background/observability/perf/PerfDebugStore.ts
  *
  * Aggregates perf events into a session-scoped diagnostics snapshot that can be
  * rendered by the debug dashboard and persisted across service worker restarts.
@@ -7,50 +7,40 @@
 
 import {
   HIGH_FREQUENCY_PERF_EVENTS,
-  PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
   PERF_EVENT_BUFFER_LIMIT,
   type PerfDebugSnapshot,
   type PerfEventEntry,
   type PerfPhase,
   type PerfSettings,
 } from '../../../shared/perf';
-import {
-  hasSessionStorageArea,
-  removeSessionStorageValues,
-  setSessionStorageValues,
-} from '../../../platform/chrome/storage';
 import { createEmptySnapshot, normalizeSummary } from './PerfDebugState';
+import { PerfDebugPersistence } from './PerfDebugPersistence';
+import { applyCapture } from './reducers/capture';
+import { applyCaptionLongTask, applyCaptionMutation, applyObserverCount } from './reducers/captions';
+import { applyDriveChunk, applyDriveFile, applyDriveFileComplete, applyDriveFinalize } from './reducers/drive';
+import { applyFinalization } from './reducers/finalization';
+import { applyLifecycle } from './reducers/lifecycle';
 import {
-  applyAudioBridge,
   applyArtifactSealed,
-  applyCaptionLongTask,
-  applyCaptionMutation,
-  applyCapture,
-  applyDriveChunk,
-  applyDriveFile,
-  applyDriveFileComplete,
-  applyDriveFinalize,
-  applyFinalization,
-  applyLifecycle,
-  applyObserverCount,
-  applyCpuSample,
+  applyAudioBridge,
   applyRecorderBitrateObserved,
   applyRecorderChunk,
   applyRecorderStarted,
-  applyRuntimeSample,
   applySelfVideoStream,
-  applyStorage,
-} from './PerfDebugReducers';
+} from './reducers/recorder';
+import { applyCpuSample, applyRuntimeSample } from './reducers/runtime';
+import { applyStorage } from './reducers/storage';
 
 export class PerfDebugStore {
   private snapshot: PerfDebugSnapshot;
-  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly persistence: PerfDebugPersistence;
 
   constructor(
     initialSettings: PerfSettings,
-    private readonly warn: (...args: any[]) => void = () => {}
+    warn: (...args: any[]) => void = () => {}
   ) {
     this.snapshot = createEmptySnapshot(initialSettings);
+    this.persistence = new PerfDebugPersistence(warn);
   }
 
   hydrate(snapshot: PerfDebugSnapshot | null | undefined): void {
@@ -213,48 +203,10 @@ export class PerfDebugStore {
 
   clear(): void {
     this.snapshot = createEmptySnapshot(this.snapshot.settings);
-    this.removePersistedSnapshot();
+    this.persistence.clear();
   }
 
   private persist(delayMs = 400): void {
-    if (!hasSessionStorageArea()) return;
-    if (delayMs === 0) {
-      if (this.persistTimer) {
-        clearTimeout(this.persistTimer);
-        this.persistTimer = null;
-      }
-      this.persistNow();
-      return;
-    }
-
-    if (this.persistTimer) return;
-    this.persistTimer = setTimeout(() => {
-      this.persistTimer = null;
-      this.persistNow();
-    }, delayMs);
-  }
-
-  private persistNow(): void {
-    const snapshot = this.getSnapshot();
-    void setSessionStorageValues({ [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: snapshot })
-      .catch(() => {
-        // Safety net: the bounded buffer keeps us well under the storage quota,
-        // but if a write is still rejected (quota or serialization), persist a
-        // summary-only snapshot so the analysis-critical aggregates survive the
-        // whole run instead of silently freezing the persisted copy.
-        void setSessionStorageValues({
-          [PERF_DEBUG_SNAPSHOT_STORAGE_KEY]: { ...snapshot, entries: [] },
-        }).catch((error: any) => this.warn('Failed to persist perf debug snapshot', error));
-      });
-  }
-
-  private removePersistedSnapshot(): void {
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
-    if (!hasSessionStorageArea()) return;
-    void removeSessionStorageValues(PERF_DEBUG_SNAPSHOT_STORAGE_KEY)
-      .catch((error: any) => this.warn('Failed to clear perf debug snapshot', error));
+    this.persistence.schedule(() => this.getSnapshot(), delayMs);
   }
 }
