@@ -33,13 +33,13 @@ test.describe('Drive destinations (integration)', () => {
       await open();
 
       // Starts empty: every recording goes to the built-in folder until asked otherwise.
-      await expect(page.locator('.destination-row')).toHaveCount(0);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(0);
 
       for (const name of ['Work meetings', 'Psychotherapy', 'Interviews']) {
         await page.locator('#destination-add').click();
         await page.locator('.destination-name').last().fill(name);
       }
-      await expect(page.locator('.destination-row')).toHaveCount(3);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(3);
       await page.locator('#save-settings').click();
 
       await open();
@@ -48,7 +48,7 @@ test.describe('Drive destinations (integration)', () => {
       // Renaming keeps the row; removing takes only that row.
       await page.locator('.destination-name').nth(1).fill('Therapy');
       await page.locator('.destination-remove').nth(0).click();
-      await expect(page.locator('.destination-row')).toHaveCount(2);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(2);
       await page.locator('#save-settings').click();
 
       await open();
@@ -58,7 +58,7 @@ test.describe('Drive destinations (integration)', () => {
       await page.locator('#destination-add').click();
       await page.locator('#save-settings').click();
       await open();
-      await expect(page.locator('.destination-row')).toHaveCount(2);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(2);
     } finally {
       await closeHarness(harness);
     }

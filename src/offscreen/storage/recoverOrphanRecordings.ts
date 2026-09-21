@@ -245,6 +245,12 @@ export function listOrphanRecordingsWithChrome(
 
 export function recoverOrphanRecordingsWithChrome(opts: {
   cutoffMs: number;
+  /**
+   * How long a recording is left for the user to decide about before it is
+   * recovered unasked. Overridable so a test can drive the unattended path
+   * without waiting a week; production leaves it at the default.
+   */
+  decisionWindowMs?: number;
   pendingUploads: PendingUploadStore;
   requestSave: (request: LocalSaveRequest) => void;
   log: (...a: any[]) => void;
@@ -254,7 +260,7 @@ export function recoverOrphanRecordingsWithChrome(opts: {
     cutoffMs: opts.cutoffMs,
     maxPerRun: MAX_ORPHANS_PER_RUN,
     maxSealBytes: MAX_SEAL_IN_MEMORY_BYTES,
-    decisionWindowMs: ORPHAN_DECISION_WINDOW_MS,
+    decisionWindowMs: opts.decisionWindowMs ?? ORPHAN_DECISION_WINDOW_MS,
     log: opts.log,
     warn: opts.warn,
     ...opfsWiring(opts.pendingUploads),

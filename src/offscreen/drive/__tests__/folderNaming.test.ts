@@ -14,8 +14,10 @@
  */
 import { buildRecordingFilename } from '../../engine/RecorderTaskUtils';
 import {
+  approximateRecordingDurationMs,
   inferDriveRecordingFolderName,
   isRecordingFilename,
+  recordingStartedAtMs,
   retitleRecordingFilename,
 } from '../folderNaming';
 
@@ -60,5 +62,32 @@ describe('the names this extension actually produces', () => {
     expect(isRecordingFilename('holiday-video.webm')).toBe(false);
     expect(isRecordingFilename('meet-abc-20260101T090000-notes.vtt')).toBe(false);
     expect(isRecordingFilename('meet-abc-recording.webm')).toBe(false);
+  });
+});
+
+/**
+ * The length of a recording that never sealed, from what is already known: the
+ * moment in its own name and the moment its file was last written. Used only
+ * when the run's measured clock is missing (8D).
+ */
+describe('how long an unsaved recording ran', () => {
+  it('reads the start out of a name the builder actually wrote', () => {
+    const startedAt = recordingStartedAtMs(built('meet-abc-defg-hij'));
+    expect(startedAt).not.toBeNull();
+    // Written now, so within a minute of now — which is also the proof it is
+    // parsed as UTC, since reading it as local time would be hours out.
+    expect(Math.abs(Date.now() - startedAt!)).toBeLessThan(60_000);
+  });
+
+  it('measures to the last write', () => {
+    const name = 'meet-abc-20260101T090000-recording.webm';
+    const startedAt = recordingStartedAtMs(name)!;
+    expect(approximateRecordingDurationMs(name, startedAt + 32 * 60_000)).toBe(32 * 60_000);
+  });
+
+  it('says nothing rather than something wrong', () => {
+    expect(approximateRecordingDurationMs('holiday-video.webm', Date.now())).toBeNull();
+    const name = 'meet-abc-20260101T090000-recording.webm';
+    expect(approximateRecordingDurationMs(name, recordingStartedAtMs(name)! - 1000)).toBeNull();
   });
 });

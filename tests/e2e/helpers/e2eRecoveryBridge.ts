@@ -38,10 +38,18 @@ export function installRecoveryTestBridge(): void {
         log,
         warn,
       }),
-    /** #2 — recover orphaned recordings, delivering via chrome.downloads. */
+    /**
+     * #2 — recover orphaned recordings, delivering via chrome.downloads.
+     *
+     * The decision window is zero here on purpose: in production a recent
+     * orphan is left for the user to answer for in the popup (8D), and this
+     * hook exists to exercise the unattended path that takes over afterwards.
+     * The waiting itself is covered by `recoverOrphanRecordings`' unit tests.
+     */
     recoverOrphans: (cutoffMs: number) =>
       recoverOrphanRecordingsWithChrome({
         cutoffMs,
+        decisionWindowMs: 0,
         pendingUploads: store,
         requestSave: ({ filename, blobUrl }) => {
           // Record the recovery output (the assertable signal) and trigger a
