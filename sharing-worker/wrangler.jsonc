@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "recording-extension-sharing",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  },
+  "vars": {
+    "ALLOWED_EXTENSION_ORIGINS": "chrome-extension://replace-with-store-extension-id",
+    "VIEWER_SESSION_TTL_SECONDS": "43200"
+  },
+  "secrets": {
+    "required": ["OWNER_API_TOKEN", "CAPABILITY_KEY", "SESSION_KEY"]
+  },
+  "d1_databases": [
+    {
+      "binding": "SHARING_DB",
+      "database_name": "recording-extension-sharing",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SHARING_MEDIA",
+      "bucket_name": "recording-extension-sharing-media"
+    }
+  ]
+}
