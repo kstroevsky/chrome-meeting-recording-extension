@@ -14,7 +14,7 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
-import { loadExtensionSettingsFromStorage, toStorageMode } from './shared/settings';
+import { loadExtensionSettingsFromStorage } from './shared/settings';
 import { DriveLibraryCoordinator } from './background/drive/DriveLibraryCoordinator';
 import { PlaybackLeaseManager } from './background/playback/PlaybackLeaseManager';
 import { addTabRemovedListener, sendTabMessage } from './platform/chrome/tabs';
@@ -74,12 +74,10 @@ import {
 import { TIMEOUTS } from './shared/timeouts';
 import { TelemetryRuntime } from './background/observability/telemetry/TelemetryRuntime';
 import {
-  captureMayBeUnsaved,
   markCaptureSettled,
   noteCaptureProgress,
-  recordedCaptureDurationMs,
 } from './background/recording/unsavedCaptureFlag';
-import type { UnsavedRecording } from './offscreen/storage/recoverOrphanRecordings';
+import { UnsavedRecordingRecovery } from './background/recording/UnsavedRecordingRecovery';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();
@@ -190,59 +188,6 @@ const driveAuthLease = new DrivePlaybackAuthLeaseManager({
   warn: L.warn,
 });
 const driveLibrary = new DriveLibraryCoordinator(historyRepository, history, L);
-
-/**
- * What a crash left behind (8D).
- *
- * The flag is checked first and the offscreen document is only created when it
- * is set: the scan is cheap, but reaching it is not, and the popup asks this on
- * every open. A clean run clears the flag, so the usual answer costs one
- * storage read.
- */
-const listUnsavedRecordings = async () => {
-  if (!await captureMayBeUnsaved()) return [];
-  // A capture in flight owns staging; asking mid-run would describe the file
-  // being written as though it were abandoned.
-  if (session.getSnapshot().phase !== 'idle') return [];
-  try {
-    await offscreen.ensureReady();
-    const response = await offscreen.rpc<{ ok: boolean; recordings?: UnsavedRecording[] }>({ type: 'OFFSCREEN_LIST_UNSAVED' });
-    const found = response?.recordings ?? [];
-    // The run's own clock beats the estimate the filename allows: it excludes
-    // paused spans, and it was measured rather than inferred.
-    const recordings = await Promise.all(found.map(async (recording) => {
-      const recorded = await recordedCaptureDurationMs(recording.lastModifiedMs);
-      return recorded != null ? { ...recording, approxDurationMs: recorded } : recording;
-    }));
-    // Nothing there means the flag was set by a run that finished after all —
-    // a worker death after delivery, say — so stop asking.
-    if (!recordings.length) await markCaptureSettled();
-    return recordings;
-  } catch (error) {
-    L.warn('Could not look for unsaved recordings:', error);
-    return [];
-  }
-};
-
-/**
- * Acts on one, once the user has decided. The storage mode is read here rather
- * than sent from the popup: it is where this recording would have gone had it
- * finished, and that is settings' answer to give, not the dialog's.
- */
-const resolveUnsavedRecording = async (key: string, action: 'save' | 'discard', name?: string) => {
-  const settings = await loadExtensionSettingsFromStorage();
-  await offscreen.ensureReady();
-  const response = await offscreen.rpc<{ ok: boolean; error?: string }>({
-    type: 'OFFSCREEN_RESOLVE_UNSAVED',
-    key,
-    action,
-    ...(name ? { name } : {}),
-    storageMode: toStorageMode(settings.basic.recordingMode),
-  });
-  if (!response?.ok) throw new Error(response?.error || 'Could not save that recording');
-  // Decided either way, so it is no longer unaccounted for.
-  await markCaptureSettled();
-};
 
 const telemetry = new TelemetryRuntime();
 
@@ -564,6 +509,7 @@ const deliverAbandonedLocalRecordings = async (): Promise<void> => {
 };
 
 // The recording control plane: every start/stop trigger drives this one seam.
+const unsavedRecovery = new UnsavedRecordingRecovery(offscreen, session, L);
 const controller = new RecordingController({ L, offscreen, session, telemetry, notations, transcripts, transcriptCapture });
 
 // Register all popup message handlers.
@@ -572,8 +518,8 @@ registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler: cr
   playback, playbackLeases, driveArtifacts: driveLibrary.artifacts,
   fileToDestination: (recordingId, presetId) => driveLibrary.fileRecordingToDestination(recordingId, presetId),
   renameDriveRootFolder: (from, to) => driveLibrary.renameRootFolder(from, to),
-  listUnsavedRecordings,
-  resolveUnsavedRecording,
+  listUnsavedRecordings: () => unsavedRecovery.list(),
+  resolveUnsavedRecording: (key, action, name) => unsavedRecovery.resolve(key, action, name),
   listPendingLocal: listPendingLocalDeliveries, deliverLocal: deliverLocalRecording,
   storageUsage: () => readStorageUsage(async () => {
     const files = await listLibraryFiles(await navigator.storage.getDirectory());
