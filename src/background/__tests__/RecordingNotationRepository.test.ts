@@ -2,8 +2,8 @@ import 'fake-indexeddb/auto';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import { IDBFactory } from 'fake-indexeddb';
 
-import { RecordingNotationRepository } from '../RecordingNotationRepository';
-import { RecordingHistoryRepository } from '../RecordingHistoryRepository';
+import { RecordingNotationRepository } from '../library/notations/RecordingNotationRepository';
+import { RecordingHistoryRepository } from '../library/history/RecordingHistoryRepository';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 

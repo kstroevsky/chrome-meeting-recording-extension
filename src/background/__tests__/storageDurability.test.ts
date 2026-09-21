@@ -1,4 +1,4 @@
-import { ensurePersistentStorage, readStorageUsage } from '../storageDurability';
+import { ensurePersistentStorage, readStorageUsage } from '../retention/storageDurability';
 
 const withStorage = (storage: unknown) => {
   Object.defineProperty(navigator, 'storage', { value: storage, configurable: true });

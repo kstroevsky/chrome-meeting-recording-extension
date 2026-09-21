@@ -62,7 +62,7 @@ sequenceDiagram
 ```
 
 - **`createCachedTokenProvider`** holds one token in memory for the whole upload so we don't call the identity API per chunk; a `refresh` bumps a generation counter (so a stale in-flight load can't overwrite the new token) and forces one re-fetch.
-- A `401/403` triggers exactly **one** refreshed retry (both in `uploadChunk` for PUTs and `fetchWithAuthRetry` for folder ops). Token **acquisition** (silent→interactive fallback, bad-client-id diagnosis) is `background/driveAuth.ts` behind the [`AuthProvider`](../../platform/capabilities/README.md) seam (ADR-0002) — this folder treats it as a black box that returns a string.
+- A `401/403` triggers exactly **one** refreshed retry (both in `uploadChunk` for PUTs and `fetchWithAuthRetry` for folder ops). Token **acquisition** (silent→interactive fallback, bad-client-id diagnosis) is `background/drive/driveAuth.ts` behind the [`AuthProvider`](../../platform/capabilities/README.md) seam (ADR-0002) — this folder treats it as a black box that returns a string.
 
 ## Failure modes & retry/backoff
 

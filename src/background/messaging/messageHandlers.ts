@@ -1,0 +1,463 @@
+/**
+ * @file background/messaging/messageHandlers.ts
+ *
+ * Registers the chrome.runtime.onMessage listener and dispatches incoming
+ * popup commands to their dedicated handlers.
+ */
+
+import type { DriveArtifactResolver } from '../drive/DriveArtifactResolver';
+import type { PlaybackLeaseManager } from '../playback/PlaybackLeaseManager';
+import type { DrivePlaybackAuthLeaseManager } from '../playback/DrivePlaybackAuthLeaseManager';
+import type { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
+import { fetchDriveTokenWithFallback } from '../drive/driveAuth';
+import { isE2EMockDriveBuild } from '../../shared/build';
+import { handleMeetingEndedMessage } from '../recording/recordingAutoStop';
+import {
+  isE2EDriveFetchMessage,
+  isMeetingEndedMessage,
+  isTranscriptUtterancesMessage,
+  isTranscriptCaptureStateRequest,
+  isPerfEventMessage,
+  isPopupToBgMessage,
+  type CommandResult,
+} from '../../shared/protocol';
+import { toStatusView } from '../../shared/recording';
+import { type PerfEventEntry } from '../../shared/perf';
+import type { RecordingController } from '../recording/RecordingController';
+import type { RecordingSession } from '../recording/session/RecordingSession';
+import type { PerfDebugStore } from '../observability/perf/PerfDebugStore';
+import type { CpuSampler } from '../observability/perf/CpuSampler';
+import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
+import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
+import { isRecordingHistoryMessage } from '../../shared/recordingHistory';
+import { isRecordingNotationMessage } from '../../shared/notations';
+import {
+  NON_SESSION_RESPONSE_MESSAGE_TYPES,
+  RECORDING_HISTORY_MESSAGE_TYPES,
+  RECORDING_NOTATION_MESSAGE_TYPES,
+} from '../../shared/protocolMessageTypes';
+import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
+import type { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
+import type { RecordingAnalysisService } from '../library/analysis/RecordingAnalysisService';
+import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
+
+const includes = (types: readonly string[], type: string) => types.includes(type);
+
+/** True when a failure must answer `{ ok: false, error }` instead of failing the session. */
+function isNonSessionResponse(type: string): boolean {
+  return includes(NON_SESSION_RESPONSE_MESSAGE_TYPES, type);
+}
+
+export type MessageHandlersDeps = {
+  L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
+  session: RecordingSession;
+  perfDebugStore: PerfDebugStore;
+  controller: RecordingController;
+  /** Dev-only system CPU sampler; null in production (no `system.cpu` permission). */
+  cpuSampler?: CpuSampler | null;
+  history?: RecordingHistoryService;
+  notations?: RecordingNotationService;
+  transcripts?: RecordingTranscriptService;
+  analyses?: RecordingAnalysisService;
+  transcriptCapture?: RecordingTranscriptCapture;
+  playback?: RecordingPlaybackService;
+  playbackLeases?: PlaybackLeaseManager;
+  driveArtifacts?: DriveArtifactResolver;
+  fileToDestination?: (recordingId: string, presetId: string | null) => Promise<void>;
+  /** Renames the folder every recording lives under, so Drive matches the setting. */
+  renameDriveRootFolder?: (from: string, to: string) => Promise<import('../drive/DriveRootFolder').RootRenameResult>;
+  /** What a crash left behind, or nothing when no capture is unaccounted for (8D). */
+  listUnsavedRecordings?: () => Promise<import('../../offscreen/storage/recoverOrphanRecordings').UnsavedRecording[]>;
+  /** Saves one of those under a name, or throws it away (8D). */
+  resolveUnsavedRecording?: (key: string, action: 'save' | 'discard', name?: string) => Promise<void>;
+  /** Storage the retained library occupies, and whether it is exempt from eviction. */
+  storageUsage?: () => Promise<import('../../shared/playback').StorageUsage>;
+  /** Recordings whose bytes are retained but not yet written to the download directory. */
+  listPendingLocal?: () => Promise<{ id: string; name: string }[]>;
+  /** Writes one of those into the chosen local folder; null means the directory itself. */
+  deliverLocal?: (recordingId: string, folderId: string | null) => Promise<void>;
+  driveAuthLease?: DrivePlaybackAuthLeaseManager;
+  telemetry?: TelemetryRuntime;
+};
+
+/**
+ * Registers the chrome.runtime.onMessage listener that dispatches popup
+ * commands to PERF_EVENT, GET_DRIVE_TOKEN, START_RECORDING, STOP_RECORDING,
+ * and GET_RECORDING_STATUS handlers.
+ */
+/**
+ * True only for a top-level page served by this extension. Guards the one
+ * message that installs a credential-bearing network rule.
+ */
+function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  const url = sender.url ?? '';
+  return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
+}
+
+export function registerMessageHandlers({ L, session, perfDebugStore, controller, cpuSampler, history, notations, transcripts, analyses, transcriptCapture, playback, playbackLeases, driveArtifacts, fileToDestination, renameDriveRootFolder, listUnsavedRecordings, resolveUnsavedRecording, storageUsage, listPendingLocal, deliverLocal, driveAuthLease, telemetry }: MessageHandlersDeps) {
+  chrome.runtime.onMessage.addListener((
+    msg: unknown,
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (response?: unknown) => void
+  ) => {
+    if (msg && typeof msg === 'object' && (msg as any).type === 'TELEMETRY_SNAPSHOT') {
+      void telemetry?.receive((msg as any).snapshot, (msg as any).critical === true).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+      return true;
+    }
+    if (msg && typeof msg === 'object' && (msg as any).type === 'TELEMETRY_FLUSH') {
+      void telemetry?.receiveFlush((msg as any).snapshot, (msg as any).reason).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+      return true;
+    }
+    if (
+      (typeof __E2E_MOCK_DRIVE_BUILD__ !== 'undefined'
+        ? __E2E_MOCK_DRIVE_BUILD__
+        : isE2EMockDriveBuild())
+      && isE2EDriveFetchMessage(msg)
+    ) {
+      if (!msg.url.startsWith('https://www.googleapis.com/')) {
+        sendResponse({ ok: false, error: 'E2E Drive bridge rejected non-Google URL' });
+        return false;
+      }
+      fetch(msg.url, {
+        method: msg.method,
+        headers: msg.headers,
+        body: msg.body,
+      })
+        .then(async (response) => {
+          const headers: Record<string, string> = {};
+          response.headers.forEach((value, name) => {
+            headers[name] = value;
+          });
+          sendResponse({
+            ok: true,
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+            body: await response.text(),
+          });
+        })
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      return true;
+    }
+
+    if (isPerfEventMessage(msg)) {
+      const entry = msg.entry as PerfEventEntry;
+      perfDebugStore.record(entry);
+      // Piggyback a system-CPU read on each runtime sample (dev builds only).
+      // chrome.system.cpu lives in the background context, so we sample here on
+      // the existing per-sample wake rather than running a separate SW timer.
+      if (cpuSampler && entry.scope === 'runtime' && entry.event === 'sample') {
+        void cpuSampler.sample().then((cpuPercent) => {
+          if (cpuPercent != null) {
+            perfDebugStore.record({
+              source: entry.source,
+              scope: 'runtime',
+              event: 'cpu',
+              ts: Date.now(),
+              fields: { cpuPercent },
+            });
+          }
+        });
+      }
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (isTranscriptUtterancesMessage(msg)) {
+      // Fire-and-forget state transfer: the meeting tab does not wait, and a
+      // transcript failure must never reach the capture session.
+      void transcriptCapture?.receive(msg.runId, msg.utterances)
+        .catch((error) => L.warn('Could not record pushed caption utterances:', error));
+      return false;
+    }
+
+    if (isTranscriptCaptureStateRequest(msg)) {
+      // A content script that loaded mid-run asking whether it should be
+      // shipping captions. Answering keeps the rest of that run incremental.
+      sendResponse(transcriptCapture?.captureState() ?? { active: false });
+      return false;
+    }
+
+    if (isMeetingEndedMessage(msg)) {
+      handleMeetingEndedMessage(msg, sender, { session, controller })
+        .then((res) => sendResponse(res))
+        .catch((e: any) => sendResponse({ ok: false, stopped: false, error: e?.message || String(e) }));
+      return true;
+    }
+
+    if (!isPopupToBgMessage(msg)) return false;
+
+    if (msg.type === 'GET_DRIVE_TOKEN') {
+      fetchDriveTokenWithFallback({ refresh: msg.refresh === true })
+        .then((res) => {
+          if (!res.ok) L.warn('GET_DRIVE_TOKEN failed:', res.error);
+          sendResponse(res);
+        })
+        .catch((e: any) => {
+          const error = e?.message || String(e);
+          L.error('GET_DRIVE_TOKEN unexpected failure:', error);
+          sendResponse({ ok: false, error });
+        });
+      return true;
+    }
+
+    const send = sendResponse as (r: CommandResult) => void;
+
+    (async () => {
+      if (includes(RECORDING_HISTORY_MESSAGE_TYPES, msg.type) && !isRecordingHistoryMessage(msg)) {
+        throw new Error('Malformed recording history request');
+      }
+      if (includes(RECORDING_NOTATION_MESSAGE_TYPES, msg.type) && !isRecordingNotationMessage(msg)) {
+        throw new Error('Malformed recording notation request');
+      }
+      if (msg.type === 'LIST_RECORDING_HISTORY') {
+        if (!history) throw new Error('Recording history is unavailable');
+        sendResponse({ ok: true, ...(await history.listPage(msg.cursor)) }); return;
+      }
+      if (msg.type === 'RENAME_RECORDING_HISTORY') {
+        if (!history) throw new Error('Recording history is unavailable');
+        const entry = await history.rename(msg.id, msg.name);
+        let renamedSnapshot = session.getSnapshot();
+        const job = renamedSnapshot.uploadJobs?.find((candidate) => candidate.historyId === msg.id);
+        if (entry && job) {
+          renamedSnapshot = session.upsertUploadJob({
+            ...job,
+            label: entry.name,
+            namingStatus: 'named',
+            driveFolderId: entry.driveFolderId ?? job.driveFolderId,
+            driveFolderName: entry.driveFolderName ?? job.driveFolderName,
+            folderWebViewLink: entry.folderWebViewLink ?? job.folderWebViewLink,
+            files: job.files.map((file) => {
+              const renamed = entry.files.find((candidate) => candidate.stream === file.stream);
+              return renamed ? { ...file, filename: renamed.filename } : file;
+            }),
+          });
+          await session.flush();
+        }
+        sendResponse({ ok: true, entry, session: toStatusView(renamedSnapshot) }); return;
+      }
+      if (msg.type === 'SET_RECORDING_HISTORY_NOTE') {
+        if (!history) throw new Error('Recording history is unavailable');
+        sendResponse({ ok: true, entry: await history.setNote(msg.id, msg.note) }); return;
+      }
+      if (msg.type === 'REMOVE_RECORDING_HISTORY') {
+        if (!history) throw new Error('Recording history is unavailable');
+        sendResponse({ ok: true, removed: await history.remove(msg.id) }); return;
+      }
+      if (msg.type === 'OPEN_RECORDING_HISTORY_FILE') {
+        if (!history) throw new Error('Recording history is unavailable');
+        await history.openLocalFile(msg.recordingId, msg.fileId);
+        sendResponse({ ok: true }); return;
+      }
+
+      // Notation commands (ADR-0005). The two live ones go through the
+      // controller, which owns the recording clock; the rest are plain CRUD on
+      // a finished recording.
+      if (msg.type === 'MARK_NOTATION') {
+        sendResponse(await controller.markNotation(msg.text)); return;
+      }
+      if (msg.type === 'END_NOTATION') {
+        sendResponse(await controller.endNotation(msg.id)); return;
+      }
+      if (msg.type === 'LIST_ACTIVE_NOTATIONS') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        const { historyId } = session.getSnapshot();
+        sendResponse({ ok: true, notations: historyId ? await notations.list(historyId) : [] }); return;
+      }
+      if (msg.type === 'LIST_RECORDING_NOTATION_SUMMARIES') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, summaries: await notations.summaries(msg.recordingIds) }); return;
+      }
+      if (msg.type === 'LIST_RECORDING_TOPIC_SUMMARIES') {
+        // Answered as empty rather than as an error when analysis is not wired
+        // up: the library is fully usable without a TOPICS column, and an error
+        // here would make the page look broken over an optional digest.
+        sendResponse({ ok: true, summaries: analyses ? await analyses.topicSummaries(msg.recordingIds) : {} });
+        return;
+      }
+      if (msg.type === 'UPDATE_ACTIVE_NOTATION' || msg.type === 'REMOVE_ACTIVE_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        const { historyId } = session.getSnapshot();
+        if (!historyId) throw new Error('No recording is active');
+        sendResponse({
+          ok: true,
+          notations: msg.type === 'UPDATE_ACTIVE_NOTATION'
+            ? await notations.update(historyId, msg.id, { text: msg.text })
+            : await notations.remove(historyId, msg.id),
+        });
+        return;
+      }
+      if (msg.type === 'GET_RECORDING_PLAYBACK_MANIFEST') {
+        if (!playback) throw new Error('Playback is unavailable');
+        const manifest = await playback.getManifest(msg.recordingId);
+        // A tombstoned or missing recording is not an error the player should
+        // retry — it is a recording that is gone.
+        if (!manifest) {
+          sendResponse({ ok: false, error: 'This recording is no longer available' });
+          return;
+        }
+        // Asking for the manifest is the moment a tab starts reading these
+        // bytes, so it is the moment the lease begins (ADR-0006 §15).
+        const readerTab = sender.tab?.id;
+        if (readerTab != null && playbackLeases && isExtensionPlayerSender(sender)) {
+          const keys = manifest.tracks.flatMap((track) => track.sources
+            .filter((source) => source.kind === 'opfs')
+            .map((source) => (source as { key: string }).key));
+          await playbackLeases.acquire(readerTab, manifest.recordingId, keys);
+        }
+        sendResponse({ ok: true, manifest });
+        return;
+      }
+      if (msg.type === 'RENAME_DRIVE_ROOT_FOLDER') {
+        if (!renameDriveRootFolder) throw new Error('Google Drive is unavailable');
+        sendResponse({ ok: true, result: await renameDriveRootFolder(msg.from, msg.to) });
+        return;
+      }
+      if (msg.type === 'GET_STORAGE_USAGE') {
+        if (!storageUsage) throw new Error('Storage usage is unavailable');
+        sendResponse({ ok: true, usage: await storageUsage() });
+        return;
+      }
+      if (msg.type === 'LIST_UNSAVED_RECORDINGS') {
+        sendResponse({ ok: true, recordings: (await listUnsavedRecordings?.()) ?? [] });
+        return;
+      }
+      if (msg.type === 'RESOLVE_UNSAVED_RECORDING') {
+        if (!resolveUnsavedRecording) throw new Error('Recovery is unavailable');
+        await resolveUnsavedRecording(msg.key, msg.action, msg.name);
+        sendResponse({ ok: true });
+        return;
+      }
+      if (msg.type === 'LIST_PENDING_LOCAL_DELIVERIES') {
+        sendResponse({ ok: true, recordings: (await listPendingLocal?.()) ?? [] });
+        return;
+      }
+      if (msg.type === 'DELIVER_LOCAL_RECORDING') {
+        if (!deliverLocal) throw new Error('Local delivery is unavailable');
+        await deliverLocal(msg.recordingId, msg.folderId);
+        sendResponse({ ok: true });
+        return;
+      }
+      if (msg.type === 'FILE_RECORDING_TO_DESTINATION') {
+        if (!fileToDestination) throw new Error('Drive destinations are unavailable');
+        await fileToDestination(msg.recordingId, msg.presetId);
+        sendResponse({ ok: true });
+        return;
+      }
+      if (msg.type === 'PREPARE_RECORDING_PLAYBACK_SOURCE' || msg.type === 'REFRESH_RECORDING_PLAYBACK_SOURCE') {
+        if (!driveAuthLease || !playback) throw new Error('Drive playback is unavailable');
+        // The tab id comes from the sender, never the message. A surface that
+        // could name its own tab could have Drive credentials installed into
+        // another one (ADR-0006 §12).
+        const tabId = sender.tab?.id;
+        if (tabId == null || !isExtensionPlayerSender(sender)) {
+          sendResponse({ ok: false, error: 'Playback can only be prepared by an extension page' });
+          return;
+        }
+        const manifest = await playback.getManifest(msg.recordingId);
+        const track = manifest?.tracks.find((candidate) => candidate.fileId === msg.fileId);
+        const drive = track?.sources.find((source) => source.kind === 'drive');
+        if (!drive || drive.kind !== 'drive') {
+          sendResponse({ ok: false, error: 'This file has no Drive copy to stream' });
+          return;
+        }
+        // Verify before authorizing. A Drive id survives moves and renames but
+        // not the trash, and history can simply hold the wrong one — both used
+        // to surface as an unexplained failure to play.
+        let fileId = drive.fileId;
+        if (driveArtifacts) {
+          const state = await driveArtifacts.resolve({
+            fileId,
+            folderId: (await playback.getFolderId(msg.recordingId)) ?? undefined,
+            filename: track!.filename,
+            ...(track!.bytes != null ? { bytes: track!.bytes } : {}),
+          });
+          if (state.status === 'trashed') {
+            sendResponse({ ok: false, error: 'This file is in your Google Drive trash. Restore it to play the recording.' });
+            return;
+          }
+          if (state.status === 'missing') {
+            sendResponse({ ok: false, error: 'This file is no longer in Google Drive.' });
+            return;
+          }
+          if (state.status === 'relinked') {
+            // Heal the row so the next open costs nothing.
+            fileId = state.fileId;
+            await history?.recordArtifactLocation(msg.recordingId, msg.fileId, { kind: 'drive', fileId });
+          }
+        }
+        // A refresh re-mints the token and replaces the rule in place; the
+        // player keeps its position across the reload.
+        const url = await driveAuthLease.authorize(tabId, fileId, {
+          refresh: msg.type === 'REFRESH_RECORDING_PLAYBACK_SOURCE',
+        });
+        sendResponse({ ok: true, url });
+        return;
+      }
+      if (msg.type === 'GET_RECORDING_TRANSCRIPT') {
+        if (!transcripts) throw new Error('Recording transcripts are unavailable');
+        const transcript = await transcripts.get(msg.recordingId);
+        sendResponse({ ok: true, ...(transcript ? { transcript } : {}) }); return;
+      }
+      if (msg.type === 'LIST_RECORDING_NOTATIONS') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, notations: await notations.list(msg.recordingId) }); return;
+      }
+      if (msg.type === 'ADD_RECORDING_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        const notation = await notations.add(msg.recordingId, {
+          tStartMs: msg.tStartMs,
+          ...(msg.tEndMs != null ? { tEndMs: msg.tEndMs } : {}),
+          text: msg.text,
+        });
+        sendResponse({ ok: true, notation }); return;
+      }
+      if (msg.type === 'UPDATE_RECORDING_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, notations: await notations.update(msg.recordingId, msg.id, msg) }); return;
+      }
+      if (msg.type === 'REMOVE_RECORDING_NOTATION') {
+        if (!notations) throw new Error('Recording notations are unavailable');
+        sendResponse({ ok: true, notations: await notations.remove(msg.recordingId, msg.id) }); return;
+      }
+      if (msg.type === 'START_RECORDING')    { send(await controller.start(msg)); return; }
+      if (msg.type === 'STOP_RECORDING')     { send(await controller.stop('popup stop button')); return; }
+      if (msg.type === 'DISCARD_RECORDING')  { send(await controller.discard('popup discard button')); return; }
+      if (msg.type === 'SET_MIC_MUTED')      { send(await controller.setMicMuted(msg.muted)); return; }
+      if (msg.type === 'SET_CAMERA_MUTED')   { send(await controller.setCameraMuted(msg.muted)); return; }
+      if (msg.type === 'SET_INPUT_DEVICE')   { send(await controller.setInputDevice(msg.device, msg.deviceId)); return; }
+      if (msg.type === 'SET_PAUSED')         { send(await controller.setPaused(msg.paused)); return; }
+      if (msg.type === 'DISMISS_INTERRUPTION') {
+        sendResponse({ session: toStatusView(session.dismissInterruption()) }); return;
+      }
+      if (msg.type === 'GET_RECORDING_STATUS') { sendResponse({ session: toStatusView(session.getSnapshot()) }); return; }
+      if (msg.type === 'DISMISS_UPLOAD_JOB')   { sendResponse({ session: toStatusView(session.removeUploadJob(msg.jobId)) }); return; }
+      if (msg.type === 'RETRY_UPLOAD_JOB')     { send(await controller.retryUpload(msg.jobId)); return; }
+      if (msg.type === 'CANCEL_UPLOAD_JOB')    { send(await controller.cancelUpload(msg.jobId)); return; }
+      if (msg.type === 'SKIP_RECORDING_NAMING') {
+        const job = session.getSnapshot().uploadJobs?.find((candidate) => candidate.id === msg.jobId);
+        if (!job || job.status !== 'completed') { send({ ok: false, error: 'Completed upload was not found', session: toStatusView(session.getSnapshot()) }); return; }
+        const skippedSnapshot = session.upsertUploadJob({ ...job, namingStatus: 'skipped' });
+        await session.flush();
+        send({ ok: true, session: toStatusView(skippedSnapshot) }); return;
+      }
+    })().catch((err) => {
+      console.error('[background] top-level error', err);
+      const error = String(err);
+      if (isPopupToBgMessage(msg) && isNonSessionResponse(msg.type)) {
+        sendResponse({ ok: false, error });
+      } else {
+        session.fail(error);
+        sendResponse({ ok: false, error, session: toStatusView(session.getSnapshot()) } satisfies CommandResult);
+      }
+    });
+
+    return true;
+  });
+}

@@ -44,8 +44,8 @@ describe('background notation commands', () => {
   }
 
   async function importBackground() {
-    jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => makeOffscreenInstance()),
     }));
     const background = await import('../src/background');
@@ -59,7 +59,7 @@ describe('background notation commands', () => {
     // they still need draining — but they are short, and no longer behind the
     // bootstrap in the same queue.
     for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
-    ({ stopKeepAlive: stopBackgroundKeepAlive } = await import('../src/background/sessionLifecycle'));
+    ({ stopKeepAlive: stopBackgroundKeepAlive } = await import('../src/background/runtime/sessionLifecycle'));
     return (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
   }
 

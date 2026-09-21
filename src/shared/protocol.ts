@@ -258,7 +258,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupGetStorageUsage
     ? { ok: true; usage: import('./playback').StorageUsage } | { ok: false; error: string } :
   T extends SettingsRenameDriveRootFolder
-    ? { ok: true; result: import('../background/DriveRootFolder').RootRenameResult } | { ok: false; error: string } :
+    ? { ok: true; result: import('../background/drive/DriveRootFolder').RootRenameResult } | { ok: false; error: string } :
   T extends PopupListUnsavedRecordings
     ? { ok: true; recordings: import('../offscreen/storage/recoverOrphanRecordings').UnsavedRecording[] }
       | { ok: false; error: string } :

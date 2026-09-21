@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 
-import { RecordingTranscriptRepository } from '../RecordingTranscriptRepository';
-import { RecordingNotationRepository } from '../RecordingNotationRepository';
+import { RecordingTranscriptRepository } from '../library/transcript/RecordingTranscriptRepository';
+import { RecordingNotationRepository } from '../library/notations/RecordingNotationRepository';
 import type { Transcript, TranscriptSegment } from '../../shared/transcript';
 
 const segment = (tStartMs: number, text: string, speaker = 'Ada'): TranscriptSegment =>

@@ -4,7 +4,7 @@ import {
   DEFAULT_ORPHAN_GRACE_MS,
   reconcileRetainedMedia,
   type RetainedMediaReconcilerDeps,
-} from '../RetainedMediaReconciler';
+} from '../retention/RetainedMediaReconciler';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 

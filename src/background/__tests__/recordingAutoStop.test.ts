@@ -6,7 +6,7 @@ jest.mock('../../platform/chrome/tabs', () => ({
 import {
   handleMeetingEndedMessage,
   registerRecordingAutoStop,
-} from '../recordingAutoStop';
+} from '../recording/recordingAutoStop';
 import { addTabRemovedListener, addTabUpdatedListener } from '../../platform/chrome/tabs';
 import type { RecordingSessionSnapshot } from '../../shared/recording';
 

@@ -1,4 +1,4 @@
-import { fetchDriveTokenWithFallback, setAuthProvider } from '../driveAuth';
+import { fetchDriveTokenWithFallback, setAuthProvider } from '../drive/driveAuth';
 import type { AuthProvider } from '../../platform/capabilities/AuthProvider';
 
 type AuthReply = { token?: string; error?: string };

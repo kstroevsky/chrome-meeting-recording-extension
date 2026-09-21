@@ -1,5 +1,5 @@
 /** Telling trash from gone, and re-finding a file history lost track of. */
-import { DriveArtifactResolver, type DriveMetadata } from '../DriveArtifactResolver';
+import { DriveArtifactResolver, type DriveMetadata } from '../drive/DriveArtifactResolver';
 
 const identity = (over: Record<string, unknown> = {}) => ({
   fileId: 'file-1', folderId: 'folder-1', filename: 'a-mic.webm', bytes: 44_911_708, ...over,

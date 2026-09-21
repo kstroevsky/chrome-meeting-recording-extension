@@ -1,6 +1,6 @@
 /** ADR-0006 §10: quota is intentional once OPFS holds a media library. */
 import { createFakeOpfs } from '../../../tests/helpers/fakeOpfs';
-import { measureRetainedStorage } from '../retainedStorage';
+import { measureRetainedStorage } from '../retention/retainedStorage';
 
 describe('measureRetainedStorage', () => {
   it('counts only the retained library, not staging or pre-split files', async () => {

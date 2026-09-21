@@ -1,5 +1,5 @@
-import { RecordingNotationService } from '../RecordingNotationService';
-import type { RecordingNotationRepositoryPort, RecordingNotationsMutation } from '../RecordingNotationRepository';
+import { RecordingNotationService } from '../library/notations/RecordingNotationService';
+import type { RecordingNotationRepositoryPort, RecordingNotationsMutation } from '../library/notations/RecordingNotationRepository';
 import { MAX_NOTATIONS_PER_RECORDING, normalizeRecordingNotations, type RecordingNotation } from '../../shared/notations';
 
 /** In-memory stand-in for the IndexedDB adapter, normalizing on write like the real one. */

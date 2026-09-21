@@ -1,5 +1,5 @@
 /** ADR-0006 §15: tombstone at once, delete the bytes only when nobody is reading. */
-import { PlaybackLeaseManager, type PlaybackLeaseState } from '../PlaybackLeaseManager';
+import { PlaybackLeaseManager, type PlaybackLeaseState } from '../playback/PlaybackLeaseManager';
 
 function make(initial?: Partial<PlaybackLeaseState>) {
   let state: PlaybackLeaseState = { leases: [], deferred: {}, ...initial };

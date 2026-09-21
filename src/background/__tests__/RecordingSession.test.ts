@@ -1,4 +1,4 @@
-import { RecordingSession } from '../RecordingSession';
+import { RecordingSession } from '../recording/session/RecordingSession';
 import type { RecordingRunConfig } from '../../shared/recording';
 
 const RUN_CONFIG: RecordingRunConfig = {

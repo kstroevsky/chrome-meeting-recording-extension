@@ -1,4 +1,4 @@
-import { createPhaseWatchdog } from '../phaseWatchdog';
+import { createPhaseWatchdog } from '../recording/phaseWatchdog';
 import type { RecordingPhase, RecordingSessionSnapshot } from '../../shared/recording';
 
 function snap(phase: RecordingPhase, updatedAt: number): RecordingSessionSnapshot {

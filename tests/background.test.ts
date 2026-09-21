@@ -31,10 +31,10 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback,
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -101,10 +101,10 @@ describe('background runtime messages', () => {
       getCapturedTabs,
       getMediaStreamIdForTab,
     }));
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback: jest.fn(),
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -168,10 +168,10 @@ describe('background runtime messages', () => {
       getCapturedTabs,
       getMediaStreamIdForTab,
     }));
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback: jest.fn(),
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -227,8 +227,8 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -279,8 +279,8 @@ describe('background runtime messages', () => {
       acknowledgeAnalysisState: jest.fn(),
       };
 
-      jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
-      jest.doMock('../src/background/OffscreenManager', () => ({
+      jest.doMock('../src/background/drive/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
+      jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
         OffscreenManager: jest.fn(() => offscreenInstance),
       }));
 
@@ -333,8 +333,8 @@ describe('background runtime messages', () => {
       acknowledgeAnalysisState: jest.fn(),
       };
 
-      jest.doMock('../src/background/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
-      jest.doMock('../src/background/OffscreenManager', () => ({
+      jest.doMock('../src/background/drive/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
+      jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
         OffscreenManager: jest.fn(() => offscreenInstance),
       }));
 
@@ -371,10 +371,10 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback: jest.fn(),
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -415,10 +415,10 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback: jest.fn(),
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -458,10 +458,10 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback: jest.fn(),
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -500,10 +500,10 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback: jest.fn(),
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -543,10 +543,10 @@ describe('background runtime messages', () => {
       revokeBlobUrl: jest.fn(),
     };
 
-    jest.doMock('../src/background/driveAuth', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => ({
       fetchDriveTokenWithFallback: jest.fn(),
     }));
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
 
@@ -588,8 +588,8 @@ describe('background runtime messages', () => {
   }
 
   async function importBackgroundWith(offscreenInstance: any, driveAuth = { fetchDriveTokenWithFallback: jest.fn() }) {
-    jest.doMock('../src/background/driveAuth', () => driveAuth);
-    jest.doMock('../src/background/OffscreenManager', () => ({
+    jest.doMock('../src/background/drive/driveAuth', () => driveAuth);
+    jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
     await import('../src/background');

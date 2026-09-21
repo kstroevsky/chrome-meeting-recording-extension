@@ -116,30 +116,27 @@ Production telemetry is a separate bounded path owned by `TelemetryRuntime`. It 
 
 ## Files
 
-| File | Role |
-| :--- | :--- |
-| `RecordingSession.ts` | the canonical state machine (writes planes, derives phase, owns the timer, answers `runDurationMs` for a run that has already ended) |
-| `RecordingController.ts` | start/stop/discard/mute/pause orchestration (validate → command offscreen) |
-| `OffscreenManager.ts` | offscreen document lifecycle: ensure/reconnect, version handshake, recorder-tab fallback, RPC, and upload-state acknowledgement |
-| `RecordingHistoryRepository.ts` | IndexedDB persistence: normalized records, v2→v3 active-entry index migration, bounded visible-page reads, atomic updates |
-| `RecordingHistoryService.ts` | history transitions for pending files, settled downloads, Drive jobs, rename/delete, duration, and opening local downloads |
-| `recordingHistoryDatabase.ts` | the shared `recording-history` IndexedDB connection + schema (v5): owns the version and creates all three object stores, so no repository can downgrade-block another |
-| `RecordingNotationRepository.ts` | IndexedDB persistence for notations, keyed by `historyId`: atomic read-modify-write of the whole list |
-| `RecordingNotationService.ts` | notation transitions (add/update/end-open/remove/remove-all) with strict write validation |
-| `RecordingTranscriptRepository.ts` | IndexedDB persistence for transcripts, keyed by `historyId`: atomic read-modify-write of the whole segment list |
-| `RecordingTranscriptService.ts` | transcript transitions (append/status/remove-all), redelivery de-duplication, and the refusal to mix sources |
-| `RecordingTranscriptCapture.ts` | the seam between the meeting tab's wall clock and the run's media timeline: arms the caption push, projects utterances, sweeps the tab at run end |
-| `TelemetryRuntime.ts` | production telemetry preference, per-run coordination, recovery, outbox delivery, retry alarms, and opt-out deletion |
-| `phaseWatchdog.ts` | liveness backstop for orphaned `starting`/`stopping` |
-| `sessionLifecycle.ts` | keep-alive loop, crash-safe save handler, and `isFreshRecordingStart` (resets diagnostics at the start of a new run, so a finished run's snapshot survives for export) |
-| `recordingAutoStop.ts` | auto-stop when the recorded tab is **closed** or **navigates away** from the meeting → `controller.stop()` |
-| `recordingCommands.ts` | keyboard-shortcut start path (preserves `activeTab`) |
-| `messageHandlers.ts` | registers the `chrome.runtime.onMessage` listener and dispatches popup commands to their handlers |
-| `legacySession.ts` | rehydrates pre-refactor persisted state (the old separate `phase` / `activeRunConfig` keys) into a snapshot |
-| `driveAuth.ts` | Drive OAuth token acquisition (silent→interactive, bad-client-id diagnosis) — token *use* is [`offscreen/drive`](../offscreen/drive/README.md) |
-| `PerfDebugStore.ts` + `perf/` | the persisted perf snapshot + reducers (`PerfDebugReducers`, `PerfDebugState`) + `CpuSampler` (dev-only); see the [instrumentation doc](../../docs/plans/storage-and-instrumentation-architecture.md) |
+The module is grouped by responsibility so ownership is visible from the path:
 
-Wiring entry: `src/background.ts` (the SW entrypoint) routes messages/commands to `RecordingController` (including the content script's `MEETING_ENDED` → `controller.stop()`), serializes upload-state persistence into the session and history service, drives the session change-listener (persist → broadcast → keep-alive → `watchdog.observe` → reset diagnostics on a fresh-run start), and rehydrates on startup.
+| Area | Files | Role |
+| :--- | :--- | :--- |
+| `recording/` | `RecordingController.ts`, `phaseWatchdog.ts`, `recordingAutoStop.ts`, `recordingCommands.ts`, `unsavedCaptureFlag.ts` | recording command orchestration, liveness, automatic stop, shortcut entry, crash marker |
+| `recording/session/` | `RecordingSession.ts`, `legacySession.ts` | canonical state machine and legacy snapshot migration |
+| `offscreen/` | `OffscreenManager.ts` | offscreen lifecycle, reconnect/version handshake, RPC, recorder-tab fallback |
+| `messaging/` | `messageHandlers.ts` | runtime message dispatch from popup/content/player surfaces |
+| `runtime/` | `sessionLifecycle.ts` | keep-alive, crash-safe save handling, fresh-run lifecycle helpers |
+| `library/history/` | `RecordingHistoryRepository.ts`, `RecordingHistoryService.ts` | durable recording history persistence and transitions |
+| `library/notations/` | `RecordingNotationRepository.ts`, `RecordingNotationService.ts` | timecoded notation aggregate |
+| `library/transcript/` | `RecordingTranscriptRepository.ts`, `RecordingTranscriptService.ts`, `RecordingTranscriptCapture.ts` | transcript persistence, transitions, and meeting-tab capture seam |
+| `library/analysis/` | `RecordingAnalysisRepository.ts`, `RecordingAnalysisService.ts`, `RecordingAnalysisCoordinator.ts` | derived topic-analysis persistence and control-plane coordination |
+| `library/` | `RecordingLibraryDatabase.ts` | shared IndexedDB connection/schema for history, notations, transcripts, and analysis |
+| `drive/` | `DriveArtifactResolver.ts`, `DriveDestinationFiler.ts`, `DriveRootFolder.ts`, `driveAuth.ts`, `driveFolderNameRepair.ts` | Drive metadata/folder policy and auth fallback |
+| `playback/` | `RecordingPlaybackService.ts`, `PlaybackLeaseManager.ts`, `DrivePlaybackAuthLeaseManager.ts` | player projections and playback lifetime/auth leases |
+| `retention/` | `RetainedMediaReconciler.ts`, `retainedStorage.ts`, `storageDurability.ts` | retained OPFS reconciliation, accounting, and persistence diagnostics |
+| `observability/perf/` | `PerfDebugStore.ts`, `PerfDebugReducers.ts`, `PerfDebugState.ts`, `CpuSampler.ts` | persisted development diagnostics and reducers |
+| `observability/telemetry/` | `TelemetryRuntime.ts` | production telemetry coordination and delivery |
+
+Wiring entry: `src/background.ts` remains the service-worker composition root. It constructs these domain services, connects their callbacks, registers browser listeners, and performs startup reconciliation; domain logic lives under `src/background/` rather than in the entrypoint.
 
 ## Testing notes
 

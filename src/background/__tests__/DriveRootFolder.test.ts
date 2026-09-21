@@ -3,7 +3,7 @@
  * and a disagreement splits the library — so the failures matter more than the
  * happy path.
  */
-import { DriveRootFolder, type DriveRootFolderDeps } from '../DriveRootFolder';
+import { DriveRootFolder, type DriveRootFolderDeps } from '../drive/DriveRootFolder';
 
 type FakeFolder = { id: string; name?: string; parents?: string[] };
 

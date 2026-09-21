@@ -16,7 +16,7 @@ import {
   handleRecordingCommand,
   MARK_NOTATION_COMMAND,
   START_RECORDING_COMMAND,
-} from '../recordingCommands';
+} from '../recording/recordingCommands';
 
 describe('recording keyboard command', () => {
   const settings = {

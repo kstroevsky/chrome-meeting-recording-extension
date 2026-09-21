@@ -14,7 +14,7 @@ import {
   registerSaveHandler,
   startKeepAlive,
   stopKeepAlive,
-} from '../sessionLifecycle';
+} from '../runtime/sessionLifecycle';
 import { awaitDownloadSettled, downloadFile } from '../../platform/chrome/downloads';
 import { pokeRuntime } from '../../platform/chrome/runtime';
 import { broadcastToPopup } from '../../shared/messages';

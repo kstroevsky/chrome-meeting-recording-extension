@@ -9,7 +9,7 @@ import {
   markCaptureStarted,
   noteCaptureProgress,
   recordedCaptureDurationMs,
-} from '../unsavedCaptureFlag';
+} from '../recording/unsavedCaptureFlag';
 
 const local = () => chrome.storage.local as unknown as {
   get: jest.Mock; set: jest.Mock; __data: Record<string, unknown>;

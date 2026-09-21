@@ -1,4 +1,4 @@
-import { OffscreenManager } from '../OffscreenManager';
+import { OffscreenManager } from '../offscreen/OffscreenManager';
 import { getBuildId } from '../../shared/build';
 
 describe('OffscreenManager', () => {

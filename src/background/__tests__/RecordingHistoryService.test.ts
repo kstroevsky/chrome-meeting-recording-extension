@@ -1,4 +1,4 @@
-import { RecordingHistoryService } from '../RecordingHistoryService';
+import { RecordingHistoryService } from '../library/history/RecordingHistoryService';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 

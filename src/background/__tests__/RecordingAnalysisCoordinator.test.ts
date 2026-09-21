@@ -1,5 +1,5 @@
-import { RecordingAnalysisCoordinator, type AnalysisDataPlane } from '../RecordingAnalysisCoordinator';
-import { RecordingAnalysisService } from '../RecordingAnalysisService';
+import { RecordingAnalysisCoordinator, type AnalysisDataPlane } from '../library/analysis/RecordingAnalysisCoordinator';
+import { RecordingAnalysisService } from '../library/analysis/RecordingAnalysisService';
 import { CANDIDATE_ANALYSIS_CONFIG } from '../../shared/analysis/candidateConfig';
 import { hashAnalysisConfig, PIPELINE_VERSION, type AnalysisProvenance } from '../../shared/analysis/provenance';
 import { toWireAnalysis, type WireAnalysis } from '../../shared/analysis/storedAnalysis';

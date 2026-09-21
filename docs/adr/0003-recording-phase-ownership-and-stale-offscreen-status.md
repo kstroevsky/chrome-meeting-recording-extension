@@ -127,7 +127,7 @@ nothing for *missing* status — a session orphaned in `starting` (worker died
 mid-start) or `stopping` (worker died mid-stop) when the in-flight `OFFSCREEN_START`
 / `OFFSCREEN_STOP` RPC promise is lost and the offscreen reconnect re-broadcast is
 itself fenced out by the stale epoch, so nothing drives the session on. A small
-background **phase watchdog** (`background/phaseWatchdog.ts`) closes that gap with a
+background **phase watchdog** (`background/recording/phaseWatchdog.ts`) closes that gap with a
 per-phase budget map (`TIMEOUTS.STARTING_WATCHDOG_MS` / `STOPPING_WATCHDOG_MS`):
 armed from the session change-listener (including the rehydrated transition, so it
 fires immediately for an already-stale phase), it fails the session and tears down

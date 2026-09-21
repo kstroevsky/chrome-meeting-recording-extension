@@ -1,5 +1,5 @@
 /** ADR-0006 §11: the manifest carries capabilities, never bytes. */
-import { RecordingPlaybackService } from '../RecordingPlaybackService';
+import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
 import type { TranscriptStatus } from '../../shared/playback';
 import { isPlayable, masterTrack } from '../../shared/playback';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';

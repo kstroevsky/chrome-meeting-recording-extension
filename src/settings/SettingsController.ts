@@ -23,7 +23,7 @@ import { applyThemePreference } from '../shared/theme';
 import { FolderPresetList } from './FolderPresetList';
 import { formatBytes } from '../shared/format';
 import { sendToBackground } from '../shared/messages';
-import { ensurePersistentStorage } from '../background/storageDurability';
+import { ensurePersistentStorage } from '../background/retention/storageDurability';
 
 export type SettingsElements = {
   anonymousDiagnostics: HTMLInputElement | null;

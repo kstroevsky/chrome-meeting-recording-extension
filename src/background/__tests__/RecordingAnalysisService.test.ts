@@ -1,5 +1,5 @@
-import { RecordingAnalysisService } from '../RecordingAnalysisService';
-import type { RecordingAnalysisRepositoryPort } from '../RecordingAnalysisRepository';
+import { RecordingAnalysisService } from '../library/analysis/RecordingAnalysisService';
+import type { RecordingAnalysisRepositoryPort } from '../library/analysis/RecordingAnalysisRepository';
 import { PIPELINE_VERSION, type AnalysisProvenance } from '../../shared/analysis/provenance';
 import { normalizeStoredAnalysis, type StoredAnalysis } from '../../shared/analysis/storedAnalysis';
 

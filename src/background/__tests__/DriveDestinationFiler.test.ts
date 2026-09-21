@@ -1,5 +1,5 @@
 /** Filing moves a recording's folder; it never moves media and never deletes. */
-import { DriveDestinationFiler, type DriveFolder } from '../DriveDestinationFiler';
+import { DriveDestinationFiler, type DriveFolder } from '../drive/DriveDestinationFiler';
 
 const ROOT = 'Recordings';
 const ROOT_FOLDER: DriveFolder = { id: 'root-folder' };

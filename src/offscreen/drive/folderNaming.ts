@@ -37,7 +37,7 @@ export function inferDriveRecordingFolderName(filename: string): string {
  * Wall clock, not recorded time — a paused run counts the pause, and the stamp
  * is only as precise as the second it was made in. That is why the caller shows
  * it as `~32m` rather than a timecode. Used only when the run's own measured
- * clock is missing; see `background/unsavedCaptureFlag.ts`.
+ * clock is missing; see `background/recording/unsavedCaptureFlag.ts`.
  */
 export function approximateRecordingDurationMs(filename: string, lastModifiedMs: number): number | null {
   if (!parseableRecordingFilename(filename)) return null;

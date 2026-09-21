@@ -1,4 +1,4 @@
-import { PerfDebugStore } from '../PerfDebugStore';
+import { PerfDebugStore } from '../observability/perf/PerfDebugStore';
 import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY, PERF_EVENT_BUFFER_LIMIT, normalizePerfSettings, type PerfEventEntry } from '../../shared/perf';
 
 function event(

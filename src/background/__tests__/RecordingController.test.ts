@@ -1,6 +1,6 @@
-import { RecordingController } from '../RecordingController';
-import { RecordingSession } from '../RecordingSession';
-import type { OffscreenManager } from '../OffscreenManager';
+import { RecordingController } from '../recording/RecordingController';
+import { RecordingSession } from '../recording/session/RecordingSession';
+import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
 
 jest.mock('../../platform/chrome/tabs', () => ({
@@ -20,7 +20,7 @@ import {
   getTab,
 } from '../../platform/chrome/tabs';
 import { loadRecorderRuntimeSettingsSnapshot } from '../../shared/settings';
-import type { RecordingNotationService } from '../RecordingNotationService';
+import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
 
 const RUN_CONFIG = { storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen' } as const;
 const startMsg = (overrides: Record<string, unknown> = {}) => ({

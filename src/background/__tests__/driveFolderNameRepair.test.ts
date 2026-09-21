@@ -2,7 +2,7 @@
  * These renames happen in someone's Drive, so the planning is pure and tested:
  * what it declines to touch matters more than what it fixes.
  */
-import { plannedFolderRenames } from '../driveFolderNameRepair';
+import { plannedFolderRenames } from '../drive/driveFolderNameRepair';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 
 // A filename the builder really writes: `{slug}-{stamp}-{type}.{ext}`.

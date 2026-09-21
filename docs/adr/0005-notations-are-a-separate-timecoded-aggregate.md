@@ -52,7 +52,7 @@ A mark lands durably the instant it is made, with no dependency on the history
 row's lifecycle; the history row appears later and the two join by id.
 
 **3. The database version and its `onupgradeneeded` are owned by one module.**
-`src/background/recordingHistoryDatabase.ts` now owns `DATABASE_VERSION` and
+`src/background/library/RecordingLibraryDatabase.ts` now owns `DATABASE_VERSION` and
 creates both stores; `RecordingHistoryRepository` and
 `RecordingNotationRepository` both delegate to it and share one connection per
 `IDBFactory`. Two repositories declaring their own version of the same database
@@ -175,7 +175,7 @@ when a second object store costs one version bump.
 - Reading a recording with its notations is two reads, not one. Acceptable: no
   current surface lists many recordings *with* their marks.
 - The `recording-history` database is now shared. Any future store goes in
-  `recordingHistoryDatabase.ts` with a version bump there, never in a repository.
+  `RecordingLibraryDatabase.ts` with a version bump there, never in a repository.
 - Because storage is structured, the eventual export can render both notations
   and the planned `TranscriptSegment` model
   (`docs/plans/portable-transcription.md`) into the same WebVTT artifact — they

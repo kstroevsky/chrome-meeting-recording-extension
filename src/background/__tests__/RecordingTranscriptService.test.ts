@@ -1,5 +1,5 @@
-import { RecordingTranscriptService } from '../RecordingTranscriptService';
-import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../RecordingTranscriptRepository';
+import { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
+import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../library/transcript/RecordingTranscriptRepository';
 import {
   MAX_TRANSCRIPT_SEGMENTS,
   normalizeTranscript,

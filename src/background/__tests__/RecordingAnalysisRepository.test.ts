@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 
-import { RecordingAnalysisRepository } from '../RecordingAnalysisRepository';
-import { RecordingTranscriptRepository } from '../RecordingTranscriptRepository';
-import { RecordingNotationRepository } from '../RecordingNotationRepository';
+import { RecordingAnalysisRepository } from '../library/analysis/RecordingAnalysisRepository';
+import { RecordingTranscriptRepository } from '../library/transcript/RecordingTranscriptRepository';
+import { RecordingNotationRepository } from '../library/notations/RecordingNotationRepository';
 import { PIPELINE_VERSION } from '../../shared/analysis/provenance';
 import type { StoredAnalysis } from '../../shared/analysis/storedAnalysis';
 

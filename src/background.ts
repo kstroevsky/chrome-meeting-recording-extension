@@ -14,50 +14,50 @@
  * and post-stop Drive upload sequencing all live in the offscreen document.
  */
 
-import { DriveDestinationFiler } from './background/DriveDestinationFiler';
+import { DriveDestinationFiler } from './background/drive/DriveDestinationFiler';
 import { loadExtensionSettingsFromStorage, toStorageMode } from './shared/settings';
 import { DRIVE_DEFAULT_DESTINATION_NAME } from './shared/settings';
-import { DriveRootFolder } from './background/DriveRootFolder';
-import { DriveArtifactResolver } from './background/DriveArtifactResolver';
-import { PlaybackLeaseManager } from './background/PlaybackLeaseManager';
+import { DriveRootFolder } from './background/drive/DriveRootFolder';
+import { DriveArtifactResolver } from './background/drive/DriveArtifactResolver';
+import { PlaybackLeaseManager } from './background/playback/PlaybackLeaseManager';
 import { addTabRemovedListener, sendTabMessage } from './platform/chrome/tabs';
-import { fetchDriveTokenWithFallback } from './background/driveAuth';
-import { DrivePlaybackAuthLeaseManager } from './background/DrivePlaybackAuthLeaseManager';
-import { RecordingPlaybackService } from './background/RecordingPlaybackService';
-import { reconcileRetainedMedia } from './background/RetainedMediaReconciler';
+import { fetchDriveTokenWithFallback } from './background/drive/driveAuth';
+import { DrivePlaybackAuthLeaseManager } from './background/playback/DrivePlaybackAuthLeaseManager';
+import { RecordingPlaybackService } from './background/playback/RecordingPlaybackService';
+import { reconcileRetainedMedia } from './background/retention/RetainedMediaReconciler';
 import { existsByKey, hasLibraryDirectory, listLibraryFiles, removeByKey } from './offscreen/storage/opfsLayout';
-import { OffscreenManager } from './background/OffscreenManager';
-import { PerfDebugStore } from './background/PerfDebugStore';
-import { RecordingController } from './background/RecordingController';
-import { RecordingSession } from './background/RecordingSession';
-import { registerMessageHandlers } from './background/messageHandlers';
-import { createChromeCpuSampler } from './background/perf/CpuSampler';
-import { registerRecordingCommands } from './background/recordingCommands';
-import { registerRecordingAutoStop } from './background/recordingAutoStop';
-import { createPhaseWatchdog } from './background/phaseWatchdog';
-import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/sessionLifecycle';
+import { OffscreenManager } from './background/offscreen/OffscreenManager';
+import { PerfDebugStore } from './background/observability/perf/PerfDebugStore';
+import { RecordingController } from './background/recording/RecordingController';
+import { RecordingSession } from './background/recording/session/RecordingSession';
+import { registerMessageHandlers } from './background/messaging/messageHandlers';
+import { createChromeCpuSampler } from './background/observability/perf/CpuSampler';
+import { registerRecordingCommands } from './background/recording/recordingCommands';
+import { registerRecordingAutoStop } from './background/recording/recordingAutoStop';
+import { createPhaseWatchdog } from './background/recording/phaseWatchdog';
+import { startKeepAlive, stopKeepAlive, isFreshRecordingStart, registerSaveHandler } from './background/runtime/sessionLifecycle';
 import {
   pendingLocalDeliveries,
   type RecordingHistoryCursor,
   type RecordingHistoryEntry,
 } from './shared/recordingHistory';
-import { ensurePersistentStorage, readStorageUsage } from './background/storageDurability';
+import { ensurePersistentStorage, readStorageUsage } from './background/retention/storageDurability';
 import { broadcastToPopup } from './shared/messages';
-import { RecordingHistoryRepository } from './background/RecordingHistoryRepository';
-import { RecordingNotationRepository } from './background/RecordingNotationRepository';
-import { RecordingNotationService } from './background/RecordingNotationService';
-import { RecordingTranscriptRepository } from './background/RecordingTranscriptRepository';
-import { RecordingTranscriptService } from './background/RecordingTranscriptService';
-import { RecordingTranscriptCapture } from './background/RecordingTranscriptCapture';
-import { RecordingAnalysisRepository } from './background/RecordingAnalysisRepository';
-import { RecordingAnalysisService } from './background/RecordingAnalysisService';
-import { RecordingAnalysisCoordinator } from './background/RecordingAnalysisCoordinator';
+import { RecordingHistoryRepository } from './background/library/history/RecordingHistoryRepository';
+import { RecordingNotationRepository } from './background/library/notations/RecordingNotationRepository';
+import { RecordingNotationService } from './background/library/notations/RecordingNotationService';
+import { RecordingTranscriptRepository } from './background/library/transcript/RecordingTranscriptRepository';
+import { RecordingTranscriptService } from './background/library/transcript/RecordingTranscriptService';
+import { RecordingTranscriptCapture } from './background/library/transcript/RecordingTranscriptCapture';
+import { RecordingAnalysisRepository } from './background/library/analysis/RecordingAnalysisRepository';
+import { RecordingAnalysisService } from './background/library/analysis/RecordingAnalysisService';
+import { RecordingAnalysisCoordinator } from './background/library/analysis/RecordingAnalysisCoordinator';
 import { CANDIDATE_ANALYSIS_CONFIG } from './shared/analysis/candidateConfig';
 import { hashAnalysisConfig, PIPELINE_VERSION } from './shared/analysis/provenance';
 import { packagedModel } from './shared/analysis/packagedModel';
-import { RecordingHistoryService } from './background/RecordingHistoryService';
+import { RecordingHistoryService } from './background/library/history/RecordingHistoryService';
 import { openDownloadedFile } from './platform/chrome/downloads';
-import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/legacySession';
+import { hydrateLegacySession, LEGACY_SESSION_PHASE_KEY, LEGACY_SESSION_RUN_CONFIG_KEY } from './background/recording/session/legacySession';
 import { getSessionStorageValues, setSessionStorageValues } from './platform/chrome/storage';
 import { makeLogger } from './shared/logger';
 import {
@@ -74,15 +74,15 @@ import {
   type RecordingPhase,
 } from './shared/recording';
 import { TIMEOUTS } from './shared/timeouts';
-import { TelemetryRuntime } from './background/TelemetryRuntime';
+import { TelemetryRuntime } from './background/observability/telemetry/TelemetryRuntime';
 import {
   captureMayBeUnsaved,
   markCaptureSettled,
   noteCaptureProgress,
   recordedCaptureDurationMs,
-} from './background/unsavedCaptureFlag';
+} from './background/recording/unsavedCaptureFlag';
 import type { UnsavedRecording } from './offscreen/storage/recoverOrphanRecordings';
-import { plannedFolderRenames } from './background/driveFolderNameRepair';
+import { plannedFolderRenames } from './background/drive/driveFolderNameRepair';
 
 const L = makeLogger('background');
 const offscreen = new OffscreenManager();

@@ -1,8 +1,8 @@
-import { RecordingTranscriptCapture } from '../RecordingTranscriptCapture';
-import { RecordingTranscriptService } from '../RecordingTranscriptService';
-import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../RecordingTranscriptRepository';
+import { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
+import { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
+import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../library/transcript/RecordingTranscriptRepository';
 import { normalizeTranscript, type CaptionUtterance, type Transcript } from '../../shared/transcript';
-import { RecordingSession } from '../RecordingSession';
+import { RecordingSession } from '../recording/session/RecordingSession';
 import type { RecordingRunConfig } from '../../shared/recording';
 
 function fakeRepository() {

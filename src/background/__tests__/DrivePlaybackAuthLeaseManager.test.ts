@@ -1,5 +1,5 @@
 /** ADR-0006 §16-17: the narrowest rule that works, and the token never leaves. */
-import { DrivePlaybackAuthLeaseManager, driveMediaUrl } from '../DrivePlaybackAuthLeaseManager';
+import { DrivePlaybackAuthLeaseManager, driveMediaUrl } from '../playback/DrivePlaybackAuthLeaseManager';
 import * as dnr from '../../platform/chrome/declarativeNetRequest';
 
 jest.mock('../../platform/chrome/declarativeNetRequest');
