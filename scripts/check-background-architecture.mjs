@@ -5,7 +5,9 @@ import ts from 'typescript';
 
 const ROOT = process.cwd();
 const BACKGROUND = path.join(ROOT, 'src/background');
+const ENTRYPOINT = path.join(ROOT, 'src/background.ts');
 const MAX_LINES = 250;
+const MAX_ENTRYPOINT_LINES = 100;
 
 const LINE_LIMIT_EXCEPTIONS = new Map([
   [
@@ -37,14 +39,16 @@ function rootIdentifier(expression) {
   return ts.isIdentifier(current) ? current.text : null;
 }
 
-function rawChromeOperations(file, sourceText) {
+function rawChromeOperations(file, sourceText, allow = () => false) {
   const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const findings = [];
 
   function visit(node) {
     if (ts.isPropertyAccessExpression(node) && rootIdentifier(node) === 'chrome') {
+      if (allow(node)) return;
       const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
-      findings.push(`${relative(file)}:${line + 1}:${character + 1} ${node.getText(source)}`);
+      const label = file === ENTRYPOINT ? 'background.ts' : relative(file);
+      findings.push(`${label}:${line + 1}:${character + 1} ${node.getText(source)}`);
       return;
     }
     ts.forEachChild(node, visit);
@@ -54,20 +58,24 @@ function rawChromeOperations(file, sourceText) {
   return findings;
 }
 
+function lineCount(source) {
+  return source.split(/\r?\n/).length - (source.endsWith('\n') ? 1 : 0);
+}
+
 const files = productionTypeScriptFiles(BACKGROUND);
 const failures = [];
 
 for (const file of files) {
   const rel = relative(file);
   const source = fs.readFileSync(file, 'utf8');
-  const lineCount = source.split(/\r?\n/).length - (source.endsWith('\n') ? 1 : 0);
+  const lines = lineCount(source);
 
   if (!rel.includes('/')) {
     failures.push(`${rel}: production TypeScript must live in a feature package, not background/ root`);
   }
 
-  if (lineCount > MAX_LINES && !LINE_LIMIT_EXCEPTIONS.has(rel)) {
-    failures.push(`${rel}: ${lineCount} lines exceeds the ${MAX_LINES}-line background target`);
+  if (lines > MAX_LINES && !LINE_LIMIT_EXCEPTIONS.has(rel)) {
+    failures.push(`${rel}: ${lines} lines exceeds the ${MAX_LINES}-line background target`);
   }
 
   if (rel.startsWith('library/')) {
@@ -88,7 +96,43 @@ for (const file of files) {
 
 for (const [rel, reason] of LINE_LIMIT_EXCEPTIONS) {
   const file = path.join(BACKGROUND, rel);
-  if (!fs.existsSync(file)) failures.push(`${rel}: stale line-limit exception (${reason})`);
+  if (!fs.existsSync(file)) {
+    failures.push(`${rel}: stale line-limit exception (${reason})`);
+    continue;
+  }
+  const lines = lineCount(fs.readFileSync(file, 'utf8'));
+  if (lines <= MAX_LINES) {
+    failures.push(`${rel}: stale line-limit exception; file is now ${lines} lines (${reason})`);
+  }
+}
+
+if (!fs.existsSync(ENTRYPOINT)) {
+  failures.push('background.ts: MV3 entrypoint is missing');
+} else {
+  const source = fs.readFileSync(ENTRYPOINT, 'utf8');
+  const lines = lineCount(source);
+  if (lines > MAX_ENTRYPOINT_LINES) {
+    failures.push(`background.ts: ${lines} lines exceeds the ${MAX_ENTRYPOINT_LINES}-line entrypoint target`);
+  }
+  const sourceFile = ts.createSourceFile(
+    ENTRYPOINT,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) {
+      failures.push('background.ts: domain/business declarations belong under background/ feature packages');
+    }
+  }
+  for (const finding of rawChromeOperations(ENTRYPOINT, source, (node) => (
+    node.name.text === 'addListener'
+    && ts.isCallExpression(node.parent)
+    && node.parent.expression === node
+  ))) {
+    failures.push(`${finding}: raw Chrome operation; entrypoint may only register listeners`);
+  }
 }
 
 if (failures.length) {
