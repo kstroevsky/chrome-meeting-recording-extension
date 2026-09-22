@@ -41,6 +41,7 @@ export type PlaybackLeaseManagerDeps = {
 
 export class PlaybackLeaseManager {
   private readonly now: () => number;
+  private mutationTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: PlaybackLeaseManagerDeps) {
     this.now = deps.now ?? Date.now;
@@ -48,10 +49,12 @@ export class PlaybackLeaseManager {
 
   /** One lease per tab-and-recording; re-acquiring refreshes rather than stacks. */
   async acquire(tabId: number, recordingId: string, opfsKeys: string[]): Promise<void> {
-    const state = await this.state();
-    const leases = state.leases.filter((lease) => !(lease.tabId === tabId && lease.recordingId === recordingId));
-    leases.push({ tabId, recordingId, opfsKeys, createdAt: this.now() });
-    await this.deps.write({ ...state, leases });
+    await this.mutate(async () => {
+      const state = await this.state();
+      const leases = state.leases.filter((lease) => !(lease.tabId === tabId && lease.recordingId === recordingId));
+      leases.push({ tabId, recordingId, opfsKeys, createdAt: this.now() });
+      await this.deps.write({ ...state, leases });
+    });
   }
 
   async isLeased(recordingId: string): Promise<boolean> {
@@ -63,20 +66,44 @@ export class PlaybackLeaseManager {
    * replace: a recording can be leased by two tabs holding different tracks.
    */
   async defer(recordingId: string, keys: string[]): Promise<void> {
-    const state = await this.state();
-    const existing = state.deferred[recordingId] ?? [];
-    await this.deps.write({
-      ...state,
-      deferred: { ...state.deferred, [recordingId]: [...new Set([...existing, ...keys])] },
+    await this.mutate(async () => {
+      const state = await this.state();
+      await this.writeDeferral(state, recordingId, keys);
+    });
+  }
+
+  /** Atomically decides whether deletion may run or must wait for readers. */
+  async deleteOrDefer(recordingId: string, keys: string[]): Promise<'deleted' | 'deferred'> {
+    return this.mutate(async () => {
+      const state = await this.state();
+      if (state.leases.some((lease) => lease.recordingId === recordingId)) {
+        await this.writeDeferral(state, recordingId, keys);
+        return 'deferred' as const;
+      }
+      await this.deps.deleteRetained(keys);
+      return 'deleted' as const;
     });
   }
 
   /** Releases a tab's leases and runs whatever that unblocks. */
   async releaseTab(tabId: number): Promise<number> {
-    const state = await this.state();
-    const leases = state.leases.filter((lease) => lease.tabId !== tabId);
-    if (leases.length === state.leases.length) return 0;
-    return await this.drain({ ...state, leases });
+    return this.mutate(async () => {
+      const state = await this.state();
+      const leases = state.leases.filter((lease) => lease.tabId !== tabId);
+      if (leases.length === state.leases.length) return 0;
+      return this.drain({ ...state, leases });
+    });
+  }
+
+  async release(tabId: number, recordingId: string): Promise<number> {
+    return this.mutate(async () => {
+      const state = await this.state();
+      const leases = state.leases.filter(
+        (lease) => !(lease.tabId === tabId && lease.recordingId === recordingId),
+      );
+      if (leases.length === state.leases.length) return 0;
+      return this.drain({ ...state, leases });
+    });
   }
 
   /**
@@ -84,10 +111,12 @@ export class PlaybackLeaseManager {
    * tabs do not, so without this a crashed player would pin its bytes forever.
    */
   async reconcile(liveTabIds: readonly number[]): Promise<number> {
-    const live = new Set(liveTabIds);
-    const state = await this.state();
-    const leases = state.leases.filter((lease) => live.has(lease.tabId));
-    return await this.drain({ ...state, leases });
+    return this.mutate(async () => {
+      const live = new Set(liveTabIds);
+      const state = await this.state();
+      const leases = state.leases.filter((lease) => live.has(lease.tabId));
+      return this.drain({ ...state, leases });
+    });
   }
 
   /** Deletes everything no longer held, and returns how many recordings that freed. */
@@ -117,7 +146,25 @@ export class PlaybackLeaseManager {
       return stored ? { leases: stored.leases ?? [], deferred: stored.deferred ?? {} } : { ...EMPTY };
     } catch (error) {
       this.deps.warn?.('Could not read playback leases', error);
-      return { ...EMPTY };
+      throw error;
     }
+  }
+
+  private async writeDeferral(
+    state: PlaybackLeaseState,
+    recordingId: string,
+    keys: string[],
+  ): Promise<void> {
+    const existing = state.deferred[recordingId] ?? [];
+    await this.deps.write({
+      ...state,
+      deferred: { ...state.deferred, [recordingId]: [...new Set([...existing, ...keys])] },
+    });
+  }
+
+  private mutate<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.mutationTail.catch(() => {}).then(work);
+    this.mutationTail = run.then(() => undefined, () => undefined);
+    return run;
   }
 }

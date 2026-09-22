@@ -57,12 +57,11 @@ export function registerSaveHandler(
     let downloadId: number | undefined;
     try {
       downloadId = await downloadFile({ url: blobUrl, filename: resolvedFilename, saveAs: false });
-      debugPerf(L.log, 'finalizer', 'download_complete', {
+      debugPerf(L.log, 'finalizer', 'download_started', {
         filename: resolvedFilename,
         durationMs: roundMs(nowMs() - downloadStartedAt),
         stream,
       });
-      await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       debugPerf(L.log, 'finalizer', 'download_failed', {
@@ -88,6 +87,7 @@ export function registerSaveHandler(
     if (historyId) void history?.localSaveSettled(historyId, stream, downloadId, settled, undefined, kind)
       .catch((historyError) => L.warn('Recording history update failed:', historyError));
     if (settled === 'complete') {
+      await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
       // A retained artifact was promoted out of staging before delivery, so
       // the extension owns these bytes now: free the object URL and keep the
       // file. Without one, the pre-ADR-0006 rule still applies — the staging
@@ -95,6 +95,11 @@ export function registerSaveHandler(
       offscreen.revokeBlobUrl(blobUrl, retainedKey ? undefined : opfsFilename);
     } else if (settled === 'interrupted') {
       offscreen.revokeBlobUrl(blobUrl);
+      await broadcastToPopup({
+        type: 'RECORDING_SAVE_ERROR',
+        filename: resolvedFilename,
+        error: 'Download interrupted',
+      });
     }
     // 'timeout': the download may still be writing — leave both the URL and the
     // OPFS file untouched; recovery reclaims the file later if it was saved.
@@ -185,9 +190,27 @@ export function registerSaveHandler(
       if (!awaitsLocalDelivery(file)) continue;
       const retained = file.locations.find((location) => location.kind === 'opfs');
       if (!retained) continue;
-      const blobUrl = await offscreen.openRetained(retained.key);
+      let blobUrl: string | undefined;
+      try {
+        blobUrl = await offscreen.openRetained(retained.key);
+      } catch (error) {
+        const message = `Recording runtime unavailable: ${error instanceof Error ? error.message : String(error)}`;
+        L.warn('Deferred delivery could not open retained bytes:', message);
+        outcomes.push({ status: 'not-started', error: message });
+        continue;
+      }
       if (!blobUrl) {
         L.warn('Deferred delivery skipped: retained bytes are gone', retained.key);
+        const error = 'Retained recording bytes are unavailable';
+        await history?.localSaveSettled(
+          entry.id,
+          file.stream,
+          undefined,
+          'interrupted',
+          error,
+          file.kind,
+        ).catch((historyError) => L.warn('Recording history update failed:', historyError));
+        outcomes.push({ status: 'not-started', error });
         continue;
       }
       outcomes.push(await deliver({

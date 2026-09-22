@@ -145,14 +145,10 @@ export class OffscreenManager {
   }
 
   async openRetained(key: string): Promise<string | undefined> {
-    try {
-      await this.ensureReady();
-      const response = await this.rpc({ type: 'OFFSCREEN_OPEN_RETAINED', key }) as
-        { ok?: boolean; blobUrl?: string } | undefined;
-      return response?.ok ? response.blobUrl : undefined;
-    } catch {
-      return undefined;
-    }
+    await this.ensureReady();
+    const response = await this.rpc({ type: 'OFFSCREEN_OPEN_RETAINED', key }) as
+      { ok?: boolean; blobUrl?: string } | undefined;
+    return response?.ok ? response.blobUrl : undefined;
   }
 
   revokeBlobUrl(blobUrl: string, opfsFilename?: string): void {

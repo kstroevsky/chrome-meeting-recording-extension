@@ -39,6 +39,25 @@ describe('registerSaveHandler', () => {
     expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1', 'tab.webm');
   });
 
+  it('does not announce success before Chrome confirms the download completed', async () => {
+    let settle!: (value: string) => void;
+    (awaitDownloadSettled as jest.Mock).mockImplementationOnce(
+      () => new Promise((resolve) => { settle = resolve; }),
+    );
+
+    offscreen.onSaveRequested({ filename: 'tab.webm', blobUrl: 'blob:1', opfsFilename: 'tab.webm' });
+    await flushMicrotasks();
+
+    expect(downloadFile).toHaveBeenCalledTimes(1);
+    expect(broadcastToPopup).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'RECORDING_SAVED' }),
+    );
+
+    settle('complete');
+    await flushMicrotasks();
+    expect(broadcastToPopup).toHaveBeenCalledWith({ type: 'RECORDING_SAVED', filename: 'tab.webm' });
+  });
+
   it('keeps the OPFS file (revokes URL only) when the download is interrupted', async () => {
     (awaitDownloadSettled as jest.Mock).mockResolvedValueOnce('interrupted');
 
@@ -47,6 +66,14 @@ describe('registerSaveHandler', () => {
 
     expect(offscreen.revokeBlobUrl).toHaveBeenCalledWith('blob:1');
     expect(offscreen.revokeBlobUrl).not.toHaveBeenCalledWith('blob:1', 'tab.webm');
+    expect(broadcastToPopup).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'RECORDING_SAVED' }),
+    );
+    expect(broadcastToPopup).toHaveBeenCalledWith({
+      type: 'RECORDING_SAVE_ERROR',
+      filename: 'tab.webm',
+      error: 'Download interrupted',
+    });
   });
 
   it('leaves the URL and OPFS file untouched when the download never settles', async () => {
@@ -56,6 +83,9 @@ describe('registerSaveHandler', () => {
     await flushMicrotasks();
 
     expect(offscreen.revokeBlobUrl).not.toHaveBeenCalled();
+    expect(broadcastToPopup).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'RECORDING_SAVED' }),
+    );
   });
 
   it('broadcasts a save error and keeps the OPFS file when the download never starts', async () => {
@@ -322,6 +352,49 @@ describe('registerSaveHandler', () => {
       expect(downloadFile).toHaveBeenCalledWith({
         url: 'blob:9', filename: 'Therapy/tab.webm', saveAs: false,
       });
+    });
+
+    it('reports a missing retained source as a failed artifact instead of silently skipping it', async () => {
+      const history = {
+        localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      };
+      const { deliverDeferred } = registerSaveHandler(offscreen, L, history as never);
+      const entry = {
+        id: 'rec-1',
+        files: [{
+          stream: 'tab' as const, filename: 'tab.webm', delivery: { requested: 'local', status: 'pending' },
+          locations: [{ kind: 'opfs' as const, key: 'library/rec-1/tab.webm', retainedAt: 1 }],
+        }],
+      };
+      offscreen.openRetained = jest.fn(async () => undefined);
+
+      await expect(deliverDeferred(entry as never)).resolves.toEqual([
+        { status: 'not-started', error: 'Retained recording bytes are unavailable' },
+      ]);
+      expect(history.localSaveSettled).toHaveBeenCalledWith(
+        'rec-1', 'tab', undefined, 'interrupted', 'Retained recording bytes are unavailable', undefined,
+      );
+    });
+
+    it('keeps runtime-unavailable retained delivery retryable', async () => {
+      const history = { localSaveSettled: jest.fn() };
+      const { deliverDeferred } = registerSaveHandler(offscreen, L, history as never);
+      const entry = {
+        id: 'rec-1',
+        files: [{
+          stream: 'tab' as const, filename: 'tab.webm', delivery: { requested: 'local', status: 'pending' },
+          locations: [{ kind: 'opfs' as const, key: 'library/rec-1/tab.webm', retainedAt: 1 }],
+        }],
+      };
+      offscreen.openRetained = jest.fn(async () => { throw new Error('offscreen unavailable'); });
+
+      const outcomes = await deliverDeferred(entry as never);
+
+      expect(outcomes).toEqual([{
+        status: 'not-started',
+        error: 'Recording runtime unavailable: offscreen unavailable',
+      }]);
+      expect(history.localSaveSettled).not.toHaveBeenCalled();
     });
 
     it('holds the download and reports that someone is being asked', async () => {

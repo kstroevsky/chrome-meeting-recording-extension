@@ -85,6 +85,23 @@ describe('authorize', () => {
     await manager.authorize(42, FILE);
     expect(updateSessionRules).toHaveBeenCalledWith(expect.objectContaining({ removeRuleIds: [] }));
   });
+
+  it('serializes concurrent authorizations so rule ids cannot collide', async () => {
+    let rules: any[] = [];
+    getSessionRules.mockImplementation(async () => rules as never);
+    updateSessionRules.mockImplementation(async ({ removeRuleIds = [], addRules = [] }) => {
+      rules = rules.filter((rule) => !removeRuleIds.includes(rule.id));
+      rules.push(...addRules);
+    });
+    const manager = new DrivePlaybackAuthLeaseManager({ getToken: async () => TOKEN });
+
+    await Promise.all([
+      manager.authorize(42, 'a'),
+      manager.authorize(43, 'b'),
+    ]);
+
+    expect(rules.map((rule) => rule.id)).toEqual([9000, 9001]);
+  });
 });
 
 describe('release and reconcile', () => {
@@ -125,12 +142,12 @@ describe('release and reconcile', () => {
     expect(updateSessionRules).not.toHaveBeenCalled();
   });
 
-  it('survives a browser that cannot read session rules', async () => {
+  it('fails closed when session-rule enumeration is unavailable', async () => {
     getSessionRules.mockRejectedValue(new Error('unavailable'));
     const warn = jest.fn();
     const manager = new DrivePlaybackAuthLeaseManager({ getToken: async () => TOKEN, warn });
 
-    await expect(manager.reconcile([1])).resolves.toBe(0);
+    await expect(manager.reconcile([1])).rejects.toThrow('unavailable');
     expect(warn).toHaveBeenCalled();
   });
 });

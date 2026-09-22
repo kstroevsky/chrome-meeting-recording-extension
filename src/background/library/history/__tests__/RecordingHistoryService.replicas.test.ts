@@ -73,6 +73,20 @@ describe('RecordingHistoryService artifact replicas', () => {
     });
   });
 
+  it('keeps an unsettled timed-out download pending and retryable', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+
+    await service.localSaveSettled('r1', 'tab', 7, 'timeout');
+
+    expect(await tabFile(repo)).toMatchObject({
+      status: 'pending',
+      downloadId: 7,
+      delivery: { requested: 'local', status: 'pending' },
+    });
+  });
+
   it('holds delivery pending through a Drive failure until the local save settles', async () => {
     const repo = new MemoryRepository();
     const service = new RecordingHistoryService(repo, jest.fn(), () => 10);

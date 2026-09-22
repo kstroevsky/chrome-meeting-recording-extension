@@ -76,16 +76,17 @@ export class LocalDeliveryOrchestrator {
     }
 
     const outcomes = await this.deliverDeferred(entry, folder);
-    const allLanded = outcomes.length > 0
-      && outcomes.every((outcome) => outcome.status === 'complete');
+    if (outcomes.length === 0) {
+      throw new Error('This recording has no pending local files to deliver');
+    }
+    const allLanded = outcomes.every((outcome) => outcome.status === 'complete');
     if (allLanded) {
       await this.history.setLocalFolder(recordingId, folder);
-    } else if (outcomes.some((outcome) => outcome.status !== 'complete')) {
-      this.logger.warn(
-        `Local delivery for ${recordingId} did not fully complete:`,
-        outcomes.map((outcome) => outcome.status).join(', '),
-      );
+      return;
     }
+    const summary = outcomes.map((outcome) => outcome.status).join(', ');
+    this.logger.warn(`Local delivery for ${recordingId} did not fully complete:`, summary);
+    throw new Error(`Local delivery did not fully complete (${summary})`);
   }
 
   async reconcileAbandoned(): Promise<void> {

@@ -18,7 +18,7 @@ export async function handlePlaybackMessage(
 
   if (msg.type === 'GET_RECORDING_PLAYBACK_MANIFEST') {
     if (!playback) throw new Error('Playback is unavailable');
-    const manifest = await playback.getManifest(msg.recordingId);
+    let manifest = await playback.getManifest(msg.recordingId);
     if (!manifest) {
       sendResponse({ ok: false, error: 'This recording is no longer available' });
       return true;
@@ -29,6 +29,15 @@ export async function handlePlaybackMessage(
         .filter((source) => source.kind === 'opfs')
         .map((source) => (source as { key: string }).key));
       await playbackLeases.acquire(readerTab, manifest.recordingId, keys);
+      // Deletion may have tombstoned the row between the first read and lease
+      // acquisition. Re-read after the lease is durable so we never hand a
+      // player a manifest whose retained bytes were already allowed to vanish.
+      manifest = await playback.getManifest(msg.recordingId);
+      if (!manifest) {
+        await playbackLeases.release(readerTab, msg.recordingId);
+        sendResponse({ ok: false, error: 'This recording is no longer available' });
+        return true;
+      }
     }
     sendResponse({ ok: true, manifest });
     return true;

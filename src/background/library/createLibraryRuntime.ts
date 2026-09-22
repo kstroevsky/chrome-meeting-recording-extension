@@ -2,7 +2,6 @@ import { openDownloadedFile } from '../../platform/chrome/downloads';
 import { CANDIDATE_ANALYSIS_CONFIG } from '../../shared/analysis/candidateConfig';
 import { packagedModel } from '../../shared/analysis/packagedModel';
 import { hashAnalysisConfig, PIPELINE_VERSION } from '../../shared/analysis/provenance';
-import { removeByKey } from '../../offscreen/storage/opfsLayout';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { PlaybackLeaseManager } from '../playback/PlaybackLeaseManager';
 import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
@@ -62,11 +61,6 @@ export function createLibraryRuntime({
     onSettled: onAnalysisSettled,
   });
 
-  const deleteRetainedKeys = async (keys: string[]) => {
-    const root = await navigator.storage.getDirectory();
-    for (const key of keys) await removeByKey(root, key);
-  };
-
   const history = new RecordingHistoryService(
     historyRepository,
     openDownloadedFile,
@@ -83,11 +77,7 @@ export function createLibraryRuntime({
         .catch((error) => logger.warn('Could not remove recording analysis:', error));
     },
     async (keys, historyId) => {
-      if (await playbackLeases.isLeased(historyId)) {
-        await playbackLeases.defer(historyId, keys);
-        return;
-      }
-      await deleteRetainedKeys(keys);
+      await playbackLeases.deleteOrDefer(historyId, keys);
     },
   );
 

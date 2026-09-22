@@ -39,6 +39,20 @@ describe('acquire', () => {
     expect(peek().leases).toHaveLength(2);
     await expect(manager.isLeased('r1')).resolves.toBe(true);
   });
+
+  it('serializes concurrent acquisitions so neither lease is lost', async () => {
+    const { manager, peek } = make();
+
+    await Promise.all([
+      manager.acquire(7, 'r1', ['a']),
+      manager.acquire(8, 'r2', ['b']),
+    ]);
+
+    expect(peek().leases.map((lease) => [lease.tabId, lease.recordingId])).toEqual([
+      [7, 'r1'],
+      [8, 'r2'],
+    ]);
+  });
 });
 
 describe('deferred deletion', () => {
@@ -74,6 +88,18 @@ describe('deferred deletion', () => {
 
     await manager.releaseTab(7);
     expect(deleteRetained).toHaveBeenCalledWith(['a', 'b']);
+  });
+
+  it('atomically defers deletion when lease acquisition won the mutation order', async () => {
+    const { manager, deleteRetained, peek } = make();
+
+    const acquire = manager.acquire(7, 'r1', ['a']);
+    const deletion = manager.deleteOrDefer('r1', ['a']);
+
+    await expect(acquire).resolves.toBeUndefined();
+    await expect(deletion).resolves.toBe('deferred');
+    expect(deleteRetained).not.toHaveBeenCalled();
+    expect(peek().deferred).toEqual({ r1: ['a'] });
   });
 
   it('leaves a deferral alone while its own recording is still held', async () => {
@@ -130,7 +156,7 @@ describe('reconcile', () => {
 });
 
 describe('unreadable storage', () => {
-  it('reports nothing leased rather than blocking deletion forever', async () => {
+  it('fails closed rather than pretending nothing is leased', async () => {
     const warn = jest.fn();
     const manager = new PlaybackLeaseManager({
       read: async () => { throw new Error('session storage unavailable'); },
@@ -138,7 +164,7 @@ describe('unreadable storage', () => {
       deleteRetained: jest.fn(async () => {}),
       warn,
     });
-    await expect(manager.isLeased('r1')).resolves.toBe(false);
+    await expect(manager.isLeased('r1')).rejects.toThrow('session storage unavailable');
     expect(warn).toHaveBeenCalled();
   });
 });

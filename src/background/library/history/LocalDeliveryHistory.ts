@@ -26,6 +26,20 @@ export class LocalDeliveryHistory {
   ): Promise<void> {
     await this.repository.update(historyId, (current) => {
       if (!current || current.deletedAt) return current;
+      if (settled === 'timeout') {
+        const files = current.files.map((file) => {
+          if (file.stream !== stream || (file.kind ?? null) !== (kind ?? null)) return file;
+          return {
+            ...file,
+            destination: 'local' as const,
+            ...(downloadId != null ? { downloadId } : {}),
+            status: 'pending' as const,
+            error: undefined,
+            delivery: { requested: file.delivery.requested, status: 'pending' as const },
+          };
+        });
+        return { ...current, files, status: summarizeHistoryFiles(files) };
+      }
       const status: RecordingHistoryFile['status'] = settled === 'complete'
         ? 'available'
         : 'unavailable';

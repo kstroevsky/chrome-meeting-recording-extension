@@ -45,6 +45,8 @@ export type DrivePlaybackAuthLeaseManagerDeps = {
 };
 
 export class DrivePlaybackAuthLeaseManager {
+  private mutationTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly deps: DrivePlaybackAuthLeaseManagerDeps) {}
 
   /**
@@ -52,24 +54,27 @@ export class DrivePlaybackAuthLeaseManager {
    * the same pair replaces the rule, which is how a token refresh works.
    */
   async authorize(tabId: number, fileId: string, options?: { refresh?: boolean }): Promise<string> {
-    const url = driveMediaUrl(fileId);
-    const token = await this.deps.getToken(options);
-    const existing = await this.owned();
-    const stale = existing.filter((rule) => matches(rule, tabId, url)).map((rule) => rule.id);
-
-    await updateSessionRules({
-      removeRuleIds: stale,
-      addRules: [this.rule(nextId(existing, stale), tabId, url, token)],
+    return this.mutate(async () => {
+      const url = driveMediaUrl(fileId);
+      const token = await this.deps.getToken(options);
+      const existing = await this.owned();
+      const stale = existing.filter((rule) => matches(rule, tabId, url)).map((rule) => rule.id);
+      await updateSessionRules({
+        removeRuleIds: stale,
+        addRules: [this.rule(nextId(existing, stale), tabId, url, token)],
+      });
+      return url;
     });
-    return url;
   }
 
   /** Releases every rule held for a tab — call when the player closes. */
   async releaseTab(tabId: number): Promise<void> {
-    const ids = (await this.owned())
-      .filter((rule) => rule.condition.tabIds?.includes(tabId))
-      .map((rule) => rule.id);
-    if (ids.length) await updateSessionRules({ removeRuleIds: ids });
+    await this.mutate(async () => {
+      const ids = (await this.owned())
+        .filter((rule) => rule.condition.tabIds?.includes(tabId))
+        .map((rule) => rule.id);
+      if (ids.length) await updateSessionRules({ removeRuleIds: ids });
+    });
   }
 
   /**
@@ -78,12 +83,14 @@ export class DrivePlaybackAuthLeaseManager {
    * could leave a live credential attached to a recycled tab id.
    */
   async reconcile(liveTabIds: readonly number[]): Promise<number> {
-    const live = new Set(liveTabIds);
-    const orphaned = (await this.owned())
-      .filter((rule) => !(rule.condition.tabIds ?? []).some((id) => live.has(id)))
-      .map((rule) => rule.id);
-    if (orphaned.length) await updateSessionRules({ removeRuleIds: orphaned });
-    return orphaned.length;
+    return this.mutate(async () => {
+      const live = new Set(liveTabIds);
+      const orphaned = (await this.owned())
+        .filter((rule) => !(rule.condition.tabIds ?? []).some((id) => live.has(id)))
+        .map((rule) => rule.id);
+      if (orphaned.length) await updateSessionRules({ removeRuleIds: orphaned });
+      return orphaned.length;
+    });
   }
 
   private async owned(): Promise<SessionRule[]> {
@@ -91,8 +98,14 @@ export class DrivePlaybackAuthLeaseManager {
       return (await getSessionRules()).filter((rule) => rule.id >= RULE_ID_BASE && rule.id <= RULE_ID_CEILING);
     } catch (error) {
       this.deps.warn?.('Could not read Drive playback rules', error);
-      return [];
+      throw error;
     }
+  }
+
+  private mutate<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.mutationTail.catch(() => {}).then(work);
+    this.mutationTail = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   private rule(id: number, tabId: number, url: string, token: string): SessionRule {
