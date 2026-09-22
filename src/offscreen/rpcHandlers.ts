@@ -15,6 +15,7 @@ import type {
   BgToOffscreenOneWay,
   BgToOffscreenRpc,
   BgToOffscreenRuntime,
+  OffscreenFinalizationCommandResult,
   OffscreenPhaseUpdate,
   RpcResponse,
 } from '../shared/protocol';
@@ -110,7 +111,7 @@ async function handleOffscreenStart(
 async function handleOffscreenStop(
   msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_STOP' }>,
   deps: RpcHandlerDeps
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<OffscreenFinalizationCommandResult> {
   const reconciled = reconcileFinalizationCommand(msg.epoch, 'kept', deps);
   if (reconciled) return reconciled;
   if (!deps.engine.isRecording()) {
@@ -127,7 +128,7 @@ async function handleOffscreenStop(
 async function handleOffscreenDiscard(
   msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_DISCARD' }>,
   deps: RpcHandlerDeps
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<OffscreenFinalizationCommandResult> {
   const reconciled = reconcileFinalizationCommand(msg.epoch, 'discarded', deps);
   if (reconciled) return reconciled;
   if (!deps.engine.isRecording()) {
@@ -142,7 +143,7 @@ function reconcileFinalizationCommand(
   epoch: number,
   disposition: 'kept' | 'discarded',
   deps: Pick<RpcHandlerDeps, 'currentEpoch' | 'currentFinalization'>,
-): { ok: boolean; error?: string } | null {
+): OffscreenFinalizationCommandResult | null {
   const currentEpoch = deps.currentEpoch();
   if (!Number.isInteger(epoch) || epoch !== currentEpoch) {
     return {
@@ -157,6 +158,7 @@ function reconcileFinalizationCommand(
     return {
       ok: false,
       error: `Finalization conflict for epoch ${epoch}: ${current.disposition} is already ${current.status}`,
+      finalizationDisposition: current.disposition,
     };
   }
   if (current.status === 'running' || current.status === 'completed') return { ok: true };

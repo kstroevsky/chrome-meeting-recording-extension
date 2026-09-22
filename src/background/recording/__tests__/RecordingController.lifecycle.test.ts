@@ -151,6 +151,47 @@ describe('RecordingController', () => {
       expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
     });
 
+    it('does not erase failed-state discard cleanup before a new START', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      const discarded = session.getSnapshot();
+      transcripts.removeAll
+        .mockRejectedValueOnce(new Error('first cleanup failed'))
+        .mockRejectedValueOnce(new Error('retry cleanup failed'));
+
+      await controller.discard();
+      expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
+      session.fail('discard watchdog timed out');
+      expect(session.getSnapshot().phase).toBe('failed');
+      offscreen.rpc.mockClear();
+
+      const blocked = await controller.start(startMsg());
+
+      expect(blocked).toEqual(expect.objectContaining({
+        ok: false,
+        error: 'Discard cleanup is still pending',
+      }));
+      expect(offscreen.rpc).toHaveBeenCalledWith({
+        type: 'OFFSCREEN_DISCARD',
+        epoch: discarded.epoch,
+      });
+      expect(offscreen.rpc).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'OFFSCREEN_START' }),
+      );
+      expect(session.getSnapshot().finalization).toEqual(expect.objectContaining({
+        historyId: discarded.historyId,
+        disposition: 'discarded',
+      }));
+
+      offscreen.rpc.mockClear();
+      await expect(controller.start(startMsg())).resolves.toEqual(
+        expect.objectContaining({ ok: true }),
+      );
+      expect(offscreen.rpc.mock.calls.map(([msg]) => msg.type)).toEqual([
+        'OFFSCREEN_DISCARD',
+        'OFFSCREEN_START',
+      ]);
+    });
+
     it('forwards the frozen recorder snapshot on OFFSCREEN_START and leaves the session starting', async () => {
       const result = await controller.start(startMsg());
 
@@ -495,6 +536,38 @@ describe('RecordingController', () => {
       }));
       expect(session.getSnapshot().phase).toBe('stopping');
       expect(session.getSnapshot().finalization?.disposition).toBe('discarded');
+    });
+
+    it('keeps derived data and reconciles to kept when protective finalization wins', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      const run = session.getSnapshot();
+      offscreen.rpc.mockResolvedValueOnce({
+        ok: false,
+        error: `Finalization conflict for epoch ${run.epoch}: kept is already running`,
+        finalizationDisposition: 'kept',
+      });
+
+      const result = await controller.discard();
+
+      expect(result).toEqual(expect.objectContaining({
+        ok: false,
+        error: expect.stringContaining('Finalization conflict'),
+      }));
+      expect(transcriptCapture.abandon).toHaveBeenCalledWith(run.epoch);
+      expect(transcriptCapture.abandon.mock.invocationCallOrder[0])
+        .toBeLessThan(offscreen.rpc.mock.invocationCallOrder[0]);
+      expect(notations.removeAll).not.toHaveBeenCalled();
+      expect(transcripts.removeAll).not.toHaveBeenCalled();
+      expect(session.getSnapshot().phase).toBe('stopping');
+      expect(session.getSnapshot().finalization).toEqual(expect.objectContaining({
+        historyId: run.historyId,
+        epoch: run.epoch,
+        disposition: 'kept',
+        backgroundFinalized: true,
+      }));
+
+      session.applyOffscreenPhase({ phase: 'idle', epoch: run.epoch });
+      expect(session.getSnapshot().finalization?.disposition).toBe('kept');
     });
 
     it('guards against discarding when no recording is active', async () => {

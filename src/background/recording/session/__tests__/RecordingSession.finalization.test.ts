@@ -131,6 +131,26 @@ describe('RecordingSession run finalization', () => {
         expect(onRunFinished).toHaveBeenCalledWith(historyId, 2_000, 'discarded');
       });
 
+      it('corrects a terminal discard announcement when offscreen reports a kept conflict', () => {
+        const { onRunFinished, hooked } = withHook();
+        hooked.start(RUN_CONFIG, { targetTabId: 42 });
+        const snapshot = hooked.getSnapshot();
+        const historyId = snapshot.historyId!;
+        hooked.applyOffscreenPhase({ phase: 'recording', epoch: snapshot.epoch });
+        t += 2_000;
+        hooked.markStopping(undefined, 'discarded');
+
+        // Idle can race ahead of the conflicting DISCARD RPC response.
+        hooked.applyOffscreenPhase({ phase: 'idle', epoch: snapshot.epoch });
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 2_000, 'discarded');
+
+        hooked.reconcileFinalizationDisposition(historyId, snapshot.epoch!, 'kept');
+
+        expect(hooked.getSnapshot().finalization?.disposition).toBe('kept');
+        expect(onRunFinished).toHaveBeenLastCalledWith(historyId, 2_000, 'kept');
+        expect(onRunFinished).toHaveBeenCalledTimes(2);
+      });
+
       it('preserves discard disposition when a stopping run fails', () => {
         const { onRunFinished, hooked } = withHook();
         hooked.start(RUN_CONFIG, { targetTabId: 42 });

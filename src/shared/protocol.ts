@@ -35,6 +35,13 @@ export type RpcId = string;
 export type RpcRequest<T extends { type: string }> = T & { __id?: RpcId };
 export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
 
+export type OffscreenFinalizationCommandResult = {
+  ok: boolean;
+  error?: string;
+  /** Present when a command conflicts with an already-authoritative ending. */
+  finalizationDisposition?: 'kept' | 'discarded';
+};
+
 export type CommandResult =
   | { ok: true; session: RecordingStatusView }
   | { ok: false; error: string; session: RecordingStatusView };

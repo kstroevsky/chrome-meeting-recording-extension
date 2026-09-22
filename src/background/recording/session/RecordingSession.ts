@@ -28,15 +28,20 @@ import {
   upsertUploadJob as upsertUploadJobInSnapshot,
   type RecordingTarget,
 } from './RecordingSessionTransitions';
+import {
+  RecordingRunFinalization,
+  type RunEnding,
+  type RunFinishedListener,
+} from './RecordingRunFinalization';
 
 export type { RecordingTarget } from './RecordingSessionTransitions';
+export type { RunEnding } from './RecordingRunFinalization';
 
 export type SessionChangeListener = (snapshot: RecordingSessionSnapshot) => void;
 export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<void> | void;
-export type RunEnding = 'kept' | 'discarded';
 export type RecordingSessionListeners = {
   onChanged?: SessionChangeListener;
-  onRunFinished?: (historyId: string, durationMs: number, ending: RunEnding) => void;
+  onRunFinished?: RunFinishedListener;
 };
 
 /**
@@ -44,12 +49,11 @@ export type RecordingSessionListeners = {
  * authority that mutates, persists, and publishes the canonical snapshot.
  */
 export class RecordingSession {
-  private lastRun?: { historyId: string; durationMs: number };
   private pendingInterruption?: RecordingInterruption;
   private snapshot: RecordingSessionSnapshot = createIdleSession();
   private persistenceTail: Promise<void> = Promise.resolve();
   private onChanged?: SessionChangeListener;
-  private onRunFinished?: RecordingSessionListeners['onRunFinished'];
+  private readonly runFinalization: RecordingRunFinalization;
   private listenersBound: boolean;
 
   constructor(
@@ -58,7 +62,7 @@ export class RecordingSession {
     onRunFinished?: RecordingSessionListeners['onRunFinished'],
   ) {
     this.onChanged = onChanged;
-    this.onRunFinished = onRunFinished;
+    this.runFinalization = new RecordingRunFinalization(onRunFinished);
     this.listenersBound = onChanged != null || onRunFinished != null;
   }
 
@@ -67,7 +71,7 @@ export class RecordingSession {
     if (this.listenersBound) throw new Error('RecordingSession listeners are already bound');
     this.listenersBound = true;
     this.onChanged = listeners.onChanged;
-    this.onRunFinished = listeners.onRunFinished;
+    this.runFinalization.bind(listeners.onRunFinished);
   }
 
   hydrate(value: unknown): RecordingSessionSnapshot {
@@ -115,7 +119,7 @@ export class RecordingSession {
   }
 
   markIdle(uploadSummary?: UploadSummary, warnings?: string[]): RecordingSessionSnapshot {
-    this.rememberFinishedRun(Date.now(), this.snapshot.finalization?.disposition ?? 'kept');
+    this.runFinalization.remember(this.snapshot, Date.now(), this.snapshot.finalization?.disposition ?? 'kept');
     this.snapshot = idleSession(
       this.snapshot,
       this.pendingInterruption,
@@ -129,18 +133,26 @@ export class RecordingSession {
 
   fail(error: string): RecordingSessionSnapshot {
     const now = Date.now();
-    this.rememberFinishedRun(now, this.snapshot.finalization?.disposition ?? 'kept');
+    this.runFinalization.remember(this.snapshot, now, this.snapshot.finalization?.disposition ?? 'kept');
     this.snapshot = failedSession(this.snapshot, error, now);
     return this.commit();
   }
 
   markBackgroundFinalized(historyId: string): RecordingSessionSnapshot {
     if (this.snapshot.finalization?.historyId !== historyId) return this.getSnapshot();
-    this.snapshot = {
-      ...this.snapshot,
-      finalization: { ...this.snapshot.finalization, backgroundFinalized: true },
-      updatedAt: Date.now(),
-    };
+    this.snapshot = this.runFinalization.markBackgroundFinalized(this.snapshot, historyId, Date.now());
+    return this.commit();
+  }
+
+  /** Reconciles an intent with the ending the offscreen has already committed. */
+  reconcileFinalizationDisposition(
+    historyId: string,
+    epoch: number,
+    disposition: RunEnding,
+  ): RecordingSessionSnapshot {
+    this.snapshot = this.runFinalization.reconcileDisposition(
+      this.snapshot, historyId, epoch, disposition, Date.now(),
+    );
     return this.commit();
   }
 
@@ -196,7 +208,7 @@ export class RecordingSession {
       return this.snapshot.finalization.durationMs;
     }
     if (this.snapshot.historyId === historyId) return this.currentRecordedMs();
-    return this.lastRun?.historyId === historyId ? this.lastRun.durationMs : undefined;
+    return this.runFinalization.finishedDuration(historyId);
   }
 
   applyOffscreenPhase(update: OffscreenPhaseUpdate): RecordingSessionSnapshot {
@@ -222,17 +234,6 @@ export class RecordingSession {
 
   async flush(): Promise<void> {
     await this.persistenceTail;
-  }
-
-  private rememberFinishedRun(now: number, ending: RunEnding = 'kept'): void {
-    const { historyId } = this.snapshot;
-    if (!historyId) return;
-    const alreadyAnnounced = this.lastRun?.historyId === historyId;
-    const durationMs = alreadyAnnounced
-      ? this.lastRun!.durationMs
-      : elapsedRecordedMs(this.snapshot, now);
-    this.lastRun = { historyId, durationMs };
-    if (!alreadyAnnounced) this.onRunFinished?.(historyId, durationMs, ending);
   }
 
   private commit(): RecordingSessionSnapshot {

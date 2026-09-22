@@ -1,5 +1,5 @@
 import { sendTabMessage } from '../../platform/chrome/tabs';
-import type { CommandResult } from '../../shared/protocol';
+import type { CommandResult, OffscreenFinalizationCommandResult } from '../../shared/protocol';
 import { isStoppablePhase, type RecordingInterruption } from '../../shared/recording';
 import type { TelemetrySnapshot } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
@@ -9,6 +9,7 @@ import type { RecordingTranscriptService } from '../library/transcript/Recording
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import type { RecordingSession } from './session/RecordingSession';
 import type { RecordingSidecars } from './RecordingSidecars';
+import { DiscardDerivedDataCleanup } from './DiscardDerivedDataCleanup';
 
 type ResultFactory = {
   ok: () => CommandResult;
@@ -16,6 +17,8 @@ type ResultFactory = {
 };
 
 export class RecordingLifecycleCommands {
+  private readonly discardData: DiscardDerivedDataCleanup;
+
   constructor(
     private readonly deps: {
       L: { log: (...a: any[]) => void; warn: (...a: any[]) => void };
@@ -28,7 +31,9 @@ export class RecordingLifecycleCommands {
       sidecars: RecordingSidecars;
       result: ResultFactory;
     },
-  ) {}
+  ) {
+    this.discardData = new DiscardDerivedDataCleanup(deps);
+  }
 
   async stop(
     reason = 'user requested stop',
@@ -101,17 +106,26 @@ export class RecordingLifecycleCommands {
       && finalization.disposition === 'discarded'
       && !finalization.backgroundFinalized
     ) {
-      const cleaned = await this.finalizeDiscardBackground(
-        finalization.historyId,
-        finalization.epoch,
-      );
+      await this.discardData.fence(finalization.epoch);
+      const cleaned = await this.discardData.cleanup(finalization.historyId);
       return cleaned
         ? this.deps.result.ok()
         : this.deps.result.fail('Discard cleanup is still pending');
     }
+    if (
+      snapshot.phase === 'failed'
+      && finalization.disposition === 'discarded'
+      && !finalization.backgroundFinalized
+    ) {
+      return this.resumeDiscard(
+        finalization.historyId,
+        'resume pending discard cleanup after failure',
+        snapshot,
+      );
+    }
     if (snapshot.phase !== 'stopping') return null;
     return finalization.disposition === 'discarded'
-      ? this.finishDiscard(finalization.historyId, 'resume after service-worker restart', snapshot)
+      ? this.resumeDiscard(finalization.historyId, 'resume after service-worker restart', snapshot)
       : this.finishKeptStop(
           finalization.historyId,
           'resume after service-worker restart',
@@ -167,59 +181,41 @@ export class RecordingLifecycleCommands {
     }
   }
 
-  private async finalizeDiscardBackground(
-    historyId: string,
-    epoch: number | undefined,
-  ): Promise<boolean> {
-    await this.deps.transcriptCapture?.abandon(epoch)
-      .catch((error) => this.deps.L.warn(
-        'Could not disarm transcript capture for the discarded run:',
-        error,
-      ));
-
-    let cleanupComplete = true;
-    await this.deps.notations?.removeAll(historyId)
-      .catch((error) => {
-        cleanupComplete = false;
-        this.deps.L.warn('Discarding recording notations failed:', error);
-      });
-    await this.deps.transcripts?.removeAll(historyId)
-      .catch((error) => {
-        cleanupComplete = false;
-        this.deps.L.warn('Discarding recording transcript failed:', error);
-      });
-
-    if (cleanupComplete) {
-      this.deps.session.markBackgroundFinalized(historyId);
-      await this.deps.session.flush();
-    }
-    return cleanupComplete;
-  }
-
   private async finishDiscard(
     historyId: string | undefined,
     reason: string,
     snapshot = this.deps.session.getSnapshot(),
   ): Promise<CommandResult> {
     const finalization = snapshot.finalization;
-    if (historyId && finalization?.backgroundFinalized !== true) {
-      await this.finalizeDiscardBackground(historyId, finalization?.epoch);
-    }
+    const commandEpoch = finalization?.epoch ?? snapshot.epoch;
+    await this.discardData.fence(commandEpoch);
 
     try {
       await this.deps.offscreen.ensureReady();
-      const commandEpoch = finalization?.epoch ?? snapshot.epoch;
       if (commandEpoch == null) {
         return this.deps.result.fail('Discard requested without a recording epoch');
       }
-      const response = await this.deps.offscreen.rpc<{ ok: boolean; error?: string }>({
+      const response = await this.deps.offscreen.rpc<OffscreenFinalizationCommandResult>({
         type: 'OFFSCREEN_DISCARD',
         epoch: commandEpoch,
       });
       if (!response?.ok) {
         const message = response?.error || 'Discard failed in offscreen';
+        if (
+          response?.finalizationDisposition === 'kept'
+          && historyId
+          && finalization?.epoch === commandEpoch
+        ) {
+          this.deps.session.reconcileFinalizationDisposition(historyId, commandEpoch, 'kept');
+          await this.deps.session.flush();
+          await this.finalizeKeptBackground(historyId);
+          return this.deps.result.fail(message);
+        }
         this.deps.session.fail(message);
         return this.deps.result.fail(message);
+      }
+      if (historyId && finalization?.backgroundFinalized !== true) {
+        await this.discardData.cleanup(historyId);
       }
       this.deps.L.log('Discard command completed:', reason);
       return this.deps.result.ok();
@@ -228,5 +224,23 @@ export class RecordingLifecycleCommands {
       this.deps.L.warn(message);
       return this.deps.result.fail(message);
     }
+  }
+
+  private async resumeDiscard(
+    historyId: string,
+    reason: string,
+    snapshot: ReturnType<RecordingSession['getSnapshot']>,
+  ): Promise<CommandResult> {
+    const result = await this.finishDiscard(historyId, reason, snapshot);
+    if (!result.ok) return result;
+    const finalization = this.deps.session.getSnapshot().finalization;
+    if (
+      finalization?.historyId === historyId
+      && finalization.disposition === 'discarded'
+      && finalization.backgroundFinalized !== true
+    ) {
+      return this.deps.result.fail('Discard cleanup is still pending');
+    }
+    return result;
   }
 }

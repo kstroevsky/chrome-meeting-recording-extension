@@ -312,6 +312,7 @@ describe('offscreen rpc handlers', () => {
     expect(responseFor(port, 'conflict')).toEqual(expect.objectContaining({
       ok: false,
       error: expect.stringContaining('Finalization conflict'),
+      finalizationDisposition: 'kept',
     }));
     expect(deps.onDiscardRequested).not.toHaveBeenCalled();
   });
