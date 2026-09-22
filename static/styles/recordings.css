@@ -211,6 +211,39 @@ button { -webkit-font-smoothing: antialiased; }
 .bulk-clear { width: 22px; border: 0; background: transparent; color: color-mix(in srgb, var(--surface) 66%, transparent); cursor: pointer; font: 400 18px/1 'IBM Plex Mono', monospace; padding: 0; }
 .bulk-clear:hover { color: var(--surface); }
 
+/* Sharing prompt: privacy choices first, then the immutable link and its owner actions. */
+.share-dialog-overlay { position: fixed; z-index: 40; inset: 0; display: flex; align-items: flex-start; justify-content: center; background: var(--overlay); padding: max(34px, 9vh) 22px 28px; }
+.share-dialog { width: min(500px, calc(100vw - 44px)); border: 1px solid var(--border); border-radius: 9px; background: var(--surface); box-shadow: var(--modal-shadow); color: var(--body); padding: 22px; }
+.share-dialog__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.share-dialog__heading h2 { margin: 0; color: var(--ink); font: 600 16px/1.2 'IBM Plex Mono', monospace; }
+.share-dialog__close { width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: 400 20px/1 'IBM Plex Mono', monospace; }
+.share-dialog__close:hover { background: var(--field); color: var(--ink); }
+.share-dialog__summary { overflow: hidden; margin: 10px 0 0; color: var(--detail); font: 500 10.5px/1.4 'IBM Plex Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.share-dialog__description { margin: 14px 0 17px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.share-dialog__options { display: grid; border-block: 1px solid var(--divider); }
+.share-dialog__option { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 11px; min-height: 58px; cursor: pointer; padding: 8px 4px; }
+.share-dialog__option + .share-dialog__option { border-top: 1px solid var(--divider); }
+.share-dialog__option input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.share-dialog__option span { display: grid; gap: 3px; }
+.share-dialog__option strong { color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.share-dialog__option small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.share-dialog__option--disabled { cursor: default; opacity: .48; }
+.share-dialog__status { margin: 14px 0 0; border-radius: 6px; background: var(--field); color: var(--detail); font: 500 11px/1.45 'IBM Plex Mono', monospace; padding: 9px 10px; }
+.share-dialog__status--error { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); color: var(--accent-dark); }
+.share-dialog__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.share-dialog__button { min-width: 74px; height: 34px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; padding: 0 13px; }
+.share-dialog__button--primary { border: 0; background: var(--accent); color: #fff; }
+.share-dialog__button--primary:hover { background: var(--accent-dark); }
+.share-dialog__button--secondary { border: 1px solid var(--border); background: var(--field); color: var(--body); }
+.share-dialog__button--secondary:hover { border-color: var(--faint); }
+.share-dialog__button--danger { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); background: transparent; color: var(--accent-dark); }
+.share-dialog__button:disabled, .share-dialog__close:disabled { cursor: not-allowed; opacity: .5; }
+.share-dialog__result { display: grid; gap: 7px; margin-top: 18px; }
+.share-dialog__result > span { color: var(--faint); font: 600 9.5px/1 'IBM Plex Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
+.share-dialog__link { width: 100%; height: 38px; border: 1px solid var(--border-field); border-radius: 6px; outline: 0; background: var(--field); color: var(--ink); font: 400 11px/1 'IBM Plex Mono', monospace; padding: 0 10px; }
+.share-dialog__link:focus { box-shadow: 0 0 0 1px var(--detail), 0 0 0 4px color-mix(in srgb, var(--detail) 16%, transparent); }
+.share-dialog__button:focus-visible, .share-dialog__close:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
+
 .recording-table { overflow: hidden; }
 .recording-table__header, .recording-row { display: grid; grid-template-columns: 18px 8px minmax(0, 1fr) 170px 50px 44px 30px 44px 20px; align-items: center; column-gap: 10px; }
 .recording-table__header { overflow: hidden; scrollbar-gutter: stable; min-height: 34px; padding: 8px 28px; border-bottom: 1px solid var(--border); background: var(--raised); }
