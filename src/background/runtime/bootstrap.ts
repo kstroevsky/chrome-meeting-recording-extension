@@ -20,7 +20,6 @@ import {
   LEGACY_SESSION_RUN_CONFIG_KEY,
 } from '../recording/session/legacySession';
 import type { CriticalWorkCoordinator } from './CriticalWorkCoordinator';
-import { startKeepAlive } from './KeepAlive';
 import type { StartupRecovery } from './StartupRecovery';
 
 type Logger = {
@@ -69,10 +68,14 @@ export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
   ]);
   deps.perfDebugStore.hydrate(stored?.[PERF_DEBUG_SNAPSHOT_STORAGE_KEY] as PerfDebugSnapshot | undefined);
   deps.perfDebugStore.setSettings(settings);
-  const snapshot = deps.session.hydrate(
+  let snapshot = deps.session.hydrate(
     stored?.[RECORDING_SESSION_STORAGE_KEY] ?? hydrateLegacySession(stored),
   );
   deps.markSessionHydrated();
+  // Releasing buffered offscreen ingress above can synchronously advance the
+  // hydrated session (for example stopping -> idle). Every recovery/liveness
+  // decision below must use that reconciled state, not the pre-replay snapshot.
+  snapshot = deps.session.getSnapshot();
 
   try {
     try {
@@ -89,7 +92,6 @@ export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
       deps.logger.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await deps.offscreen.ensureReady();
       await deps.resumePendingFinalization();
-      startKeepAlive();
     } else {
       if (
         snapshot.finalization?.disposition === 'discarded'
@@ -100,9 +102,9 @@ export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
       await deps.criticalWork.confirmAnalysisWork();
       if (deps.criticalWork.hasWork()) {
         deps.logger.log('SW restarted while an analysis was active — re-attaching offscreen');
-        deps.criticalWork.sync();
       }
     }
+    deps.criticalWork.sync();
   } catch (error) {
     deps.logger.warn('Post-hydration startup recovery failed (non-fatal):', error);
   }

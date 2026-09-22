@@ -1,7 +1,8 @@
 import { getPerfSettingsSnapshot } from '../../../shared/perf';
 import { createIdleSession, type RecordingSessionSnapshot } from '../../../shared/recording';
 import { getSessionStorageValuesStrict } from '../../../platform/chrome/storage';
-import { startKeepAlive } from '../KeepAlive';
+import { startKeepAlive, stopKeepAlive } from '../KeepAlive';
+import { CriticalWorkCoordinator } from '../CriticalWorkCoordinator';
 import { bootstrapBackground } from '../bootstrap';
 
 jest.mock('../../../platform/chrome/storage', () => ({
@@ -9,6 +10,7 @@ jest.mock('../../../platform/chrome/storage', () => ({
 }));
 jest.mock('../KeepAlive', () => ({
   startKeepAlive: jest.fn(),
+  stopKeepAlive: jest.fn(),
 }));
 jest.mock('../../../shared/perf', () => {
   const actual = jest.requireActual('../../../shared/perf');
@@ -20,6 +22,7 @@ jest.mock('../../../shared/perf', () => {
 
 const storageMock = getSessionStorageValuesStrict as jest.MockedFunction<typeof getSessionStorageValuesStrict>;
 const startKeepAliveMock = startKeepAlive as jest.MockedFunction<typeof startKeepAlive>;
+const stopKeepAliveMock = stopKeepAlive as jest.MockedFunction<typeof stopKeepAlive>;
 
 describe('bootstrapBackground', () => {
   const logger = { log: jest.fn(), warn: jest.fn() };
@@ -37,7 +40,10 @@ describe('bootstrapBackground', () => {
     jest.clearAllMocks();
     snapshot = createIdleSession();
     storageMock.mockResolvedValue({});
-    session = { hydrate: jest.fn(() => snapshot) };
+    session = {
+      hydrate: jest.fn(() => snapshot),
+      getSnapshot: jest.fn(() => snapshot),
+    };
     offscreen = { ensureReady: jest.fn().mockResolvedValue(undefined) };
     telemetry = {
       initialize: jest.fn().mockResolvedValue(undefined),
@@ -80,7 +86,7 @@ describe('bootstrapBackground', () => {
     expect(telemetry.initialize).toHaveBeenCalledWith(new Set([7]), new Set());
     expect(offscreen.ensureReady).toHaveBeenCalledTimes(1);
     expect(resumePendingFinalization).toHaveBeenCalledTimes(1);
-    expect(startKeepAliveMock).toHaveBeenCalledTimes(1);
+    expect(criticalWork.sync).toHaveBeenCalledTimes(1);
     expect(criticalWork.confirmAnalysisWork).not.toHaveBeenCalled();
     expect(markSessionHydrated).toHaveBeenCalledTimes(1);
     expect(startupRecovery.run).toHaveBeenCalledTimes(1);
@@ -94,6 +100,39 @@ describe('bootstrapBackground', () => {
     expect(criticalWork.confirmAnalysisWork).toHaveBeenCalledTimes(1);
     expect(criticalWork.sync).toHaveBeenCalledTimes(1);
     expect(offscreen.ensureReady).not.toHaveBeenCalled();
+  });
+
+  it('does not re-arm keep-alive from a stale stopping snapshot after buffered idle replay', async () => {
+    const hydrated = {
+      ...createIdleSession(),
+      phase: 'stopping' as const,
+      desired: 'idle' as const,
+      observed: 'stopping' as const,
+      epoch: 7,
+    };
+    let current = hydrated as RecordingSessionSnapshot;
+    session.hydrate.mockReturnValue(hydrated);
+    session.getSnapshot.mockImplementation(() => current);
+    markSessionHydrated.mockImplementation(() => {
+      current = {
+        ...createIdleSession(),
+        epoch: 7,
+      };
+    });
+    criticalWork = new CriticalWorkCoordinator({
+      getSnapshot: () => current,
+      hasActiveAnalysisJobs: () => false,
+      refreshAnalysisWork: jest.fn().mockResolvedValue(undefined),
+      reload: jest.fn(),
+      logger,
+    });
+
+    await run();
+
+    expect(offscreen.ensureReady).not.toHaveBeenCalled();
+    expect(resumePendingFinalization).not.toHaveBeenCalled();
+    expect(startKeepAliveMock).not.toHaveBeenCalled();
+    expect(stopKeepAliveMock).toHaveBeenCalledTimes(1);
   });
 
   it('disables telemetry on initialization failure without blocking startup', async () => {
