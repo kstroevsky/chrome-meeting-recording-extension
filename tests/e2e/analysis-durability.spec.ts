@@ -12,19 +12,18 @@
  * a real IndexedDB outbox, a real port reconnect, and a real service worker
  * that genuinely loses its memory.
  *
- * **Why the transcript is seeded rather than spoken.** Analysis has to still be
- * running when the worker is killed, which means enough windows to take
- * seconds — around a hundred, so around four hundred utterances. Driving that
- * many through the mock Meet caption region, each waiting out a grace window,
- * would take longer than the recording. `TRANSCRIPT_UTTERANCES` is the same
- * message the content script sends and takes a batch, so the test uses it
- * directly: the transcript arrives by the production path, just faster.
+ * **Why the transcript is seeded rather than spoken.** `TRANSCRIPT_UTTERANCES`
+ * is the same message the content script sends and takes a batch, so the test
+ * uses it directly. A deterministic E2E gate pauses the offscreen job after it
+ * becomes active and before model work starts, so the durability window does
+ * not depend on making inference artificially large or slow.
  *
  *   npm run build:e2e:mock && EXTENSION_PATH=dist-e2e npx playwright test analysis-durability
  */
 
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { ANALYSIS_E2E_GATE_CHANNEL } from '../../src/shared/e2e';
 import {
   closeHarness,
   findMockMeetTabId,
@@ -38,8 +37,8 @@ import {
 
 test.setTimeout(300_000);
 
-/** Enough windows that embedding takes seconds, at window 4 / stride 4. */
-const UTTERANCES = 400;
+/** Small real workload; the E2E gate, rather than CPU time, holds the kill window open. */
+const UTTERANCES = 48;
 
 type Manifest = {
   topics: Array<{ id: string; keywords: string[]; totalMs: number; spans: unknown[] }>;
@@ -143,6 +142,59 @@ async function waitForAnalysisWork(
   throw new Error('Offscreen analysis work never became active');
 }
 
+async function armAnalysisGate(controlPage: Page): Promise<void> {
+  await controlPage.evaluate((channelName) => new Promise<void>((resolve, reject) => {
+    const prior = (globalThis as any).__analysisE2EGate;
+    prior?.channel?.close?.();
+
+    const channel = new BroadcastChannel(channelName);
+    const state = {
+      channel,
+      paused: false,
+      pausedWaiters: [] as Array<() => void>,
+    };
+    (globalThis as any).__analysisE2EGate = state;
+    const timer = setTimeout(() => reject(new Error('Analysis E2E gate did not arm')), 10_000);
+
+    channel.onmessage = (event) => {
+      const message = event.data as { type?: string } | null;
+      if (message?.type === 'armed') {
+        clearTimeout(timer);
+        resolve();
+      }
+      if (message?.type === 'paused') {
+        state.paused = true;
+        for (const waiter of state.pausedWaiters.splice(0)) waiter();
+      }
+    };
+    channel.postMessage({ type: 'arm' });
+  }), ANALYSIS_E2E_GATE_CHANNEL);
+}
+
+async function waitForAnalysisPaused(controlPage: Page): Promise<void> {
+  await controlPage.evaluate(() => new Promise<void>((resolve, reject) => {
+    const state = (globalThis as any).__analysisE2EGate as {
+      paused: boolean;
+      pausedWaiters: Array<() => void>;
+    } | undefined;
+    if (!state) { reject(new Error('Analysis E2E gate is not armed')); return; }
+    if (state.paused) { resolve(); return; }
+    const timer = setTimeout(() => reject(new Error('Analysis job never reached the E2E gate')), 30_000);
+    state.pausedWaiters.push(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  }));
+}
+
+async function releaseAnalysisGate(controlPage: Page): Promise<void> {
+  await controlPage.evaluate(() => {
+    const state = (globalThis as any).__analysisE2EGate as { channel?: BroadcastChannel } | undefined;
+    if (!state?.channel) throw new Error('Analysis E2E gate is not armed');
+    state.channel.postMessage({ type: 'release' });
+  });
+}
+
 /**
  * Whether an analysis row is on disk, read straight from IndexedDB. Also from
  * the extension page, for the same reason: asking background would revive it.
@@ -223,10 +275,10 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
       await harness.controlPage.waitForTimeout(2_000);
       await seedTranscript(harness.controlPage, epoch, startedAt, UTTERANCES);
       await harness.controlPage.waitForTimeout(500);
+      await armAnalysisGate(harness.controlPage);
       await stopRecording(harness.controlPage);
 
-      // Wait for the durable data-plane fact this test needs instead of assuming
-      // a runner-specific model-load duration.
+      await waitForAnalysisPaused(harness.controlPage);
       await waitForAnalysisWork(harness.controlPage);
       expect((await outboxRows(harness.controlPage)).some((row) => row.status === 'completed')).toBe(false);
 
@@ -266,6 +318,10 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
         if (!sawWorkerGone) await harness.controlPage.waitForTimeout(50);
       }
       expect(sawWorkerGone, 'the service worker never went away — nothing was actually killed').toBe(true);
+
+      // The kill window was held by the data plane itself. Let the small real
+      // analysis run only after the service worker termination was observed.
+      await releaseAnalysisGate(harness.controlPage);
 
       // Every poll wakes the service worker again, which is the reconnect the
       // outbox replays into. The analysis must arrive without a second run.
@@ -342,12 +398,12 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
       await harness.controlPage.waitForTimeout(2_000);
       await seedTranscript(harness.controlPage, epoch, startedAt, UTTERANCES);
       await harness.controlPage.waitForTimeout(500);
+      await armAnalysisGate(harness.controlPage);
       await stopRecording(harness.controlPage);
-      const stoppedAt = Date.now();
 
-      // First prove the coordinator got through its initial analyses.get() and
-      // actually enqueued the job. Holding the store earlier can block enqueue
-      // itself, which tests a different condition.
+      // Prove the job is active, then hold persistence while the data plane is
+      // paused before inference. This removes the CPU-speed race entirely.
+      await waitForAnalysisPaused(harness.controlPage);
       await waitForAnalysisWork(harness.controlPage);
 
       // Now hold the store before the job can finish, so its result cannot land.
@@ -356,6 +412,9 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
         (await outboxRows(harness.controlPage)).some((row) => row.status === 'completed'),
         'the analysis finished before the store was held',
       ).toBe(false);
+
+      const analysisStartedAt = Date.now();
+      await releaseAnalysisGate(harness.controlPage);
 
       const session = await harness.context.newCDPSession(harness.controlPage);
       await session.send('ServiceWorker.enable' as never);
@@ -368,7 +427,7 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
         completed = (await outboxRows(harness.controlPage)).find((row) => row.status === 'completed');
       }
       expect(completed, 'the analysis never reached a completed state').toBeTruthy();
-      const analysisMs = Date.now() - stoppedAt;
+      const analysisMs = Date.now() - analysisStartedAt;
 
       // Give background ample time to receive the result and block on the
       // store. Under release-on-delivery, the data plane has dropped its copy

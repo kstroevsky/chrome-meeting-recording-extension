@@ -54,6 +54,8 @@ export type AnalysisManagerDeps = {
   warn?: (...args: unknown[]) => void;
   /** True when the engine path is latched unusable; jobs then end `unsupported`. */
   isUnsupported?: () => boolean;
+  /** E2E-only synchronization hook; production leaves this undefined. */
+  beforeAnalyze?: (job: AnalysisJob) => Promise<void>;
 };
 
 type AnalysisTask = {
@@ -220,6 +222,9 @@ export class AnalysisManager {
     }
 
     try {
+      if (this.deps.beforeAnalyze) {
+        await this.deps.beforeAnalyze({ ...task.job });
+      }
       const engine = await this.acquireEngine();
       task.job = { ...task.job, device: engine.info.device };
       await this.emit(task.job);
