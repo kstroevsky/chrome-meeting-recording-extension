@@ -43,6 +43,16 @@ export function createE2EMockTabStream(
   const ctx = canvas.getContext('2d');
   let frame = 0;
   const captureFrameRate = Math.max(1, Math.min(tabOutput.maxFrameRate, 30));
+  // A 250 ms pulse is long enough to survive frame drops while leaving >500 ms
+  // of silence for ffmpeg's audio marker detector. The marker itself is large
+  // and the analyzer samples only its interior: the old 64x64 block shared
+  // codec macroblocks with the animated background, which could turn one
+  // intended black interval into several false transitions at 1080p.
+  const markerPeriodFrames = captureFrameRate;
+  const markerActiveFrames = Math.max(2, Math.round(captureFrameRate * 0.25));
+  const markerSize = 256;
+  const markerLeft = canvas.width - 320;
+  const markerTop = 32;
   let markerGain: GainNode | null = null;
   let markerOscillator: OscillatorNode | null = null;
 
@@ -56,9 +66,9 @@ export function createE2EMockTabStream(
     ctx.fillText('E2E mock tab capture', 32, 72);
     ctx.font = '24px sans-serif';
     ctx.fillText(`Frame ${frame}`, 32, 116);
-    const markerActive = frame % captureFrameRate < Math.max(1, Math.round(captureFrameRate / 10));
+    const markerActive = frame % markerPeriodFrames < markerActiveFrames;
     ctx.fillStyle = markerActive ? '#ffffff' : '#000000';
-    ctx.fillRect(canvas.width - 96, 32, 64, 64);
+    ctx.fillRect(markerLeft, markerTop, markerSize, markerSize);
     if (markerGain && markerOscillator) {
       markerGain.gain.value = markerActive ? 0.08 : 0;
       markerOscillator.frequency.value = markerActive ? 880 : 440;
