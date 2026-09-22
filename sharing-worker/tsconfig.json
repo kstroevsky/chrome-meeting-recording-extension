@@ -9,5 +9,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "test", "vitest.config.ts", "worker-configuration.d.ts"]
+  "include": ["src", "test", "vitest.config.ts", "worker-configuration.d.ts"],
+  "exclude": ["src/viewer/app.ts"]
 }

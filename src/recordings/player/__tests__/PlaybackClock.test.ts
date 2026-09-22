@@ -56,6 +56,27 @@ describe('PlaybackClock', () => {
     expect(aux.plays).toBe(1);
   });
 
+  it('keeps a late-starting auxiliary paused until its capture offset', async () => {
+    const master = element(0);
+    const aux = element(0);
+    const clock = new PlaybackClock(master);
+    clock.add({ element: aux, timelineOffsetMs: 5_000 });
+
+    await clock.play();
+    expect(aux.currentTime).toBe(0);
+    expect(aux.plays).toBe(0);
+    expect(aux.paused).toBe(true);
+
+    master.currentTime = 4.9;
+    clock.correctDrift();
+    expect(aux.plays).toBe(0);
+
+    master.currentTime = 5.1;
+    clock.correctDrift();
+    expect(aux.plays).toBe(1);
+    expect(aux.currentTime).toBeCloseTo(0.1);
+  });
+
   it('pauses and seeks everything as one', () => {
     const master = element();
     const aux = element();

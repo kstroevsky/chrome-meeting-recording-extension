@@ -9,7 +9,8 @@ import { sha256Base64Url } from '../auth/crypto';
 import { parseRange } from '../http/range';
 import { json } from '../http/responses';
 import { getShare, type ShareRow, type TrackRow } from '../shares/ShareRepository';
-import { viewerAppScript, viewerShell } from './shell';
+import { viewerAppScript } from './appAsset';
+import { viewerShell } from './shell';
 
 const SESSION_COOKIE = '__Host-share_session';
 
