@@ -228,7 +228,7 @@ export function createBackgroundRuntime() {
       const closed = await offscreen.closeForUpdate();
       if (!closed) criticalWork.markReloadPending();
     },
-    handleTabRemoved: (tabId: number) => {
+    releasePlaybackTab: (tabId: number) => {
       void driveAuthLease.releaseTab(tabId)
         .catch((error) => logger.warn('Drive lease release failed:', error));
       void playbackLeases.releaseTab(tabId)

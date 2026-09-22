@@ -36,6 +36,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn(),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/background/drive/driveAuth', () => ({
@@ -97,6 +98,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/shared/settings', () => ({
@@ -168,6 +170,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/platform/chrome/tabs', () => ({
@@ -232,6 +235,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn(),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/background/drive/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
@@ -280,6 +284,7 @@ describe('background runtime messages', () => {
         stopIfPossibleOnSuspend: jest.fn(),
         rpc: jest.fn(),
         revokeBlobUrl: jest.fn(),
+        releaseBufferedIngress: jest.fn(),
         closeForUpdate: jest.fn().mockResolvedValue(true),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
@@ -334,6 +339,7 @@ describe('background runtime messages', () => {
         stopIfPossibleOnSuspend: jest.fn(),
         rpc: jest.fn(),
         revokeBlobUrl: jest.fn(),
+        releaseBufferedIngress: jest.fn(),
         closeForUpdate: jest.fn().mockResolvedValue(true),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
@@ -376,6 +382,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn(),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/background/drive/driveAuth', () => ({
@@ -420,6 +427,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/background/drive/driveAuth', () => ({
@@ -442,6 +450,14 @@ describe('background runtime messages', () => {
   });
 
   it('stops the active recording when the recorded tab navigates away from the meeting', async () => {
+    const { PlaybackLeaseManager } = await import('../src/background/playback/PlaybackLeaseManager');
+    const { DrivePlaybackAuthLeaseManager } = await import('../src/background/playback/DrivePlaybackAuthLeaseManager');
+    const releasePlaybackTab = jest
+      .spyOn(PlaybackLeaseManager.prototype, 'releaseTab')
+      .mockResolvedValue(0);
+    const releaseDriveTab = jest
+      .spyOn(DrivePlaybackAuthLeaseManager.prototype, 'releaseTab')
+      .mockResolvedValue(undefined);
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({
       recordingSession: {
         phase: 'recording',
@@ -463,6 +479,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/background/drive/driveAuth', () => ({
@@ -475,12 +492,25 @@ describe('background runtime messages', () => {
     await import('../src/background');
     await new Promise(process.nextTick);
 
-    const updatedListener = (chrome.tabs.onUpdated.addListener as jest.Mock).mock.calls[0][0];
-    updatedListener(42, { url: 'https://example.com/' }, { id: 42 });
+    const updatedListeners = (chrome.tabs.onUpdated.addListener as jest.Mock).mock.calls
+      .map(([listener]) => listener as (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void);
+    expect(updatedListeners).toHaveLength(2);
+    updatedListeners.forEach((listener) => listener(42, { url: 'https://example.com/' }, { id: 42 } as chrome.tabs.Tab));
     await untilCalled(offscreenInstance.rpc);
+    await new Promise(process.nextTick);
 
     expect(offscreenInstance.rpc)
       .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
+    expect(releasePlaybackTab).toHaveBeenCalledWith(42);
+    expect(releaseDriveTab).toHaveBeenCalledWith(42);
+
+    releasePlaybackTab.mockClear();
+    releaseDriveTab.mockClear();
+    updatedListeners.forEach((listener) => listener(42, { status: 'complete' }, { id: 42 } as chrome.tabs.Tab));
+    await new Promise(process.nextTick);
+
+    expect(releasePlaybackTab).not.toHaveBeenCalled();
+    expect(releaseDriveTab).not.toHaveBeenCalled();
   });
 
   it('ignores meeting-ended messages from a different meeting', async () => {
@@ -505,6 +535,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/background/drive/driveAuth', () => ({
@@ -548,6 +579,7 @@ describe('background runtime messages', () => {
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
       revokeBlobUrl: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
 
     jest.doMock('../src/background/drive/driveAuth', () => ({

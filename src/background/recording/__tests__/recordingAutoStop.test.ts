@@ -126,70 +126,83 @@ describe('registerRecordingAutoStop', () => {
     return { onRemoved, onUpdated, stop };
   }
 
-  it('stops when the recorded tab is closed', () => {
+  const settleIngress = async () => { await Promise.resolve(); };
+
+  it('stops when the recorded tab is closed', async () => {
     const { onRemoved, stop } = register(RECORDING_SNAPSHOT);
     onRemoved(42, { windowId: 1, isWindowClosing: false });
+    await settleIngress();
     expect(stop).toHaveBeenCalledWith('recorded tab closed', 'tab-closed');
   });
 
-  it('ignores closure of an unrelated tab', () => {
+  it('ignores closure of an unrelated tab', async () => {
     const { onRemoved, stop } = register(RECORDING_SNAPSHOT);
     onRemoved(7, { windowId: 1, isWindowClosing: false });
+    await settleIngress();
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('stops when the recorded tab navigates away from the meeting', () => {
+  it('stops when the recorded tab navigates away from the meeting', async () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'https://example.com/' }, { id: 42 });
+    await settleIngress();
     expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting', 'navigated-away');
   });
 
-  it('stops a Meet recording that navigates to a different meeting room', () => {
+  it('stops a Meet recording that navigates to a different meeting room', async () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'https://meet.google.com/zzz-yyyy-xxx' }, { id: 42 });
+    await settleIngress();
     expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting', 'navigated-away');
   });
 
-  it('does not stop when the URL update keeps the same meeting slug', () => {
+  it('does not stop when the URL update keeps the same meeting slug', async () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'https://meet.google.com/abc-defg-hij' }, { id: 42 });
+    await settleIngress();
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('keeps a non-Meet recording running when its tab navigates to another page', () => {
+  it('keeps a non-Meet recording running when its tab navigates to another page', async () => {
     const { onUpdated, stop } = register(NON_MEET_SNAPSHOT);
     onUpdated(42, { url: 'https://www.youtube.com/watch?v=different-video' }, { id: 42 });
+    await settleIngress();
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('keeps a non-Meet recording running across an SPA in-tab URL change', () => {
+  it('keeps a non-Meet recording running across an SPA in-tab URL change', async () => {
     const { onUpdated, stop } = register(NON_MEET_SNAPSHOT);
     // Same-origin route change (History API), the common case that fired tabs.onUpdated.
     onUpdated(42, { url: 'https://www.youtube.com/feed/subscriptions' }, { id: 42 });
+    await settleIngress();
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('does not stop a non-Meet recording even when it navigates onto a Meet URL', () => {
+  it('does not stop a non-Meet recording even when it navigates onto a Meet URL', async () => {
     const { onUpdated, stop } = register(NON_MEET_SNAPSHOT);
     onUpdated(42, { url: 'https://meet.google.com/abc-defg-hij' }, { id: 42 });
+    await settleIngress();
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('still stops a non-Meet recording when its tab is closed', () => {
+  it('still stops a non-Meet recording when its tab is closed', async () => {
     const { onRemoved, stop } = register(NON_MEET_SNAPSHOT);
     onRemoved(42, { windowId: 1, isWindowClosing: false });
+    await settleIngress();
     expect(stop).toHaveBeenCalledWith('recorded tab closed', 'tab-closed');
   });
 
-  it('ignores tab updates without a URL change', () => {
+  it('ignores tab updates without a URL change', async () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { status: 'complete' }, { id: 42 });
+    await settleIngress();
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('treats a malformed URL as leaving the meeting (slug parses to null)', () => {
+  it('treats a malformed URL as leaving the meeting (slug parses to null)', async () => {
     const { onUpdated, stop } = register(RECORDING_SNAPSHOT);
     onUpdated(42, { url: 'not a valid url' }, { id: 42 });
+    await settleIngress();
     expect(stop).toHaveBeenCalledWith('recorded tab navigated away from meeting', 'navigated-away');
   });
 });

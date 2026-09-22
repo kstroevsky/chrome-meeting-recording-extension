@@ -10,7 +10,7 @@
 import { createBackgroundRuntime } from './background/runtime/createBackgroundRuntime';
 import { registerRecordingAutoStop } from './background/recording/recordingAutoStop';
 import { registerRecordingCommands } from './background/recording/recordingCommands';
-import { addTabRemovedListener } from './platform/chrome/tabs';
+import { addTabRemovedListener, addTabUpdatedListener } from './platform/chrome/tabs';
 
 const runtime = createBackgroundRuntime();
 
@@ -42,7 +42,10 @@ registerRecordingAutoStop({
 
 // Registered after recordingAutoStop so closing a recorded tab stops capture
 // before playback/auth leases attached to that tab are released.
-addTabRemovedListener(runtime.handleTabRemoved);
+addTabRemovedListener(runtime.releasePlaybackTab);
+addTabUpdatedListener((tabId, changeInfo) => {
+  if (changeInfo.url != null) runtime.releasePlaybackTab(tabId);
+});
 
 chrome.runtime.onUpdateAvailable?.addListener(() => {
   void sessionHydration
