@@ -9,6 +9,7 @@ import { sha256Base64Url } from '../auth/crypto';
 import { parseRange } from '../http/range';
 import { json } from '../http/responses';
 import { getShare, type ShareRow, type TrackRow } from '../shares/ShareRepository';
+import { viewerAppScript, viewerShell } from './shell';
 
 const SESSION_COOKIE = '__Host-share_session';
 
@@ -22,6 +23,12 @@ export async function routeViewerRequest(request: Request, env: Env, url: URL): 
     const session = await requireViewerSession(request, env);
     if (session instanceof Response) return session;
     return viewerShell();
+  }
+
+  if (url.pathname === '/viewer/app.js' && request.method === 'GET') {
+    const session = await requireViewerSession(request, env);
+    if (session instanceof Response) return session;
+    return viewerAppScript();
   }
 
   if (url.pathname === '/viewer/manifest' && request.method === 'GET') {
@@ -117,36 +124,4 @@ async function requireViewerSession(request: Request, env: Env): Promise<ViewerS
     return json({ code: 'SHARE_REVOKED' }, 410);
   }
   return session;
-}
-
-function viewerShell(): Response {
-  return new Response(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="referrer" content="no-referrer">
-  <title>Shared recording</title>
-</head>
-<body>
-  <main>
-    <h1>Shared recording</h1>
-    <p>This intentionally minimal viewer proves capability exchange, protected metadata, ranged media, and revocation.</p>
-    <pre id="manifest">Loading…</pre>
-  </main>
-  <script type="module">
-    const response = await fetch('/viewer/manifest', { cache: 'no-store' });
-    document.querySelector('#manifest').textContent = response.ok
-      ? JSON.stringify(await response.json(), null, 2)
-      : 'This share is no longer available.';
-  </script>
-</body>
-</html>`, {
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-store',
-      'referrer-policy': 'no-referrer',
-      'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-    },
-  });
 }

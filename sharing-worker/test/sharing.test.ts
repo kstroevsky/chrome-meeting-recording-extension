@@ -113,6 +113,38 @@ describe('sharing worker vertical slice', () => {
     expect(await denied.json()).toEqual({ code: 'SHARE_REVOKED' });
   });
 
+  it('serves a real session-protected synchronized web player', async () => {
+    await putManifest();
+    const upload = await beginTrack();
+    await uploadBytes(upload.uploadId, new Uint8Array([1, 2, 3, 4, 5, 6]));
+    await completeTrack(upload.uploadId);
+    const finalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
+    const { shareUrl } = await finalize.json<{ shareUrl: string }>();
+    const open = await worker.fetch(new Request(shareUrl), env);
+    const cookie = open.headers.get('set-cookie');
+
+    const page = await worker.fetch(new Request(`${origin}/viewer`, { headers: { cookie: cookie! } }), env);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('id="recording-title"');
+    expect(html).toContain('id="mixers"');
+    expect(html).toContain('id="transcript"');
+    expect(html).toContain('src="/viewer/app.js"');
+    expect(html).not.toContain('id="manifest"');
+    expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
+
+    const app = await worker.fetch(new Request(`${origin}/viewer/app.js`, { headers: { cookie: cookie! } }), env);
+    expect(app.status).toBe(200);
+    const script = await app.text();
+    expect(() => new Function(script)).not.toThrow();
+    expect(script).toContain("fetch('/viewer/manifest'");
+    expect(script).toContain('captureStartOffsetMs');
+    expect(script).toContain('Math.abs(item.element.currentTime - target) * 1000 > 150');
+    expect(script).toContain("slider.type = 'range'");
+    expect(script).toContain('syncTranscript');
+    expect(script).toContain('renderTopics');
+  });
+
   it('rejects a different manifest reusing the same owner share id', async () => {
     expect((await putManifest()).status).toBe(201);
     const changed = structuredClone(manifest);
