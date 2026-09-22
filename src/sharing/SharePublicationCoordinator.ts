@@ -20,6 +20,8 @@ export interface SharePublicationApi {
   createShare(manifest: PublishedPlaybackManifest): Promise<void>;
   /** Idempotent finalization. The returned viewer URL must not derive authority from shareId. */
   finalizeShare(shareId: string): Promise<{ shareUrl: string }>;
+  /** Idempotent server-side revocation of the viewer capability. */
+  revokeShare(shareId: string): Promise<void>;
 }
 
 export type SharePublicationCoordinatorDeps = {
@@ -60,12 +62,28 @@ export class SharePublicationCoordinator {
     return await this.resume(publication);
   }
 
+  /** Persists revoking before the DELETE so a crash can safely replay it. */
+  async revoke(shareId: string): Promise<SharePublication> {
+    const publication = await this.deps.store.get(shareId);
+    if (!publication) throw new Error(`Share ${shareId} is not published locally`);
+    if (publication.status === 'revoked') return publication;
+    if (publication.status === 'revoking'
+      || (publication.status === 'failed' && publication.resumeFrom === 'revoking')) {
+      return await this.resume(publication);
+    }
+    if (publication.status !== 'active') {
+      throw new Error(`Share ${shareId} cannot be revoked while ${publication.status}`);
+    }
+
+    return await this.resume(await this.transition(publication, 'revoking'));
+  }
+
   /** Resumes interrupted or failed publications without minting any new ids. */
   async resumePending(): Promise<SharePublication[]> {
     const publications = await this.deps.store.list();
     const outcomes: SharePublication[] = [];
     for (const publication of publications) {
-      if (publication.status === 'revoked' || publication.status === 'revoking') continue;
+      if (publication.status === 'revoked') continue;
       if (publication.status === 'active') {
         // A crash can occur after active was persisted but before temporary
         // upload jobs were cleared. Cleanup is safe and idempotent.
@@ -111,6 +129,13 @@ export class SharePublicationCoordinator {
         // will remove these temporary upload jobs on the next startup.
         await this.deps.uploads.clearShare(current.id).catch(() => {});
       }
+
+      if (phase === 'revoking') {
+        await this.deps.api.revokeShare(current.id);
+        current = await this.transition(current, 'revoked');
+        // Revoked is persisted first. Cleanup is local-only and idempotent.
+        await this.deps.uploads.clearShare(current.id).catch(() => {});
+      }
       return current;
     } catch (error) {
       const failed: SharePublication = {
@@ -144,7 +169,7 @@ export class SharePublicationCoordinator {
 }
 
 function isResumablePhase(status: SharePublication['status']): status is SharePublicationPhase {
-  return status === 'draft' || status === 'uploading' || status === 'finalizing';
+  return status === 'draft' || status === 'uploading' || status === 'finalizing' || status === 'revoking';
 }
 
 function describeError(error: unknown): string {
