@@ -85,6 +85,8 @@ export class RecordingAnalysisCoordinator {
    * merely computed. A cache: after a restart it is rebuilt from replayed state.
    */
   private readonly running = new Map<string, string>();
+  /** Covers the async enqueue window before a durable offscreen job id exists. */
+  private readonly pending = new Set<string>();
   /**
    * Recordings purged by this worker instance — a fast path only. The durable
    * fence is {@link RecordingAnalysisCoordinatorDeps.isRecordingDeleted}.
@@ -118,24 +120,20 @@ export class RecordingAnalysisCoordinator {
    * not the one it wants.
    */
   async analyze(historyId: string, options: { force?: boolean } = {}): Promise<AnalysisStartResult> {
-    if (this.running.has(historyId)) {
+    if (this.running.has(historyId) || this.pending.has(historyId)) {
       return { ok: false, reason: 'busy' };
     }
-    if (!options.force && await this.deps.analyses.get(historyId)) {
-      // INC-03: results are computed once and never recomputed on reopen.
-      return { ok: false, reason: 'already-analyzed' };
-    }
-
-    const transcript = await this.deps.readTranscript(historyId);
-    if (!transcript?.segments.length) return { ok: false, reason: 'no-transcript' };
-
-    // Reaching here means the recording has words, so this worker's own purge
-    // marker for it is stale. The durable fence is still checked on arrival.
-    this.purged.delete(historyId);
-
-    // Captured before the run starts, and sent with it.
-    const provenance = this.deps.analyses.provenanceForNewRun();
+    this.pending.add(historyId);
     try {
+      if (!options.force && await this.deps.analyses.get(historyId)) {
+        return { ok: false, reason: 'already-analyzed' };
+      }
+
+      const transcript = await this.deps.readTranscript(historyId);
+      if (!transcript?.segments.length) return { ok: false, reason: 'no-transcript' };
+
+      this.purged.delete(historyId);
+      const provenance = this.deps.analyses.provenanceForNewRun();
       await this.deps.dataPlane.ensureReady();
       const response = await this.deps.dataPlane.analyzeTranscript(
         historyId,
@@ -153,6 +151,8 @@ export class RecordingAnalysisCoordinator {
       const message = error instanceof Error ? error.message : String(error);
       L.warn('Could not start topic analysis', historyId, message);
       return { ok: false, reason: 'failed', error: message };
+    } finally {
+      this.pending.delete(historyId);
     }
   }
 

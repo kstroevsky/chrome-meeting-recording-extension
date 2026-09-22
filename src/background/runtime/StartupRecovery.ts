@@ -31,21 +31,25 @@ export class StartupRecovery {
     const already = await getSessionStorageValues(RECONCILED_KEY)
       .catch(() => ({} as Record<string, unknown>));
     if (already[RECONCILED_KEY]) return;
-    await setSessionStorageValues({ [RECONCILED_KEY]: true }).catch(() => {});
 
-    await this.reconcileRetained();
+    const retainedOk = await this.reconcileRetained();
     await ensurePersistentStorage(this.logger.log, this.logger.warn);
-    await this.reconcileDeferredDelivery();
-    await this.reconcilePlaybackLeases();
+    const deliveryOk = await this.reconcileDeferredDelivery();
+    const leasesOk = await this.reconcilePlaybackLeases();
+    if (retainedOk && deliveryOk && leasesOk) {
+      await setSessionStorageValues({ [RECONCILED_KEY]: true }).catch((error) => {
+        this.logger.warn('Could not persist startup reconciliation marker:', error);
+      });
+    }
   }
 
-  private async reconcileRetained(): Promise<void> {
+  private async reconcileRetained(): Promise<boolean> {
     try {
       const report = await reconcileRetainedMedia({
         hasRetainedLibrary: async () => hasLibraryDirectory(await navigator.storage.getDirectory()),
         listRetained: async () => listLibraryFiles(await navigator.storage.getDirectory()),
         getEntry: (id) => this.historyRepository.get(id),
-        listLiveEntries: () => this.history.list(),
+        listLiveEntries: () => this.listAllLiveEntries(),
         exists: async (key) => existsByKey(await navigator.storage.getDirectory(), key),
         removeRetained: async (key) => removeByKey(await navigator.storage.getDirectory(), key),
         recordLocation: (historyId, fileId, key, retainedAt) =>
@@ -57,22 +61,26 @@ export class StartupRecovery {
       if (report.repaired || report.collected || report.staleLocations) {
         this.logger.log('Retained-media reconciliation:', report);
       }
+      return true;
     } catch (error) {
       this.logger.warn('Retained-media reconciliation failed (non-fatal):', error);
+      return false;
     }
   }
 
-  private async reconcileDeferredDelivery(): Promise<void> {
+  private async reconcileDeferredDelivery(): Promise<boolean> {
     try {
       if (await hasLibraryDirectory(await navigator.storage.getDirectory())) {
         await this.localDelivery.reconcileAbandoned();
       }
+      return true;
     } catch (error) {
       this.logger.warn('Reconciling deferred local deliveries failed (non-fatal):', error);
+      return false;
     }
   }
 
-  private async reconcilePlaybackLeases(): Promise<void> {
+  private async reconcilePlaybackLeases(): Promise<boolean> {
     try {
       const tabs = await queryTabs({});
       const liveTabIds = tabs.map((tab) => tab.id).filter((id): id is number => id != null);
@@ -80,8 +88,25 @@ export class StartupRecovery {
       if (dropped) this.logger.log(`Dropped ${dropped} orphaned Drive playback rule(s)`);
       const freed = await this.playbackLeases.reconcile(liveTabIds);
       if (freed) this.logger.log(`Freed retained media for ${freed} recording(s) whose player is gone`);
+      return true;
     } catch (error) {
       this.logger.warn('Playback lease reconciliation failed (non-fatal):', error);
+      return false;
     }
+  }
+
+  private async listAllLiveEntries() {
+    const entries = [];
+    let cursor;
+    for (let page = 0; page < 200; page += 1) {
+      const result = await this.historyRepository.listPage({
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      entries.push(...result.entries.filter((entry) => !entry.deletedAt));
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+    return entries;
   }
 }

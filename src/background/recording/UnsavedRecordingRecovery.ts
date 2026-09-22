@@ -53,6 +53,11 @@ export class UnsavedRecordingRecovery {
       storageMode: toStorageMode(settings.basic.recordingMode),
     });
     if (!response?.ok) throw new Error(response?.error || 'Could not save that recording');
-    await markCaptureSettled();
+    const remaining = await this.offscreen.rpc<{ ok: boolean; recordings?: UnsavedRecording[] }>({
+      type: 'OFFSCREEN_LIST_UNSAVED',
+    });
+    if (remaining?.ok && (remaining.recordings?.length ?? 0) === 0) {
+      await markCaptureSettled();
+    }
   }
 }

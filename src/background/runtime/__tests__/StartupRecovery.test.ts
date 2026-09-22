@@ -56,7 +56,10 @@ describe('StartupRecovery', () => {
       staleLocations: 0,
     });
     ensurePersistentStorageMock.mockResolvedValue(true);
-    historyRepository = { get: jest.fn() };
+    historyRepository = {
+      get: jest.fn(),
+      listPage: jest.fn().mockResolvedValue({ entries: [] }),
+    };
     history = {
       list: jest.fn().mockResolvedValue([]),
       recordArtifactLocation: jest.fn(),
@@ -118,6 +121,7 @@ describe('StartupRecovery', () => {
     expect(ensurePersistentStorageMock).toHaveBeenCalledTimes(1);
     expect(localDelivery.reconcileAbandoned).toHaveBeenCalledTimes(1);
     expect(driveAuthLease.reconcile).toHaveBeenCalledTimes(1);
+    expect(chrome.storage.session.set).not.toHaveBeenCalledWith({ retainedMediaReconciled: true });
   });
 
   it('continues lease cleanup when deferred local delivery reconciliation fails', async () => {
@@ -131,5 +135,40 @@ describe('StartupRecovery', () => {
     );
     expect(driveAuthLease.reconcile).toHaveBeenCalledTimes(1);
     expect(playbackLeases.reconcile).toHaveBeenCalledTimes(1);
+    expect(chrome.storage.session.set).not.toHaveBeenCalledWith({ retainedMediaReconciled: true });
+  });
+
+  it('marks reconciliation complete only after every startup pass succeeds', async () => {
+    const order: string[] = [];
+    reconcileRetainedMock.mockImplementation(async () => {
+      order.push('retained');
+      return { healthy: 0, repaired: 0, collected: 0, deferred: 0, staleLocations: 0 };
+    });
+    localDelivery.reconcileAbandoned.mockImplementation(async () => { order.push('delivery'); });
+    driveAuthLease.reconcile.mockImplementation(async () => { order.push('leases'); return 0; });
+    (chrome.storage.session.set as jest.Mock).mockImplementation(async () => { order.push('marker'); });
+
+    await run();
+
+    expect(order.indexOf('marker')).toBeGreaterThan(order.indexOf('retained'));
+    expect(order.indexOf('marker')).toBeGreaterThan(order.indexOf('delivery'));
+    expect(order.indexOf('marker')).toBeGreaterThan(order.indexOf('leases'));
+  });
+
+  it('gives retained-location reconciliation every history page', async () => {
+    historyRepository.listPage
+      .mockResolvedValueOnce({
+        entries: [{ id: 'r1' }, { id: 'deleted', deletedAt: 9 }],
+        nextCursor: { createdAt: 2, id: 'r1' },
+      })
+      .mockResolvedValueOnce({ entries: [{ id: 'r2' }] });
+    reconcileRetainedMock.mockImplementation(async (deps: any) => {
+      await expect(deps.listLiveEntries()).resolves.toEqual([{ id: 'r1' }, { id: 'r2' }]);
+      return { healthy: 0, repaired: 0, collected: 0, deferred: 0, staleLocations: 0 };
+    });
+
+    await run();
+
+    expect(historyRepository.listPage).toHaveBeenCalledTimes(2);
   });
 });

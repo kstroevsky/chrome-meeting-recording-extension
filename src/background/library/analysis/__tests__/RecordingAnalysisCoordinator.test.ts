@@ -168,6 +168,17 @@ describe('RecordingAnalysisCoordinator', () => {
     expect(h.calls.analyze).toHaveLength(1);
   });
 
+  it('fences concurrent enqueue attempts before the first job id exists', async () => {
+    const h = harness({ transcript: TRANSCRIPT });
+
+    const first = h.coordinator.analyze('rec_1');
+    const second = h.coordinator.analyze('rec_1');
+
+    await expect(second).resolves.toEqual({ ok: false, reason: 'busy' });
+    await expect(first).resolves.toEqual({ ok: true, jobId: 'ana_1' });
+    expect(h.calls.analyze).toHaveLength(1);
+  });
+
   it('reports a data plane that refuses the job', async () => {
     const h = harness({ transcript: TRANSCRIPT, analyzeAnswer: { ok: false, error: 'Topic analysis is unavailable' } });
     await expect(h.coordinator.analyze('rec_1'))
