@@ -1,25 +1,11 @@
+import {
+  canonicalizeManifest,
+  canonicalizeStoredManifest,
+} from './shares/manifestSchema';
+
 const CHUNK_SIZE = 8 * 1024 * 1024;
 const SESSION_COOKIE = '__Host-share_session';
 const encoder = new TextEncoder();
-
-type PublishedTrack = {
-  id: string;
-  mimeType: string;
-  bytes?: number;
-  mediaEndpoint: string;
-};
-
-type PublishedRecording = {
-  id: string;
-  title: string;
-  tracks: PublishedTrack[];
-};
-
-type PublishedManifest = {
-  id: string;
-  createdAt: number;
-  recordings: PublishedRecording[];
-};
 
 type ShareRow = {
   id: string;
@@ -166,13 +152,14 @@ async function routeOwner(request: Request, env: Env, url: URL): Promise<Respons
 
 async function putShare(shareId: string, request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
-  const manifest = validateManifest(body, shareId);
-  if (manifest instanceof Response) return manifest;
+  const manifest = canonicalizeManifest(body, shareId);
+  if (!manifest) return json({ code: 'INVALID_MANIFEST' }, 400);
 
-  const manifestJson = JSON.stringify(body);
+  const manifestJson = JSON.stringify(manifest);
   const existing = await getShare(env.SHARING_DB, shareId);
   if (existing) {
-    if (existing.manifest_json !== manifestJson) {
+    const existingManifest = canonicalizeStoredManifest(existing.manifest_json, shareId);
+    if (!existingManifest || JSON.stringify(existingManifest) !== manifestJson) {
       return json({ code: 'SHARE_ID_CONFLICT', message: 'Share id already belongs to another snapshot' }, 409);
     }
     if (existing.status === 'revoked') return json({ code: 'SHARE_REVOKED' }, 410);
@@ -608,51 +595,6 @@ function isMultipartSessionGone(error: unknown): boolean {
     message.includes('no such upload') ||
     message.includes('invalid upload')
   );
-}
-
-function validateManifest(value: unknown, expectedShareId: string): PublishedManifest | Response {
-  if (!value || typeof value !== 'object') return json({ code: 'INVALID_MANIFEST' }, 400);
-  const manifest = value as Record<string, unknown>;
-  if (manifest.id !== expectedShareId || typeof manifest.createdAt !== 'number' || !Array.isArray(manifest.recordings) || manifest.recordings.length === 0) {
-    return json({ code: 'INVALID_MANIFEST' }, 400);
-  }
-
-  const recordingIds = new Set<string>();
-  const recordings: PublishedRecording[] = [];
-  for (const rawRecording of manifest.recordings) {
-    if (!rawRecording || typeof rawRecording !== 'object') return json({ code: 'INVALID_MANIFEST' }, 400);
-    const recording = rawRecording as Record<string, unknown>;
-    if (typeof recording.id !== 'string' || !recording.id || recordingIds.has(recording.id) || typeof recording.title !== 'string' || !Array.isArray(recording.tracks) || recording.tracks.length === 0) {
-      return json({ code: 'INVALID_MANIFEST' }, 400);
-    }
-    recordingIds.add(recording.id);
-
-    const trackIds = new Set<string>();
-    const tracks: PublishedTrack[] = [];
-    for (const rawTrack of recording.tracks) {
-      if (!rawTrack || typeof rawTrack !== 'object') return json({ code: 'INVALID_MANIFEST' }, 400);
-      const track = rawTrack as Record<string, unknown>;
-      const expectedEndpoint = `/media/recordings/${encodeURIComponent(recording.id)}/tracks/${encodeURIComponent(String(track.id ?? ''))}`;
-      if (
-        typeof track.id !== 'string' || !track.id || trackIds.has(track.id) ||
-        typeof track.mimeType !== 'string' || !track.mimeType ||
-        typeof track.mediaEndpoint !== 'string' || track.mediaEndpoint !== expectedEndpoint ||
-        (track.bytes != null && (!Number.isInteger(track.bytes) || Number(track.bytes) < 0))
-      ) {
-        return json({ code: 'INVALID_MANIFEST' }, 400);
-      }
-      trackIds.add(track.id);
-      tracks.push({
-        id: track.id,
-        mimeType: track.mimeType,
-        ...(track.bytes != null ? { bytes: Number(track.bytes) } : {}),
-        mediaEndpoint: track.mediaEndpoint,
-      });
-    }
-    recordings.push({ id: recording.id, title: recording.title, tracks });
-  }
-
-  return { id: expectedShareId, createdAt: manifest.createdAt, recordings };
 }
 
 async function authorizeOwner(request: Request, env: Env): Promise<Response | null> {
