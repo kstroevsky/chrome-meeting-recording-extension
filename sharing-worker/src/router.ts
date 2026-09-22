@@ -14,20 +14,20 @@ export async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (ownerRoute) {
-    const denied = await authorizeOwner(request, env);
-    if (denied) return withOwnerCors(denied, request, env);
-    const response = await routeOwner(request, env, url);
+    const owner = await authorizeOwner(request, env);
+    if (owner instanceof Response) return withOwnerCors(owner, request, env);
+    const response = await routeOwner(request, env, url, owner.id);
     return withOwnerCors(response, request, env);
   }
 
   return await routeViewerRequest(request, env, url) ?? json({ code: 'NOT_FOUND' }, 404);
 }
 
-async function routeOwner(request: Request, env: Env, url: URL): Promise<Response> {
-  const shareResponse = await routeShareOwnerRequest(request, env, url);
+async function routeOwner(request: Request, env: Env, url: URL, ownerId: string): Promise<Response> {
+  const shareResponse = await routeShareOwnerRequest(request, env, url, ownerId);
   if (shareResponse) return shareResponse;
 
-  const uploadResponse = await routeUploadOwnerRequest(request, env, url);
+  const uploadResponse = await routeUploadOwnerRequest(request, env, url, ownerId);
   if (uploadResponse) return uploadResponse;
 
   return json({ code: 'NOT_FOUND' }, 404);

@@ -1,5 +1,6 @@
 export type ShareRow = {
   id: string;
+  owner_id: string;
   status: 'draft' | 'uploading' | 'active' | 'revoked';
   manifest_json: string;
   capability_hash: string | null;
@@ -22,10 +23,18 @@ export type TrackRow = {
 
 export async function getShare(db: D1Database, shareId: string): Promise<ShareRow | null> {
   return db.prepare(
-    `SELECT id, status, manifest_json, capability_hash, capability_version,
+    `SELECT id, owner_id, status, manifest_json, capability_hash, capability_version,
             created_at, updated_at, finalized_at, revoked_at
        FROM shares WHERE id = ?`,
   ).bind(shareId).first<ShareRow>();
+}
+
+export async function getOwnedShare(db: D1Database, shareId: string, ownerId: string): Promise<ShareRow | null> {
+  return db.prepare(
+    `SELECT id, owner_id, status, manifest_json, capability_hash, capability_version,
+            created_at, updated_at, finalized_at, revoked_at
+       FROM shares WHERE id = ? AND owner_id = ?`,
+  ).bind(shareId, ownerId).first<ShareRow>();
 }
 
 export function mediaObjectKey(shareId: string, recordingId: string, trackId: string): string {

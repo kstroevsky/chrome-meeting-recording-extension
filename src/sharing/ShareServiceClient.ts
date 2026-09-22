@@ -24,8 +24,8 @@ import type { ShareUploadSession, ShareUploadTransport } from './ShareUploadMana
 
 export type ShareServiceClientDeps = {
   fetch?: typeof fetch;
-  /** Authentication/session headers supplied by the eventual account layer. */
-  headers?: () => HeadersInit | Promise<HeadersInit>;
+  /** Authentication headers. A 401 retries once with `refresh: true`. */
+  headers?: (options?: { refresh?: boolean }) => HeadersInit | Promise<HeadersInit>;
 };
 
 export class ShareServiceRequestError extends Error {
@@ -136,28 +136,33 @@ export class ShareServiceClient implements SharePublicationApi, ShareUploadTrans
   }
 
   private async request(path: string, options: RequestOptions): Promise<Response> {
-    const authHeaders = await this.deps.headers?.();
-    const headers = new Headers(authHeaders);
-    if (options.json !== undefined) headers.set('content-type', 'application/json');
-    new Headers(options.headers).forEach((value, name) => headers.set(name, value));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const refresh = attempt > 0;
+      const authHeaders = await this.deps.headers?.(refresh ? { refresh: true } : undefined);
+      const headers = new Headers(authHeaders);
+      if (options.json !== undefined) headers.set('content-type', 'application/json');
+      new Headers(options.headers).forEach((value, name) => headers.set(name, value));
 
-    const response = await this.fetcher(this.origin + path, {
-      method: options.method,
-      headers,
-      body: options.json !== undefined ? JSON.stringify(options.json) : options.body,
-      signal: options.signal,
-      cache: 'no-store',
-    });
-    if (!options.statuses.includes(response.status)) {
-      const detail = await response.text().catch(() => '');
-      const suffix = detail.trim() ? `: ${detail.trim().slice(0, 240)}` : '';
-      throw new ShareServiceRequestError(
-        `Sharing service ${options.method} ${path} failed (${response.status})${suffix}`,
-        response.status,
-        responseErrorCode(detail),
-      );
+      const response = await this.fetcher(this.origin + path, {
+        method: options.method,
+        headers,
+        body: options.json !== undefined ? JSON.stringify(options.json) : options.body,
+        signal: options.signal,
+        cache: 'no-store',
+      });
+      if (response.status === 401 && attempt === 0 && this.deps.headers) continue;
+      if (!options.statuses.includes(response.status)) {
+        const detail = await response.text().catch(() => '');
+        const suffix = detail.trim() ? `: ${detail.trim().slice(0, 240)}` : '';
+        throw new ShareServiceRequestError(
+          `Sharing service ${options.method} ${path} failed (${response.status})${suffix}`,
+          response.status,
+          responseErrorCode(detail),
+        );
+      }
+      return response;
     }
-    return response;
+    throw new Error('Sharing service authentication retry did not complete');
   }
 }
 

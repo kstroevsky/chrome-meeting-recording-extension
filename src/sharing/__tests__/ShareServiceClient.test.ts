@@ -38,6 +38,26 @@ describe('ShareServiceClient', () => {
     expect(JSON.parse(String(init.body))).toEqual(manifest);
   });
 
+  it('refreshes owner authentication once after a 401', async () => {
+    const fetcher = jest.fn()
+      .mockResolvedValueOnce(mockResponse('{"code":"OWNER_AUTH_INVALID"}', 401))
+      .mockResolvedValueOnce(mockResponse('', 201));
+    const headers = jest.fn(async (options?: { refresh?: boolean }) => ({
+      Authorization: options?.refresh ? 'Bearer refreshed-token' : 'Bearer stale-token',
+    }));
+    const client = new ShareServiceClient('https://share.example', {
+      fetch: fetcher as typeof fetch,
+      headers,
+    });
+
+    await client.createShare(manifest);
+
+    expect(headers).toHaveBeenNthCalledWith(1, undefined);
+    expect(headers).toHaveBeenNthCalledWith(2, { refresh: true });
+    expect(new Headers(fetcher.mock.calls[0][1].headers).get('authorization')).toBe('Bearer stale-token');
+    expect(new Headers(fetcher.mock.calls[1][1].headers).get('authorization')).toBe('Bearer refreshed-token');
+  });
+
   it('creates an upload session, sends an idempotent ranged chunk, then completes it', async () => {
     const fetcher = jest.fn()
       .mockResolvedValueOnce(jsonResponse({ uploadId: 'upl/1', chunkSize: 4, offset: 2 }, 201))

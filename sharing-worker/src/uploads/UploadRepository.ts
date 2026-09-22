@@ -20,12 +20,14 @@ export type UploadPartRow = {
   etag: string;
 };
 
-export async function getUpload(db: D1Database, uploadId: string): Promise<UploadRow | null> {
+export async function getOwnedUpload(db: D1Database, uploadId: string, ownerId: string): Promise<UploadRow | null> {
   return db.prepare(
-    `SELECT id, share_id, recording_id, track_id, r2_upload_id, object_key, bytes,
-            chunk_size, offset, status
-       FROM share_uploads WHERE id = ?`,
-  ).bind(uploadId).first<UploadRow>();
+    `SELECT u.id, u.share_id, u.recording_id, u.track_id, u.r2_upload_id, u.object_key, u.bytes,
+            u.chunk_size, u.offset, u.status
+       FROM share_uploads u
+       JOIN shares s ON s.id = u.share_id
+      WHERE u.id = ? AND s.owner_id = ?`,
+  ).bind(uploadId, ownerId).first<UploadRow>();
 }
 
 export async function markUploadComplete(upload: UploadRow, env: Env): Promise<void> {

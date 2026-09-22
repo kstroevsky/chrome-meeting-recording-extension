@@ -13,7 +13,7 @@
     "VIEWER_SESSION_TTL_SECONDS": "43200"
   },
   "secrets": {
-    "required": ["OWNER_API_TOKEN", "CAPABILITY_KEY", "SESSION_KEY"]
+    "required": ["CAPABILITY_KEY", "SESSION_KEY"]
   },
   "d1_databases": [
     {

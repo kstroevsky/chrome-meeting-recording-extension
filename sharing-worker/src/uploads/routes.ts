@@ -1,9 +1,9 @@
 import { integerField, json, readJson, stringField } from '../http/responses';
 import { parseContentRange } from '../http/range';
-import { getShare, type TrackRow } from '../shares/ShareRepository';
+import { getOwnedShare, type TrackRow } from '../shares/ShareRepository';
 import {
   abandonUpload,
-  getUpload,
+  getOwnedUpload,
   isMultipartSessionGone,
   markUploadComplete,
   recoverCompletedObject,
@@ -14,7 +14,12 @@ import {
 
 const CHUNK_SIZE = 8 * 1024 * 1024;
 
-export async function routeUploadOwnerRequest(request: Request, env: Env, url: URL): Promise<Response | null> {
+export async function routeUploadOwnerRequest(
+  request: Request,
+  env: Env,
+  url: URL,
+  ownerId: string,
+): Promise<Response | null> {
   const beginMatch = /^\/api\/shares\/([^/]+)\/recordings\/([^/]+)\/tracks\/([^/]+)\/uploads$/.exec(url.pathname);
   if (beginMatch && request.method === 'POST') {
     return beginUpload(
@@ -23,17 +28,18 @@ export async function routeUploadOwnerRequest(request: Request, env: Env, url: U
       decodeURIComponent(beginMatch[3]),
       request,
       env,
+      ownerId,
     );
   }
 
   const chunkMatch = /^\/api\/share-uploads\/([^/]+)\/chunks\/(\d+)$/.exec(url.pathname);
   if (chunkMatch && request.method === 'PUT') {
-    return uploadChunk(decodeURIComponent(chunkMatch[1]), Number(chunkMatch[2]), request, env);
+    return uploadChunk(decodeURIComponent(chunkMatch[1]), Number(chunkMatch[2]), request, env, ownerId);
   }
 
   const completeMatch = /^\/api\/share-uploads\/([^/]+)\/complete$/.exec(url.pathname);
   if (completeMatch && request.method === 'POST') {
-    return completeUpload(decodeURIComponent(completeMatch[1]), request, env);
+    return completeUpload(decodeURIComponent(completeMatch[1]), request, env, ownerId);
   }
 
   return null;
@@ -45,6 +51,7 @@ async function beginUpload(
   trackId: string,
   request: Request,
   env: Env,
+  ownerId: string,
 ): Promise<Response> {
   const body = await readJson(request);
   const mimeType = stringField(body, 'mimeType');
@@ -53,7 +60,7 @@ async function beginUpload(
     return json({ code: 'INVALID_UPLOAD', message: 'mimeType and non-negative bytes are required' }, 400);
   }
 
-  const share = await getShare(env.SHARING_DB, shareId);
+  const share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
   if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
   if (share.status === 'active') return json({ code: 'SHARE_ALREADY_ACTIVE' }, 409);
   if (share.status === 'revoked') return json({ code: 'SHARE_REVOKED' }, 410);
@@ -117,8 +124,8 @@ async function beginUpload(
   return json({ uploadId, chunkSize: CHUNK_SIZE, offset: 0 }, 201);
 }
 
-async function uploadChunk(uploadId: string, offset: number, request: Request, env: Env): Promise<Response> {
-  const upload = await getUpload(env.SHARING_DB, uploadId);
+async function uploadChunk(uploadId: string, offset: number, request: Request, env: Env, ownerId: string): Promise<Response> {
+  const upload = await getOwnedUpload(env.SHARING_DB, uploadId, ownerId);
   if (!upload || upload.status === 'abandoned') return uploadSessionGone();
   if (upload.status === 'completed') return new Response(null, { status: 204 });
 
@@ -184,8 +191,8 @@ async function uploadChunk(uploadId: string, offset: number, request: Request, e
   return new Response(null, { status: 204 });
 }
 
-async function completeUpload(uploadId: string, request: Request, env: Env): Promise<Response> {
-  const upload = await getUpload(env.SHARING_DB, uploadId);
+async function completeUpload(uploadId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
+  const upload = await getOwnedUpload(env.SHARING_DB, uploadId, ownerId);
   if (!upload || upload.status === 'abandoned') return uploadSessionGone();
   if (upload.status === 'completed') return new Response(null, { status: 204 });
 
