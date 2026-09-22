@@ -224,7 +224,7 @@ export function createBackgroundRuntime() {
     applyUpdateWhenSafe: () => criticalWork.applyUpdateWhenSafe(),
     handleUpdatedExtension: async () => {
       logger.log('Extension updated; refreshing offscreen document');
-      void driveLibrary.tidyOnce();
+      await driveLibrary.tidyOnce();
       const closed = await offscreen.closeForUpdate();
       if (!closed) criticalWork.markReloadPending();
     },

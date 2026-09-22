@@ -24,6 +24,7 @@ describe('background update lifecycle', () => {
       onSaveRequested: undefined as ((msg: any) => void) | undefined,
       hydratePhase: jest.fn(),
       attachPort: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
       stopIfPossibleOnSuspend: jest.fn(),
       rpc: jest.fn().mockResolvedValue({ ok: true }),
@@ -35,8 +36,24 @@ describe('background update lifecycle', () => {
     };
   }
 
-  async function importBackgroundWith(offscreenInstance: any, driveAuth = { fetchDriveTokenWithFallback: jest.fn() }) {
+  function makeDriveLibraryInstance() {
+    return {
+      artifacts: { resolve: jest.fn() },
+      fileRecordingToDestination: jest.fn(),
+      renameRootFolder: jest.fn(),
+      tidyOnce: jest.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  async function importBackgroundWith(
+    offscreenInstance: any,
+    driveAuth = { fetchDriveTokenWithFallback: jest.fn() },
+    driveLibraryInstance = makeDriveLibraryInstance(),
+  ) {
     jest.doMock('../src/background/drive/driveAuth', () => driveAuth);
+    jest.doMock('../src/background/drive/DriveLibraryCoordinator', () => ({
+      DriveLibraryCoordinator: jest.fn(() => driveLibraryInstance),
+    }));
     jest.doMock('../src/background/offscreen/OffscreenManager', () => ({
       OffscreenManager: jest.fn(() => offscreenInstance),
     }));
@@ -213,6 +230,29 @@ describe('background update lifecycle', () => {
 
     expect(offscreenInstance.closeForUpdate).toHaveBeenCalledTimes(1);
     expect(chrome.runtime.reload).not.toHaveBeenCalled();
+  });
+
+  it('finishes durable Drive maintenance before refreshing offscreen on update', async () => {
+    const offscreenInstance = makeOffscreenInstance();
+    let releaseTidy!: () => void;
+    const driveLibrary = makeDriveLibraryInstance();
+    driveLibrary.tidyOnce.mockImplementation(() => new Promise<void>((resolve) => {
+      releaseTidy = resolve;
+    }));
+    await importBackgroundWith(
+      offscreenInstance,
+      { fetchDriveTokenWithFallback: jest.fn() },
+      driveLibrary,
+    );
+
+    const onInstalled = (chrome.runtime.onInstalled.addListener as jest.Mock).mock.calls[0][0];
+    const handling = onInstalled({ reason: 'update' });
+    await untilCalled(driveLibrary.tidyOnce);
+
+    expect(offscreenInstance.closeForUpdate).not.toHaveBeenCalled();
+    releaseTidy();
+    await handling;
+    expect(offscreenInstance.closeForUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('ignores onInstalled events that are not updates', async () => {
