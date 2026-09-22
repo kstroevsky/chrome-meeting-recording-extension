@@ -140,10 +140,12 @@ describe('sharing worker vertical slice', () => {
     expect(app.status).toBe(200);
     const script = await app.text();
     expect(() => new Function(script)).not.toThrow();
-    expect(script).toContain("fetch('/viewer/manifest'");
+    expect(script).toContain('fetch("/viewer/manifest"');
     expect(script).toContain('captureStartOffsetMs');
-    expect(script).toContain('Math.abs(item.element.currentTime - target) * 1000 > 150');
-    expect(script).toContain("slider.type = 'range'");
+    expect(script).toContain('var PlaybackClock = class');
+    expect(script).toContain('DRIFT_RESYNC_MS = 150');
+    expect(script).not.toContain('Math.abs(item.element.currentTime - target) * 1000 > 150');
+    expect(script).toContain('slider.type = "range"');
     expect(script).toContain('syncTranscript');
     expect(script).toContain('renderTopics');
   });
