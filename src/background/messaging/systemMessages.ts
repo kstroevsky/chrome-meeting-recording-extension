@@ -28,6 +28,17 @@ export function handleSystemIngress(
     transcriptCapture,
   } = deps;
 
+  if (
+    (typeof __E2E_MOCK_CAPTURE_BUILD__ !== 'undefined' && __E2E_MOCK_CAPTURE_BUILD__)
+    && msg && typeof msg === 'object' && (msg as any).type === 'E2E_GET_ANALYSIS_WORK'
+  ) {
+    void Promise.resolve(deps.waitUntilReady?.())
+      .then(() => deps.e2eAnalysisWork?.() ?? false)
+      .then((active) => sendResponse({ ok: true, active }))
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+
   if (msg && typeof msg === 'object' && (msg as any).type === 'TELEMETRY_SNAPSHOT') {
     void telemetry?.receive((msg as any).snapshot, (msg as any).critical === true)
       .then(() => sendResponse({ ok: true }))

@@ -127,6 +127,22 @@ async function outboxRows(controlPage: Page): Promise<Array<{ id: string; status
   }));
 }
 
+async function waitForAnalysisWork(
+  controlPage: Page,
+  timeoutMs = 120_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await sendRuntimeMessage<{ ok: boolean; active?: boolean }>(
+      controlPage,
+      { type: 'E2E_GET_ANALYSIS_WORK' },
+    ).catch(() => null);
+    if (response?.ok && response.active) return;
+    await controlPage.waitForTimeout(200);
+  }
+  throw new Error('Offscreen analysis work never became active');
+}
+
 /**
  * Whether an analysis row is on disk, read straight from IndexedDB. Also from
  * the extension page, for the same reason: asking background would revive it.
@@ -209,12 +225,13 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
       await harness.controlPage.waitForTimeout(500);
       await stopRecording(harness.controlPage);
 
-      // Stopping finishes transcript capture and queues analysis. Give it long
-      // enough to be genuinely in flight — loading the model alone is ~2 s.
-      await harness.controlPage.waitForTimeout(4_000);
+      // Wait for the durable data-plane fact this test needs instead of assuming
+      // a runner-specific model-load duration.
+      await waitForAnalysisWork(harness.controlPage);
+      expect((await outboxRows(harness.controlPage)).some((row) => row.status === 'completed')).toBe(false);
 
-      // The guard that stops this test being vacuous: if the analysis already
-      // finished, killing the worker afterwards proves nothing at all.
+      // A second guard keeps the test non-vacuous: topics must not already be
+      // persisted before the worker is killed.
       const beforeKill = await manifestTopics(harness.controlPage, historyId).catch(() => null);
       expect(
         beforeKill?.length ?? 0,
@@ -328,9 +345,17 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
       await stopRecording(harness.controlPage);
       const stoppedAt = Date.now();
 
-      // Hold the store before the job can finish, so its result cannot land.
+      // First prove the coordinator got through its initial analyses.get() and
+      // actually enqueued the job. Holding the store earlier can block enqueue
+      // itself, which tests a different condition.
+      await waitForAnalysisWork(harness.controlPage);
+
+      // Now hold the store before the job can finish, so its result cannot land.
       await holdAnalysesStore(harness.controlPage);
-      expect(await outboxRows(harness.controlPage), 'the analysis finished before the store was held').toEqual([]);
+      expect(
+        (await outboxRows(harness.controlPage)).some((row) => row.status === 'completed'),
+        'the analysis finished before the store was held',
+      ).toBe(false);
 
       const session = await harness.context.newCDPSession(harness.controlPage);
       await session.send('ServiceWorker.enable' as never);

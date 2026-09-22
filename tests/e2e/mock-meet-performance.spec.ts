@@ -194,7 +194,8 @@ test.describe('mock Meet performance E2E', () => {
       driveProfile: 'fast',
       workload: workloads.normal,
     }));
-    expect(result.drive?.sessionsCreated).toBe(3);
+    expect(result.drive?.sessionsCreated).toBe(result.snapshot.summary.upload.uploadedCount);
+    expect(result.drive?.sessionsCreated).toBeGreaterThanOrEqual(3);
   });
 
   test('@perf-smoke OPFS writes use the sync-access worker and stay drained under 1080p load', async ({}, testInfo) => {

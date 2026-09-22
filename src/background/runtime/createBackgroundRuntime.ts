@@ -167,6 +167,7 @@ export function createBackgroundRuntime() {
     }),
     driveAuthLease,
     telemetry,
+    e2eAnalysisWork: () => offscreen.refreshAnalysisWork(),
     waitUntilReady: () => readiness.wait(),
   });
 
@@ -203,7 +204,7 @@ export function createBackgroundRuntime() {
         logger,
       });
     } catch (error) {
-      readiness.markFailed(error);
+      if (!sessionHydrated) readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);
       throw error;
     }

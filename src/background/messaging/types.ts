@@ -53,6 +53,8 @@ export type MessageHandlersDeps = {
   deliverLocal?: (recordingId: string, folderId: string | null) => Promise<void>;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
+  /** E2E-only probe for real offscreen analysis work; never routed in production builds. */
+  e2eAnalysisWork?: () => Promise<boolean>;
   waitUntilReady?: () => Promise<void>;
 };
 
