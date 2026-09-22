@@ -1,3 +1,4 @@
+import { createAlarm } from '../../platform/chrome/alarms';
 import { loadExtensionSettingsFromStorage } from '../../shared/settings';
 import { pendingLocalDeliveries, type RecordingHistoryCursor } from '../../shared/recordingHistory';
 import type { RecordingHistoryRepository } from '../library/history/RecordingHistoryRepository';
@@ -100,7 +101,7 @@ export class LocalDeliveryOrchestrator {
 
   private async scheduleAbandonedSweep(): Promise<void> {
     try {
-      await chrome.alarms?.create?.(ABANDONED_DELIVERY_ALARM, { delayInMinutes: 0.5 });
+      await createAlarm(ABANDONED_DELIVERY_ALARM, { delayInMinutes: 0.5 });
     } catch (error) {
       this.logger.warn('Could not schedule the local delivery sweep:', error);
     }

@@ -1,4 +1,6 @@
+import { addAlarmListener } from '../../../platform/chrome/alarms';
 import { addStorageChangedListener } from '../../../platform/chrome/storage';
+import { queryTabs, sendTabMessage } from '../../../platform/chrome/tabs';
 import { loadExtensionSettingsFromStorage, normalizeExtensionSettings } from '../../../shared/settings';
 import type { RecordingRunConfig, UploadJob } from '../../../shared/recording';
 import type { RecorderRuntimeSettingsSnapshot } from '../../../shared/settings';
@@ -29,7 +31,7 @@ export class TelemetryRuntime {
     });
     if (this.enabled && typeof indexedDB === 'undefined') this.setEnabled(false);
     if (this.enabled) await this.coordinator.recover(liveEpochs, liveUploadJobIds);
-    chrome.alarms?.onAlarm?.addListener((alarm) => {
+    addAlarmListener((alarm) => {
       if (alarm.name === 'anonymous-telemetry-retry') void this.coordinator.deliverPending();
     });
   }
@@ -39,9 +41,9 @@ export class TelemetryRuntime {
     this.coordinator.setEnabled(enabled);
     if (!enabled) { this.accumulator?.reset(); this.accumulator = null; this.runId = null; }
     if (!enabled) {
-      void chrome.tabs?.query?.({}).then((tabs) => Promise.all(tabs
+      void queryTabs({}).then((tabs) => Promise.all(tabs
         .filter((tab) => typeof tab.id === 'number')
-        .map((tab) => chrome.tabs.sendMessage(tab.id!, { type: 'TELEMETRY_RUN', runId: null, enabled: false }).catch(() => {}))))
+        .map((tab) => sendTabMessage(tab.id!, { type: 'TELEMETRY_RUN', runId: null, enabled: false }).catch(() => {}))))
         .catch(() => {});
     }
   }

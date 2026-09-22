@@ -8,6 +8,7 @@ import {
   buildDefaultRunConfigFromSettings,
   loadExtensionSettingsFromStorage,
 } from '../../shared/settings';
+import { addCommandListener } from '../../platform/chrome/commands';
 import { sendTabMessage } from '../../platform/chrome/tabs';
 import type { RecordingController } from './RecordingController';
 
@@ -59,7 +60,7 @@ export async function handleRecordingCommand(
 }
 
 export function registerRecordingCommands(deps: RecordingCommandDeps): void {
-  chrome.commands.onCommand.addListener((command, tab) => {
+  addCommandListener((command, tab) => {
     void handleRecordingCommand(command, tab, deps).catch((error) => {
       deps.L.error(
         `${command} shortcut failed unexpectedly:`,

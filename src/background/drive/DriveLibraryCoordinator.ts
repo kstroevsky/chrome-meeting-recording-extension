@@ -1,3 +1,4 @@
+import { getLocalStorageValues, setLocalStorageValues } from '../../platform/chrome/storage';
 import { loadExtensionSettingsFromStorage } from '../../shared/settings';
 import { DRIVE_DEFAULT_DESTINATION_NAME } from '../../shared/settings';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../../shared/recordingHistory';
@@ -124,7 +125,7 @@ export class DriveLibraryCoordinator {
 
   async tidyOnce(): Promise<void> {
     try {
-      const stored = await chrome.storage?.local?.get?.(DRIVE_DESTINATIONS_GATHERED_KEY);
+      const stored = await getLocalStorageValues(DRIVE_DESTINATIONS_GATHERED_KEY);
       if (stored?.[DRIVE_DESTINATIONS_GATHERED_KEY]) return;
       const result = await this.gatherDestinations();
       const repair = await this.repairFolderNames();
@@ -132,7 +133,7 @@ export class DriveLibraryCoordinator {
       if (result.moved.length) {
         this.logger.log('Moved destination folders into the recordings folder:', result.moved.join(', '));
       }
-      await chrome.storage?.local?.set?.({ [DRIVE_DESTINATIONS_GATHERED_KEY]: true });
+      await setLocalStorageValues({ [DRIVE_DESTINATIONS_GATHERED_KEY]: true });
     } catch (error) {
       this.logger.warn('Could not tidy the Drive destination folders:', error);
     }

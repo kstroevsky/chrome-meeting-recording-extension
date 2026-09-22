@@ -6,7 +6,6 @@ import { removeByKey } from '../../offscreen/storage/opfsLayout';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { PlaybackLeaseManager } from '../playback/PlaybackLeaseManager';
 import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
-import type { CriticalWorkCoordinator } from '../runtime/CriticalWorkCoordinator';
 import { RecordingAnalysisCoordinator } from './analysis/RecordingAnalysisCoordinator';
 import { RecordingAnalysisRepository } from './analysis/RecordingAnalysisRepository';
 import { RecordingAnalysisService } from './analysis/RecordingAnalysisService';
@@ -24,17 +23,17 @@ type Logger = {
 
 type LibraryRuntimeDeps = {
   offscreen: OffscreenManager;
-  criticalWork: CriticalWorkCoordinator;
   playbackLeases: PlaybackLeaseManager;
   logger: Logger;
+  onAnalysisSettled?: () => void;
 };
 
 /** Constructs durable library aggregates and wires their offscreen analysis boundary. */
 export function createLibraryRuntime({
   offscreen,
-  criticalWork,
   playbackLeases,
   logger,
+  onAnalysisSettled,
 }: LibraryRuntimeDeps) {
   const historyRepository = new RecordingHistoryRepository();
   const notations = new RecordingNotationService(new RecordingNotationRepository());
@@ -60,19 +59,8 @@ export function createLibraryRuntime({
       (await historyRepository.get(historyId))?.deletedAt,
     ),
     config: () => CANDIDATE_ANALYSIS_CONFIG,
-    onSettled: () => criticalWork.sync(),
+    onSettled: onAnalysisSettled,
   });
-
-  offscreen.onAnalysisJobChanged = (job) => {
-    criticalWork.markAnalysisWorkKnown();
-    analysisCoordinator.handleJobState(job);
-    criticalWork.sync();
-  };
-  offscreen.onAnalysisResult = (job, analysis, provenance) => {
-    void analysisCoordinator.handleResult(job, analysis, provenance)
-      .catch((error) => logger.warn('Could not handle an analysis result', job.historyId, error))
-      .finally(() => criticalWork.sync());
-  };
 
   const deleteRetainedKeys = async (keys: string[]) => {
     const root = await navigator.storage.getDirectory();

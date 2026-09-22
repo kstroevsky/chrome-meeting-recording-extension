@@ -1,4 +1,6 @@
 import { existsByKey, hasLibraryDirectory, listLibraryFiles, removeByKey } from '../../offscreen/storage/opfsLayout';
+import { getSessionStorageValues, setSessionStorageValues } from '../../platform/chrome/storage';
+import { queryTabs } from '../../platform/chrome/tabs';
 import { reconcileRetainedMedia } from '../retention/RetainedMediaReconciler';
 import { ensurePersistentStorage } from '../retention/storageDurability';
 import type { DrivePlaybackAuthLeaseManager } from '../playback/DrivePlaybackAuthLeaseManager';
@@ -26,10 +28,10 @@ export class StartupRecovery {
   ) {}
 
   async run(): Promise<void> {
-    const already = await chrome.storage.session.get(RECONCILED_KEY)
+    const already = await getSessionStorageValues(RECONCILED_KEY)
       .catch(() => ({} as Record<string, unknown>));
-    if ((already as Record<string, unknown>)[RECONCILED_KEY]) return;
-    await chrome.storage.session.set({ [RECONCILED_KEY]: true }).catch(() => {});
+    if (already[RECONCILED_KEY]) return;
+    await setSessionStorageValues({ [RECONCILED_KEY]: true }).catch(() => {});
 
     await this.reconcileRetained();
     await ensurePersistentStorage(this.logger.log, this.logger.warn);
@@ -72,7 +74,7 @@ export class StartupRecovery {
 
   private async reconcilePlaybackLeases(): Promise<void> {
     try {
-      const tabs = await chrome.tabs.query({});
+      const tabs = await queryTabs({});
       const liveTabIds = tabs.map((tab) => tab.id).filter((id): id is number => id != null);
       const dropped = await this.driveAuthLease.reconcile(liveTabIds);
       if (dropped) this.logger.log(`Dropped ${dropped} orphaned Drive playback rule(s)`);

@@ -1,4 +1,6 @@
 import { listLibraryFiles, removeByKey } from '../../offscreen/storage/opfsLayout';
+import { reloadRuntime } from '../../platform/chrome/runtime';
+import { getSessionStorageValues, setSessionStorageValues } from '../../platform/chrome/storage';
 import { makeLogger } from '../../shared/logger';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
 import { fetchDriveTokenWithFallback } from '../drive/driveAuth';
@@ -11,7 +13,7 @@ import { PerfDebugStore } from '../observability/perf/PerfDebugStore';
 import { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import { OffscreenManager } from '../offscreen/OffscreenManager';
 import { DrivePlaybackAuthLeaseManager } from '../playback/DrivePlaybackAuthLeaseManager';
-import { PlaybackLeaseManager } from '../playback/PlaybackLeaseManager';
+import { PlaybackLeaseManager, type PlaybackLeaseState } from '../playback/PlaybackLeaseManager';
 import { RecordingController } from '../recording/RecordingController';
 import { RecordingSession } from '../recording/session/RecordingSession';
 import { UnsavedRecordingRecovery } from '../recording/UnsavedRecordingRecovery';
@@ -24,6 +26,7 @@ import {
 } from './RecordingSessionRuntime';
 import { StartupRecovery } from './StartupRecovery';
 import { UploadStatePersistence } from './UploadStatePersistence';
+import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 
 const PLAYBACK_LEASE_STORAGE_KEY = 'playbackLeases';
@@ -40,16 +43,16 @@ export function createBackgroundRuntime() {
     getSnapshot: () => session.getSnapshot(),
     hasActiveAnalysisJobs: () => offscreen.hasActiveAnalysisJobs(),
     refreshAnalysisWork: () => offscreen.refreshAnalysisWork(),
-    reload: () => chrome.runtime.reload(),
+    reload: reloadRuntime,
     logger,
   });
 
   const playbackLeases = new PlaybackLeaseManager({
     read: async () => (
-      await chrome.storage.session.get(PLAYBACK_LEASE_STORAGE_KEY)
-    )?.[PLAYBACK_LEASE_STORAGE_KEY],
+      await getSessionStorageValues(PLAYBACK_LEASE_STORAGE_KEY)
+    )?.[PLAYBACK_LEASE_STORAGE_KEY] as PlaybackLeaseState | undefined,
     write: async (state) => {
-      await chrome.storage.session.set({ [PLAYBACK_LEASE_STORAGE_KEY]: state });
+      await setSessionStorageValues({ [PLAYBACK_LEASE_STORAGE_KEY]: state });
     },
     deleteRetained: async (keys) => {
       const root = await navigator.storage.getDirectory();
@@ -68,8 +71,14 @@ export function createBackgroundRuntime() {
 
   const library = createLibraryRuntime({
     offscreen,
-    criticalWork,
     playbackLeases,
+    logger,
+    onAnalysisSettled: () => criticalWork.sync(),
+  });
+  wireAnalysisRuntime({
+    offscreen,
+    analysisCoordinator: library.analysisCoordinator,
+    criticalWork,
     logger,
   });
   const driveLibrary = new DriveLibraryCoordinator(

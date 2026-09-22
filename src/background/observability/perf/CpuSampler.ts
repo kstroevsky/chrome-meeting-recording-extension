@@ -14,6 +14,8 @@
  * "how much CPU did the recorder use?".
  */
 
+import { getSystemCpuInfo, hasSystemCpuInfo } from '../../../platform/chrome/system';
+
 /** Minimal shape of `chrome.system.cpu` `CpuInfo` that we depend on (structurally compatible). */
 type CpuUsageSnapshot = {
   processors: Array<{ usage: { idle: number; total: number } }>;
@@ -69,7 +71,10 @@ export class CpuSampler {
  * without the API, so callers can treat CPU sampling as optional.
  */
 export function createChromeCpuSampler(): CpuSampler | null {
-  const cpu = (globalThis as any)?.chrome?.system?.cpu;
-  if (!cpu || typeof cpu.getInfo !== 'function') return null;
-  return new CpuSampler(() => cpu.getInfo());
+  if (!hasSystemCpuInfo()) return null;
+  return new CpuSampler(async () => {
+    const info = await getSystemCpuInfo();
+    if (!info) throw new Error('chrome.system.cpu is unavailable');
+    return info;
+  });
 }

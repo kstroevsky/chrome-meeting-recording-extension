@@ -1,3 +1,4 @@
+import { sendTabMessage } from '../../platform/chrome/tabs';
 import type { CommandResult } from '../../shared/protocol';
 import { isStoppablePhase, type RecordingInterruption } from '../../shared/recording';
 import type { TelemetrySnapshot } from '../../shared/telemetry';
@@ -40,10 +41,10 @@ export class RecordingLifecycleCommands {
 
     if (typeof snapshot.targetTabId === 'number') {
       try {
-        const response = await chrome.tabs.sendMessage(
+        const response = await sendTabMessage<{ snapshot?: TelemetrySnapshot }>(
           snapshot.targetTabId,
           { type: 'TELEMETRY_GET_SNAPSHOT' },
-        ) as { snapshot?: TelemetrySnapshot };
+        );
         if (response?.snapshot) {
           await this.deps.telemetry?.receive(response.snapshot, true);
         }

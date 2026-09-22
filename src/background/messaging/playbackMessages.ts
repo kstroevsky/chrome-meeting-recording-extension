@@ -1,10 +1,11 @@
+import { getRuntimeId, getRuntimeUrl } from '../../platform/chrome/runtime';
 import type { PopupToBg } from '../../shared/protocol';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean {
-  if (sender.id !== chrome.runtime.id) return false;
+  if (sender.id !== getRuntimeId()) return false;
   const url = sender.url ?? '';
-  return url.startsWith(chrome.runtime.getURL('')) && url.includes('recordings.html');
+  return url.startsWith(getRuntimeUrl('')) && url.includes('recordings.html');
 }
 
 export async function handlePlaybackMessage(

@@ -3,6 +3,7 @@ import {
   getCapturedTabs,
   getMediaStreamIdForTab,
   getTab,
+  sendTabMessage,
 } from '../../platform/chrome/tabs';
 import { isE2ERealCaptureTabBuild } from '../../shared/build';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
@@ -89,7 +90,7 @@ export class RecordingStartCommands {
       started.epoch,
     );
     this.deps.telemetry?.context('capture_requested');
-    void chrome.tabs.sendMessage(msg.tabId, {
+    void sendTabMessage(msg.tabId, {
       type: 'TELEMETRY_RUN',
       runId: telemetryRunId,
       enabled: this.deps.telemetry?.isEnabled() ?? false,

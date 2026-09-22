@@ -3,8 +3,12 @@ import {
   getCapturedTabs,
   getMediaStreamIdForTab,
   getTab,
+  queryTabs,
 } from '../tabs';
+import { addAlarmListener, createAlarm } from '../alarms';
+import { addCommandListener } from '../commands';
 import { downloadFile } from '../downloads';
+import { getRuntimeId, getRuntimeUrl, reloadRuntime } from '../runtime';
 import {
   getAllLocalStorageValues,
   getLocalStorageValues,
@@ -12,6 +16,7 @@ import {
   setLocalStorageValues,
   setSessionStorageValues,
 } from '../storage';
+import { getSystemCpuInfo, hasSystemCpuInfo } from '../system';
 
 function setLastError(message?: string) {
   (chrome.runtime as any).lastError = message ? { message } : undefined;
@@ -100,6 +105,59 @@ describe('platform/chrome/tabs', () => {
 
     await expect(activateTab(42)).resolves.toBeUndefined();
     expect(chrome.tabs.update).toHaveBeenCalledWith(42, { active: true });
+  });
+
+  it('passes arbitrary queries through the normalized tabs seam', async () => {
+    (chrome.tabs.query as jest.Mock).mockResolvedValueOnce([{ id: 8 }]);
+    await expect(queryTabs({})).resolves.toEqual([{ id: 8 }]);
+    expect(chrome.tabs.query).toHaveBeenCalledWith({});
+  });
+});
+
+describe('platform/chrome runtime and event wrappers', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('exposes runtime identity/url and reload through the seam', () => {
+    expect(getRuntimeId()).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(getRuntimeUrl('recordings.html')).toBe('chrome-extension://mock-id/recordings.html');
+    reloadRuntime();
+    expect(chrome.runtime.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers command and alarm listeners and creates alarms', async () => {
+    const command = jest.fn();
+    const alarm = jest.fn();
+    addCommandListener(command);
+    addAlarmListener(alarm);
+    await createAlarm('sweep', { delayInMinutes: 0.5 });
+
+    expect(chrome.commands.onCommand.addListener).toHaveBeenCalledWith(command);
+    expect(chrome.alarms.onAlarm.addListener).toHaveBeenCalledWith(alarm);
+    expect(chrome.alarms.create).toHaveBeenCalledWith('sweep', { delayInMinutes: 0.5 });
+  });
+});
+
+describe('platform/chrome/system', () => {
+  const originalSystem = (chrome as any).system;
+
+  afterEach(() => {
+    (chrome as any).system = originalSystem;
+  });
+
+  it('reports the optional CPU API as unavailable when production omits it', async () => {
+    (chrome as any).system = undefined;
+    expect(hasSystemCpuInfo()).toBe(false);
+    await expect(getSystemCpuInfo()).resolves.toBeNull();
+  });
+
+  it('reads CPU info when the development-only API is present', async () => {
+    const info = { processors: [{ usage: { idle: 10, total: 20 } }] };
+    const getInfo = jest.fn().mockResolvedValue(info);
+    (chrome as any).system = { cpu: { getInfo } };
+
+    expect(hasSystemCpuInfo()).toBe(true);
+    await expect(getSystemCpuInfo()).resolves.toEqual(info);
+    expect(getInfo).toHaveBeenCalledTimes(1);
   });
 });
 

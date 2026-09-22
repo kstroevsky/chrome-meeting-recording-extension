@@ -4,9 +4,10 @@
  */
 import { createMessageListener } from './MessageRouter';
 import type { MessageHandlersDeps } from './types';
+import { addRuntimeMessageListener } from '../../platform/chrome/runtime';
 
 export type { MessageHandlersDeps } from './types';
 
 export function registerMessageHandlers(deps: MessageHandlersDeps): void {
-  chrome.runtime.onMessage.addListener(createMessageListener(deps));
+  addRuntimeMessageListener(createMessageListener(deps));
 }
