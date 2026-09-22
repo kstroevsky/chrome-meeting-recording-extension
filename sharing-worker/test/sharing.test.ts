@@ -1,11 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { applyD1Migrations, reset, type D1Migration } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 
 const origin = 'https://sharing.test';
 const ownerHeaders = {
-  authorization: 'Bearer test-owner-token',
+  authorization: 'Bearer owner-a-token',
   origin: 'chrome-extension://test-extension',
 };
 
@@ -33,6 +33,24 @@ const manifest = {
 };
 
 beforeEach(async () => {
+  vi.restoreAllMocks();
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url !== 'https://www.googleapis.com/drive/v3/about?fields=user(permissionId)') {
+      throw new Error(`Unexpected owner identity request: ${url}`);
+    }
+    const authorization = new Headers(init?.headers).get('authorization');
+    const permissionId = authorization === 'Bearer owner-a-token'
+      ? 'permission-owner-a'
+      : authorization === 'Bearer owner-b-token'
+        ? 'permission-owner-b'
+        : null;
+    if (!permissionId) return new Response('{}', { status: 401 });
+    return new Response(JSON.stringify({ user: { permissionId } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
   await reset();
   const testEnv = env as Env & { TEST_D1_MIGRATIONS: D1Migration[] };
   await applyD1Migrations(env.SHARING_DB, testEnv.TEST_D1_MIGRATIONS);
@@ -201,7 +219,7 @@ describe('sharing worker vertical slice', () => {
 
   it('requires both the configured extension origin and owner bearer token', async () => {
     const badOrigin = await worker.fetch(new Request(`${origin}/api/shares`, {
-      headers: { authorization: 'Bearer test-owner-token', origin: 'https://evil.example' },
+      headers: { authorization: 'Bearer owner-a-token', origin: 'https://evil.example' },
     }), env);
     expect(badOrigin.status).toBe(403);
 
@@ -209,6 +227,51 @@ describe('sharing worker vertical slice', () => {
       headers: { authorization: 'Bearer wrong', origin: 'chrome-extension://test-extension' },
     }), env);
     expect(badToken.status).toBe(401);
+  });
+
+  it('isolates shares and upload sessions by authenticated owner identity', async () => {
+    expect((await putManifest()).status).toBe(201);
+    const ownedShare = await env.SHARING_DB.prepare(
+      'SELECT owner_id FROM shares WHERE id = ?',
+    ).bind('share-owner-id').first<{ owner_id: string }>();
+    expect(ownedShare?.owner_id).toBe('google-drive:permission-owner-a');
+
+    const ownerBHeaders = { authorization: 'Bearer owner-b-token' };
+    const ownerBRegistry = await ownerFetch('/api/shares', { headers: ownerBHeaders });
+    expect(await ownerBRegistry.json()).toEqual({ shares: [] });
+
+    const ownerBGet = await ownerFetch('/api/shares/share-owner-id', { headers: ownerBHeaders });
+    expect(ownerBGet.status).toBe(404);
+    expect(await ownerBGet.json()).toEqual({ code: 'SHARE_NOT_FOUND' });
+
+    const ownerBPut = await ownerFetch('/api/shares/share-owner-id', {
+      method: 'PUT',
+      headers: { ...ownerBHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify(manifest),
+    });
+    expect(ownerBPut.status).toBe(404);
+
+    const ownerBRevoke = await ownerFetch('/api/shares/share-owner-id', {
+      method: 'DELETE',
+      headers: ownerBHeaders,
+    });
+    expect(ownerBRevoke.status).toBe(404);
+
+    const upload = await beginTrack();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const ownerBChunk = await ownerFetch(`/api/share-uploads/${encodeURIComponent(upload.uploadId)}/chunks/0`, {
+      method: 'PUT',
+      headers: {
+        ...ownerBHeaders,
+        'content-type': 'video/webm',
+        'content-range': 'bytes 0-5/6',
+      },
+      body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+    });
+    expect(ownerBChunk.status).toBe(410);
+    expect(await ownerBChunk.json()).toEqual(expect.objectContaining({ code: 'UPLOAD_SESSION_GONE' }));
+
+    expect((await uploadBytes(upload.uploadId, bytes)).status).toBe(204);
   });
 });
 
