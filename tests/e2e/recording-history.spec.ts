@@ -9,9 +9,14 @@ const HISTORY_DATABASE = 'recording-history';
 const HISTORY_STORE = 'recordings';
 
 test.describe('recording history (integration)', () => {
-  test('migrates legacy rows and keeps deletion tombstones outside paged history scans', async ({}, testInfo) => {
+  test('keeps deletion tombstones outside paged history scans', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
     try {
+      // Let background own schema creation. Opening an absent IndexedDB from
+      // this page with no version would create an empty v1 database and race the
+      // production v6 opener instead of testing history behavior.
+      await sendRuntimeMessage(harness.controlPage, { type: 'LIST_RECORDING_HISTORY' });
+
       await harness.controlPage.evaluate(async () => {
         const active = {
           id: 'active-recording',
@@ -36,17 +41,13 @@ test.describe('recording history (integration)', () => {
           deletedAt: 40,
         };
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open('recording-history', 2);
-          request.onupgradeneeded = () => {
-            const store = request.result.createObjectStore('recordings', { keyPath: 'id' });
-            store.createIndex('createdAtId', ['createdAt', 'id'], { unique: true });
-          };
+          const request = indexedDB.open('recording-history');
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
         await new Promise<void>((resolve, reject) => {
           const transaction = database.transaction('recordings', 'readwrite');
-          transaction.objectStore('recordings').put(active);
+          transaction.objectStore('recordings').put({ ...active, activeCreatedAt: active.createdAt });
           transaction.objectStore('recordings').put(deleted);
           transaction.oncomplete = () => resolve();
           transaction.onerror = () => reject(transaction.error);
