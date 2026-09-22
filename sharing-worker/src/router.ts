@@ -1,4 +1,4 @@
-import { authorizeOwner } from './auth/ownerAuth';
+import { authorizeOwner, createOwnerSession } from './auth/ownerAuth';
 import { ownerCorsPreflight, withOwnerCors } from './http/cors';
 import { json } from './http/responses';
 import { routeShareOwnerRequest } from './shares/routes';
@@ -11,6 +11,10 @@ export async function route(request: Request, env: Env): Promise<Response> {
 
   if (ownerRoute && request.method === 'OPTIONS') {
     return ownerCorsPreflight(request, env);
+  }
+
+  if (url.pathname === '/api/auth/session' && request.method === 'POST') {
+    return withOwnerCors(await createOwnerSession(request, env), request, env);
   }
 
   if (ownerRoute) {
@@ -34,5 +38,8 @@ async function routeOwner(request: Request, env: Env, url: URL, ownerId: string)
 }
 
 function isOwnerRoute(pathname: string): boolean {
-  return pathname === '/api/shares' || pathname.startsWith('/api/shares/') || pathname.startsWith('/api/share-uploads/');
+  return pathname === '/api/auth/session'
+    || pathname === '/api/shares'
+    || pathname.startsWith('/api/shares/')
+    || pathname.startsWith('/api/share-uploads/');
 }

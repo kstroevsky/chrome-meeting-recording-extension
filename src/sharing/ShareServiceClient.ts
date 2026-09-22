@@ -211,7 +211,7 @@ type RequestOptions = {
   signal?: AbortSignal;
 };
 
-function normalizeServiceOrigin(value: string): string {
+export function normalizeServiceOrigin(value: string): string {
   let url: URL;
   try {
     url = new URL(value);

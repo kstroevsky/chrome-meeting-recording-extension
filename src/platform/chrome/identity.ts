@@ -4,9 +4,12 @@
  * Promise-based wrappers around the Chrome Identity API.
  */
 
-export function getAuthToken(interactive: boolean): Promise<string> {
+export function getAuthToken(interactive: boolean, scopes?: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive }, (result) => {
+    chrome.identity.getAuthToken({
+      interactive,
+      ...(scopes?.length ? { scopes: [...scopes] } : {}),
+    }, (result) => {
       const error = chrome.runtime.lastError?.message;
       if (error) return reject(new Error(error));
       const candidate = result as string | { token?: string } | undefined;

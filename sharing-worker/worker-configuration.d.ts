@@ -6,6 +6,7 @@ interface __BaseEnv_Env {
 	SHARING_DB: D1Database;
 	ALLOWED_EXTENSION_ORIGINS: "chrome-extension://replace-with-store-extension-id";
 	VIEWER_SESSION_TTL_SECONDS: "43200";
+	OWNER_SESSION_TTL_SECONDS: "3600";
 	CAPABILITY_KEY: string;
 	SESSION_KEY: string;
 }
@@ -20,7 +21,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ALLOWED_EXTENSION_ORIGINS" | "VIEWER_SESSION_TTL_SECONDS" | "CAPABILITY_KEY" | "SESSION_KEY">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ALLOWED_EXTENSION_ORIGINS" | "VIEWER_SESSION_TTL_SECONDS" | "OWNER_SESSION_TTL_SECONDS" | "CAPABILITY_KEY" | "SESSION_KEY">> {}
 }
 
 // Begin runtime types
