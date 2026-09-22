@@ -89,8 +89,8 @@ test.describe('recording playback (integration)', () => {
        * recorded duration instead, which is the better source anyway: it is
        * pause-aware (ADR-0005), and a container duration is not.
        */
-      await expect(page.locator('.player__clock')).toHaveText(/^0:00 \/ \d+:\d{2}$/);
-      await expect(page.locator('.player__clock')).not.toHaveText('0:00 / 0:00');
+      await expect(page.locator('.player__clock')).toHaveText(/^\d{2}:\d{2} \/ \d{2}:\d{2}$/);
+      await expect(page.locator('.player__clock')).not.toHaveText('00:00 / 00:00');
 
       // No failure banner over the picture.
       await expect(page.locator('.player__status')).toBeHidden();
@@ -469,4 +469,3 @@ test.describe('recording playback (integration)', () => {
     }
   });
 });
-
