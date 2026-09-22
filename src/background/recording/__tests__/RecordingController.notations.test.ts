@@ -26,7 +26,13 @@ const RUN_CONFIG = { storageMode: 'local', micMode: 'off', recordSelfVideo: fals
 describe('RecordingController', () => {
   let session: RecordingSession;
   let offscreen: { ensureReady: jest.Mock; rpc: jest.Mock; ensureRecorderTabReady: jest.Mock };
-  let notations: { list: jest.Mock; add: jest.Mock; endOpen: jest.Mock; removeAll: jest.Mock };
+  let notations: {
+    list: jest.Mock;
+    add: jest.Mock;
+    endOpen: jest.Mock;
+    closeOpenSpans: jest.Mock;
+    removeAll: jest.Mock;
+  };
   let transcripts: any;
   let transcriptCapture: any;
   let controller: RecordingController;
@@ -56,10 +62,14 @@ describe('RecordingController', () => {
         id: 'notation:1', tStartMs: notation.tStartMs, text: notation.text ?? '',
       })),
       endOpen: jest.fn(async (_id: string, id: string, tEndMs: number) => ({ id, tStartMs: 0, tEndMs, text: '' })),
+      closeOpenSpans: jest.fn().mockResolvedValue(undefined),
       removeAll: jest.fn().mockResolvedValue(undefined),
     };
     transcripts = { removeAll: jest.fn().mockResolvedValue(undefined), get: jest.fn().mockResolvedValue(undefined) };
-    transcriptCapture = { flushAtBoundary: jest.fn().mockResolvedValue(undefined) };
+    transcriptCapture = {
+      flushAtBoundary: jest.fn().mockResolvedValue(undefined),
+      finish: jest.fn().mockResolvedValue(undefined),
+    };
     const L = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     controller = new RecordingController({
       L,

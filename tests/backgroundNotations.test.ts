@@ -40,6 +40,7 @@ describe('background notation commands', () => {
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
   }
 

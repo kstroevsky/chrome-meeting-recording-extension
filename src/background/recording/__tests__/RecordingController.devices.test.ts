@@ -85,6 +85,7 @@ describe('RecordingController', () => {
 
     it('rejects when the active recording has no microphone', async () => {
       startMic('off');
+      session.applyOffscreenPhase({ phase: 'recording' });
 
       const result = await controller.setMicMuted(true);
 
@@ -139,6 +140,7 @@ describe('RecordingController', () => {
 
     it('rejects when the active recording has no camera', async () => {
       startRun(false);
+      session.applyOffscreenPhase({ phase: 'recording' });
       const result = await controller.setCameraMuted(true);
       expect(result).toEqual(
         expect.objectContaining({ ok: false, error: 'Camera hide requested but this recording has no camera' })

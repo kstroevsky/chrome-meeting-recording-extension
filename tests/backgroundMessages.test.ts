@@ -19,6 +19,7 @@ describe('background runtime system messages', () => {
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
+      releaseBufferedIngress: jest.fn(),
     };
   }
 
