@@ -98,7 +98,7 @@ describe('SharePublicationCoordinator', () => {
     });
     const coordinator = new SharePublicationCoordinator({
       store,
-      api: { createShare, finalizeShare },
+      api: { createShare, finalizeShare, revokeShare: async () => {} },
       uploads: { upload, clearShare },
       now: (() => { let value = 10; return () => value++; })(),
     });
@@ -123,7 +123,7 @@ describe('SharePublicationCoordinator', () => {
     const finalizeShare = jest.fn(async () => ({ shareUrl: 'https://watch.example/s/viewer-token' }));
     const coordinator = new SharePublicationCoordinator({
       store,
-      api: { createShare, finalizeShare },
+      api: { createShare, finalizeShare, revokeShare: async () => {} },
       uploads: { upload, clearShare: async () => {} },
     });
 
@@ -151,7 +151,7 @@ describe('SharePublicationCoordinator', () => {
     });
     const deps = {
       store,
-      api: { createShare: async () => {}, finalizeShare },
+      api: { createShare: async () => {}, finalizeShare, revokeShare: async () => {} },
       uploads: { upload: async () => {}, clearShare: jest.fn(async () => {}) },
     };
     const first = new SharePublicationCoordinator(deps);
@@ -173,7 +173,11 @@ describe('SharePublicationCoordinator', () => {
     const clearShare = jest.fn(async () => {});
     const coordinator = new SharePublicationCoordinator({
       store,
-      api: { createShare: async () => {}, finalizeShare: async () => ({ shareUrl: 'unused' }) },
+      api: {
+        createShare: async () => {},
+        finalizeShare: async () => ({ shareUrl: 'unused' }),
+        revokeShare: async () => {},
+      },
       uploads: { upload: async () => {}, clearShare },
     });
 
@@ -189,6 +193,7 @@ describe('SharePublicationCoordinator', () => {
       api: {
         createShare: async () => {},
         finalizeShare: async () => ({ shareUrl: 'https://watch.example/s/token' }),
+        revokeShare: async () => {},
       },
       uploads: {
         upload: async () => {},
@@ -217,6 +222,7 @@ describe('SharePublicationCoordinator', () => {
       api: {
         createShare: async () => {},
         finalizeShare: async (shareId) => ({ shareUrl: `https://watch.example/s/${shareId}-viewer` }),
+        revokeShare: async () => {},
       },
       uploads: {
         upload: async (shareId) => { if (shareId === 'share-control-id') throw new Error('source missing'); },
@@ -230,5 +236,105 @@ describe('SharePublicationCoordinator', () => {
       expect.objectContaining({ id: 'share-control-id', status: 'failed', resumeFrom: 'uploading' }),
       expect.objectContaining({ id: 'share-2', status: 'active' }),
     ]));
+  });
+
+  it('persists revoking before the remote revoke and only then marks the share revoked', async () => {
+    const store = new SharePublicationStore(memoryArea());
+    await store.put(publication('active', { shareUrl: 'https://watch.example/s/token' }));
+    const calls: string[] = [];
+    const revokeShare = jest.fn(async (shareId) => {
+      calls.push('revoke');
+      expect(shareId).toBe('share-control-id');
+      expect((await store.get(shareId))?.status).toBe('revoking');
+    });
+    const clearShare = jest.fn(async (shareId) => {
+      calls.push('clear');
+      expect((await store.get(shareId))?.status).toBe('revoked');
+    });
+    const coordinator = new SharePublicationCoordinator({
+      store,
+      api: {
+        createShare: async () => {},
+        finalizeShare: async () => ({ shareUrl: 'unused' }),
+        revokeShare,
+      },
+      uploads: { upload: async () => {}, clearShare },
+    });
+
+    const result = await coordinator.revoke('share-control-id');
+
+    expect(calls).toEqual(['revoke', 'clear']);
+    expect(result.status).toBe('revoked');
+    expect(await store.get('share-control-id')).toEqual(result);
+  });
+
+  it('resumes a revocation left in progress by a browser restart', async () => {
+    const store = new SharePublicationStore(memoryArea());
+    await store.put(publication('revoking', { shareUrl: 'https://watch.example/s/token' }));
+    const revokeShare = jest.fn(async () => {});
+    const coordinator = new SharePublicationCoordinator({
+      store,
+      api: {
+        createShare: async () => {},
+        finalizeShare: async () => ({ shareUrl: 'unused' }),
+        revokeShare,
+      },
+      uploads: { upload: async () => {}, clearShare: async () => {} },
+    });
+
+    const [result] = await coordinator.resumePending();
+
+    expect(revokeShare).toHaveBeenCalledWith('share-control-id');
+    expect(result.status).toBe('revoked');
+  });
+
+  it('persists failed revocation for retry and resumes it later', async () => {
+    const store = new SharePublicationStore(memoryArea());
+    await store.put(publication('active', { shareUrl: 'https://watch.example/s/token' }));
+    let fail = true;
+    const revokeShare = jest.fn(async () => {
+      if (fail) throw new Error('revoke response lost');
+    });
+    const deps = {
+      store,
+      api: {
+        createShare: async () => {},
+        finalizeShare: async () => ({ shareUrl: 'unused' }),
+        revokeShare,
+      },
+      uploads: { upload: async () => {}, clearShare: async () => {} },
+    };
+    const coordinator = new SharePublicationCoordinator(deps);
+
+    await expect(coordinator.revoke('share-control-id')).rejects.toThrow('revoke response lost');
+    expect(await store.get('share-control-id')).toMatchObject({
+      status: 'failed',
+      resumeFrom: 'revoking',
+      error: 'revoke response lost',
+    });
+
+    fail = false;
+    const [result] = await new SharePublicationCoordinator(deps).resumePending();
+    expect(revokeShare).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('revoked');
+  });
+
+  it('treats an already revoked publication as an idempotent local success', async () => {
+    const store = new SharePublicationStore(memoryArea());
+    const existing = publication('revoked', { shareUrl: 'https://watch.example/s/token' });
+    await store.put(existing);
+    const revokeShare = jest.fn(async () => {});
+    const coordinator = new SharePublicationCoordinator({
+      store,
+      api: {
+        createShare: async () => {},
+        finalizeShare: async () => ({ shareUrl: 'unused' }),
+        revokeShare,
+      },
+      uploads: { upload: async () => {}, clearShare: async () => {} },
+    });
+
+    await expect(coordinator.revoke('share-control-id')).resolves.toEqual(existing);
+    expect(revokeShare).not.toHaveBeenCalled();
   });
 });
