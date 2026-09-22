@@ -53,7 +53,7 @@ export function createLibraryRuntime({
     dataPlane: offscreen,
     analyses,
     readTranscript: (historyId) => transcripts.get(historyId),
-    // Absence is not deletion: analysis may finish before finalize creates history.
+    // Absence is not deletion: history delivery and analysis completion settle independently.
     isRecordingDeleted: async (historyId) => Boolean(
       (await historyRepository.get(historyId))?.deletedAt,
     ),
