@@ -5,13 +5,6 @@ describe('background runtime system messages', () => {
     (chrome.storage.session.get as jest.Mock).mockResolvedValue({});
   });
 
-  /** Waits for a mock to be called, letting queued microtasks and IDB reads settle. */
-  async function untilCalled(mock: jest.Mock, attempts = 40): Promise<void> {
-    for (let i = 0; i < attempts && mock.mock.calls.length === 0; i++) {
-      await new Promise(process.nextTick);
-    }
-  }
-
   function makeOffscreenInstance() {
     return {
       onStateChanged: undefined as ((msg: any) => void) | undefined,

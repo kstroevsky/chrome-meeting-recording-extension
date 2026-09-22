@@ -62,10 +62,11 @@
         "test:e2e:real": "node scripts/run-real-meet-e2e.mjs",
         "test:e2e:live": "node scripts/run-real-meet-e2e.mjs",
         "test:real-meet": "node scripts/run-real-meet-e2e.mjs",
-        "typecheck": "tsc --noEmit",
-        "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
-        "test:production-guards": "node scripts/check-production-build.mjs",
-        "lint": "npm run typecheck"
+    "typecheck": "tsc --noEmit",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
+    "check:background-architecture": "node scripts/check-background-architecture.mjs",
+    "test:production-guards": "node scripts/check-production-build.mjs && npm run check:background-architecture",
+    "lint": "npm run typecheck"
     },
     "devDependencies": {
         "@playwright/test": "^1.60.0",
