@@ -23,8 +23,71 @@ import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 const includes = (types: readonly string[], type: string): boolean => types.includes(type);
 
+type PopupRouteOwner = 'drive-token' | 'library' | 'playback' | 'recording' | 'system';
+
+/** Compile-time ownership table: every recognized popup message must have one background route. */
+export const POPUP_ROUTE_OWNERS = {
+  START_RECORDING: 'recording',
+  STOP_RECORDING: 'recording',
+  DISCARD_RECORDING: 'recording',
+  GET_RECORDING_STATUS: 'recording',
+  GET_DRIVE_TOKEN: 'drive-token',
+  SET_MIC_MUTED: 'recording',
+  SET_CAMERA_MUTED: 'recording',
+  SET_INPUT_DEVICE: 'recording',
+  SET_PAUSED: 'recording',
+  DISMISS_UPLOAD_JOB: 'recording',
+  RETRY_UPLOAD_JOB: 'recording',
+  CANCEL_UPLOAD_JOB: 'recording',
+  SKIP_RECORDING_NAMING: 'recording',
+  DISMISS_INTERRUPTION: 'recording',
+  LIST_RECORDING_HISTORY: 'library',
+  RENAME_RECORDING_HISTORY: 'library',
+  SET_RECORDING_HISTORY_NOTE: 'library',
+  REMOVE_RECORDING_HISTORY: 'library',
+  OPEN_RECORDING_HISTORY_FILE: 'library',
+  MARK_NOTATION: 'recording',
+  END_NOTATION: 'recording',
+  LIST_ACTIVE_NOTATIONS: 'library',
+  UPDATE_ACTIVE_NOTATION: 'library',
+  REMOVE_ACTIVE_NOTATION: 'library',
+  LIST_RECORDING_NOTATIONS: 'library',
+  GET_RECORDING_PLAYBACK_MANIFEST: 'playback',
+  FILE_RECORDING_TO_DESTINATION: 'system',
+  GET_STORAGE_USAGE: 'system',
+  RENAME_DRIVE_ROOT_FOLDER: 'system',
+  LIST_UNSAVED_RECORDINGS: 'system',
+  RESOLVE_UNSAVED_RECORDING: 'system',
+  LIST_PENDING_LOCAL_DELIVERIES: 'system',
+  DELIVER_LOCAL_RECORDING: 'system',
+  PREPARE_RECORDING_PLAYBACK_SOURCE: 'playback',
+  REFRESH_RECORDING_PLAYBACK_SOURCE: 'playback',
+  LIST_RECORDING_NOTATION_SUMMARIES: 'library',
+  ADD_RECORDING_NOTATION: 'library',
+  UPDATE_RECORDING_NOTATION: 'library',
+  REMOVE_RECORDING_NOTATION: 'library',
+  GET_RECORDING_TRANSCRIPT: 'library',
+  LIST_RECORDING_TOPIC_SUMMARIES: 'library',
+} satisfies Record<PopupToBg['type'], PopupRouteOwner>;
+
+const SESSION_FAILURE_MESSAGE_TYPES = [
+  'START_RECORDING',
+  'STOP_RECORDING',
+  'DISCARD_RECORDING',
+  'SET_MIC_MUTED',
+  'SET_CAMERA_MUTED',
+  'SET_INPUT_DEVICE',
+  'SET_PAUSED',
+  'RETRY_UPLOAD_JOB',
+  'CANCEL_UPLOAD_JOB',
+] as const;
+
 function isNonSessionResponse(type: string): boolean {
   return includes(NON_SESSION_RESPONSE_MESSAGE_TYPES, type);
+}
+
+function failsSessionOnError(type: string): boolean {
+  return includes(SESSION_FAILURE_MESSAGE_TYPES, type);
 }
 
 function validatePopupMessage(msg: PopupToBg): void {
@@ -50,10 +113,17 @@ async function routePopupMessage(
 ): Promise<void> {
   await deps.waitUntilReady?.();
   validatePopupMessage(msg);
-  if (await handleLibraryMessage(msg, sendResponse, deps)) return;
-  if (await handlePlaybackMessage(msg, sender, sendResponse, deps)) return;
-  if (await handleSystemPopupMessage(msg, sendResponse, deps)) return;
-  await handleRecordingMessage(msg, sendResponse, deps);
+  const owner = POPUP_ROUTE_OWNERS[msg.type];
+  const handled = owner === 'library'
+    ? await handleLibraryMessage(msg, sendResponse, deps)
+    : owner === 'playback'
+      ? await handlePlaybackMessage(msg, sender, sendResponse, deps)
+      : owner === 'system'
+        ? await handleSystemPopupMessage(msg, sendResponse, deps)
+        : owner === 'recording'
+          ? await handleRecordingMessage(msg, sendResponse, deps)
+          : false;
+  if (!handled) throw new Error(`Unhandled background message type: ${msg.type}`);
 }
 
 export function createMessageListener(deps: MessageHandlersDeps) {
@@ -77,7 +147,7 @@ export function createMessageListener(deps: MessageHandlersDeps) {
         sendResponse({ ok: false, error: message });
         return;
       }
-      deps.session.fail(message);
+      if (failsSessionOnError(msg.type)) deps.session.fail(message);
       sendResponse({
         ok: false,
         error: message,
