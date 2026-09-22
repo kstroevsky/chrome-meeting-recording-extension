@@ -1,9 +1,8 @@
-import { loadExtensionSettingsFromStorage } from '../../../shared/settings';
-import { pendingLocalDeliveries, type RecordingHistoryCursor } from '../../../shared/recordingHistory';
-import type { OffscreenManager } from '../../offscreen/OffscreenManager';
-import type { RecordingSession } from '../../recording/session/RecordingSession';
-import type { RecordingHistoryRepository } from './RecordingHistoryRepository';
-import type { RecordingHistoryService } from './RecordingHistoryService';
+import { loadExtensionSettingsFromStorage } from '../../shared/settings';
+import { pendingLocalDeliveries, type RecordingHistoryCursor } from '../../shared/recordingHistory';
+import type { RecordingHistoryRepository } from '../library/history/RecordingHistoryRepository';
+import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
+import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import { registerSaveHandler } from './LocalDeliveryRuntime';
 
 type Logger = {
@@ -21,14 +20,14 @@ export class LocalDeliveryOrchestrator {
     offscreen: OffscreenManager,
     private readonly history: RecordingHistoryService,
     private readonly historyRepository: RecordingHistoryRepository,
-    session: RecordingSession,
+    getRunDurationMs: (historyId: string) => number | undefined,
     private readonly logger: Logger,
   ) {
     const registered = registerSaveHandler(
       offscreen,
       logger,
       history,
-      (historyId) => session.runDurationMs(historyId),
+      getRunDurationMs,
       async () => {
         try {
           return (await loadExtensionSettingsFromStorage()).storage.localFolderPresets.length;

@@ -34,6 +34,14 @@ export type { RecordingTarget } from './RecordingSessionTransitions';
 export type SessionChangeListener = (snapshot: RecordingSessionSnapshot) => void;
 export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<void> | void;
 export type RunEnding = 'kept' | 'discarded';
+export type RecordingSessionListeners = {
+  onChanged?: SessionChangeListener;
+  onRunFinished?: (
+    historyId: string,
+    durationMs: number,
+    ending: RunEnding,
+  ) => void;
+};
 
 /**
  * Imperative shell around pure session transitions and the recording clock.
@@ -45,16 +53,32 @@ export class RecordingSession {
   private pendingInterruption?: RecordingInterruption;
   private snapshot: RecordingSessionSnapshot = createIdleSession();
   private persistenceTail: Promise<void> = Promise.resolve();
+  private onChanged?: SessionChangeListener;
+  private onRunFinished?: RecordingSessionListeners['onRunFinished'];
+  private listenersBound: boolean;
 
   constructor(
     private readonly persist: SessionPersistor,
-    private readonly onChanged?: SessionChangeListener,
-    private readonly onRunFinished?: (
-      historyId: string,
-      durationMs: number,
-      ending: RunEnding,
-    ) => void,
-  ) {}
+    onChanged?: SessionChangeListener,
+    onRunFinished?: RecordingSessionListeners['onRunFinished'],
+  ) {
+    this.onChanged = onChanged;
+    this.onRunFinished = onRunFinished;
+    this.listenersBound = onChanged != null || onRunFinished != null;
+  }
+
+  /**
+   * Binds runtime observers after the session itself exists. This is a one-time
+   * composition seam for collaborators (watchdog, offscreen, analysis) that
+   * depend on the canonical session and therefore cannot all be constructed
+   * before it.
+   */
+  bindListeners(listeners: RecordingSessionListeners): void {
+    if (this.listenersBound) throw new Error('RecordingSession listeners are already bound');
+    this.listenersBound = true;
+    this.onChanged = listeners.onChanged;
+    this.onRunFinished = listeners.onRunFinished;
+  }
 
   hydrate(value: unknown): RecordingSessionSnapshot {
     this.snapshot = normalizeSessionSnapshot(value);

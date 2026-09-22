@@ -12,7 +12,8 @@ import {
 import type { RecordingHistoryRepositoryPort } from './RecordingHistoryRepository';
 import { summarizeHistoryFiles } from './RecordingHistoryState';
 
-export class LocalDeliveryCoordinator {
+/** Owns history mutations caused by local-download delivery outcomes. */
+export class LocalDeliveryHistory {
   constructor(private readonly repository: RecordingHistoryRepositoryPort) {}
 
   async localSaveSettled(

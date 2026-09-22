@@ -1,15 +1,15 @@
 /** Owns OFFSCREEN_SAVE delivery into Chrome Downloads and deferred local delivery. */
-import { awaitDownloadSettled, downloadFile } from '../../../platform/chrome/downloads';
-import { broadcastToPopup } from '../../../shared/messages';
-import { debugPerf, nowMs, roundMs } from '../../../shared/perf';
-import type { RecordingArtifactKind, RecordingStream } from '../../../shared/recording';
+import { awaitDownloadSettled, downloadFile } from '../../platform/chrome/downloads';
+import { broadcastToPopup } from '../../shared/messages';
+import { debugPerf, nowMs, roundMs } from '../../shared/perf';
+import type { RecordingArtifactKind, RecordingStream } from '../../shared/recording';
 import {
   awaitsLocalDelivery,
   recordingHistoryFileId,
   type RecordingHistoryFile,
-} from '../../../shared/recordingHistory';
-import type { OffscreenManager } from '../../offscreen/OffscreenManager';
-import type { RecordingHistoryService } from './RecordingHistoryService';
+} from '../../shared/recordingHistory';
+import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
+import type { OffscreenManager } from '../offscreen/OffscreenManager';
 
 /**
  * What actually happened to one artifact. Reported rather than swallowed,

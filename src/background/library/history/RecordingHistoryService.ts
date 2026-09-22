@@ -11,7 +11,7 @@ import type {
   RecordingHistoryEntry,
   RecordingHistoryPage,
 } from '../../../shared/recordingHistory';
-import { LocalDeliveryCoordinator } from './LocalDeliveryCoordinator';
+import { LocalDeliveryHistory } from './LocalDeliveryHistory';
 import { RecordingDelivery } from './RecordingDelivery';
 import type { RecordingHistoryRepositoryPort } from './RecordingHistoryRepository';
 import type { PendingRecordingFile } from './RecordingHistoryState';
@@ -25,7 +25,7 @@ export type { DriveRecordingRenamer, DriveRenameResult } from './RecordingRename
 /** Public owner of recording-history behavior and its focused collaborators. */
 export class RecordingHistoryService {
   private readonly delivery: RecordingDelivery;
-  private readonly localDelivery: LocalDeliveryCoordinator;
+  private readonly localDelivery: LocalDeliveryHistory;
   private readonly renameCommands: RecordingRename;
 
   constructor(
@@ -40,7 +40,7 @@ export class RecordingHistoryService {
     ) => Promise<void>,
   ) {
     this.delivery = new RecordingDelivery(repository, now);
-    this.localDelivery = new LocalDeliveryCoordinator(repository);
+    this.localDelivery = new LocalDeliveryHistory(repository);
     this.renameCommands = new RecordingRename(repository, renameDriveResources);
   }
 

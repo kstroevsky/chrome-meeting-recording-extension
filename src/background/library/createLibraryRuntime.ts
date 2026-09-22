@@ -1,0 +1,122 @@
+import { openDownloadedFile } from '../../platform/chrome/downloads';
+import { CANDIDATE_ANALYSIS_CONFIG } from '../../shared/analysis/candidateConfig';
+import { packagedModel } from '../../shared/analysis/packagedModel';
+import { hashAnalysisConfig, PIPELINE_VERSION } from '../../shared/analysis/provenance';
+import { removeByKey } from '../../offscreen/storage/opfsLayout';
+import type { OffscreenManager } from '../offscreen/OffscreenManager';
+import type { PlaybackLeaseManager } from '../playback/PlaybackLeaseManager';
+import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
+import type { CriticalWorkCoordinator } from '../runtime/CriticalWorkCoordinator';
+import { RecordingAnalysisCoordinator } from './analysis/RecordingAnalysisCoordinator';
+import { RecordingAnalysisRepository } from './analysis/RecordingAnalysisRepository';
+import { RecordingAnalysisService } from './analysis/RecordingAnalysisService';
+import { RecordingHistoryRepository } from './history/RecordingHistoryRepository';
+import { RecordingHistoryService } from './history/RecordingHistoryService';
+import { RecordingNotationRepository } from './notations/RecordingNotationRepository';
+import { RecordingNotationService } from './notations/RecordingNotationService';
+import { RecordingTranscriptRepository } from './transcript/RecordingTranscriptRepository';
+import { RecordingTranscriptService } from './transcript/RecordingTranscriptService';
+
+type Logger = {
+  log: (...args: any[]) => void;
+  warn: (...args: any[]) => void;
+};
+
+type LibraryRuntimeDeps = {
+  offscreen: OffscreenManager;
+  criticalWork: CriticalWorkCoordinator;
+  playbackLeases: PlaybackLeaseManager;
+  logger: Logger;
+};
+
+/** Constructs durable library aggregates and wires their offscreen analysis boundary. */
+export function createLibraryRuntime({
+  offscreen,
+  criticalWork,
+  playbackLeases,
+  logger,
+}: LibraryRuntimeDeps) {
+  const historyRepository = new RecordingHistoryRepository();
+  const notations = new RecordingNotationService(new RecordingNotationRepository());
+  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository());
+  const analyses = new RecordingAnalysisService(new RecordingAnalysisRepository(), () => {
+    const model = packagedModel();
+    return {
+      pipelineVersion: PIPELINE_VERSION,
+      embeddingModel: model.id,
+      embeddingModelRevision: model.revision,
+      embeddingDimensions: 384,
+      embeddingDtype: model.dtype,
+      configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
+    };
+  });
+
+  const analysisCoordinator = new RecordingAnalysisCoordinator({
+    dataPlane: offscreen,
+    analyses,
+    readTranscript: (historyId) => transcripts.get(historyId),
+    // Absence is not deletion: analysis may finish before finalize creates history.
+    isRecordingDeleted: async (historyId) => Boolean(
+      (await historyRepository.get(historyId))?.deletedAt,
+    ),
+    config: () => CANDIDATE_ANALYSIS_CONFIG,
+    onSettled: () => criticalWork.sync(),
+  });
+
+  offscreen.onAnalysisJobChanged = (job) => {
+    criticalWork.markAnalysisWorkKnown();
+    analysisCoordinator.handleJobState(job);
+    criticalWork.sync();
+  };
+  offscreen.onAnalysisResult = (job, analysis, provenance) => {
+    void analysisCoordinator.handleResult(job, analysis, provenance)
+      .catch((error) => logger.warn('Could not handle an analysis result', job.historyId, error))
+      .finally(() => criticalWork.sync());
+  };
+
+  const deleteRetainedKeys = async (keys: string[]) => {
+    const root = await navigator.storage.getDirectory();
+    for (const key of keys) await removeByKey(root, key);
+  };
+
+  const history = new RecordingHistoryService(
+    historyRepository,
+    openDownloadedFile,
+    Date.now,
+    async (resources) => {
+      await offscreen.ensureReady();
+      return offscreen.rpc({ type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES', resources });
+    },
+    async (id) => {
+      await notations.removeAll(id);
+      await transcripts.removeAll(id)
+        .catch((error) => logger.warn('Could not remove recording transcript:', error));
+      await analysisCoordinator.purge(id)
+        .catch((error) => logger.warn('Could not remove recording analysis:', error));
+    },
+    async (keys, historyId) => {
+      if (await playbackLeases.isLeased(historyId)) {
+        await playbackLeases.defer(historyId, keys);
+        return;
+      }
+      await deleteRetainedKeys(keys);
+    },
+  );
+
+  const playback = new RecordingPlaybackService({
+    getEntry: (id) => historyRepository.get(id),
+    listNotations: (id) => notations.list(id),
+    transcriptStatus: (id) => transcripts.status(id),
+    analysis: (id) => analyses.get(id),
+  });
+
+  return {
+    historyRepository,
+    history,
+    notations,
+    transcripts,
+    analyses,
+    analysisCoordinator,
+    playback,
+  };
+}
