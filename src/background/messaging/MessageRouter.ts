@@ -111,7 +111,6 @@ async function routePopupMessage(
   sendResponse: RuntimeSendResponse,
   deps: MessageHandlersDeps,
 ): Promise<void> {
-  await deps.waitUntilReady?.();
   validatePopupMessage(msg);
   const owner = POPUP_ROUTE_OWNERS[msg.type];
   const handled = owner === 'library'
@@ -140,14 +139,19 @@ export function createMessageListener(deps: MessageHandlersDeps) {
     const driveTokenResult = handleDriveTokenMessage(msg, sendResponse, deps);
     if (driveTokenResult !== undefined) return driveTokenResult;
 
-    void routePopupMessage(msg, sender, sendResponse, deps).catch((error) => {
+    let readinessPassed = deps.waitUntilReady == null;
+    void (async () => {
+      await deps.waitUntilReady?.();
+      readinessPassed = true;
+      await routePopupMessage(msg, sender, sendResponse, deps);
+    })().catch((error) => {
       console.error('[background] top-level error', error);
       const message = String(error);
       if (isNonSessionResponse(msg.type)) {
         sendResponse({ ok: false, error: message });
         return;
       }
-      if (failsSessionOnError(msg.type)) deps.session.fail(message);
+      if (readinessPassed && failsSessionOnError(msg.type)) deps.session.fail(message);
       sendResponse({
         ok: false,
         error: message,

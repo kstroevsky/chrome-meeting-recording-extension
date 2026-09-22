@@ -186,6 +186,7 @@ export function createBackgroundRuntime() {
       }
     }
     offscreen.releaseBufferedIngress();
+    readiness.markReady();
   };
 
   const bootstrap = async () => {
@@ -201,7 +202,6 @@ export function createBackgroundRuntime() {
         resumePendingFinalization: () => controller.resumePendingFinalization(),
         logger,
       });
-      readiness.markReady();
     } catch (error) {
       readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);

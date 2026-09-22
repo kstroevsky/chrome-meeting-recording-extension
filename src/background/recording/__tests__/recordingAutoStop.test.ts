@@ -135,6 +135,34 @@ describe('registerRecordingAutoStop', () => {
     expect(stop).toHaveBeenCalledWith('recorded tab closed', 'tab-closed');
   });
 
+  it('does not inspect the constructor-default session before readiness on tab close', async () => {
+    let snapshot: RecordingSessionSnapshot = {
+      phase: 'idle',
+      runConfig: null,
+      updatedAt: Date.now(),
+    };
+    let releaseReady!: () => void;
+    const ready = new Promise<void>((resolve) => { releaseReady = resolve; });
+    const stop = jest.fn().mockResolvedValue({ ok: true });
+    registerRecordingAutoStop({
+      session: { getSnapshot: () => snapshot } as any,
+      controller: { stop } as any,
+      waitUntilReady: () => ready,
+    });
+    const onRemoved = (addTabRemovedListener as jest.Mock).mock.calls[0][0];
+
+    onRemoved(42, { windowId: 1, isWindowClosing: false });
+    await Promise.resolve();
+    expect(stop).not.toHaveBeenCalled();
+
+    snapshot = RECORDING_SNAPSHOT;
+    releaseReady();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(stop).toHaveBeenCalledWith('recorded tab closed', 'tab-closed');
+  });
+
   it('ignores closure of an unrelated tab', async () => {
     const { onRemoved, stop } = register(RECORDING_SNAPSHOT);
     onRemoved(7, { windowId: 1, isWindowClosing: false });
