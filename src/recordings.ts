@@ -4,6 +4,9 @@ import { initializeExtensionTheme } from './shared/theme';
 import { sendToBackground } from './shared/messages';
 import type { RecordingNotation } from './shared/notations';
 import type { PopupListRecordingNotations, PopupRemoveRecordingNotation, PopupUpdateRecordingNotation } from './shared/protocol';
+import { fetchDriveTokenWithFallback } from './background/driveAuth';
+import { sharingServiceOrigin } from './sharing/config';
+import { createShareRuntime } from './sharing/ShareRuntime';
 
 /** One recording's notes, read or rewritten through the background's keyed commands. */
 async function readNotations(
@@ -23,6 +26,12 @@ const error = get('recordings-error');
 const loadMore = get('recordings-load-more');
 if (list && empty && error && loadMore instanceof HTMLButtonElement) {
   let controller: RecordingsController;
+  const serviceOrigin = sharingServiceOrigin();
+  const sharing = serviceOrigin ? createShareRuntime(serviceOrigin, async (options) => {
+    const result = await fetchDriveTokenWithFallback(options);
+    if (!result.ok) throw new Error(result.error);
+    return result.token;
+  }) : undefined;
   const view = new RecordingsView(list, empty, error, loadMore, {
     rename: (id, name) => void controller.rename(id, name),
     note: (id, note) => void controller.setNote(id, note),
@@ -32,6 +41,10 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
     play: (recordingId) => void controller.play(recordingId),
     fileTo: (recordingId, presetId) => void controller.fileTo(recordingId, presetId),
     loadMore: () => void controller.loadMore(),
+    ...(sharing ? {
+      share: (recordingIds, options, report) => controller.share(recordingIds, options, report),
+      revokeShare: (shareId) => controller.revokeShare(shareId),
+    } : {}),
     notes: {
       load: (recordingId) => readNotations({ type: 'LIST_RECORDING_NOTATIONS', recordingId }),
       rename: (recordingId, id, text) => readNotations({ type: 'UPDATE_RECORDING_NOTATION', recordingId, id, text }),
@@ -55,6 +68,9 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
       notesChanged: () => controller.notesChanged(),
     },
   });
-  controller = new RecordingsController(view);
+  controller = new RecordingsController(view, sharing ? {
+    publisher: sharing.publisher,
+    publications: sharing.publications,
+  } : undefined);
   void controller.init().catch((cause) => view.showError(cause instanceof Error ? cause.message : String(cause)));
 }

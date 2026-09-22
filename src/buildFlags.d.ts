@@ -10,6 +10,8 @@ declare const __WEB_OAUTH_CLIENT_ID__: string | undefined;
 declare const __WEB_OAUTH_CLIENT_SECRET__: string | undefined;
 /** Exact HTTPS telemetry ingestion endpoint injected by webpack. */
 declare const __TELEMETRY_ENDPOINT__: string;
+/** Bare HTTPS sharing service origin injected by webpack. Empty disables sharing UI. */
+declare const __SHARING_SERVICE_ORIGIN__: string;
 /**
  * The embedding model this build packaged, injected by webpack from the same
  * manifest the fetcher verified. Read through `analysisEngineConfig()` rather

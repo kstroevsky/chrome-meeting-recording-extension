@@ -3,6 +3,7 @@ import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 import { RecordingsController } from '../RecordingsController';
 import type { RecordingsView } from '../RecordingsView';
+import type { PlaybackManifest } from '../../shared/playback';
 
 jest.mock('../../shared/messages', () => ({ sendToBackground: jest.fn() }));
 
@@ -157,5 +158,68 @@ describe('RecordingsController', () => {
 
     expect(view.setTopicSummaries).not.toHaveBeenCalled();
     expect(view.render).toHaveBeenCalledWith([entry('one')], false);
+  });
+
+  it('builds a selected share from playback manifests and requested transcripts', async () => {
+    const view = makeView();
+    const publish = jest.fn(async () => ({
+      manifest: { id: 'share-public-id', createdAt: 10, recordings: [] },
+      shareUrl: 'https://sharing.example/s/capability',
+    }));
+    const controller = new RecordingsController(view, {
+      publisher: { publish },
+      publications: { resumePending: async () => [], revoke: async () => { throw new Error('unused'); } },
+    });
+    const manifest: PlaybackManifest = {
+      recordingId: 'one',
+      title: 'Recording one',
+      createdAt: 1,
+      transcriptStatus: 'ready',
+      notations: [],
+      topics: [],
+      tracks: [],
+    };
+    const transcript = {
+      source: 'meet-captions' as const,
+      segments: [{ tStartMs: 0, tEndMs: 1000, speaker: 'A', text: 'Hello' }],
+    };
+    respond({
+      LIST_RECORDING_HISTORY: [{ ok: true, entries: [entry('one')] }],
+      GET_RECORDING_PLAYBACK_MANIFEST: [{ ok: true, manifest }],
+      GET_RECORDING_TRANSCRIPT: [{ ok: true, transcript }],
+    });
+    await controller.init();
+    const progress: string[] = [];
+
+    const result = await controller.share(['one'], {
+      includeTranscript: true,
+      includeTopics: true,
+      includeNotations: false,
+      includeSelfVideo: false,
+    }, (message) => progress.push(message));
+
+    expect(publish).toHaveBeenCalledWith([{ manifest, transcript }], expect.objectContaining({
+      includeTranscript: true,
+      includeTopics: true,
+    }));
+    expect(result).toEqual({ shareId: 'share-public-id', shareUrl: 'https://sharing.example/s/capability' });
+    expect(progress).toEqual([
+      'Preparing 1 recording…',
+      'Uploading media and creating the share link…',
+      'Share link ready.',
+    ]);
+  });
+
+  it('reuses the durable publication coordinator when a share is revoked', async () => {
+    const view = makeView();
+    const revoke = jest.fn(async () => ({ status: 'revoked' } as any));
+    const controller = new RecordingsController(view, {
+      publisher: { publish: jest.fn() as any },
+      publications: { resumePending: async () => [], revoke },
+    });
+
+    await controller.revokeShare('share-public-id');
+
+    expect(revoke).toHaveBeenCalledWith('share-public-id');
   });
 });

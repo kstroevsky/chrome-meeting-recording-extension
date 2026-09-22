@@ -6,16 +6,62 @@ import { createPlaybackTrackResolver } from './player/playbackSource';
 import type { PlayerStatus } from './player/PlayerView';
 import type { PlaybackTrack } from '../shared/playback';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
+import type { PublishRecordingOptions, PublishedRecordingInput } from '../sharing/PublishedManifestBuilder';
+import type { SharePublicationCoordinator } from '../sharing/SharePublicationCoordinator';
+import type { SharePublisher } from '../sharing/SharePublisher';
 import { RecordingsView } from './RecordingsView';
+import type { CreatedShareLink, ShareProgressReporter } from './ShareDialog';
+
+export type RecordingsSharing = {
+  publisher: Pick<SharePublisher, 'publish'>;
+  publications: Pick<SharePublicationCoordinator, 'resumePending' | 'revoke'>;
+};
 
 export class RecordingsController {
   private player: PlayerController | null = null;
   private entries: RecordingHistoryEntry[] = [];
   private nextCursor: RecordingHistoryCursor | undefined;
   private loadingMore = false;
-  constructor(private readonly view: RecordingsView) {}
+  constructor(
+    private readonly view: RecordingsView,
+    private readonly sharing?: RecordingsSharing,
+  ) {}
 
-  async init() { await Promise.all([this.refresh(), this.loadDestinations()]); }
+  async init() {
+    await Promise.all([this.refresh(), this.loadDestinations()]);
+    if (this.sharing) void this.sharing.publications.resumePending().catch(() => {});
+  }
+
+  async share(
+    recordingIds: readonly string[],
+    options: PublishRecordingOptions,
+    report: ShareProgressReporter = () => {},
+  ): Promise<CreatedShareLink> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    const ids = [...new Set(recordingIds)].filter((id) => this.entries.some((entry) => entry.id === id));
+    if (!ids.length) throw new Error('Select at least one recording to share');
+
+    report(`Preparing ${ids.length} recording${ids.length === 1 ? '' : 's'}…`);
+    const recordings: PublishedRecordingInput[] = await Promise.all(ids.map(async (recordingId) => {
+      const manifest = await this.playback.getManifest(recordingId);
+      if (!manifest) throw new Error(`Could not prepare “${this.entries.find((entry) => entry.id === recordingId)?.name ?? recordingId}” for sharing`);
+      const transcript = options.includeTranscript ? await this.transcript(recordingId) : undefined;
+      if (options.includeTranscript && manifest.transcriptStatus === 'ready' && !transcript) {
+        throw new Error(`Could not load the transcript for “${manifest.title}”`);
+      }
+      return transcript ? { manifest, transcript } : { manifest };
+    }));
+
+    report('Uploading media and creating the share link…');
+    const result = await this.sharing.publisher.publish(recordings, options);
+    report('Share link ready.');
+    return { shareId: result.manifest.id, shareUrl: result.shareUrl };
+  }
+
+  async revokeShare(shareId: string): Promise<void> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    await this.sharing.publications.revoke(shareId);
+  }
 
   async rename(id: string, name: string) {
     try {
