@@ -82,11 +82,88 @@ describe('RecordingHistoryService', () => {
     it('still reports the removal when dependent cleanup fails', async () => {
       const repo = new MemoryRepository();
       const onRemoved = jest.fn().mockRejectedValue(new Error('store closed'));
-      const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, onRemoved);
+      const warn = jest.fn();
+      const service = new RecordingHistoryService(
+        repo,
+        jest.fn(),
+        () => 10,
+        undefined,
+        onRemoved,
+        undefined,
+        warn,
+      );
       await seed(repo, service);
 
       await expect(service.remove('r1')).resolves.toBe(true);
+      expect(repo.entries.get('r1')).toEqual(expect.objectContaining({
+        deletedAt: 10,
+        cleanupPending: true,
+      }));
+      expect(warn).toHaveBeenCalledWith(
+        'Could not clean up recording r1 dependent data:',
+        expect.any(Error),
+      );
+    });
+
+    it('retries durable cleanup and clears the marker only after every cleanup succeeds', async () => {
+      const repo = new MemoryRepository();
+      const onRemoved = jest.fn()
+        .mockRejectedValueOnce(new Error('store closed'))
+        .mockResolvedValue(undefined);
+      const deleteRetained = jest.fn().mockResolvedValue(undefined);
+      const service = new RecordingHistoryService(
+        repo,
+        jest.fn(),
+        () => 10,
+        undefined,
+        onRemoved,
+        deleteRetained,
+      );
+      await seed(repo, service);
+      await service.recordArtifactLocation('r1', 'r1:tab', {
+        kind: 'opfs',
+        key: 'library/r1.webm',
+        retainedAt: 9,
+      });
+
+      await service.remove('r1');
+      expect(repo.entries.get('r1')?.cleanupPending).toBe(true);
+      expect(deleteRetained).toHaveBeenCalledTimes(1);
+
+      await expect(service.retryPendingCleanup()).resolves.toBe(true);
+      expect(onRemoved).toHaveBeenCalledTimes(2);
+      expect(deleteRetained).toHaveBeenCalledTimes(2);
+      expect(repo.entries.get('r1')?.cleanupPending).toBeUndefined();
       expect(repo.entries.get('r1')?.deletedAt).toBe(10);
+    });
+
+    it('runs dependent and retained cleanup independently when either side fails', async () => {
+      const repo = new MemoryRepository();
+      const onRemoved = jest.fn().mockRejectedValue(new Error('derived failed'));
+      const deleteRetained = jest.fn().mockRejectedValue(new Error('opfs failed'));
+      const warn = jest.fn();
+      const service = new RecordingHistoryService(
+        repo,
+        jest.fn(),
+        () => 10,
+        undefined,
+        onRemoved,
+        deleteRetained,
+        warn,
+      );
+      await seed(repo, service);
+      await service.recordArtifactLocation('r1', 'r1:tab', {
+        kind: 'opfs',
+        key: 'library/r1.webm',
+        retainedAt: 9,
+      });
+
+      await service.remove('r1');
+
+      expect(onRemoved).toHaveBeenCalledTimes(1);
+      expect(deleteRetained).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(repo.entries.get('r1')?.cleanupPending).toBe(true);
     });
   });
 

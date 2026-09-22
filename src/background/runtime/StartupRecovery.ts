@@ -34,9 +34,10 @@ export class StartupRecovery {
 
     const retainedOk = await this.reconcileRetained();
     await ensurePersistentStorage(this.logger.log, this.logger.warn);
+    const cleanupOk = await this.reconcileDeletedHistory();
     const deliveryOk = await this.reconcileDeferredDelivery();
     const leasesOk = await this.reconcilePlaybackLeases();
-    if (retainedOk && deliveryOk && leasesOk) {
+    if (retainedOk && cleanupOk && deliveryOk && leasesOk) {
       await setSessionStorageValues({ [RECONCILED_KEY]: true }).catch((error) => {
         this.logger.warn('Could not persist startup reconciliation marker:', error);
       });
@@ -64,6 +65,15 @@ export class StartupRecovery {
       return true;
     } catch (error) {
       this.logger.warn('Retained-media reconciliation failed (non-fatal):', error);
+      return false;
+    }
+  }
+
+  private async reconcileDeletedHistory(): Promise<boolean> {
+    try {
+      return await this.history.retryPendingCleanup();
+    } catch (error) {
+      this.logger.warn('Reconciling deleted recording cleanup failed (non-fatal):', error);
       return false;
     }
   }

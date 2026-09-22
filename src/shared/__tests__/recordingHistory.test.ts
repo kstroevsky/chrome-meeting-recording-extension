@@ -1,6 +1,28 @@
 import { isRecordingHistoryMessage, normalizeRecordingHistoryEntry } from '../recordingHistory';
 
 describe('recording history durable-data boundaries', () => {
+  it('preserves the durable cleanup marker on a tombstoned row', () => {
+    expect(normalizeRecordingHistoryEntry({
+      id: 'r1',
+      name: 'Recording',
+      createdAt: 1,
+      storageMode: 'local',
+      status: 'complete',
+      files: [{
+        id: 'r1:tab',
+        stream: 'tab',
+        filename: 'recording.webm',
+        destination: 'local',
+        status: 'available',
+      }],
+      deletedAt: 2,
+      cleanupPending: true,
+    })).toEqual(expect.objectContaining({
+      deletedAt: 2,
+      cleanupPending: true,
+    }));
+  });
+
   it('normalizes valid durable rows and discards malformed files', () => {
     expect(normalizeRecordingHistoryEntry({
       id: ' recording:1 ',
@@ -199,4 +221,3 @@ describe('two rows sharing an id', () => {
     expect(entry!.files.map((f) => f.id)).toEqual(['r1:mic', 'r1:tab']);
   });
 });
-

@@ -70,15 +70,24 @@ export function createLibraryRuntime({
       return offscreen.rpc({ type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES', resources });
     },
     async (id) => {
-      await notations.removeAll(id);
-      await transcripts.removeAll(id)
-        .catch((error) => logger.warn('Could not remove recording transcript:', error));
-      await analysisCoordinator.purge(id)
-        .catch((error) => logger.warn('Could not remove recording analysis:', error));
+      const cleanup = await Promise.allSettled([
+        notations.removeAll(id),
+        transcripts.removeAll(id),
+        analysisCoordinator.purge(id),
+      ]);
+      const labels = ['notations', 'transcript', 'analysis'];
+      let failed = false;
+      cleanup.forEach((result, index) => {
+        if (result.status === 'fulfilled') return;
+        failed = true;
+        logger.warn(`Could not remove recording ${labels[index]}:`, result.reason);
+      });
+      if (failed) throw new Error('Dependent recording cleanup incomplete');
     },
     async (keys, historyId) => {
       await playbackLeases.deleteOrDefer(historyId, keys);
     },
+    logger.warn,
   );
 
   const playback = new RecordingPlaybackService({

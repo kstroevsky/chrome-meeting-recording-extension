@@ -64,6 +64,7 @@ describe('StartupRecovery', () => {
       list: jest.fn().mockResolvedValue([]),
       recordArtifactLocation: jest.fn(),
       dropArtifactLocation: jest.fn(),
+      retryPendingCleanup: jest.fn().mockResolvedValue(true),
     };
     localDelivery = { reconcileAbandoned: jest.fn().mockResolvedValue(undefined) };
     driveAuthLease = { reconcile: jest.fn().mockResolvedValue(0) };
@@ -88,6 +89,7 @@ describe('StartupRecovery', () => {
     expect(chrome.storage.session.set).toHaveBeenCalledWith({ retainedMediaReconciled: true });
     expect(reconcileRetainedMock).toHaveBeenCalledTimes(1);
     expect(ensurePersistentStorageMock).toHaveBeenCalledTimes(1);
+    expect(history.retryPendingCleanup).toHaveBeenCalledTimes(1);
     expect(localDelivery.reconcileAbandoned).toHaveBeenCalledTimes(1);
     expect(driveAuthLease.reconcile).toHaveBeenCalledWith([3, 9]);
     expect(playbackLeases.reconcile).toHaveBeenCalledWith([3, 9]);
@@ -135,6 +137,28 @@ describe('StartupRecovery', () => {
     );
     expect(driveAuthLease.reconcile).toHaveBeenCalledTimes(1);
     expect(playbackLeases.reconcile).toHaveBeenCalledTimes(1);
+    expect(chrome.storage.session.set).not.toHaveBeenCalledWith({ retainedMediaReconciled: true });
+  });
+
+  it('keeps startup reconciliation retryable while deleted history cleanup is incomplete', async () => {
+    history.retryPendingCleanup.mockResolvedValue(false);
+
+    await run();
+
+    expect(localDelivery.reconcileAbandoned).toHaveBeenCalledTimes(1);
+    expect(driveAuthLease.reconcile).toHaveBeenCalledTimes(1);
+    expect(chrome.storage.session.set).not.toHaveBeenCalledWith({ retainedMediaReconciled: true });
+  });
+
+  it('keeps startup reconciliation retryable when deleted history cleanup cannot be enumerated', async () => {
+    history.retryPendingCleanup.mockRejectedValue(new Error('history unavailable'));
+
+    await run();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Reconciling deleted recording cleanup failed (non-fatal):',
+      expect.any(Error),
+    );
     expect(chrome.storage.session.set).not.toHaveBeenCalledWith({ retainedMediaReconciled: true });
   });
 

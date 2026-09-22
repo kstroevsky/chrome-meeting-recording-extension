@@ -38,6 +38,7 @@ export class RecordingHistoryService {
       keys: string[],
       historyId: string,
     ) => Promise<void>,
+    private readonly warnCleanup: (message: string, error: unknown) => void = () => {},
   ) {
     this.delivery = new RecordingDelivery(repository, now);
     this.localDelivery = new LocalDeliveryHistory(repository);
@@ -86,21 +87,27 @@ export class RecordingHistoryService {
 
   async remove(id: string): Promise<boolean> {
     let removed = false;
-    let retainedKeys: string[] = [];
     await this.repository.update(id, (current) => {
       if (!current || current.deletedAt) return current;
       removed = true;
-      retainedKeys = current.files.flatMap((file) => file.locations
-        .filter((location) => location.kind === 'opfs')
-        .map((location) => location.key));
-      return { ...current, deletedAt: this.now() };
+      return { ...current, deletedAt: this.now(), cleanupPending: true };
     });
 
-    if (removed && this.onRemoved) await this.onRemoved(id).catch(() => {});
-    if (removed && retainedKeys.length && this.deleteRetainedMedia) {
-      await this.deleteRetainedMedia(retainedKeys, id).catch(() => {});
-    }
+    if (removed) await this.cleanupDeletedEntry(id).catch(() => {});
     return removed;
+  }
+
+  async retryPendingCleanup(): Promise<boolean> {
+    const pending = await this.repository.listCleanupPending();
+    let allSucceeded = true;
+    for (const entry of pending) {
+      try {
+        await this.cleanupDeletedEntry(entry.id, entry);
+      } catch {
+        allSucceeded = false;
+      }
+    }
+    return allSucceeded;
   }
 
   async createPending(
@@ -179,5 +186,39 @@ export class RecordingHistoryService {
       : undefined;
     if (!file?.downloadId) throw new Error('This local file is no longer available');
     await this.openDownload(file.downloadId);
+  }
+
+  private async cleanupDeletedEntry(
+    id: string,
+    knownEntry?: RecordingHistoryEntry,
+  ): Promise<void> {
+    const entry = knownEntry ?? await this.repository.get(id);
+    if (!entry?.deletedAt || !entry.cleanupPending) return;
+    const retainedKeys = entry.files.flatMap((file) => file.locations
+      .filter((location) => location.kind === 'opfs')
+      .map((location) => location.key));
+    const work: Array<{ label: string; run: () => Promise<void> }> = [];
+    if (this.onRemoved) work.push({ label: 'dependent data', run: () => this.onRemoved!(id) });
+    if (retainedKeys.length && this.deleteRetainedMedia) {
+      work.push({
+        label: 'retained media',
+        run: () => this.deleteRetainedMedia!(retainedKeys, id),
+      });
+    }
+
+    const results = await Promise.allSettled(work.map(({ run }) => run()));
+    const failures = results.flatMap((result, index) => {
+      if (result.status === 'fulfilled') return [];
+      const label = work[index]?.label ?? 'cleanup';
+      this.warnCleanup(`Could not clean up recording ${id} ${label}:`, result.reason);
+      return [result.reason];
+    });
+    if (failures.length) throw failures[0];
+
+    await this.repository.update(id, (current) => {
+      if (!current?.deletedAt || !current.cleanupPending) return current;
+      const { cleanupPending: _completed, ...rest } = current;
+      return rest;
+    });
   }
 }

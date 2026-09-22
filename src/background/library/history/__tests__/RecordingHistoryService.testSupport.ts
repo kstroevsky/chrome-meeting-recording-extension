@@ -5,6 +5,9 @@ export class MemoryRepository {
   async listPage() {
     return { entries: [...this.entries.values()].filter((entry) => !entry.deletedAt).sort((a, b) => b.createdAt - a.createdAt) };
   }
+  async listCleanupPending() {
+    return [...this.entries.values()].filter((entry) => entry.deletedAt && entry.cleanupPending);
+  }
   async get(id: string) { return this.entries.get(id); }
   async update(id: string, mutate: (entry: RecordingHistoryEntry | undefined) => RecordingHistoryEntry | undefined) {
     const current = this.entries.get(id);

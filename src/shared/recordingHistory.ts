@@ -92,6 +92,8 @@ export type RecordingHistoryEntry = {
   files: RecordingHistoryFile[];
   /** Soft deletion prevents delayed upload/recovery work from resurrecting history. */
   deletedAt?: number;
+  /** Durable maintenance marker; cleared only after dependent deletion cleanup succeeds. */
+  cleanupPending?: true;
 };
 
 export type RecordingHistoryCursor = { createdAt: number; id: string };
@@ -171,6 +173,7 @@ export function normalizeRecordingHistoryEntry(value: unknown): RecordingHistory
     status,
     files,
     ...(deletedAt != null ? { deletedAt } : {}),
+    ...(candidate.cleanupPending === true ? { cleanupPending: true as const } : {}),
   };
 }
 

@@ -17,6 +17,7 @@ export type RecordingHistoryMutation = (
 
 export interface RecordingHistoryRepositoryPort {
   listPage(options?: { limit?: number; cursor?: RecordingHistoryCursor }): Promise<RecordingHistoryPage>;
+  listCleanupPending(): Promise<RecordingHistoryEntry[]>;
   get(id: string): Promise<RecordingHistoryEntry | undefined>;
   update(id: string, mutate: RecordingHistoryMutation): Promise<RecordingHistoryEntry | undefined>;
 }
@@ -72,6 +73,18 @@ export class RecordingHistoryRepository implements RecordingHistoryRepositoryPor
     const database = await this.open();
     const raw = await this.request(database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id));
     return normalizeRecordingHistoryEntry(raw);
+  }
+
+  async listCleanupPending(): Promise<RecordingHistoryEntry[]> {
+    const database = await this.open();
+    const rows = await this.request(
+      database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll(),
+    );
+    return rows
+      .map((row) => normalizeRecordingHistoryEntry(row))
+      .filter((entry): entry is RecordingHistoryEntry => Boolean(
+        entry?.deletedAt && entry.cleanupPending,
+      ));
   }
 
   async update(id: string, mutate: RecordingHistoryMutation): Promise<RecordingHistoryEntry | undefined> {
