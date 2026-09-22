@@ -182,7 +182,7 @@ describe('RecordingController', () => {
       await controller.stop('popup stop button');
 
       const stopCall = offscreen.rpc.mock.calls.find(([msg]) => msg.type === 'OFFSCREEN_STOP')?.[0];
-      expect(stopCall).toEqual({ type: 'OFFSCREEN_STOP' });
+      expect(stopCall).toEqual({ type: 'OFFSCREEN_STOP', epoch: 1 });
     });
 
     it('exports the run\u2019s transcript with the stop too (ADR-0007)', async () => {
@@ -210,7 +210,7 @@ describe('RecordingController', () => {
       await controller.stop('popup stop button');
 
       const stopCall = offscreen.rpc.mock.calls.find(([msg]) => msg.type === 'OFFSCREEN_STOP')?.[0];
-      expect(stopCall).toEqual({ type: 'OFFSCREEN_STOP' });
+      expect(stopCall).toEqual({ type: 'OFFSCREEN_STOP', epoch: 1 });
     });
 
     it('still stops when the notes cannot be read', async () => {
@@ -218,7 +218,7 @@ describe('RecordingController', () => {
       notations.list.mockRejectedValueOnce(new Error('store closed'));
 
       await expect(controller.stop('popup stop button')).resolves.toMatchObject({ ok: true });
-      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', epoch: 1 });
     });
 
     it('toggle refuses when nothing is recording', async () => {

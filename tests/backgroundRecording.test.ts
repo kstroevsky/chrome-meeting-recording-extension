@@ -412,6 +412,7 @@ describe('background runtime messages', () => {
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
         meetingSlug: 'meet-abc-defg-hij',
+        epoch: 3,
         updatedAt: Date.now(),
       },
     });
@@ -446,7 +447,7 @@ describe('background runtime messages', () => {
 
     expect(offscreenInstance.ensureReady).toHaveBeenCalled();
     expect(offscreenInstance.rpc)
-      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
+      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', epoch: 3, driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
   });
 
   it('stops the active recording when the recorded tab navigates away from the meeting', async () => {
@@ -464,6 +465,7 @@ describe('background runtime messages', () => {
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
         meetingSlug: 'meet-abc-defg-hij',
+        epoch: 3,
         updatedAt: Date.now(),
       },
     });
@@ -500,7 +502,7 @@ describe('background runtime messages', () => {
     await new Promise(process.nextTick);
 
     expect(offscreenInstance.rpc)
-      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
+      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', epoch: 3, driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
     expect(releasePlaybackTab).toHaveBeenCalledWith(42);
     expect(releaseDriveTab).toHaveBeenCalledWith(42);
 
@@ -520,6 +522,7 @@ describe('background runtime messages', () => {
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
         meetingSlug: 'meet-abc-defg-hij',
+        epoch: 3,
         updatedAt: Date.now(),
       },
     });
@@ -564,6 +567,7 @@ describe('background runtime messages', () => {
         runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
         targetTabId: 42,
         meetingSlug: 'meet-abc-defg-hij',
+        epoch: 3,
         updatedAt: Date.now(),
       },
     });
@@ -599,7 +603,7 @@ describe('background runtime messages', () => {
 
     expect(response).toEqual({ ok: true, stopped: true, reason: 'meeting ended: post-call state detected' });
     expect(offscreenInstance.rpc)
-      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
+      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', epoch: 3, driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
   });
 
 });

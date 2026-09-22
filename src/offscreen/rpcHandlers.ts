@@ -22,15 +22,18 @@ import type { RecorderEngine } from './RecorderEngine';
 import { describeRuntimeError } from './errors';
 import { removeByKey } from './storage/opfsLayout';
 import type { DriveRenameResource } from './drive/DriveMetadataRenamer';
+import type { OffscreenFinalizationState } from './OffscreenController';
 
 export type RpcHandlerDeps = {
   engine: RecorderEngine;
   getPort: () => chrome.runtime.Port;
   connectPort: () => chrome.runtime.Port;
   currentPhase: () => RecordingPhase;
+  currentEpoch: () => number;
   isFinalizing: () => boolean;
+  currentFinalization: () => OffscreenFinalizationState | null;
   onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number, historyId: string, telemetryRunId?: string) => void;
-  onStopRequested: (sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } }, driveRootFolderName?: string) => void;
+  onStopRequested: (sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } }, driveRootFolderName?: string) => Promise<void> | void;
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
   retryUpload: (jobId: string) => boolean | Promise<boolean>;
@@ -105,9 +108,11 @@ async function handleOffscreenStart(
 }
 
 async function handleOffscreenStop(
-  msg: { notesSidecar?: { vtt: string }; transcriptSidecar?: { vtt: string }; driveRootFolderName?: string },
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_STOP' }>,
   deps: RpcHandlerDeps
 ): Promise<{ ok: boolean; error?: string }> {
+  const reconciled = reconcileFinalizationCommand(msg.epoch, 'kept', deps);
+  if (reconciled) return reconciled;
   if (!deps.engine.isRecording()) {
     return { ok: false, error: 'Stop requested but recorder is not active' };
   }
@@ -120,14 +125,45 @@ async function handleOffscreenStop(
 }
 
 async function handleOffscreenDiscard(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_DISCARD' }>,
   deps: RpcHandlerDeps
 ): Promise<{ ok: boolean; error?: string }> {
+  const reconciled = reconcileFinalizationCommand(msg.epoch, 'discarded', deps);
+  if (reconciled) return reconciled;
   if (!deps.engine.isRecording()) {
     return { ok: false, error: 'Discard requested but recorder is not active' };
   }
   deps.pushState('stopping');
   await deps.onDiscardRequested();
   return { ok: true };
+}
+
+function reconcileFinalizationCommand(
+  epoch: number,
+  disposition: 'kept' | 'discarded',
+  deps: Pick<RpcHandlerDeps, 'currentEpoch' | 'currentFinalization'>,
+): { ok: boolean; error?: string } | null {
+  const currentEpoch = deps.currentEpoch();
+  if (!Number.isInteger(epoch) || epoch !== currentEpoch) {
+    return {
+      ok: false,
+      error: `Stale finalization command for epoch ${String(epoch)}; current epoch is ${currentEpoch}`,
+    };
+  }
+
+  const current = deps.currentFinalization();
+  if (!current || current.epoch !== epoch) return null;
+  if (current.disposition !== disposition) {
+    return {
+      ok: false,
+      error: `Finalization conflict for epoch ${epoch}: ${current.disposition} is already ${current.status}`,
+    };
+  }
+  if (current.status === 'running' || current.status === 'completed') return { ok: true };
+  return {
+    ok: false,
+    error: current.error || `Finalization for epoch ${epoch} already failed`,
+  };
 }
 
 async function handleOffscreenSetMicMuted(
@@ -322,7 +358,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
     {
       OFFSCREEN_START:   (msg) => handleOffscreenStart(msg, deps),
       OFFSCREEN_STOP:    (msg) => handleOffscreenStop(msg, deps),
-      OFFSCREEN_DISCARD: ()    => handleOffscreenDiscard(deps),
+      OFFSCREEN_DISCARD: (msg) => handleOffscreenDiscard(msg, deps),
       OFFSCREEN_SET_MIC_MUTED: (msg) => handleOffscreenSetMicMuted(msg, deps),
       OFFSCREEN_SET_CAMERA_MUTED: (msg) => handleOffscreenSetCameraMuted(msg, deps),
       OFFSCREEN_SET_INPUT_DEVICE: (msg) => handleOffscreenSetInputDevice(msg, deps),

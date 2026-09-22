@@ -404,6 +404,8 @@ export type BgToOffscreenRpc =
     }>
   | RpcRequest<{
       type: 'OFFSCREEN_STOP';
+      /** Monotonic run epoch; stale or conflicting finalization commands are rejected. */
+      epoch: number;
       /**
        * The run's notes, already rendered to WebVTT by the background (which
        * owns them) for the offscreen to deliver ahead of the media (ADR-0005).
@@ -423,7 +425,11 @@ export type BgToOffscreenRpc =
        */
       driveRootFolderName?: string;
     }>
-  | RpcRequest<{ type: 'OFFSCREEN_DISCARD' }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_DISCARD';
+      /** Monotonic run epoch; stale or conflicting finalization commands are rejected. */
+      epoch: number;
+    }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_CAMERA_MUTED'; muted: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_INPUT_DEVICE'; device: RecordingInputDevice; deviceId: string }>

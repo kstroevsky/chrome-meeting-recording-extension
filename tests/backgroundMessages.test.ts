@@ -55,7 +55,7 @@ describe('background runtime system messages', () => {
       ok: true,
       session: expect.objectContaining({ phase: 'stopping' }),
     }));
-    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD' });
+    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD', epoch: 3 });
   });
 
   it('acknowledges a PERF_EVENT without keeping the response channel open', async () => {

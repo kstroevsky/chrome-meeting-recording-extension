@@ -91,6 +91,66 @@ describe('RecordingController', () => {
   });
 
   describe('start', () => {
+    it('finishes pending discarded-run cleanup before starting the next recording', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      const discarded = session.getSnapshot();
+      transcripts.removeAll.mockRejectedValueOnce(new Error('IndexedDB is unavailable'));
+
+      await controller.discard();
+      session.applyOffscreenPhase({ phase: 'idle', epoch: discarded.epoch });
+      expect(session.getSnapshot().phase).toBe('idle');
+      expect(session.getSnapshot().finalization).toEqual(expect.objectContaining({
+        historyId: discarded.historyId,
+        disposition: 'discarded',
+      }));
+      expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
+
+      let releaseCleanup!: () => void;
+      const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+      let markCleanupStarted!: () => void;
+      const cleanupStarted = new Promise<void>((resolve) => { markCleanupStarted = resolve; });
+      transcripts.removeAll.mockImplementationOnce(async () => {
+        markCleanupStarted();
+        await cleanupGate;
+      });
+      offscreen.rpc.mockClear();
+
+      const start = controller.start(startMsg());
+      await cleanupStarted;
+
+      expect(transcripts.removeAll).toHaveBeenCalledTimes(2);
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+
+      releaseCleanup();
+      await expect(start).resolves.toEqual(expect.objectContaining({ ok: true }));
+      expect(offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({ type: 'OFFSCREEN_START' }));
+      expect(session.getSnapshot().finalization).toBeUndefined();
+    });
+
+    it('preserves pending discarded-run cleanup when START cannot finish it', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      const discarded = session.getSnapshot();
+      transcripts.removeAll.mockRejectedValue(new Error('IndexedDB is unavailable'));
+
+      await controller.discard();
+      session.applyOffscreenPhase({ phase: 'idle', epoch: discarded.epoch });
+      offscreen.rpc.mockClear();
+
+      const result = await controller.start(startMsg());
+
+      expect(result).toEqual(expect.objectContaining({
+        ok: false,
+        error: 'Discard cleanup is still pending',
+      }));
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+      expect(session.getSnapshot().finalization).toEqual(expect.objectContaining({
+        historyId: discarded.historyId,
+        epoch: discarded.epoch,
+        disposition: 'discarded',
+      }));
+      expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
+    });
+
     it('forwards the frozen recorder snapshot on OFFSCREEN_START and leaves the session starting', async () => {
       const result = await controller.start(startMsg());
 
@@ -300,13 +360,18 @@ describe('RecordingController', () => {
     it('serializes duplicate stops and treats the second stop as idempotent', async () => {
       session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
       session.applyOffscreenPhase({ phase: 'recording' });
+      const epoch = session.getSnapshot().epoch;
 
       const first = controller.stop('first');
       const second = controller.stop('second');
 
       await expect(first).resolves.toEqual(expect.objectContaining({ ok: true }));
       await expect(second).resolves.toEqual(expect.objectContaining({ ok: true }));
-      expect(offscreen.rpc).toHaveBeenCalledTimes(1);
+      expect(offscreen.rpc).toHaveBeenCalledTimes(2);
+      expect(offscreen.rpc.mock.calls.map(([msg]) => msg)).toEqual([
+        expect.objectContaining({ type: 'OFFSCREEN_STOP', epoch }),
+        expect.objectContaining({ type: 'OFFSCREEN_STOP', epoch }),
+      ]);
       expect(transcriptCapture.finish).toHaveBeenCalledTimes(1);
     });
 
@@ -316,7 +381,7 @@ describe('RecordingController', () => {
       const result = await controller.stop('popup stop button');
 
       expect(offscreen.ensureReady).toHaveBeenCalledTimes(1);
-      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', epoch: 1 });
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('stopping');
     });
@@ -333,7 +398,10 @@ describe('RecordingController', () => {
 
     it('keeps stopping durable when the OFFSCREEN_STOP transport drops', async () => {
       session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
-      offscreen.rpc.mockRejectedValueOnce(new Error('port disconnected'));
+      const epoch = session.getSnapshot().epoch;
+      offscreen.rpc
+        .mockRejectedValueOnce(new Error('port disconnected'))
+        .mockResolvedValueOnce({ ok: true });
 
       const result = await controller.stop('popup stop button');
 
@@ -343,6 +411,15 @@ describe('RecordingController', () => {
       }));
       expect(session.getSnapshot().phase).toBe('stopping');
       expect(session.getSnapshot().finalization?.disposition).toBe('kept');
+
+      await expect(controller.stop('popup stop retry')).resolves.toEqual(
+        expect.objectContaining({ ok: true }),
+      );
+      expect(offscreen.rpc).toHaveBeenCalledTimes(2);
+      expect(offscreen.rpc.mock.calls.map(([msg]) => msg)).toEqual([
+        expect.objectContaining({ type: 'OFFSCREEN_STOP', epoch }),
+        expect.objectContaining({ type: 'OFFSCREEN_STOP', epoch }),
+      ]);
     });
   });
 
@@ -353,7 +430,7 @@ describe('RecordingController', () => {
       const result = await controller.discard('popup discard button');
 
       expect(offscreen.ensureReady).toHaveBeenCalledTimes(1);
-      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD' });
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD', epoch: 1 });
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('stopping');
     });
@@ -372,7 +449,7 @@ describe('RecordingController', () => {
       transcripts.removeAll.mockRejectedValueOnce(new Error('IndexedDB is unavailable'));
 
       await expect(controller.discard()).resolves.toEqual(expect.objectContaining({ ok: true }));
-      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD' });
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD', epoch: 1 });
       expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
     });
 
@@ -390,7 +467,7 @@ describe('RecordingController', () => {
       notations.removeAll.mockRejectedValueOnce(new Error('store closed'));
 
       await expect(controller.discard()).resolves.toEqual(expect.objectContaining({ ok: true }));
-      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD' });
+      expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD', epoch: 1 });
       expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
     });
 

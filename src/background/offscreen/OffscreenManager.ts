@@ -135,10 +135,10 @@ export class OffscreenManager {
     return this.connection.rpc<TRes>(msg);
   }
 
-  async stopIfPossibleOnSuspend(): Promise<void> {
+  async stopIfPossibleOnSuspend(epoch?: number): Promise<void> {
     try {
-      if (this.port && isStoppablePhase(this.events.phase)) {
-        await this.rpc({ type: 'OFFSCREEN_STOP' });
+      if (this.port && epoch != null && isStoppablePhase(this.events.phase)) {
+        await this.rpc({ type: 'OFFSCREEN_STOP', epoch });
       }
     } catch {}
     this.events.showIdleBadge();

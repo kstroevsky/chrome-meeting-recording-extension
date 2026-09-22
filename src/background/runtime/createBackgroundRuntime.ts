@@ -221,7 +221,7 @@ export function createBackgroundRuntime() {
     handleConnect: (port: chrome.runtime.Port) => {
       if (port.name === 'offscreen') offscreen.attachPort(port);
     },
-    handleSuspend: () => offscreen.stopIfPossibleOnSuspend(),
+    handleSuspend: () => offscreen.stopIfPossibleOnSuspend(session.getSnapshot().epoch),
     applyUpdateWhenSafe: () => criticalWork.applyUpdateWhenSafe(),
     handleUpdatedExtension: async () => {
       logger.log('Extension updated; refreshing offscreen document');

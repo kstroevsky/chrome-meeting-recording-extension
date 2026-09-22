@@ -81,7 +81,11 @@ export class RecordingController {
   }
 
   start(msg: StartRecordingMessage): Promise<CommandResult> {
-    return this.serializeLifecycle(() => this.starts.start(msg));
+    return this.serializeLifecycle(async () => {
+      const pending = await this.lifecycle.resumePendingFinalization();
+      if (pending && !pending.ok) return pending;
+      return this.starts.start(msg);
+    });
   }
 
   stop(

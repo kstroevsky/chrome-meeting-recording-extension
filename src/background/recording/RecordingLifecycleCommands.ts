@@ -36,7 +36,11 @@ export class RecordingLifecycleCommands {
   ): Promise<CommandResult> {
     let snapshot = this.deps.session.getSnapshot();
     if (snapshot.phase === 'stopping' && snapshot.finalization?.disposition === 'kept') {
-      return this.deps.result.ok();
+      return this.finishKeptStop(
+        snapshot.finalization.historyId,
+        reason,
+        snapshot.finalization.epoch,
+      );
     }
     if (!isStoppablePhase(snapshot.phase)) {
       return this.deps.result.fail('Stop requested but no recording session is active');
@@ -59,7 +63,11 @@ export class RecordingLifecycleCommands {
     await this.deps.session.flush();
     snapshot = this.deps.session.getSnapshot();
     this.deps.L.log('Stopping recording:', reason);
-    return this.finishKeptStop(historyId, reason);
+    return this.finishKeptStop(
+      historyId,
+      reason,
+      snapshot.finalization?.epoch ?? snapshot.epoch,
+    );
   }
 
   async discard(reason = 'user requested discard'): Promise<CommandResult> {
@@ -104,7 +112,11 @@ export class RecordingLifecycleCommands {
     if (snapshot.phase !== 'stopping') return null;
     return finalization.disposition === 'discarded'
       ? this.finishDiscard(finalization.historyId, 'resume after service-worker restart', snapshot)
-      : this.finishKeptStop(finalization.historyId, 'resume after service-worker restart');
+      : this.finishKeptStop(
+          finalization.historyId,
+          'resume after service-worker restart',
+          finalization.epoch,
+        );
   }
 
   private async finalizeKeptBackground(historyId: string): Promise<void> {
@@ -121,6 +133,7 @@ export class RecordingLifecycleCommands {
   private async finishKeptStop(
     historyId: string | undefined,
     reason: string,
+    epoch: number | undefined,
   ): Promise<CommandResult> {
     if (historyId) await this.finalizeKeptBackground(historyId);
 
@@ -132,8 +145,10 @@ export class RecordingLifecycleCommands {
 
     try {
       await this.deps.offscreen.ensureReady();
+      if (epoch == null) return this.deps.result.fail('Stop requested without a recording epoch');
       const response = await this.deps.offscreen.rpc<{ ok: boolean; error?: string }>({
         type: 'OFFSCREEN_STOP',
+        epoch,
         ...(notesSidecar ? { notesSidecar } : {}),
         ...(transcriptSidecar ? { transcriptSidecar } : {}),
         ...(driveRootFolderName ? { driveRootFolderName } : {}),
@@ -193,8 +208,13 @@ export class RecordingLifecycleCommands {
 
     try {
       await this.deps.offscreen.ensureReady();
+      const commandEpoch = finalization?.epoch ?? snapshot.epoch;
+      if (commandEpoch == null) {
+        return this.deps.result.fail('Discard requested without a recording epoch');
+      }
       const response = await this.deps.offscreen.rpc<{ ok: boolean; error?: string }>({
         type: 'OFFSCREEN_DISCARD',
+        epoch: commandEpoch,
       });
       if (!response?.ok) {
         const message = response?.error || 'Discard failed in offscreen';
