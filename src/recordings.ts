@@ -5,6 +5,7 @@ import { sendToBackground } from './shared/messages';
 import type { RecordingNotation } from './shared/notations';
 import type { PopupListRecordingNotations, PopupRemoveRecordingNotation, PopupUpdateRecordingNotation } from './shared/protocol';
 import { fetchDriveTokenWithFallback } from './background/driveAuth';
+import { fetchShareIdentityTokenWithFallback } from './background/shareIdentityAuth';
 import { sharingServiceOrigin } from './sharing/config';
 import { createShareRuntime } from './sharing/ShareRuntime';
 
@@ -27,10 +28,17 @@ const loadMore = get('recordings-load-more');
 if (list && empty && error && loadMore instanceof HTMLButtonElement) {
   let controller: RecordingsController;
   const serviceOrigin = sharingServiceOrigin();
-  const sharing = serviceOrigin ? createShareRuntime(serviceOrigin, async (options) => {
-    const result = await fetchDriveTokenWithFallback(options);
-    if (!result.ok) throw new Error(result.error);
-    return result.token;
+  const sharing = serviceOrigin ? createShareRuntime(serviceOrigin, {
+    getDriveToken: async (options) => {
+      const result = await fetchDriveTokenWithFallback(options);
+      if (!result.ok) throw new Error(result.error);
+      return result.token;
+    },
+    getIdentityToken: async (options) => {
+      const result = await fetchShareIdentityTokenWithFallback(options);
+      if (!result.ok) throw new Error(result.error);
+      return result.token;
+    },
   }) : undefined;
   const view = new RecordingsView(list, empty, error, loadMore, {
     rename: (id, name) => void controller.rename(id, name),

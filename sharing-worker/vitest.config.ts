@@ -14,6 +14,7 @@ export default defineConfig({
         bindings: {
           ALLOWED_EXTENSION_ORIGINS: 'chrome-extension://test-extension',
           VIEWER_SESSION_TTL_SECONDS: '3600',
+          OWNER_SESSION_TTL_SECONDS: '3600',
           CAPABILITY_KEY: 'test-capability-key-with-enough-entropy',
           SESSION_KEY: 'test-session-key-with-enough-entropy',
           TEST_D1_MIGRATIONS: migrations,

@@ -1,25 +1,32 @@
 /**
  * @file background/shareService.ts
  *
- * Background composition seam for authenticated publishing. Sharing reuses the
- * Google OAuth identity already required by Drive instead of embedding a
- * backend-wide secret in the extension.
+ * Background composition seam for authenticated publishing. Google proves the
+ * account identity once; subsequent owner requests use a short-lived sharing
+ * service session rather than a Drive-capable OAuth token.
  */
 
 import { ShareServiceClient } from '../sharing/ShareServiceClient';
-import { fetchDriveTokenWithFallback, type DriveTokenOptions } from './driveAuth';
+import { ShareOwnerSession } from '../sharing/ShareOwnerSession';
+import {
+  fetchShareIdentityTokenWithFallback,
+  type ShareIdentityTokenOptions,
+} from './shareIdentityAuth';
 
-export type ShareOwnerTokenProvider = (options?: DriveTokenOptions) => ReturnType<typeof fetchDriveTokenWithFallback>;
+export type ShareOwnerTokenProvider = (
+  options?: ShareIdentityTokenOptions,
+) => ReturnType<typeof fetchShareIdentityTokenWithFallback>;
 
 export function createAuthenticatedShareServiceClient(
   baseUrl: string,
-  getToken: ShareOwnerTokenProvider = fetchDriveTokenWithFallback,
+  getToken: ShareOwnerTokenProvider = fetchShareIdentityTokenWithFallback,
 ): ShareServiceClient {
+  const ownerSession = new ShareOwnerSession(baseUrl, async (options) => {
+    const result = await getToken(options);
+    if (!result.ok) throw new Error(result.error);
+    return result.token;
+  });
   return new ShareServiceClient(baseUrl, {
-    headers: async (options) => {
-      const result = await getToken(options?.refresh ? { refresh: true } : undefined);
-      if (!result.ok) throw new Error(result.error);
-      return { authorization: `Bearer ${result.token}` };
-    },
+    headers: (options) => ownerSession.headers(options),
   });
 }

@@ -7,6 +7,7 @@
 import type { TokenProvider } from '../offscreen/drive/request';
 import { SharePublicationCoordinator } from './SharePublicationCoordinator';
 import { createSharePublicationStore } from './SharePublicationStore';
+import { ShareOwnerSession } from './ShareOwnerSession';
 import { SharePublisher } from './SharePublisher';
 import { ShareRegistry } from './ShareRegistry';
 import { ShareServiceClient } from './ShareServiceClient';
@@ -16,16 +17,20 @@ import { createShareUploadStore } from './ShareUploadStore';
 
 export type ShareRuntime = ReturnType<typeof createShareRuntime>;
 
-export function createShareRuntime(serviceOrigin: string, getToken: TokenProvider) {
+export type ShareRuntimeAuth = {
+  getDriveToken: TokenProvider;
+  getIdentityToken: TokenProvider;
+};
+
+export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth) {
+  const ownerSession = new ShareOwnerSession(serviceOrigin, auth.getIdentityToken);
   const service = new ShareServiceClient(serviceOrigin, {
-    headers: async (options) => ({
-      authorization: `Bearer ${await getToken(options?.refresh ? { refresh: true } : undefined)}`,
-    }),
+    headers: (options) => ownerSession.headers(options),
   });
   const publicationStore = createSharePublicationStore();
   const uploads = new ShareUploadManager({
     store: createShareUploadStore(),
-    source: createShareUploadSourceResolver({ getDriveToken: getToken }),
+    source: createShareUploadSourceResolver({ getDriveToken: auth.getDriveToken }),
     transport: service,
   });
   const publications = new SharePublicationCoordinator({

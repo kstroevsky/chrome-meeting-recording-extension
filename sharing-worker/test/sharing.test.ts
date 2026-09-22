@@ -4,10 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 
 const origin = 'https://sharing.test';
-const ownerHeaders = {
-  authorization: 'Bearer owner-a-token',
-  origin: 'chrome-extension://test-extension',
-};
+const extensionOrigin = 'chrome-extension://test-extension';
+const ownerSessions = new Map<string, string>();
+let googleIdentityRequests = 0;
 
 const manifest = {
   id: 'share-owner-id',
@@ -34,19 +33,22 @@ const manifest = {
 
 beforeEach(async () => {
   vi.restoreAllMocks();
+  ownerSessions.clear();
+  googleIdentityRequests = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url !== 'https://www.googleapis.com/drive/v3/about?fields=user(permissionId)') {
+    if (url !== 'https://openidconnect.googleapis.com/v1/userinfo') {
       throw new Error(`Unexpected owner identity request: ${url}`);
     }
+    googleIdentityRequests += 1;
     const authorization = new Headers(init?.headers).get('authorization');
-    const permissionId = authorization === 'Bearer owner-a-token'
-      ? 'permission-owner-a'
+    const subject = authorization === 'Bearer owner-a-token'
+      ? 'subject-owner-a'
       : authorization === 'Bearer owner-b-token'
-        ? 'permission-owner-b'
+        ? 'subject-owner-b'
         : null;
-    if (!permissionId) return new Response('{}', { status: 401 });
-    return new Response(JSON.stringify({ user: { permissionId } }), {
+    if (!subject) return new Response('{}', { status: 401 });
+    return new Response(JSON.stringify({ sub: subject }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
@@ -78,6 +80,7 @@ describe('sharing worker vertical slice', () => {
     expect(registryBody.shares).toEqual([
       expect.objectContaining({ id: 'share-owner-id', status: 'active', shareUrl: first.shareUrl }),
     ]);
+    expect(googleIdentityRequests).toBe(1);
   });
 
   it('treats a committed chunk retry as idempotent and supports ranged media before revocation', async () => {
@@ -250,8 +253,9 @@ describe('sharing worker vertical slice', () => {
   });
 
   it('requires both the configured extension origin and owner bearer token', async () => {
+    const session = await ownerSession('owner-a-token');
     const badOrigin = await worker.fetch(new Request(`${origin}/api/shares`, {
-      headers: { authorization: 'Bearer owner-a-token', origin: 'https://evil.example' },
+      headers: { authorization: `Bearer ${session}`, origin: 'https://evil.example' },
     }), env);
     expect(badOrigin.status).toBe(403);
 
@@ -266,35 +270,32 @@ describe('sharing worker vertical slice', () => {
     const ownedShare = await env.SHARING_DB.prepare(
       'SELECT owner_id FROM shares WHERE id = ?',
     ).bind('share-owner-id').first<{ owner_id: string }>();
-    expect(ownedShare?.owner_id).toBe('google-drive:permission-owner-a');
+    expect(ownedShare?.owner_id).toBe('google:subject-owner-a');
 
-    const ownerBHeaders = { authorization: 'Bearer owner-b-token' };
-    const ownerBRegistry = await ownerFetch('/api/shares', { headers: ownerBHeaders });
+    const ownerBRegistry = await ownerFetchAs('owner-b-token', '/api/shares');
     expect(await ownerBRegistry.json()).toEqual({ shares: [] });
 
-    const ownerBGet = await ownerFetch('/api/shares/share-owner-id', { headers: ownerBHeaders });
+    const ownerBGet = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-id');
     expect(ownerBGet.status).toBe(404);
     expect(await ownerBGet.json()).toEqual({ code: 'SHARE_NOT_FOUND' });
 
-    const ownerBPut = await ownerFetch('/api/shares/share-owner-id', {
+    const ownerBPut = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-id', {
       method: 'PUT',
-      headers: { ...ownerBHeaders, 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(manifest),
     });
     expect(ownerBPut.status).toBe(404);
 
-    const ownerBRevoke = await ownerFetch('/api/shares/share-owner-id', {
+    const ownerBRevoke = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-id', {
       method: 'DELETE',
-      headers: ownerBHeaders,
     });
     expect(ownerBRevoke.status).toBe(404);
 
     const upload = await beginTrack();
     const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
-    const ownerBChunk = await ownerFetch(`/api/share-uploads/${encodeURIComponent(upload.uploadId)}/chunks/0`, {
+    const ownerBChunk = await ownerFetchAs('owner-b-token', `/api/share-uploads/${encodeURIComponent(upload.uploadId)}/chunks/0`, {
       method: 'PUT',
       headers: {
-        ...ownerBHeaders,
         'content-type': 'video/webm',
         'content-range': 'bytes 0-5/6',
       },
@@ -348,7 +349,30 @@ async function completeTrack(uploadId: string): Promise<Response> {
 }
 
 async function ownerFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(ownerHeaders);
+  return ownerFetchAs('owner-a-token', path, init);
+}
+
+async function ownerFetchAs(identityToken: string, path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers({
+    authorization: `Bearer ${await ownerSession(identityToken)}`,
+    origin: extensionOrigin,
+  });
   new Headers(init.headers).forEach((value, name) => headers.set(name, value));
   return worker.fetch(new Request(origin + path, { ...init, headers }), env);
+}
+
+async function ownerSession(identityToken: string): Promise<string> {
+  const cached = ownerSessions.get(identityToken);
+  if (cached) return cached;
+  const response = await worker.fetch(new Request(`${origin}/api/auth/session`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${identityToken}`,
+      origin: extensionOrigin,
+    },
+  }), env);
+  expect(response.status).toBe(200);
+  const body = await response.json<{ token: string }>();
+  ownerSessions.set(identityToken, body.token);
+  return body.token;
 }
