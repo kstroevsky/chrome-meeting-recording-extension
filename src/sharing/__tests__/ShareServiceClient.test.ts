@@ -94,6 +94,53 @@ describe('ShareServiceClient', () => {
     ]);
   });
 
+  it('lists and fetches authenticated owner shares', async () => {
+    const active = {
+      id: 'share-1',
+      status: 'active',
+      manifest: { id: 'share-1', createdAt: 1, recordings: [] },
+      createdAt: 1,
+      updatedAt: 3,
+      finalizedAt: 2,
+      shareUrl: 'https://share.example/s/viewer-capability',
+    };
+    const revoked = {
+      id: 'share-2',
+      status: 'revoked',
+      manifest: { id: 'share-2', createdAt: 4, recordings: [] },
+      createdAt: 4,
+      updatedAt: 6,
+      revokedAt: 6,
+    };
+    const fetcher = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ shares: [active, revoked] }))
+      .mockResolvedValueOnce(jsonResponse(active));
+    const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
+
+    await expect(client.listShares()).resolves.toEqual([active, revoked]);
+    await expect(client.getShare('share-1')).resolves.toEqual(active);
+    expect(fetcher.mock.calls.map((call) => [call[0], call[1].method])).toEqual([
+      ['https://share.example/api/shares', 'GET'],
+      ['https://share.example/api/shares/share-1', 'GET'],
+    ]);
+  });
+
+  it('rejects malformed owner-registry responses', async () => {
+    const fetcher = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ shares: {} }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'share-1',
+        status: 'active',
+        manifest: { id: 'share-1', createdAt: 1, recordings: [] },
+        createdAt: 1,
+        updatedAt: 2,
+      }));
+    const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
+
+    await expect(client.listShares()).rejects.toThrow('invalid share list');
+    await expect(client.getShare('share-1')).rejects.toThrow('active share without a URL');
+  });
+
   it('fails closed on non-HTTPS or path-bearing service URLs and malformed sessions', async () => {
     expect(() => new ShareServiceClient('http://share.example')).toThrow('bare HTTPS origin');
     expect(() => new ShareServiceClient('https://share.example/api')).toThrow('bare HTTPS origin');
