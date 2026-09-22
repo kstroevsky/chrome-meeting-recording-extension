@@ -87,7 +87,21 @@ export class RecordingLifecycleCommands {
   async resumePendingFinalization(): Promise<CommandResult | null> {
     const snapshot = this.deps.session.getSnapshot();
     const finalization = snapshot.finalization;
-    if (!finalization || snapshot.phase !== 'stopping') return null;
+    if (!finalization) return null;
+    if (
+      snapshot.phase === 'idle'
+      && finalization.disposition === 'discarded'
+      && !finalization.backgroundFinalized
+    ) {
+      const cleaned = await this.finalizeDiscardBackground(
+        finalization.historyId,
+        finalization.epoch,
+      );
+      return cleaned
+        ? this.deps.result.ok()
+        : this.deps.result.fail('Discard cleanup is still pending');
+    }
+    if (snapshot.phase !== 'stopping') return null;
     return finalization.disposition === 'discarded'
       ? this.finishDiscard(finalization.historyId, 'resume after service-worker restart', snapshot)
       : this.finishKeptStop(finalization.historyId, 'resume after service-worker restart');
@@ -132,10 +146,39 @@ export class RecordingLifecycleCommands {
       this.deps.L.log('Stop command completed:', reason);
       return this.deps.result.ok();
     } catch (error: any) {
-      const message = `STOP failed: ${error?.message || error}`;
-      this.deps.session.fail(message);
+      const message = `STOP outcome unknown: ${error?.message || error}`;
+      this.deps.L.warn(message);
       return this.deps.result.fail(message);
     }
+  }
+
+  private async finalizeDiscardBackground(
+    historyId: string,
+    epoch: number | undefined,
+  ): Promise<boolean> {
+    await this.deps.transcriptCapture?.abandon(epoch)
+      .catch((error) => this.deps.L.warn(
+        'Could not disarm transcript capture for the discarded run:',
+        error,
+      ));
+
+    let cleanupComplete = true;
+    await this.deps.notations?.removeAll(historyId)
+      .catch((error) => {
+        cleanupComplete = false;
+        this.deps.L.warn('Discarding recording notations failed:', error);
+      });
+    await this.deps.transcripts?.removeAll(historyId)
+      .catch((error) => {
+        cleanupComplete = false;
+        this.deps.L.warn('Discarding recording transcript failed:', error);
+      });
+
+    if (cleanupComplete) {
+      this.deps.session.markBackgroundFinalized(historyId);
+      await this.deps.session.flush();
+    }
+    return cleanupComplete;
   }
 
   private async finishDiscard(
@@ -145,25 +188,7 @@ export class RecordingLifecycleCommands {
   ): Promise<CommandResult> {
     const finalization = snapshot.finalization;
     if (historyId && finalization?.backgroundFinalized !== true) {
-      await this.deps.transcriptCapture?.abandon(finalization?.epoch)
-        .catch((error) => this.deps.L.warn(
-          'Could not disarm transcript capture for the discarded run:',
-          error,
-        ));
-      if (historyId) {
-      await this.deps.notations?.removeAll(historyId)
-        .catch((error) => this.deps.L.warn(
-          'Discarding recording notations failed:',
-          error,
-        ));
-      await this.deps.transcripts?.removeAll(historyId)
-        .catch((error) => this.deps.L.warn(
-          'Discarding recording transcript failed:',
-          error,
-        ));
-    }
-      this.deps.session.markBackgroundFinalized(historyId);
-      await this.deps.session.flush();
+      await this.finalizeDiscardBackground(historyId, finalization?.epoch);
     }
 
     try {
@@ -179,8 +204,8 @@ export class RecordingLifecycleCommands {
       this.deps.L.log('Discard command completed:', reason);
       return this.deps.result.ok();
     } catch (error: any) {
-      const message = `DISCARD failed: ${error?.message || error}`;
-      this.deps.session.fail(message);
+      const message = `DISCARD outcome unknown: ${error?.message || error}`;
+      this.deps.L.warn(message);
       return this.deps.result.fail(message);
     }
   }

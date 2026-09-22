@@ -121,9 +121,20 @@ export class RecordingStartCommands {
       );
     }
 
+    let streamId: string;
     try {
-      const streamId = await getMediaStreamIdForTab(msg.tabId);
+      streamId = await getMediaStreamIdForTab(msg.tabId);
       await markCaptureStarted();
+    } catch (error: any) {
+      await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);
+      return this.failStart(
+        `Could not acquire recording stream: ${error?.message || error}`,
+        'offscreen_start',
+        error,
+      );
+    }
+
+    try {
       const response = await this.deps.offscreen.rpc<{ ok: boolean; error?: string }>({
         type: 'OFFSCREEN_START',
         streamId,
@@ -144,11 +155,13 @@ export class RecordingStartCommands {
     } catch (error: any) {
       await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);
       this.deps.L.error('OFFSCREEN_START failed', error);
-      return this.failStart(
-        `OFFSCREEN_START failed: ${error?.message || error}`,
-        'offscreen_rpc',
+      const message = `OFFSCREEN_START outcome unknown: ${error?.message || error}`;
+      this.deps.telemetry?.incident({
+        kind: 'recording_start_failed',
+        stage: 'offscreen_rpc',
         error,
-      );
+      });
+      return this.deps.result.fail(message);
     }
   }
 

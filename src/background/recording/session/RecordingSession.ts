@@ -115,10 +115,7 @@ export class RecordingSession {
   }
 
   markIdle(uploadSummary?: UploadSummary, warnings?: string[]): RecordingSessionSnapshot {
-    this.rememberFinishedRun(
-      Date.now(),
-      this.snapshot.finalization?.disposition ?? 'kept',
-    );
+    this.rememberFinishedRun(Date.now(), this.snapshot.finalization?.disposition ?? 'kept');
     this.snapshot = idleSession(
       this.snapshot,
       this.pendingInterruption,
@@ -132,7 +129,7 @@ export class RecordingSession {
 
   fail(error: string): RecordingSessionSnapshot {
     const now = Date.now();
-    this.rememberFinishedRun(now);
+    this.rememberFinishedRun(now, this.snapshot.finalization?.disposition ?? 'kept');
     this.snapshot = failedSession(this.snapshot, error, now);
     return this.commit();
   }
@@ -195,6 +192,9 @@ export class RecordingSession {
 
   runDurationMs(historyId: string | undefined): number | undefined {
     if (!historyId) return undefined;
+    if (this.snapshot.finalization?.historyId === historyId) {
+      return this.snapshot.finalization.durationMs;
+    }
     if (this.snapshot.historyId === historyId) return this.currentRecordedMs();
     return this.lastRun?.historyId === historyId ? this.lastRun.durationMs : undefined;
   }

@@ -131,6 +131,20 @@ describe('RecordingSession run finalization', () => {
         expect(onRunFinished).toHaveBeenCalledWith(historyId, 2_000, 'discarded');
       });
 
+      it('preserves discard disposition when a stopping run fails', () => {
+        const { onRunFinished, hooked } = withHook();
+        hooked.start(RUN_CONFIG, { targetTabId: 42 });
+        const historyId = hooked.getSnapshot().historyId!;
+        hooked.applyOffscreenPhase({ phase: 'recording' });
+        t += 2_000;
+        hooked.markStopping(undefined, 'discarded');
+
+        hooked.fail('discard watchdog timed out');
+
+        expect(onRunFinished).toHaveBeenCalledTimes(1);
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 2_000, 'discarded');
+      });
+
       it('announces after offscreen idle while preserving the markStopping cutoff', () => {
         const { onRunFinished, hooked } = withHook();
         hooked.start(RUN_CONFIG, { targetTabId: 42 });
@@ -226,6 +240,20 @@ describe('RecordingSession run finalization', () => {
 
         expect(session.runDurationMs(first)).toBe(6_000);
         expect(session.runDurationMs(session.getSnapshot().historyId!)).toBe(1_000);
+      });
+
+      it('survives a service-worker restart through the durable finalization descriptor', () => {
+        session.start(RUN_CONFIG, { targetTabId: 42 });
+        const historyId = session.getSnapshot().historyId!;
+        session.applyOffscreenPhase({ phase: 'recording' });
+        t += 63_000;
+        session.markStopping();
+        const persisted = session.getSnapshot();
+
+        const restarted = new RecordingSession(jest.fn());
+        restarted.hydrate(persisted);
+
+        expect(restarted.runDurationMs(historyId)).toBe(63_000);
       });
 
       it('returns undefined for an unknown or missing run', () => {

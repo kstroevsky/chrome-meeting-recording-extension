@@ -91,6 +91,12 @@ export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
       await deps.resumePendingFinalization();
       startKeepAlive();
     } else {
+      if (
+        snapshot.finalization?.disposition === 'discarded'
+        && snapshot.finalization.backgroundFinalized !== true
+      ) {
+        await deps.resumePendingFinalization();
+      }
       await deps.criticalWork.confirmAnalysisWork();
       if (deps.criticalWork.hasWork()) {
         deps.logger.log('SW restarted while an analysis was active — re-attaching offscreen');

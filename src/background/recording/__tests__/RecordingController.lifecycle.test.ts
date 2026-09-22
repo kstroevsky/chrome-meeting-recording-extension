@@ -231,6 +231,18 @@ describe('RecordingController', () => {
       expect(session.getSnapshot().phase).toBe('failed');
     });
 
+    it('keeps start outcome pending when the OFFSCREEN_START transport drops', async () => {
+      offscreen.rpc.mockRejectedValueOnce(new Error('port disconnected'));
+
+      const result = await controller.start(startMsg());
+
+      expect(result).toEqual(expect.objectContaining({
+        ok: false,
+        error: expect.stringContaining('outcome unknown'),
+      }));
+      expect(session.getSnapshot().phase).toBe('starting');
+    });
+
     it('surfaces recorder failures without changing runtime', async () => {
       offscreen.rpc.mockResolvedValue({
         ok: false,
@@ -318,6 +330,20 @@ describe('RecordingController', () => {
       expect(result).toEqual(expect.objectContaining({ ok: false, error: 'stop boom' }));
       expect(session.getSnapshot().phase).toBe('failed');
     });
+
+    it('keeps stopping durable when the OFFSCREEN_STOP transport drops', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      offscreen.rpc.mockRejectedValueOnce(new Error('port disconnected'));
+
+      const result = await controller.stop('popup stop button');
+
+      expect(result).toEqual(expect.objectContaining({
+        ok: false,
+        error: expect.stringContaining('outcome unknown'),
+      }));
+      expect(session.getSnapshot().phase).toBe('stopping');
+      expect(session.getSnapshot().finalization?.disposition).toBe('kept');
+    });
   });
 
   describe('discard', () => {
@@ -347,6 +373,7 @@ describe('RecordingController', () => {
 
       await expect(controller.discard()).resolves.toEqual(expect.objectContaining({ ok: true }));
       expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD' });
+      expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
     });
 
     it('drops the discarded run\u2019s notations so they cannot outlive it', async () => {
@@ -364,6 +391,33 @@ describe('RecordingController', () => {
 
       await expect(controller.discard()).resolves.toEqual(expect.objectContaining({ ok: true }));
       expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD' });
+      expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
+    });
+
+    it('retries discarded derived-data cleanup until it can mark background finalization complete', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      transcripts.removeAll.mockRejectedValueOnce(new Error('IndexedDB is unavailable'));
+
+      await controller.discard();
+      expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
+
+      await controller.discard();
+      expect(transcripts.removeAll).toHaveBeenCalledTimes(2);
+      expect(session.getSnapshot().finalization?.backgroundFinalized).toBe(true);
+    });
+
+    it('keeps discarded stopping durable when the OFFSCREEN_DISCARD transport drops', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      offscreen.rpc.mockRejectedValueOnce(new Error('port disconnected'));
+
+      const result = await controller.discard();
+
+      expect(result).toEqual(expect.objectContaining({
+        ok: false,
+        error: expect.stringContaining('outcome unknown'),
+      }));
+      expect(session.getSnapshot().phase).toBe('stopping');
+      expect(session.getSnapshot().finalization?.disposition).toBe('discarded');
     });
 
     it('guards against discarding when no recording is active', async () => {
