@@ -53,10 +53,10 @@ export type RecordingAnalysisCoordinatorDeps = {
   /**
    * Whether the recording has been **tombstoned** — the durable deletion fence.
    *
-   * Tombstoned, not merely absent. The run-finished hook that queues analysis
-   * fires at `markStopping`, *before* finalize creates the history row, so a
-   * short recording's analysis can legitimately finish before its row exists.
-   * Treating "no row" as "deleted" would silently drop those results.
+   * Tombstoned, not merely absent. History delivery is asynchronous relative
+   * to run completion, so an analysis result can legitimately arrive before
+   * its history row exists. Treating "no row" as "deleted" would silently
+   * drop those results.
    */
   isRecordingDeleted: (historyId: string) => Promise<boolean>;
   /** The §9 values a run should use. Injected so a later settings surface can supply them. */

@@ -115,9 +115,8 @@ describe('RecordingSession run finalization', () => {
       });
 
       it('says when the run being announced is a discard', () => {
-        // The hook fires before anything is delivered, so without this a
-        // discarded run is indistinguishable from a kept one — and the final
-        // transcript sweep and topic analysis would run for it.
+        // Finalization intent is durable at markStopping, but the hook waits
+        // for the offscreen idle acknowledgement before announcing the run.
         const { onRunFinished, hooked } = withHook();
         hooked.start(RUN_CONFIG, { targetTabId: 42 });
         const historyId = hooked.getSnapshot().historyId!;
@@ -126,15 +125,13 @@ describe('RecordingSession run finalization', () => {
         t += 2_000;
         hooked.markStopping(undefined, 'discarded');
 
-        expect(onRunFinished).toHaveBeenCalledTimes(1);
-        expect(onRunFinished).toHaveBeenCalledWith(historyId, 2_000, 'discarded');
-
-        // The idle that follows does not re-announce it as kept.
+        expect(onRunFinished).not.toHaveBeenCalled();
         hooked.applyOffscreenPhase({ phase: 'idle' });
         expect(onRunFinished).toHaveBeenCalledTimes(1);
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 2_000, 'discarded');
       });
 
-      it('announces at markStopping, where capture has already ended', () => {
+      it('announces after offscreen idle while preserving the markStopping cutoff', () => {
         const { onRunFinished, hooked } = withHook();
         hooked.start(RUN_CONFIG, { targetTabId: 42 });
         const historyId = hooked.getSnapshot().historyId!;
@@ -143,13 +140,14 @@ describe('RecordingSession run finalization', () => {
         t += 9_000;
         hooked.markStopping();
 
-        // Early enough that the stop RPC can still carry the notes export.
-        expect(onRunFinished).toHaveBeenCalledWith(historyId, 9_000, 'kept');
+        expect(onRunFinished).not.toHaveBeenCalled();
 
-        // And the later idle must not repeat it, nor change the duration.
+        // Offscreen confirmation announces the run, but does not extend the
+        // logical duration past the user-command cutoff.
         t += 4_000;
         hooked.applyOffscreenPhase({ phase: 'idle' });
         expect(onRunFinished).toHaveBeenCalledTimes(1);
+        expect(onRunFinished).toHaveBeenCalledWith(historyId, 9_000, 'kept');
         expect(hooked.runDurationMs(historyId)).toBe(9_000);
       });
 

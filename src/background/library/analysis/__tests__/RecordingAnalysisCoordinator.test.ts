@@ -433,8 +433,8 @@ describe('RecordingAnalysisCoordinator', () => {
     });
 
     it('still saves a result whose history row does not exist yet', async () => {
-      // Analysis is queued at markStopping, before finalize creates the row, so
-      // "no row" is an ordinary state for a short recording — not a deletion.
+      // Delivery and analysis settle independently, so "no row" is an
+      // ordinary state for a short recording — not a deletion.
       const h = harness({ transcript: TRANSCRIPT });
       await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
       expect(h.rows.has('rec_1')).toBe(true);
