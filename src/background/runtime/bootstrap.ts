@@ -1,5 +1,6 @@
 import {
   configurePerfRuntime,
+  getPerfSettingsSnapshot,
   PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
   type PerfDebugSnapshot,
 } from '../../shared/perf';
@@ -8,7 +9,7 @@ import {
   isBusyPhase,
   RECORDING_SESSION_STORAGE_KEY,
 } from '../../shared/recording';
-import { getSessionStorageValues } from '../../platform/chrome/storage';
+import { getSessionStorageValuesStrict } from '../../platform/chrome/storage';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { PerfDebugStore } from '../observability/perf/PerfDebugStore';
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
@@ -35,13 +36,15 @@ type BootstrapDeps = {
   criticalWork: CriticalWorkCoordinator;
   startupRecovery: StartupRecovery;
   markSessionHydrated: () => void;
+  resumePendingFinalization: () => Promise<unknown>;
   logger: Logger;
 };
 
 /** Hydrates durable runtime state, then performs once-per-browser recovery. */
 export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
+  let settings = getPerfSettingsSnapshot();
   try {
-    const settings = await configurePerfRuntime({
+    settings = await configurePerfRuntime({
       source: 'background',
       sink: (entry) => deps.perfDebugStore.record(entry),
       telemetrySink: {
@@ -54,19 +57,24 @@ export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
       },
       onSettingsChanged: (nextSettings) => deps.perfDebugStore.setSettings(nextSettings),
     });
+  } catch (error) {
+    deps.logger.warn('Perf runtime configuration failed (non-fatal):', error);
+  }
 
-    const stored = await getSessionStorageValues([
-      RECORDING_SESSION_STORAGE_KEY,
-      LEGACY_SESSION_PHASE_KEY,
-      LEGACY_SESSION_RUN_CONFIG_KEY,
-      PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
-    ]);
-    deps.perfDebugStore.hydrate(stored?.[PERF_DEBUG_SNAPSHOT_STORAGE_KEY] as PerfDebugSnapshot | undefined);
-    deps.perfDebugStore.setSettings(settings);
-    const snapshot = deps.session.hydrate(
-      stored?.[RECORDING_SESSION_STORAGE_KEY] ?? hydrateLegacySession(stored),
-    );
+  const stored = await getSessionStorageValuesStrict([
+    RECORDING_SESSION_STORAGE_KEY,
+    LEGACY_SESSION_PHASE_KEY,
+    LEGACY_SESSION_RUN_CONFIG_KEY,
+    PERF_DEBUG_SNAPSHOT_STORAGE_KEY,
+  ]);
+  deps.perfDebugStore.hydrate(stored?.[PERF_DEBUG_SNAPSHOT_STORAGE_KEY] as PerfDebugSnapshot | undefined);
+  deps.perfDebugStore.setSettings(settings);
+  const snapshot = deps.session.hydrate(
+    stored?.[RECORDING_SESSION_STORAGE_KEY] ?? hydrateLegacySession(stored),
+  );
+  deps.markSessionHydrated();
 
+  try {
     try {
       await deps.telemetry.initialize(
         isBusyPhase(snapshot.phase) && snapshot.epoch != null ? new Set([snapshot.epoch]) : new Set(),
@@ -80,6 +88,7 @@ export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
     if (isBusyPhase(snapshot.phase) || hasUploadsInFlight(snapshot.uploadJobs)) {
       deps.logger.log('SW restarted while offscreen work was active — re-attaching offscreen');
       await deps.offscreen.ensureReady();
+      await deps.resumePendingFinalization();
       startKeepAlive();
     } else {
       await deps.criticalWork.confirmAnalysisWork();
@@ -89,10 +98,12 @@ export async function bootstrapBackground(deps: BootstrapDeps): Promise<void> {
       }
     }
   } catch (error) {
-    deps.logger.warn('Session re-hydration failed (non-fatal):', error);
-  } finally {
-    deps.markSessionHydrated();
+    deps.logger.warn('Post-hydration startup recovery failed (non-fatal):', error);
   }
 
-  await deps.startupRecovery.run();
+  try {
+    await deps.startupRecovery.run();
+  } catch (error) {
+    deps.logger.warn('Startup reconciliation failed (non-fatal):', error);
+  }
 }

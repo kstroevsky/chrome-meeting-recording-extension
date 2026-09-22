@@ -53,6 +53,7 @@ export type MessageHandlersDeps = {
   deliverLocal?: (recordingId: string, folderId: string | null) => Promise<void>;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
+  waitUntilReady?: () => Promise<void>;
 };
 
 export type RuntimeSendResponse = (response?: unknown) => void;

@@ -35,6 +35,8 @@ export class OffscreenEventRouter {
   private lastKnownPhase: RecordingPhase = 'idle';
   private readonly activeUploadJobs = new Set<string>();
   private readonly activeAnalysisJobs = new Set<string>();
+  private ingressReleased = false;
+  private bufferedIngress: OffscreenToBg[] = [];
 
   onStateChanged?: OffscreenStateListener;
   onSaveRequested?: OffscreenSaveListener;
@@ -57,6 +59,24 @@ export class OffscreenEventRouter {
       this.host.handleReady(msg.version);
       return;
     }
+
+    if (!this.ingressReleased) {
+      this.bufferedIngress.push(msg);
+      return;
+    }
+
+    this.routeReleased(msg);
+  }
+
+  releaseBufferedIngress(): void {
+    if (this.ingressReleased) return;
+    this.ingressReleased = true;
+    const buffered = this.bufferedIngress;
+    this.bufferedIngress = [];
+    for (const msg of buffered) this.routeReleased(msg);
+  }
+
+  private routeReleased(msg: OffscreenToBg): void {
 
     if (msg.type === 'OFFSCREEN_STATE') {
       const phase = normalizePhase(msg.phase);

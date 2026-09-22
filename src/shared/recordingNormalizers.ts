@@ -380,6 +380,7 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     // Phase-independent (ADR-0007): the transcript sweep reads the span ledger
     // after the run has finished, so it must outlive the return to idle.
     recordedSpans: normalizeRecordedSpans(candidate.recordedSpans),
+    finalization: normalizeRunFinalization(candidate.finalization),
     // Phase-independent (design n4): an interruption outlives its run, because
     // the capture is already saved and the user still has to be told.
     interruption: normalizeInterruption(candidate.interruption),
@@ -407,6 +408,28 @@ export function normalizeSessionSnapshot(value: unknown): RecordingSessionSnapsh
     tabResolution: phase === 'idle' ? undefined : normalizeTabResolution(candidate.tabResolution),
     capturedDevices: phase === 'idle' ? undefined : normalizeCapturedDevices(candidate.capturedDevices),
     updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
+  };
+}
+
+function normalizeRunFinalization(
+  value: unknown,
+): RecordingSessionSnapshot['finalization'] {
+  if (!isRecord(value)) return undefined;
+  const { historyId, epoch, targetTabId, durationMs, disposition, backgroundFinalized } = value;
+  if (typeof historyId !== 'string' || !historyId) return undefined;
+  if (!Number.isInteger(epoch) || (epoch as number) < 0) return undefined;
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0) {
+    return undefined;
+  }
+  if (disposition !== 'kept' && disposition !== 'discarded') return undefined;
+  const normalizedTarget = normalizeTargetTabId(targetTabId);
+  return {
+    historyId,
+    epoch: epoch as number,
+    ...(normalizedTarget != null ? { targetTabId: normalizedTarget } : {}),
+    durationMs,
+    disposition,
+    ...(backgroundFinalized === true ? { backgroundFinalized: true } : {}),
   };
 }
 

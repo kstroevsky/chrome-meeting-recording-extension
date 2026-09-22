@@ -1,5 +1,5 @@
 import { sendTabMessage } from '../../platform/chrome/tabs';
-import { setSessionStorageValues } from '../../platform/chrome/storage';
+import { setSessionStorageValuesStrict } from '../../platform/chrome/storage';
 import { broadcastToPopup } from '../../shared/messages';
 import {
   RECORDING_SESSION_STORAGE_KEY,
@@ -49,7 +49,7 @@ export function createSessionPersistor(logger: Logger): SessionPersistor {
       });
     }
     try {
-      await setSessionStorageValues({ [RECORDING_SESSION_STORAGE_KEY]: snapshot });
+      await setSessionStorageValuesStrict({ [RECORDING_SESSION_STORAGE_KEY]: snapshot });
     } catch (error) {
       logger.warn('storage.session.set failed (recording session):', error);
       throw error;
@@ -95,19 +95,11 @@ export function wireRecordingSessionRuntime(deps: SessionRuntimeDeps): void {
       deps.criticalWork.sync(snapshot);
       broadcastToPopup({ type: 'RECORDING_STATE', session: toStatusView(snapshot) });
     },
-    onRunFinished: (historyId, durationMs, ending) => {
+    onRunFinished: (historyId, _durationMs, ending) => {
       if (ending === 'discarded') {
-        void deps.transcriptCapture.abandon()
-          .catch((error) => deps.logger.warn(
-            'Could not disarm transcript capture for the discarded run:',
-            error,
-          ));
         return;
       }
-      void deps.notations.closeOpenSpans(historyId, durationMs)
-        .catch((error) => deps.logger.warn('Could not close open notations for the finished run:', error));
-      void deps.transcriptCapture.finish(historyId)
-        .then(() => deps.analysisCoordinator.analyze(historyId))
+      void deps.analysisCoordinator.analyze(historyId)
         .then((started) => {
           if (!started.ok && started.reason !== 'no-transcript') {
             deps.logger.warn(
@@ -116,7 +108,7 @@ export function wireRecordingSessionRuntime(deps: SessionRuntimeDeps): void {
             );
           }
         })
-        .catch((error) => deps.logger.warn('Could not finish transcript capture for the run:', error));
+        .catch((error) => deps.logger.warn('Could not start topic analysis for the run:', error));
     },
   });
 

@@ -19,6 +19,7 @@ const runtime = createBackgroundRuntime();
  * instead of guessing how many event-loop turns startup requires.
  */
 export const sessionHydration = runtime.bootstrap();
+void sessionHydration.catch(() => {});
 
 // Runtime ingress is registered eagerly during module evaluation (MV3).
 chrome.runtime.onMessage.addListener(runtime.messageListener);
@@ -28,21 +29,35 @@ chrome.runtime.onSuspend?.addListener(async () => {
 });
 chrome.alarms?.onAlarm?.addListener(runtime.handleAlarm);
 
-registerRecordingCommands({ L: runtime.logger, controller: runtime.controller });
-registerRecordingAutoStop({ session: runtime.session, controller: runtime.controller });
+registerRecordingCommands({
+  L: runtime.logger,
+  controller: runtime.controller,
+  waitUntilReady: runtime.waitUntilReady,
+});
+registerRecordingAutoStop({
+  session: runtime.session,
+  controller: runtime.controller,
+  waitUntilReady: runtime.waitUntilReady,
+});
 
 // Registered after recordingAutoStop so closing a recorded tab stops capture
 // before playback/auth leases attached to that tab are released.
 addTabRemovedListener(runtime.handleTabRemoved);
 
 chrome.runtime.onUpdateAvailable?.addListener(() => {
-  void sessionHydration.then(() => runtime.applyUpdateWhenSafe());
+  void sessionHydration
+    .then(() => runtime.applyUpdateWhenSafe())
+    .catch((error) => runtime.logger.warn('Update deferred because background is not ready:', error));
 });
 
 chrome.runtime.onInstalled?.addListener(async (details) => {
   if (details.reason !== 'update') return;
-  await sessionHydration;
-  await runtime.handleUpdatedExtension();
+  try {
+    await sessionHydration;
+    await runtime.handleUpdatedExtension();
+  } catch (error) {
+    runtime.logger.warn('Extension update reconciliation deferred:', error);
+  }
 });
 
 globalThis.addEventListener?.('error', runtime.handleGlobalError);

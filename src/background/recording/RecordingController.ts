@@ -41,6 +41,7 @@ export class RecordingController {
   private readonly lifecycle: RecordingLifecycleCommands;
   private readonly devices: RecordingDeviceCommands;
   private readonly notations: RecordingNotationCommands;
+  private lifecycleTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: RecordingControllerDeps) {
     const result = {
@@ -80,18 +81,22 @@ export class RecordingController {
   }
 
   start(msg: StartRecordingMessage): Promise<CommandResult> {
-    return this.starts.start(msg);
+    return this.serializeLifecycle(() => this.starts.start(msg));
   }
 
   stop(
     reason = 'user requested stop',
     interruption?: RecordingInterruption['reason'],
   ): Promise<CommandResult> {
-    return this.lifecycle.stop(reason, interruption);
+    return this.serializeLifecycle(() => this.lifecycle.stop(reason, interruption));
   }
 
   discard(reason = 'user requested discard'): Promise<CommandResult> {
-    return this.lifecycle.discard(reason);
+    return this.serializeLifecycle(() => this.lifecycle.discard(reason));
+  }
+
+  resumePendingFinalization(): Promise<CommandResult | null> {
+    return this.serializeLifecycle(() => this.lifecycle.resumePendingFinalization());
   }
 
   retryUpload(jobId: string): Promise<CommandResult> {
@@ -143,5 +148,11 @@ export class RecordingController {
       error,
       session: toStatusView(this.deps.session.getSnapshot()),
     };
+  }
+
+  private serializeLifecycle<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.lifecycleTail.catch(() => {}).then(work);
+    this.lifecycleTail = run.then(() => undefined, () => undefined);
+    return run;
   }
 }

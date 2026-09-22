@@ -22,13 +22,16 @@ type RecordingCommandDeps = {
     warn: (...args: any[]) => void;
     error: (...args: any[]) => void;
   };
+  waitUntilReady?: () => Promise<void>;
 };
 
 export async function handleRecordingCommand(
   command: string,
   tab: chrome.tabs.Tab | undefined,
-  { controller, L }: RecordingCommandDeps
+  deps: RecordingCommandDeps,
 ): Promise<void> {
+  await deps.waitUntilReady?.();
+  const { controller, L } = deps;
   // Marking targets the run, not a tab, so it needs neither an active tab nor
   // the activeTab grant that gates starting a recording.
   if (command === MARK_NOTATION_COMMAND) {

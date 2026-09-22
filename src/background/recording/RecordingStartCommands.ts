@@ -51,6 +51,10 @@ export class RecordingStartCommands {
     if (!runConfig) {
       return this.deps.result.fail('Missing or invalid run configuration');
     }
+    const current = this.deps.session.getSnapshot();
+    if (current.phase !== 'idle' && current.phase !== 'failed') {
+      return this.deps.result.fail(`Recording is already ${current.phase}`);
+    }
 
     const conflict = await this.findTabCaptureConflict(msg.tabId);
     if (conflict) {
@@ -83,6 +87,7 @@ export class RecordingStartCommands {
       targetTabId: msg.tabId,
       meetingSlug: meetingSlug || undefined,
     });
+    await this.deps.session.flush();
     this.deps.telemetry?.configureRun(
       telemetryRunId,
       runConfig,

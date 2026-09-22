@@ -14,6 +14,7 @@ import type { RecordingController } from './RecordingController';
 type AutoStopDeps = {
   session: RecordingSession;
   controller: RecordingController;
+  waitUntilReady?: () => Promise<void>;
 };
 
 function getMeetSlug(url: string): string | null {
@@ -89,23 +90,28 @@ export async function handleMeetingEndedMessage(
 /** Registers Chrome tab lifecycle hard-stops for the recorded tab. */
 export function registerRecordingAutoStop(deps: AutoStopDeps): void {
   addTabRemovedListener((tabId) => {
-    const snapshot = deps.session.getSnapshot();
-    if (!isSameRecordingTab(snapshot, tabId)) return;
-    void deps.controller.stop('recorded tab closed', 'tab-closed');
+    void Promise.resolve(deps.waitUntilReady?.()).then(() => {
+      const snapshot = deps.session.getSnapshot();
+      if (!isSameRecordingTab(snapshot, tabId)) return;
+      return deps.controller.stop('recorded tab closed', 'tab-closed');
+    });
   });
 
   addTabUpdatedListener((tabId, changeInfo) => {
     if (typeof changeInfo.url !== 'string') return;
-    const snapshot = deps.session.getSnapshot();
-    if (!isSameRecordingTab(snapshot, tabId)) return;
-    // Only Meet recordings auto-stop on navigation. A non-Meet recording keeps
-    // running across in-tab URL changes and is hard-stopped only when the tab
-    // closes (above) or the user stops it; otherwise an SPA route change would
-    // silently kill the recording mid-session.
-    if (!isMeetRecording(snapshot)) return;
+    const nextUrl = changeInfo.url;
+    void Promise.resolve(deps.waitUntilReady?.()).then(() => {
+      const snapshot = deps.session.getSnapshot();
+      if (!isSameRecordingTab(snapshot, tabId)) return;
+      // Only Meet recordings auto-stop on navigation. A non-Meet recording keeps
+      // running across in-tab URL changes and is hard-stopped only when the tab
+      // closes (above) or the user stops it; otherwise an SPA route change would
+      // silently kill the recording mid-session.
+      if (!isMeetRecording(snapshot)) return;
 
-    const nextSlug = getMeetSlug(changeInfo.url);
-    if (nextSlug === snapshot.meetingSlug) return;
-    void deps.controller.stop('recorded tab navigated away from meeting', 'navigated-away');
+      const nextSlug = getMeetSlug(nextUrl);
+      if (nextSlug === snapshot.meetingSlug) return;
+      return deps.controller.stop('recorded tab navigated away from meeting', 'navigated-away');
+    });
   });
 }

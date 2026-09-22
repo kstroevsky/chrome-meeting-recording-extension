@@ -34,7 +34,13 @@ const startMsg = (overrides: Record<string, unknown> = {}) => ({
 describe('RecordingController', () => {
   let session: RecordingSession;
   let offscreen: { ensureReady: jest.Mock; rpc: jest.Mock; ensureRecorderTabReady: jest.Mock };
-  let notations: { list: jest.Mock; add: jest.Mock; endOpen: jest.Mock; removeAll: jest.Mock };
+  let notations: {
+    list: jest.Mock;
+    add: jest.Mock;
+    endOpen: jest.Mock;
+    closeOpenSpans: jest.Mock;
+    removeAll: jest.Mock;
+  };
   let transcripts: any;
   let transcriptCapture: any;
   let controller: RecordingController;
@@ -64,10 +70,15 @@ describe('RecordingController', () => {
         id: 'notation:1', tStartMs: notation.tStartMs, text: notation.text ?? '',
       })),
       endOpen: jest.fn(async (_id: string, id: string, tEndMs: number) => ({ id, tStartMs: 0, tEndMs, text: '' })),
+      closeOpenSpans: jest.fn().mockResolvedValue(undefined),
       removeAll: jest.fn().mockResolvedValue(undefined),
     };
     transcripts = { removeAll: jest.fn().mockResolvedValue(undefined), get: jest.fn().mockResolvedValue(undefined) };
-    transcriptCapture = { flushAtBoundary: jest.fn().mockResolvedValue(undefined) };
+    transcriptCapture = {
+      finish: jest.fn().mockResolvedValue(undefined),
+      abandon: jest.fn().mockResolvedValue(undefined),
+      flushAtBoundary: jest.fn().mockResolvedValue(undefined),
+    };
     const L = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     controller = new RecordingController({
       L,
@@ -249,17 +260,17 @@ describe('RecordingController', () => {
       expect(offscreen.rpc).not.toHaveBeenCalled();
     });
 
-    it('drains the caption buffer at the cutoff, before the stop reaches offscreen', async () => {
+    it('finishes the caption sweep at the cutoff before sidecar delivery reaches offscreen', async () => {
       session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
       session.applyOffscreenPhase({ phase: 'recording' });
       const historyId = session.getSnapshot().historyId;
       const order: string[] = [];
-      transcriptCapture.flushAtBoundary.mockImplementation(async () => { order.push('drain'); });
+      transcriptCapture.finish.mockImplementation(async () => { order.push('drain'); });
       offscreen.rpc.mockImplementation(async () => { order.push('stop'); return { ok: true }; });
 
       await controller.stop();
 
-      expect(transcriptCapture.flushAtBoundary).toHaveBeenCalledWith(historyId);
+      expect(transcriptCapture.finish).toHaveBeenCalledWith(historyId);
       // Meet keeps refining a caption after the recorder stops; the drain has to
       // happen at the cutoff, not after the pipeline has run on.
       expect(order).toEqual(['drain', 'stop']);
@@ -268,10 +279,23 @@ describe('RecordingController', () => {
     it('still stops when draining the caption buffer fails', async () => {
       session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
       session.applyOffscreenPhase({ phase: 'recording' });
-      transcriptCapture.flushAtBoundary.mockRejectedValue(new Error('tab is gone'));
+      transcriptCapture.finish.mockRejectedValue(new Error('tab is gone'));
 
       await expect(controller.stop()).resolves.toEqual(expect.objectContaining({ ok: true }));
       expect(offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({ type: 'OFFSCREEN_STOP' }));
+    });
+
+    it('serializes duplicate stops and treats the second stop as idempotent', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      session.applyOffscreenPhase({ phase: 'recording' });
+
+      const first = controller.stop('first');
+      const second = controller.stop('second');
+
+      await expect(first).resolves.toEqual(expect.objectContaining({ ok: true }));
+      await expect(second).resolves.toEqual(expect.objectContaining({ ok: true }));
+      expect(offscreen.rpc).toHaveBeenCalledTimes(1);
+      expect(transcriptCapture.finish).toHaveBeenCalledTimes(1);
     });
 
     it('marks the session stopping and forwards OFFSCREEN_STOP', async () => {
@@ -350,6 +374,20 @@ describe('RecordingController', () => {
       );
       expect(offscreen.rpc).not.toHaveBeenCalled();
       expect(notations.removeAll).not.toHaveBeenCalled();
+    });
+
+    it('does not let discard reinterpret a stop that has already committed its intent', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      session.applyOffscreenPhase({ phase: 'recording' });
+
+      const stop = controller.stop();
+      const discard = controller.discard();
+      await stop;
+
+      await expect(discard).resolves.toEqual(expect.objectContaining({
+        ok: false,
+        error: 'Discard cannot replace a stop that is already finalizing',
+      }));
     });
   });
 

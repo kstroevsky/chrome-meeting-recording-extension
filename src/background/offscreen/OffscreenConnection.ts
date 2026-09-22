@@ -32,7 +32,8 @@ export class OffscreenConnection {
     this.ready = false;
     port.onMessage.addListener(onMessage);
     port.onDisconnect.addListener(() => {
-      if (this.port === port) this.port = null;
+      if (this.port !== port) return;
+      this.port = null;
       this.ready = false;
       onDisconnected();
       if (!preserveReadyOnDisconnect()) this.resetReadyPromise();

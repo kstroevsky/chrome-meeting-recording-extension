@@ -97,16 +97,24 @@ export function handleSystemIngress(
     return false;
   }
   if (isTranscriptUtterancesMessage(msg)) {
-    void transcriptCapture?.receive(msg.runId, msg.utterances)
+    void Promise.resolve(deps.waitUntilReady?.())
+      .then(() => transcriptCapture?.receive(msg.runId, msg.utterances))
       .catch((error) => L.warn('Could not record pushed caption utterances:', error));
     return false;
   }
   if (isTranscriptCaptureStateRequest(msg)) {
-    sendResponse(transcriptCapture?.captureState() ?? { active: false });
-    return false;
+    if (!deps.waitUntilReady) {
+      sendResponse(transcriptCapture?.captureState() ?? { active: false });
+      return false;
+    }
+    void deps.waitUntilReady()
+      .then(() => sendResponse(transcriptCapture?.captureState() ?? { active: false }))
+      .catch((error) => sendResponse({ active: false, error: String(error) }));
+    return true;
   }
   if (isMeetingEndedMessage(msg)) {
-    handleMeetingEndedMessage(msg, sender, { session, controller })
+    Promise.resolve(deps.waitUntilReady?.())
+      .then(() => handleMeetingEndedMessage(msg, sender, { session, controller }))
       .then((result) => sendResponse(result))
       .catch((error: any) => sendResponse({
         ok: false,

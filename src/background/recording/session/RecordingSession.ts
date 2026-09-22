@@ -36,17 +36,12 @@ export type SessionPersistor = (snapshot: RecordingSessionSnapshot) => Promise<v
 export type RunEnding = 'kept' | 'discarded';
 export type RecordingSessionListeners = {
   onChanged?: SessionChangeListener;
-  onRunFinished?: (
-    historyId: string,
-    durationMs: number,
-    ending: RunEnding,
-  ) => void;
+  onRunFinished?: (historyId: string, durationMs: number, ending: RunEnding) => void;
 };
 
 /**
- * Imperative shell around pure session transitions and the recording clock.
- * This remains the single authority that mutates, persists, and publishes the
- * canonical snapshot.
+ * Imperative shell around pure transitions and the recording clock; the single
+ * authority that mutates, persists, and publishes the canonical snapshot.
  */
 export class RecordingSession {
   private lastRun?: { historyId: string; durationMs: number };
@@ -67,12 +62,7 @@ export class RecordingSession {
     this.listenersBound = onChanged != null || onRunFinished != null;
   }
 
-  /**
-   * Binds runtime observers after the session itself exists. This is a one-time
-   * composition seam for collaborators (watchdog, offscreen, analysis) that
-   * depend on the canonical session and therefore cannot all be constructed
-   * before it.
-   */
+  /** One-time composition seam for observers that depend on the session. */
   bindListeners(listeners: RecordingSessionListeners): void {
     if (this.listenersBound) throw new Error('RecordingSession listeners are already bound');
     this.listenersBound = true;
@@ -96,6 +86,9 @@ export class RecordingSession {
   }
 
   start(runConfig: RecordingRunConfig, target?: RecordingTarget): RecordingSessionSnapshot {
+    if (this.snapshot.phase !== 'idle' && this.snapshot.phase !== 'failed') {
+      throw new Error(`Cannot start recording while session is ${this.snapshot.phase}`);
+    }
     this.pendingInterruption = undefined;
     this.snapshot = startSession(
       this.snapshot,
@@ -114,16 +107,18 @@ export class RecordingSession {
     const now = Date.now();
     const { historyId } = this.snapshot;
     const atMs = elapsedRecordedMs(this.snapshot, now);
-    this.rememberFinishedRun(now, ending);
     if (interruption && historyId) {
       this.pendingInterruption = { reason: interruption, atMs, historyId };
     }
-    this.snapshot = stoppingSession(this.snapshot, this.pendingInterruption, now);
+    this.snapshot = stoppingSession(this.snapshot, this.pendingInterruption, ending, now);
     return this.commit();
   }
 
   markIdle(uploadSummary?: UploadSummary, warnings?: string[]): RecordingSessionSnapshot {
-    this.rememberFinishedRun(Date.now());
+    this.rememberFinishedRun(
+      Date.now(),
+      this.snapshot.finalization?.disposition ?? 'kept',
+    );
     this.snapshot = idleSession(
       this.snapshot,
       this.pendingInterruption,
@@ -139,6 +134,16 @@ export class RecordingSession {
     const now = Date.now();
     this.rememberFinishedRun(now);
     this.snapshot = failedSession(this.snapshot, error, now);
+    return this.commit();
+  }
+
+  markBackgroundFinalized(historyId: string): RecordingSessionSnapshot {
+    if (this.snapshot.finalization?.historyId !== historyId) return this.getSnapshot();
+    this.snapshot = {
+      ...this.snapshot,
+      finalization: { ...this.snapshot.finalization, backgroundFinalized: true },
+      updatedAt: Date.now(),
+    };
     return this.commit();
   }
 

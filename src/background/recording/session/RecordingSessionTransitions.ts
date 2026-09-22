@@ -39,6 +39,7 @@ export function startSession(
     warnings: undefined,
     epoch: (snapshot.epoch ?? 0) + 1,
     recordedSpans: undefined,
+    finalization: undefined,
     uploadJobs: carriedUploads?.length ? carriedUploads : undefined,
     updatedAt: now,
   };
@@ -47,12 +48,14 @@ export function startSession(
 export function stoppingSession(
   snapshot: RecordingSessionSnapshot,
   interruption: RecordingInterruption | undefined,
+  disposition: 'kept' | 'discarded',
   now: number,
 ): RecordingSessionSnapshot {
   const desired: DesiredState = 'idle';
   const observed = snapshot.observed ?? 'starting';
   const failed = snapshot.failed ?? false;
   const phase = projectPhase(desired, observed, failed);
+  const durationMs = elapsedRecordedMs(snapshot, now);
   return {
     phase,
     desired,
@@ -72,6 +75,15 @@ export function stoppingSession(
     epoch: snapshot.epoch,
     uploadJobs: snapshot.uploadJobs,
     interruption: interruption ?? snapshot.interruption,
+    finalization: snapshot.historyId != null && snapshot.epoch != null
+      ? {
+          historyId: snapshot.historyId,
+          epoch: snapshot.epoch,
+          targetTabId: snapshot.targetTabId,
+          durationMs,
+          disposition,
+        }
+      : snapshot.finalization,
     updatedAt: now,
   };
 }
@@ -94,6 +106,7 @@ export function idleSession(
     warnings,
     epoch: snapshot.epoch,
     recordedSpans: closeOpenSpan(snapshot.recordedSpans, closeAt),
+    finalization: snapshot.finalization,
     uploadJobs: snapshot.uploadJobs,
     interruption: interruption ?? snapshot.interruption,
     updatedAt,
@@ -126,6 +139,8 @@ export function failedSession(
     capturedDevices: snapshot.capturedDevices,
     recordedMs: elapsedRecordedMs(snapshot, now),
     runningSince: undefined,
+    recordedSpans: closeOpenSpan(snapshot.recordedSpans, now),
+    finalization: snapshot.finalization,
     uploadJobs: snapshot.uploadJobs,
     updatedAt: now,
   };

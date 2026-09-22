@@ -12,9 +12,11 @@ import { getRuntimeId, getRuntimeUrl, reloadRuntime } from '../runtime';
 import {
   getAllLocalStorageValues,
   getLocalStorageValues,
+  getSessionStorageValuesStrict,
   removeLocalStorageValues,
   setLocalStorageValues,
   setSessionStorageValues,
+  setSessionStorageValuesStrict,
 } from '../storage';
 import { getSystemCpuInfo, hasSystemCpuInfo } from '../system';
 
@@ -204,5 +206,14 @@ describe('platform/chrome/storage (host without chrome.storage)', () => {
     await expect(setLocalStorageValues({ k: 1 })).resolves.toBeUndefined();
     await expect(removeLocalStorageValues('k')).resolves.toBeUndefined();
     await expect(setSessionStorageValues({ k: 1 })).resolves.toBeUndefined();
+  });
+
+  it('fails closed for strict background session durability operations', async () => {
+    await expect(getSessionStorageValuesStrict('k')).rejects.toThrow(
+      'chrome.storage.session is unavailable',
+    );
+    await expect(setSessionStorageValuesStrict({ k: 1 })).rejects.toThrow(
+      'chrome.storage.session is unavailable',
+    );
   });
 });

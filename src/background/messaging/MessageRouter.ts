@@ -48,6 +48,7 @@ async function routePopupMessage(
   sendResponse: RuntimeSendResponse,
   deps: MessageHandlersDeps,
 ): Promise<void> {
+  await deps.waitUntilReady?.();
   validatePopupMessage(msg);
   if (await handleLibraryMessage(msg, sendResponse, deps)) return;
   if (await handlePlaybackMessage(msg, sender, sendResponse, deps)) return;

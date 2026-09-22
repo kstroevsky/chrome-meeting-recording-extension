@@ -28,12 +28,14 @@ import { StartupRecovery } from './StartupRecovery';
 import { UploadStatePersistence } from './UploadStatePersistence';
 import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
+import { BackgroundReadiness } from './BackgroundReadiness';
 
 const PLAYBACK_LEASE_STORAGE_KEY = 'playbackLeases';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
   const logger = makeLogger('background');
+  const readiness = new BackgroundReadiness();
   const offscreen = new OffscreenManager();
   const telemetry = new TelemetryRuntime();
   const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), logger.warn);
@@ -165,23 +167,55 @@ export function createBackgroundRuntime() {
     }),
     driveAuthLease,
     telemetry,
+    waitUntilReady: () => readiness.wait(),
   });
+
+  const markSessionHydrated = () => {
+    sessionHydrated = true;
+    const snapshot = session.getSnapshot();
+    if (snapshot.phase !== 'idle') {
+      const finalization = snapshot.finalization;
+      const targetTabId = finalization?.targetTabId ?? snapshot.targetTabId;
+      const epoch = finalization?.epoch ?? snapshot.epoch;
+      if (targetTabId != null && epoch != null) {
+        void transcriptCapture.restore(
+          targetTabId,
+          epoch,
+          finalization?.disposition ?? 'kept',
+        );
+      }
+    }
+    offscreen.releaseBufferedIngress();
+  };
+
+  const bootstrap = async () => {
+    try {
+      await bootstrapBackground({
+        session,
+        offscreen,
+        telemetry,
+        perfDebugStore,
+        criticalWork,
+        startupRecovery,
+        markSessionHydrated,
+        resumePendingFinalization: () => controller.resumePendingFinalization(),
+        logger,
+      });
+      readiness.markReady();
+    } catch (error) {
+      readiness.markFailed(error);
+      logger.error('Critical background session hydration failed:', error);
+      throw error;
+    }
+  };
 
   return {
     logger,
     session,
     controller,
     messageListener,
-    bootstrap: () => bootstrapBackground({
-      session,
-      offscreen,
-      telemetry,
-      perfDebugStore,
-      criticalWork,
-      startupRecovery,
-      markSessionHydrated: () => { sessionHydrated = true; },
-      logger,
-    }),
+    bootstrap,
+    waitUntilReady: () => readiness.wait(),
     handleAlarm: (alarm: chrome.alarms.Alarm) => localDelivery.handleAlarm(alarm),
     handleConnect: (port: chrome.runtime.Port) => {
       if (port.name === 'offscreen') offscreen.attachPort(port);

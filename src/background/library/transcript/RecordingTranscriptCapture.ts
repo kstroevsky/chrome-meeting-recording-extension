@@ -64,6 +64,24 @@ export class RecordingTranscriptCapture {
 
   /** Arms the meeting tab's push for a run that is starting. */
   async arm(tabId: number, runId: number): Promise<void> {
+    this.abandonedRunId = undefined;
+    this.armedTabId = tabId;
+    await this.setCapture(tabId, runId);
+  }
+
+  /** Reconstitutes volatile capture targeting after an MV3 worker restart. */
+  async restore(
+    tabId: number,
+    runId: number,
+    disposition: 'kept' | 'discarded' = 'kept',
+  ): Promise<void> {
+    if (disposition === 'discarded') {
+      this.abandonedRunId = runId;
+      this.armedTabId = undefined;
+      await this.setCapture(tabId, null);
+      return;
+    }
+    this.abandonedRunId = undefined;
     this.armedTabId = tabId;
     await this.setCapture(tabId, runId);
   }
@@ -125,8 +143,8 @@ export class RecordingTranscriptCapture {
    * history id stays live until the session reaches idle; remembering the
    * abandoned run is what stops them.
    */
-  async abandon(): Promise<void> {
-    this.abandonedRunId = this.deps.activeRunId();
+  async abandon(runId: number | undefined = this.deps.activeRunId()): Promise<void> {
+    this.abandonedRunId = runId;
     const tabId = this.armedTabId;
     this.armedTabId = undefined;
     if (tabId == null) return;

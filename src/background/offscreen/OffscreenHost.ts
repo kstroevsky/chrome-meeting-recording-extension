@@ -116,15 +116,18 @@ export class OffscreenHost {
     }
 
     this.runtimeTransitioning = true;
-    this.connection.markNotReady();
-    this.cancelRecorderTabCleanup();
-    this.connection.clearPort(true);
-    await closeOffscreenDocument();
-    await this.closeRecorderTab();
-    this.runtimeTransitioning = false;
-    this.connection.resetReadyPromise();
-    this.L.log('Discarded stale offscreen document after extension update');
-    return true;
+    try {
+      this.connection.markNotReady();
+      this.cancelRecorderTabCleanup();
+      this.connection.clearPort(true);
+      await closeOffscreenDocument();
+      await this.closeRecorderTab();
+      this.connection.resetReadyPromise();
+      this.L.log('Discarded stale offscreen document after extension update');
+      return true;
+    } finally {
+      this.runtimeTransitioning = false;
+    }
   }
 
   cancelRecorderTabCleanup(): void {

@@ -7,6 +7,7 @@ describe('OffscreenManager', () => {
 
   beforeEach(() => {
     manager = new OffscreenManager();
+    manager.releaseBufferedIngress();
     mockPort = {
       name: 'offscreen',
       onMessage: { addListener: jest.fn() },
@@ -229,6 +230,23 @@ describe('OffscreenManager', () => {
     );
   });
 
+  it('buffers state replay until canonical session hydration releases ingress', () => {
+    const gated = new OffscreenManager();
+    const onStateChanged = jest.fn();
+    gated.onStateChanged = onStateChanged;
+    gated.attachPort(mockPort);
+    const listener = mockPort.onMessage.addListener.mock.calls[0][0];
+
+    listener({ type: 'OFFSCREEN_STATE', phase: 'recording', epoch: 7 });
+    expect(onStateChanged).not.toHaveBeenCalled();
+    expect(gated.getRecordingStatus()).toBe('idle');
+
+    gated.releaseBufferedIngress();
+    expect(onStateChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'OFFSCREEN_STATE', phase: 'recording', epoch: 7 }),
+    );
+  });
+
   it('gracefully handles port disconnects', () => {
     manager.attachPort(mockPort);
     expect((manager as any).port).toBe(mockPort);
@@ -238,6 +256,28 @@ describe('OffscreenManager', () => {
 
     expect((manager as any).port).toBe(null);
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
+  });
+
+  it('ignores a late disconnect from a replaced port', () => {
+    const oldPort = mockPort;
+    manager.attachPort(oldPort);
+    const oldDisconnect = oldPort.onDisconnect.addListener.mock.calls[0][0];
+
+    const newPort: any = {
+      name: 'offscreen',
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+    };
+    manager.attachPort(newPort);
+    newPort.onMessage.addListener.mock.calls[0][0]({
+      type: 'OFFSCREEN_READY',
+      version: getBuildId(),
+    });
+
+    oldDisconnect();
+
+    expect((manager as any).port).toBe(newPort);
   });
 
   it('forwards blob cleanup requests back to the offscreen port', () => {

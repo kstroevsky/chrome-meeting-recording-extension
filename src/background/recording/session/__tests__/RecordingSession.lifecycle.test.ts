@@ -134,10 +134,16 @@ describe('RecordingSession state machine', () => {
     });
 
     it('rehydrates the persisted epoch so the fence survives a service-worker restart', () => {
-      const restored = session.hydrate({ phase: 'recording', runConfig: RUN_CONFIG, epoch: 5, updatedAt: 1 });
+      const restored = session.hydrate({ phase: 'idle', runConfig: null, epoch: 5, updatedAt: 1 });
       expect(restored.epoch).toBe(5);
       // The next run continues strictly above the restored epoch.
       expect(session.start(RUN_CONFIG).epoch).toBe(6);
+    });
+
+    it('refuses to overwrite an active hydrated run with a second start', () => {
+      session.hydrate({ phase: 'recording', runConfig: RUN_CONFIG, epoch: 5, updatedAt: 1 });
+      expect(() => session.start(RUN_CONFIG)).toThrow('Cannot start recording while session is recording');
+      expect(session.getSnapshot().epoch).toBe(5);
     });
   });
 

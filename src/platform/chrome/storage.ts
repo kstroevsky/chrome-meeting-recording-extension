@@ -58,8 +58,22 @@ export async function getSessionStorageValues(keys: string | string[]): Promise<
   return await chrome.storage.session.get(keys as string[]) as StorageValues;
 }
 
+/** Strict background-owned durable session read: absence is an error, not idle state. */
+export async function getSessionStorageValuesStrict(
+  keys: string | string[],
+): Promise<StorageValues> {
+  if (!hasSessionStorageArea()) throw new Error('chrome.storage.session is unavailable');
+  return await chrome.storage.session.get(keys as string[]) as StorageValues;
+}
+
 export async function setSessionStorageValues(values: StorageValues): Promise<void> {
   if (!hasSessionStorageArea()) return;
+  await chrome.storage.session.set(values);
+}
+
+/** Strict background-owned durable session write: never report success on a no-op. */
+export async function setSessionStorageValuesStrict(values: StorageValues): Promise<void> {
+  if (!hasSessionStorageArea()) throw new Error('chrome.storage.session is unavailable');
   await chrome.storage.session.set(values);
 }
 

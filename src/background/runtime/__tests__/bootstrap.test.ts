@@ -1,11 +1,11 @@
 import { getPerfSettingsSnapshot } from '../../../shared/perf';
 import { createIdleSession, type RecordingSessionSnapshot } from '../../../shared/recording';
-import { getSessionStorageValues } from '../../../platform/chrome/storage';
+import { getSessionStorageValuesStrict } from '../../../platform/chrome/storage';
 import { startKeepAlive } from '../KeepAlive';
 import { bootstrapBackground } from '../bootstrap';
 
 jest.mock('../../../platform/chrome/storage', () => ({
-  getSessionStorageValues: jest.fn(),
+  getSessionStorageValuesStrict: jest.fn(),
 }));
 jest.mock('../KeepAlive', () => ({
   startKeepAlive: jest.fn(),
@@ -18,7 +18,7 @@ jest.mock('../../../shared/perf', () => {
   };
 });
 
-const storageMock = getSessionStorageValues as jest.MockedFunction<typeof getSessionStorageValues>;
+const storageMock = getSessionStorageValuesStrict as jest.MockedFunction<typeof getSessionStorageValuesStrict>;
 const startKeepAliveMock = startKeepAlive as jest.MockedFunction<typeof startKeepAlive>;
 
 describe('bootstrapBackground', () => {
@@ -31,6 +31,7 @@ describe('bootstrapBackground', () => {
   let criticalWork: any;
   let startupRecovery: any;
   let markSessionHydrated: jest.Mock;
+  let resumePendingFinalization: jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -55,6 +56,7 @@ describe('bootstrapBackground', () => {
     };
     startupRecovery = { run: jest.fn().mockResolvedValue(undefined) };
     markSessionHydrated = jest.fn();
+    resumePendingFinalization = jest.fn().mockResolvedValue(null);
   });
 
   const run = () => bootstrapBackground({
@@ -65,6 +67,7 @@ describe('bootstrapBackground', () => {
     criticalWork,
     startupRecovery,
     markSessionHydrated,
+    resumePendingFinalization,
     logger,
   });
 
@@ -76,6 +79,7 @@ describe('bootstrapBackground', () => {
 
     expect(telemetry.initialize).toHaveBeenCalledWith(new Set([7]), new Set());
     expect(offscreen.ensureReady).toHaveBeenCalledTimes(1);
+    expect(resumePendingFinalization).toHaveBeenCalledTimes(1);
     expect(startKeepAliveMock).toHaveBeenCalledTimes(1);
     expect(criticalWork.confirmAnalysisWork).not.toHaveBeenCalled();
     expect(markSessionHydrated).toHaveBeenCalledTimes(1);
@@ -106,17 +110,13 @@ describe('bootstrapBackground', () => {
     expect(startupRecovery.run).toHaveBeenCalledTimes(1);
   });
 
-  it('marks hydration complete and performs recovery after a rehydration failure', async () => {
+  it('fails closed and does not release readiness after a session-storage failure', async () => {
     storageMock.mockRejectedValue(new Error('session storage unavailable'));
 
-    await run();
+    await expect(run()).rejects.toThrow('session storage unavailable');
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      'Session re-hydration failed (non-fatal):',
-      expect.any(Error),
-    );
-    expect(markSessionHydrated).toHaveBeenCalledTimes(1);
-    expect(startupRecovery.run).toHaveBeenCalledTimes(1);
+    expect(markSessionHydrated).not.toHaveBeenCalled();
+    expect(startupRecovery.run).not.toHaveBeenCalled();
   });
 
   it('hydrates perf settings before session observers can use them', async () => {

@@ -1,4 +1,4 @@
-import { isStoppablePhase, type RecordingInputDevice } from '../../shared/recording';
+import type { RecordingInputDevice } from '../../shared/recording';
 import type { CommandResult } from '../../shared/protocol';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
@@ -38,7 +38,7 @@ export class RecordingDeviceCommands {
 
   async setMicMuted(muted: boolean): Promise<CommandResult> {
     const snapshot = this.deps.session.getSnapshot();
-    if (!isStoppablePhase(snapshot.phase)) {
+    if (snapshot.phase !== 'recording') {
       return this.deps.result.fail('Mic mute requested but no recording is active');
     }
     const micMode = snapshot.runConfig?.micMode;
@@ -56,7 +56,7 @@ export class RecordingDeviceCommands {
 
   async setCameraMuted(muted: boolean): Promise<CommandResult> {
     const snapshot = this.deps.session.getSnapshot();
-    if (!isStoppablePhase(snapshot.phase)) {
+    if (snapshot.phase !== 'recording') {
       return this.deps.result.fail('Camera hide requested but no recording is active');
     }
     if (snapshot.runConfig?.recordSelfVideo !== true) {
@@ -118,7 +118,7 @@ export class RecordingDeviceCommands {
 
   async setPaused(paused: boolean): Promise<CommandResult> {
     const snapshot = this.deps.session.getSnapshot();
-    if (!isStoppablePhase(snapshot.phase)) {
+    if (snapshot.phase !== 'recording') {
       return this.deps.result.fail('Pause requested but no recording is active');
     }
 
@@ -130,7 +130,7 @@ export class RecordingDeviceCommands {
     );
     if (!result.ok || !paused || !snapshot.historyId) return result;
 
-    void this.deps.transcriptCapture?.flushAtBoundary(snapshot.historyId)
+    await this.deps.transcriptCapture?.flushAtBoundary(snapshot.historyId)
       .catch((error) => this.deps.L.warn(
         'Could not flush captions at the pause boundary:',
         error,
