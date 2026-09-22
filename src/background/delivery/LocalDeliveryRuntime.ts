@@ -70,8 +70,12 @@ export function registerSaveHandler(
       });
       L.warn('downloads.download error:', message);
       await broadcastToPopup({ type: 'RECORDING_SAVE_ERROR', filename: resolvedFilename, error: message });
-      if (historyId) void history?.localSaveSettled(historyId, stream, undefined, 'interrupted', message, kind)
-        .catch((historyError) => L.warn('Recording history update failed:', historyError));
+      if (historyId) {
+        const update = retainedKey
+          ? history?.localSaveSettled(historyId, stream, undefined, 'interrupted', message, kind, true)
+          : history?.localSaveSettled(historyId, stream, undefined, 'interrupted', message, kind);
+        void update?.catch((historyError) => L.warn('Recording history update failed:', historyError));
+      }
       // The download never started: free the in-memory URL but keep the OPFS
       // source so crash recovery can retry it on a later launch.
       offscreen.revokeBlobUrl(blobUrl);
@@ -84,8 +88,13 @@ export function registerSaveHandler(
     // OPFS source is deleted ONLY on confirmed completion; an interrupted (or
     // never-settling) download keeps it so crash recovery can reclaim it.
     const settled = downloadId != null ? await awaitDownloadSettled(downloadId) : 'timeout';
-    if (historyId) void history?.localSaveSettled(historyId, stream, downloadId, settled, undefined, kind)
-      .catch((historyError) => L.warn('Recording history update failed:', historyError));
+    if (historyId) {
+      const retryable = settled === 'interrupted' && Boolean(retainedKey);
+      const update = retryable
+        ? history?.localSaveSettled(historyId, stream, downloadId, settled, undefined, kind, true)
+        : history?.localSaveSettled(historyId, stream, downloadId, settled, undefined, kind);
+      void update?.catch((historyError) => L.warn('Recording history update failed:', historyError));
+    }
     if (settled === 'complete') {
       await broadcastToPopup({ type: 'RECORDING_SAVED', filename: resolvedFilename });
       // A retained artifact was promoted out of staging before delivery, so

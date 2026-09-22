@@ -73,6 +73,20 @@ describe('RecordingHistoryService artifact replicas', () => {
     });
   });
 
+  it('keeps an interrupted retained download pending and retryable', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending('r1', [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }], 'local');
+    await service.recordArtifactLocation('r1', 'r1:tab', { kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 1 });
+    await service.localSaveSettled('r1', 'tab', 7, 'interrupted', 'Download interrupted', undefined, true);
+
+    expect(await tabFile(repo)).toMatchObject({
+      status: 'pending',
+      error: 'Download interrupted',
+      delivery: { requested: 'local', status: 'pending', error: 'Download interrupted' },
+    });
+  });
+
   it('keeps an unsettled timed-out download pending and retryable', async () => {
     const repo = new MemoryRepository();
     const service = new RecordingHistoryService(repo, jest.fn(), () => 10);

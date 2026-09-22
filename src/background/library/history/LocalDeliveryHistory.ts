@@ -23,19 +23,27 @@ export class LocalDeliveryHistory {
     settled: DownloadSettledResult,
     error?: string,
     kind?: RecordingArtifactKind,
+    retryable = false,
   ): Promise<void> {
     await this.repository.update(historyId, (current) => {
       if (!current || current.deletedAt) return current;
-      if (settled === 'timeout') {
+      if (settled === 'timeout' || (settled === 'interrupted' && retryable)) {
         const files = current.files.map((file) => {
           if (file.stream !== stream || (file.kind ?? null) !== (kind ?? null)) return file;
+          const failure = settled === 'interrupted'
+            ? error ?? 'Download interrupted'
+            : error;
           return {
             ...file,
             destination: 'local' as const,
             ...(downloadId != null ? { downloadId } : {}),
             status: 'pending' as const,
-            error: undefined,
-            delivery: { requested: file.delivery.requested, status: 'pending' as const },
+            error: failure,
+            delivery: {
+              requested: file.delivery.requested,
+              status: 'pending' as const,
+              ...(failure ? { error: failure } : {}),
+            },
           };
         });
         return { ...current, files, status: summarizeHistoryFiles(files) };

@@ -66,7 +66,7 @@ describe('StartupRecovery', () => {
       dropArtifactLocation: jest.fn(),
       retryPendingCleanup: jest.fn().mockResolvedValue(true),
     };
-    localDelivery = { reconcileAbandoned: jest.fn().mockResolvedValue(undefined) };
+    localDelivery = { reconcileAbandoned: jest.fn().mockResolvedValue(true) };
     driveAuthLease = { reconcile: jest.fn().mockResolvedValue(0) };
     playbackLeases = { reconcile: jest.fn().mockResolvedValue(0) };
   });
@@ -140,6 +140,16 @@ describe('StartupRecovery', () => {
     expect(chrome.storage.session.set).not.toHaveBeenCalledWith({ retainedMediaReconciled: true });
   });
 
+  it('keeps startup reconciliation retryable while deferred local delivery still has pending work', async () => {
+    localDelivery.reconcileAbandoned.mockResolvedValue(false);
+
+    await run();
+
+    expect(driveAuthLease.reconcile).toHaveBeenCalledTimes(1);
+    expect(playbackLeases.reconcile).toHaveBeenCalledTimes(1);
+    expect(chrome.storage.session.set).not.toHaveBeenCalledWith({ retainedMediaReconciled: true });
+  });
+
   it('keeps startup reconciliation retryable while deleted history cleanup is incomplete', async () => {
     history.retryPendingCleanup.mockResolvedValue(false);
 
@@ -168,7 +178,7 @@ describe('StartupRecovery', () => {
       order.push('retained');
       return { healthy: 0, repaired: 0, collected: 0, deferred: 0, staleLocations: 0 };
     });
-    localDelivery.reconcileAbandoned.mockImplementation(async () => { order.push('delivery'); });
+    localDelivery.reconcileAbandoned.mockImplementation(async () => { order.push('delivery'); return true; });
     driveAuthLease.reconcile.mockImplementation(async () => { order.push('leases'); return 0; });
     (chrome.storage.session.set as jest.Mock).mockImplementation(async () => { order.push('marker'); });
 

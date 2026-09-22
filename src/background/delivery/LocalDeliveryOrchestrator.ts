@@ -89,14 +89,16 @@ export class LocalDeliveryOrchestrator {
     throw new Error(`Local delivery did not fully complete (${summary})`);
   }
 
-  async reconcileAbandoned(): Promise<void> {
+  async reconcileAbandoned(): Promise<boolean> {
     try {
       for (const pending of await this.listPending()) {
         const entry = await this.historyRepository.get(pending.id);
         if (entry) await this.deliverDeferred(entry);
       }
+      return (await this.listPending()).length === 0;
     } catch (error) {
       this.logger.warn('Reconciling deferred local deliveries failed:', error);
+      return false;
     }
   }
 

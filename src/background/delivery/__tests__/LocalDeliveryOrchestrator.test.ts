@@ -43,7 +43,7 @@ describe('LocalDeliveryOrchestrator', () => {
 
   it('reconciles only the local-delivery alarm', async () => {
     const orchestrator = create();
-    const reconcile = jest.spyOn(orchestrator, 'reconcileAbandoned').mockResolvedValue(undefined);
+    const reconcile = jest.spyOn(orchestrator, 'reconcileAbandoned').mockResolvedValue(true);
 
     orchestrator.handleAlarm({ name: 'other' });
     expect(reconcile).not.toHaveBeenCalled();
@@ -83,5 +83,29 @@ describe('LocalDeliveryOrchestrator', () => {
 
     await expect(orchestrator.deliver('r1', null)).resolves.toBeUndefined();
     expect(history.setLocalFolder).toHaveBeenCalledWith('r1', undefined);
+  });
+
+  it('reports startup reconciliation incomplete while retryable local delivery remains pending', async () => {
+    deliverDeferred.mockResolvedValue([{ status: 'not-started', error: 'offscreen unavailable' }]);
+    const get = jest.fn().mockResolvedValue({ id: 'r1', files: [], name: 'demo' });
+    const orchestrator = create({ get });
+    jest.spyOn(orchestrator, 'listPending')
+      .mockResolvedValueOnce([{ id: 'r1', name: 'demo' }])
+      .mockResolvedValueOnce([{ id: 'r1', name: 'demo' }]);
+
+    await expect(orchestrator.reconcileAbandoned()).resolves.toBe(false);
+    expect(deliverDeferred).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports startup reconciliation complete after pending delivery clears', async () => {
+    deliverDeferred.mockResolvedValue([{ status: 'complete', downloadId: 1 }]);
+    const get = jest.fn().mockResolvedValue({ id: 'r1', files: [], name: 'demo' });
+    const orchestrator = create({ get });
+    jest.spyOn(orchestrator, 'listPending')
+      .mockResolvedValueOnce([{ id: 'r1', name: 'demo' }])
+      .mockResolvedValueOnce([]);
+
+    await expect(orchestrator.reconcileAbandoned()).resolves.toBe(true);
+    expect(deliverDeferred).toHaveBeenCalledTimes(1);
   });
 });

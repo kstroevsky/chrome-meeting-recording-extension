@@ -81,7 +81,7 @@ export class StartupRecovery {
   private async reconcileDeferredDelivery(): Promise<boolean> {
     try {
       if (await hasLibraryDirectory(await navigator.storage.getDirectory())) {
-        await this.localDelivery.reconcileAbandoned();
+        return await this.localDelivery.reconcileAbandoned();
       }
       return true;
     } catch (error) {

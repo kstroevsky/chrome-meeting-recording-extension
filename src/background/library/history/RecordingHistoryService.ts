@@ -133,6 +133,7 @@ export class RecordingHistoryService {
     settled: DownloadSettledResult,
     error?: string,
     kind?: RecordingArtifactKind,
+    retryable = false,
   ): Promise<void> {
     await this.localDelivery.localSaveSettled(
       historyId,
@@ -141,6 +142,7 @@ export class RecordingHistoryService {
       settled,
       error,
       kind,
+      retryable,
     );
   }
 
