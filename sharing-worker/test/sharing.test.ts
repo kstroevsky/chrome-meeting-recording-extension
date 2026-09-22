@@ -108,6 +108,79 @@ describe('sharing worker vertical slice', () => {
     expect(await response.json()).toEqual(expect.objectContaining({ code: 'SHARE_ID_CONFLICT' }));
   });
 
+  it('stores only the canonical public manifest shape', async () => {
+    const canonical = {
+      ...manifest,
+      recordings: [{
+        ...manifest.recordings[0],
+        durationMs: 42_000,
+        transcript: {
+          source: 'meet-captions' as const,
+          segments: [{ tStartMs: 1_000, tEndMs: 2_000, speaker: 'A', text: 'Hello' }],
+        },
+        topics: [{
+          id: 'topic-1',
+          keywords: ['hello'],
+          spans: [{ tStartMs: 1_000, tEndMs: 2_000 }],
+          totalMs: 1_000,
+          importance: 0.8,
+        }],
+        notations: [{ id: 'note-1', tStartMs: 1_500, tEndMs: 1_750, endedBy: 'user' as const, text: 'Check this' }],
+      }],
+    };
+    const untrusted = structuredClone(canonical) as typeof canonical & { privateSourceId?: string };
+    untrusted.privateSourceId = 'history-private-123';
+    Object.assign(untrusted.recordings[0], { driveFileId: 'drive-secret' });
+    Object.assign(untrusted.recordings[0].tracks[0], {
+      opfsKey: 'library/history-private-123/customer-name.webm',
+    });
+    Object.assign(untrusted.recordings[0].transcript.segments[0], { sourceFileId: 'drive-transcript-secret' });
+    Object.assign(untrusted.recordings[0].topics[0].spans[0], { privateEmbeddingId: 'embedding-secret' });
+    Object.assign(untrusted.recordings[0].notations[0], { ownerRecordingId: 'history-private-note' });
+
+    const response = await ownerFetch('/api/shares/share-owner-id', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(untrusted),
+    });
+    expect(response.status).toBe(201);
+
+    const stored = await env.SHARING_DB.prepare(
+      'SELECT manifest_json FROM shares WHERE id = ?',
+    ).bind('share-owner-id').first<{ manifest_json: string }>();
+    expect(JSON.parse(stored!.manifest_json)).toEqual(canonical);
+    expect(stored!.manifest_json).not.toMatch(/history-private|drive-.*secret|library\/|embedding-secret/);
+  });
+
+  it('treats equivalent manifests with different JSON property order as the same snapshot', async () => {
+    expect((await putManifest()).status).toBe(201);
+    const reordered = {
+      recordings: manifest.recordings.map((recording) => ({
+        downloadsEnabled: recording.downloadsEnabled,
+        tracks: recording.tracks.map((track) => ({
+          mediaEndpoint: track.mediaEndpoint,
+          captureStartOffsetMs: track.captureStartOffsetMs,
+          bytes: track.bytes,
+          mimeType: track.mimeType,
+          stream: track.stream,
+          id: track.id,
+        })),
+        createdAt: recording.createdAt,
+        title: recording.title,
+        id: recording.id,
+      })),
+      createdAt: manifest.createdAt,
+      id: manifest.id,
+    };
+
+    const response = await ownerFetch('/api/shares/share-owner-id', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reordered),
+    });
+    expect(response.status).toBe(200);
+  });
+
   it('returns UPLOAD_SESSION_GONE and permits a fresh multipart session', async () => {
     await putManifest();
     const first = await beginTrack();
