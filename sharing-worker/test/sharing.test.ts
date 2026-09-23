@@ -205,6 +205,9 @@ describe('sharing worker vertical slice', () => {
       .bind('share-owner-id').first()).toBeNull();
     expect(await env.SHARING_DB.prepare('SELECT id FROM share_uploads WHERE share_id = ?')
       .bind('share-owner-id').first()).toBeNull();
+
+    expect((await ownerFetch('/api/shares/share-owner-id', { method: 'DELETE' })).status).toBe(204);
+    expect((await ownerFetchAs('owner-b-token', '/api/shares/share-owner-id', { method: 'DELETE' })).status).toBe(204);
   });
 
   it('serves a real session-protected synchronized web player', async () => {

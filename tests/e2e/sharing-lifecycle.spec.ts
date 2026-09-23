@@ -164,12 +164,15 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       expect((await worker.state()).objects.length).toBeGreaterThan(0);
 
       // Permanent delete is a distinct destructive operation and removes both
-      // server registry metadata and R2 objects belonging to this share.
+      // server registry metadata and R2 objects belonging to this share. Lose
+      // the first successful response to prove the retry is idempotent end to end.
+      await worker.faults({ dropNextDeleteResponse: true });
       afterRestartPage.once('dialog', (dialog) => void dialog.accept());
       await managedFirst.getByRole('button', { name: 'Delete published data' }).click();
       await expect.poll(async () => (await worker!.state()).shares.some((share) => share.id === firstState.shares[0].id))
         .toBe(false);
       await expect(afterRestartPage.locator(`[data-share-id="${firstState.shares[0].id}"]`)).toHaveCount(0);
+      expect((await worker.state()).counters.droppedDeleteResponses).toBe(1);
     } finally {
       await cleanBrowser?.close().catch(() => {});
       await worker?.stop().catch(() => {});

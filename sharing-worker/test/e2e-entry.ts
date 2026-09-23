@@ -3,6 +3,7 @@ import worker from '../src/index';
 type Faults = {
   delayNextChunkMs: number;
   dropNextChunkResponse: boolean;
+  dropNextDeleteResponse: boolean;
   expireNextUpload: boolean;
   ownerUnauthorizedOnce: boolean;
 };
@@ -10,6 +11,7 @@ type Faults = {
 const faults: Faults = {
   delayNextChunkMs: 0,
   dropNextChunkResponse: false,
+  dropNextDeleteResponse: false,
   expireNextUpload: false,
   ownerUnauthorizedOnce: false,
 };
@@ -20,6 +22,7 @@ const counters = {
   chunkCommits: 0,
   expiredUploads: 0,
   droppedChunkResponses: 0,
+  droppedDeleteResponses: 0,
 };
 
 export default {
@@ -74,6 +77,15 @@ export default {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
+    const deleteShare = /^\/api\/shares\/[^/]+$/.test(url.pathname) && request.method === 'DELETE';
+    if (deleteShare && response.ok && faults.dropNextDeleteResponse) {
+      faults.dropNextDeleteResponse = false;
+      counters.droppedDeleteResponses += 1;
+      return new Response(JSON.stringify({ code: 'E2E_LOST_RESPONSE' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     return response;
   },
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
@@ -86,6 +98,7 @@ async function configureFaults(request: Request): Promise<Response> {
   if (!body) return new Response('invalid fault config', { status: 400 });
   if (body.delayNextChunkMs != null) faults.delayNextChunkMs = Math.max(0, Math.min(30_000, Math.floor(body.delayNextChunkMs)));
   if (body.dropNextChunkResponse != null) faults.dropNextChunkResponse = body.dropNextChunkResponse === true;
+  if (body.dropNextDeleteResponse != null) faults.dropNextDeleteResponse = body.dropNextDeleteResponse === true;
   if (body.expireNextUpload != null) faults.expireNextUpload = body.expireNextUpload === true;
   if (body.ownerUnauthorizedOnce != null) faults.ownerUnauthorizedOnce = body.ownerUnauthorizedOnce === true;
   return Response.json({ ...faults });

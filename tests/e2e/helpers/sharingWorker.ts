@@ -18,6 +18,7 @@ export type SharingWorkerState = {
     chunkCommits: number;
     expiredUploads: number;
     droppedChunkResponses: number;
+    droppedDeleteResponses: number;
   };
   shares: Array<{ id: string; owner_id: string; status: string; manifest: any }>;
   uploads: Array<{ id: string; share_id: string; status: string; offset: number; bytes: number }>;

@@ -223,7 +223,7 @@ async function revokeShare(shareId: string, env: Env, ownerId: string): Promise<
 
 async function deleteShare(shareId: string, env: Env, ownerId: string): Promise<Response> {
   let share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
-  if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
+  if (!share) return new Response(null, { status: 204 });
   if (share.status !== 'revoked') {
     await revokeShare(shareId, env, ownerId);
     share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);

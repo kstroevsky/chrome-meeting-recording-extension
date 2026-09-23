@@ -155,10 +155,20 @@ export class ShareServiceClient implements SharePublicationApi, ShareUploadTrans
   }
 
   async deleteShare(shareId: string): Promise<void> {
-    await this.request(`/api/shares/${segment(shareId)}`, {
-      method: 'DELETE',
-      statuses: [200, 204],
-    });
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.request(`/api/shares/${segment(shareId)}`, {
+          method: 'DELETE',
+          statuses: [200, 204],
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt > 0 || !isRetryableDeleteFailure(error)) throw error;
+      }
+    }
+    throw lastError;
   }
 
   async listShares(): Promise<RemoteShareSummary[]> {
@@ -380,6 +390,10 @@ function isRemoteShareStatus(value: unknown): value is RemoteShareStatus {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isRetryableDeleteFailure(error: unknown): boolean {
+  return !(error instanceof ShareServiceRequestError) || error.status >= 500;
 }
 
 function responseErrorCode(detail: string): string | undefined {
