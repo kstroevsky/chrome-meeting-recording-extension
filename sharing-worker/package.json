@@ -19,7 +19,7 @@
     "@cloudflare/vitest-plugin": "1.2.1",
     "esbuild": "0.28.1",
     "typescript": "5.9.2",
-    "vitest": "4.1.10",
+    "vitest": "4.1.11",
     "wrangler": "4.136.1"
   }
 }
