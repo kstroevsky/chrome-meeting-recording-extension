@@ -124,7 +124,9 @@ Firefox and Safari are not part of the MVP support contract yet. Expanding the m
 
 ## CI contract
 
-The existing `.github/workflows/ci.yml` contains a dedicated sharing gate. Ready PRs, merge queues, and `main` pushes run:
+The existing `.github/workflows/ci.yml` contains a dedicated sharing validation domain. Pull requests are classified from the whole PR diff, while successful validation is reused only when the current merged tree produces the exact same content fingerprint for that domain. Draft status does not change coverage. `main` pushes ignore validation-result reuse and run every domain.
+
+On a sharing-domain cache miss, CI runs:
 
 - Worker/viewer typecheck;
 - Worker tests;
@@ -133,7 +135,7 @@ The existing `.github/workflows/ci.yml` contains a dedicated sharing gate. Ready
 - a real mock-extension build wired to the local Worker;
 - the sharing lifecycle E2E, including OPFS, Drive Range reads, page closure, full Chrome restart, upload-response loss, expired multipart recovery, session renewal, viewer playback, revoke, and permanent deletion.
 
-Draft PRs run this gate only when sharing-related files change. The generic mock E2E job excludes `@sharing-e2e` so the sharing slice runs once with its required Worker environment.
+Sharing-internal changes can run this domain without the full core mock E2E suite; shared extension boundaries invalidate both domains. The generic mock E2E job excludes `@sharing-e2e` so the sharing slice runs once with its required Worker environment. The required aggregate result is `ci-gate`, which accepts a domain only when it either succeeds on the current run or has an exact successful fingerprint hit.
 
 ## Manual MVP acceptance
 
