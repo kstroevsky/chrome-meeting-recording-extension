@@ -21,6 +21,8 @@ import { formatBytes } from '../../shared/format';
 import type { RecordingNameDialog, RecordingNameDialogOptions } from '../RecordingNameDialog';
 import { sendToBackground } from '../../shared/messages';
 import type { DriveFolderPreset } from '../../shared/settings';
+import { DEFAULT_DRIVE_ROOT_FOLDER_NAME, DRIVE_DEFAULT_DESTINATION_NAME } from '../../shared/settings';
+import { suffixedRecordingName } from '../../shared/recordingNames';
 import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
 
 export type CompletedNamingActions = {
@@ -29,6 +31,12 @@ export type CompletedNamingActions = {
   rename: (historyId: string, name: string) => Promise<unknown>;
   /** Destinations offered in the prompt; empty until settings load, or when none exist. */
   destinations: () => DriveFolderPreset[];
+  /** The Drive folder they all live in, so the prompt can say where a recording went. */
+  driveRootFolder: () => string;
+  /** Adds a folder from the dialog (7A); null when the name was refused. */
+  createDestination: (name: string) => Promise<DriveFolderPreset | null>;
+  /** Names already in the library, so the prompt can say a name is taken (7C). */
+  recordingNames: () => readonly string[];
   /** Files the recording's Drive folder into the chosen destination. */
   fileTo: (historyId: string, presetId: string) => Promise<unknown>;
   /** Local folders offered to a recording that has not been written yet. */
@@ -81,6 +89,7 @@ export class CompletedNamingPrompt {
     try {
       // The local prompt really is the save (9L): the name becomes the file.
       const outcome = await this.dialog.ask({
+        duplicateOf: (name) => suffixedRecordingName(name, this.actions.recordingNames()),
         title: 'Save recording',
         message: presets.length ? '' : 'Saved to Downloads',
         initialValue: next.name,
@@ -110,7 +119,7 @@ export class CompletedNamingPrompt {
   }
 
   private driveOptions(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
-    return driveNamingOptions(job, presets, async (name, destinationId) => {
+    return driveNamingOptions(job, presets, this.actions.driveRootFolder(), (name) => this.actions.createDestination(name), async (name, destinationId) => {
       // Rename first: filing moves the folder this rename just retitled,
       // and a failed move must not cost the user the name they typed.
       await this.actions.rename(job.historyId!, name);
@@ -132,7 +141,10 @@ export class CompletedNamingPrompt {
     this.actions.reveal(job.id);
     const presets = this.actions.destinations();
     try {
-      const outcome = await this.dialog.ask(this.driveOptions(job, presets));
+      const outcome = await this.dialog.ask({
+        ...this.driveOptions(job, presets),
+        duplicateOf: (name) => suffixedRecordingName(name, this.actions.recordingNames()),
+      });
       if (outcome === 'canceled') {
         // Skipping is recorded, so this recording is not asked about again.
         const response = await sendToBackground({ type: 'SKIP_RECORDING_NAMING', jobId: job.id });
@@ -150,13 +162,24 @@ export class CompletedNamingPrompt {
 }
 
 /** A title for the gallery: the Drive prompt with its real copy, and no writes. */
-export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
-  return driveNamingOptions(job, presets, async () => {});
+export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[], pickedId: string | null = null): RecordingNameDialogOptions {
+  // The create row is part of what there is to look at (7A), so the story keeps
+  // it — it just mints a folder that lives as long as the story does.
+  const options = driveNamingOptions(
+    job,
+    presets,
+    DEFAULT_DRIVE_ROOT_FOLDER_NAME,
+    async (name) => ({ id: `preview-${name}`, name }),
+    async () => {},
+  );
+  return options.destinations ? { ...options, destinations: { ...options.destinations, initialId: pickedId } } : options;
 }
 
 function driveNamingOptions(
   job: UploadJob,
   presets: DriveFolderPreset[],
+  rootFolderName: string,
+  onCreate: ((name: string) => Promise<DriveFolderPreset | null>) | undefined,
   onSave: RecordingNameDialogOptions['onSave'],
 ): RecordingNameDialogOptions {
   const media = (job.files ?? []).filter((file) => file.kind !== 'notes');
@@ -164,7 +187,7 @@ function driveNamingOptions(
   return {
     title: 'Name this recording',
     // Without folders to choose from, the hint says where it already is (9L).
-    message: presets.length ? '' : 'Saved to Drive > Google Meet Records',
+    message: presets.length ? '' : `Saved to Drive > ${rootFolderName} > ${DRIVE_DEFAULT_DESTINATION_NAME}`,
     summary: media.length
       ? [`${media.length} ${media.length === 1 ? 'FILE' : 'FILES'}`, ...(bytes ? [formatBytes(bytes).toUpperCase()] : [])].join(' · ')
       : undefined,
@@ -172,7 +195,7 @@ function driveNamingOptions(
     saveLabel: 'Save name',
     cancelLabel: 'Keep the default name',
     destinations: presets.length
-      ? { presets, unfiledLabel: 'Google Meet Records', initialId: null }
+      ? { presets, unfiledLabel: DRIVE_DEFAULT_DESTINATION_NAME, initialId: null, ...(onCreate ? { onCreate } : {}) }
       : undefined,
     onSave,
   };

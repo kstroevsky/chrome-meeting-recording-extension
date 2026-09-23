@@ -1,4 +1,5 @@
 import { TIMEOUTS } from '../src/shared/timeouts';
+import { DEFAULT_DRIVE_ROOT_FOLDER_NAME } from '../src/shared/settings';
 import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY } from '../src/shared/perf';
 
 describe('background runtime messages', () => {
@@ -429,7 +430,8 @@ describe('background runtime messages', () => {
     await untilCalled(offscreenInstance.rpc);
 
     expect(offscreenInstance.ensureReady).toHaveBeenCalled();
-    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+    expect(offscreenInstance.rpc)
+      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
   });
 
   it('stops the active recording when the recorded tab navigates away from the meeting', async () => {
@@ -470,7 +472,8 @@ describe('background runtime messages', () => {
     updatedListener(42, { url: 'https://example.com/' }, { id: 42 });
     await untilCalled(offscreenInstance.rpc);
 
-    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+    expect(offscreenInstance.rpc)
+      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
   });
 
   it('ignores meeting-ended messages from a different meeting', async () => {
@@ -556,7 +559,8 @@ describe('background runtime messages', () => {
     });
 
     expect(response).toEqual({ ok: true, stopped: true, reason: 'meeting ended: post-call state detected' });
-    expect(offscreenInstance.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP' });
+    expect(offscreenInstance.rpc)
+      .toHaveBeenCalledWith({ type: 'OFFSCREEN_STOP', driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME });
   });
 
   /** Waits for a mock to be called, letting queued microtasks and IDB reads settle. */

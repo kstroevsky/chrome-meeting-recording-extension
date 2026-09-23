@@ -15,6 +15,7 @@ import {
   MAX_LOCAL_FOLDER_NAME_LENGTH,
   MAX_DRIVE_FOLDER_PRESETS,
   LEGACY_CAMERA_FORMAT_TO_PRESET,
+  LEGACY_DRIVE_ROOT_FOLDER_NAME,
   LEGACY_VIDEO_FORMAT_OPTIONS,
   MICROPHONE_RECORDING_FORMAT_OPTIONS,
   MICROPHONE_MODE_OPTIONS,
@@ -28,6 +29,7 @@ import {
 import {
   validateChunkingSettings,
   validateDriveFolderPresets,
+  validateDriveRootFolderName,
   validateLocalFolderPresets,
   validateMicrophoneSettings,
   validateSelfVideoProfile,
@@ -238,7 +240,19 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
     maxPresets: MAX_LOCAL_FOLDER_PRESETS,
     maxNameLength: MAX_LOCAL_FOLDER_NAME_LENGTH,
   });
-  const storage: ExtensionSettings['storage'] = { driveFolderPresets, localFolderPresets };
+  // Reaching here at all means settings were stored before, so an absent root
+  // folder name is an installation that predates the setting — and its
+  // recordings are in the folder the old constant named. A fresh install never
+  // gets this far; it took the DEFAULT_EXTENSION_SETTINGS path above.
+  const storage: ExtensionSettings['storage'] = {
+    driveRootFolderName: validateDriveRootFolderName(
+      storageCandidate.driveRootFolderName,
+      LEGACY_DRIVE_ROOT_FOLDER_NAME,
+      MAX_DRIVE_FOLDER_NAME_LENGTH,
+    ),
+    driveFolderPresets,
+    localFolderPresets,
+  };
 
   return { privacy, appearance, basic, storage, professional };
 }

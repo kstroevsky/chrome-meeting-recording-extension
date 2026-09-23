@@ -129,6 +129,23 @@ describe('OffscreenController', () => {
       expect(controller.currentPhase()).toBe('idle');
     });
 
+    it('delivers the notes and the transcript ahead of the media (ADR-0005, ADR-0007)', async () => {
+      const { controller } = makeController();
+      // Named after the media file, so the fixture carries a filename.
+      const media = { stream: 'tab', artifact: { filename: 'weekly-sync-recording.webm', file: new Blob(['x']) } } as never;
+      const { finalize } = attach(controller, { artifacts: [media] });
+      controller.onStartRequested({ storageMode: 'local', micMode: 'off', recordSelfVideo: false }, 'local', 7, 'history-sidecars');
+
+      await controller.finalize({ notes: { vtt: 'WEBVTT\n\nnotes' }, transcript: { vtt: 'WEBVTT\n\nlines' } });
+
+      const delivered = finalize.mock.calls[0][0].artifacts;
+      expect(delivered.map((entry: { kind?: string }) => entry.kind)).toEqual(['notes', 'transcript', undefined]);
+      expect(delivered.slice(0, 2).map((entry: { artifact: { filename: string; mimeType: string } }) => [entry.artifact.filename, entry.artifact.mimeType])).toEqual([
+        ['weekly-sync-notes.vtt', 'text/vtt'],
+        ['weekly-sync-transcript.vtt', 'text/vtt'],
+      ]);
+    });
+
     it('does not signal uploading for a Drive run that produced no artifacts', async () => {
       const { controller, postMessage } = makeController();
       attach(controller, { artifacts: [] });

@@ -18,7 +18,7 @@ import {
   VALID_STORAGE_MODES,
   VALID_TAB_CONTENT_TYPES,
 } from './recordingConstants';
-import { MAX_RECORDED_SPANS } from './recordingTypes';
+import { isArtifactKind, MAX_RECORDED_SPANS } from './recordingTypes';
 import type {
   CapturedTabResolution,
   RecordedSpan,
@@ -175,7 +175,7 @@ function parseUploadJobFile(value: unknown): UploadJobFile | null {
   return {
     stream: stream as RecordingStream,
     // Absent for media; `notes` marks the WebVTT sidecar (ADR-0005).
-    ...(value.kind === 'notes' ? { kind: 'notes' as const } : {}),
+    ...(isArtifactKind(value.kind) ? { kind: value.kind } : {}),
     filename,
     status: status as UploadJobFile['status'],
     bytes,

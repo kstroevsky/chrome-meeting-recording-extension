@@ -106,11 +106,18 @@ export type RecordingNamingStatus = 'pending' | 'named' | 'skipped';
 /** Per-stream file outcome shown in an upload job's detail view. */
 /**
  * What an uploaded artifact *is*, orthogonal to which stream produced it. Absent
- * means media; `notes` is the WebVTT sidecar, which is delivered before the
- * media so a reader has the notes even while the video is still uploading
- * (ADR-0005).
+ * means media; `notes` and `transcript` are the WebVTT sidecars, delivered
+ * before the media so a reader has both while the video is still uploading
+ * (ADR-0005, ADR-0007).
  */
-export type RecordingArtifactKind = 'notes';
+export type RecordingArtifactKind = 'notes' | 'transcript';
+
+const ARTIFACT_KINDS: readonly string[] = ['notes', 'transcript'];
+
+/** True for a stored `kind`; anything else is media, whatever it claims. */
+export function isArtifactKind(value: unknown): value is RecordingArtifactKind {
+  return typeof value === 'string' && ARTIFACT_KINDS.includes(value);
+}
 
 export type UploadJobFile = {
   stream: RecordingStream;

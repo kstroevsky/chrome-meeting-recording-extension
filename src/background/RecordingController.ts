@@ -19,7 +19,8 @@ import {
   getTab,
 } from '../platform/chrome/tabs';
 import { isE2ERealCaptureTabBuild } from '../shared/build';
-import { loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
+import { loadExtensionSettingsFromStorage, loadRecorderRuntimeSettingsSnapshot } from '../shared/settings';
+import { markCaptureStarted } from './unsavedCaptureFlag';
 import type { RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { getPerfSettingsSnapshot } from '../shared/perf';
 import { type CommandResult, type NotationResult } from '../shared/protocol';
@@ -32,6 +33,7 @@ import type { RecordingTranscriptCapture } from './RecordingTranscriptCapture';
 import type { TelemetryRuntime } from './TelemetryRuntime';
 import { createTelemetryId } from '../shared/telemetry';
 import { hasExportableNotations, toWebVtt } from '../shared/notationExport';
+import { hasExportableTranscript, transcriptToWebVtt } from '../shared/transcriptExport';
 
 export type RecordingControllerDeps = {
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
@@ -159,6 +161,9 @@ export class RecordingController {
         // Fencing token (ADR-0003): the offscreen echoes this in OFFSCREEN_STATE.
         epoch: started.epoch ?? 0,
       } as const;
+      // Before the RPC, not after: if the worker dies between the two, the
+      // capture may already be writing bytes, and an unset flag would hide them.
+      await markCaptureStarted();
       const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>(startRequest);
       await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);
 
@@ -211,12 +216,16 @@ export class RecordingController {
         .catch((error) => this.L.warn('Could not flush captions at the stop boundary:', error));
     }
     const notesSidecar = await this.buildNotesSidecar(historyId);
+    const transcriptSidecar = await this.buildTranscriptSidecar(historyId);
+    const driveRootFolderName = await this.driveRootFolderName();
 
     try {
       await this.offscreen.ensureReady();
       const r = await this.offscreen.rpc<{ ok: boolean; error?: string }>({
         type: 'OFFSCREEN_STOP',
         ...(notesSidecar ? { notesSidecar } : {}),
+        ...(transcriptSidecar ? { transcriptSidecar } : {}),
+        ...(driveRootFolderName ? { driveRootFolderName } : {}),
       });
       if (!r?.ok) {
         this.session.fail(r?.error || 'Stop failed in offscreen');
@@ -439,6 +448,41 @@ export class RecordingController {
       return { vtt: toWebVtt(notations, { durationMs: this.session.runDurationMs(historyId) }) };
     } catch (error) {
       this.L.warn('Could not export notes for this recording:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * The run's transcript as a WebVTT sidecar, rendered here because the
+   * background owns the transcript (ADR-0007) and the offscreen owns delivery.
+   * Read after the caption flush above, so it holds the whole run.
+   *
+   * Best-effort, as the notes sidecar is: a recording must still save when its
+   * transcript cannot be read.
+   */
+  private async buildTranscriptSidecar(historyId: string | undefined): Promise<{ vtt: string } | undefined> {
+    if (!historyId || !this.transcripts) return undefined;
+    try {
+      const transcript = await this.transcripts.get(historyId);
+      if (!transcript || !hasExportableTranscript(transcript)) return undefined;
+      return { vtt: transcriptToWebVtt(transcript) };
+    } catch (error) {
+      this.L.warn('Could not export the transcript for this recording:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * The folder the user's recordings live under. Read here because the
+   * offscreen document cannot: its `chrome` object is runtime-only. Best-effort
+   * — a settings read that fails should cost the upload its folder name, not
+   * the recording, and the offscreen falls back to the legacy name.
+   */
+  private async driveRootFolderName(): Promise<string | undefined> {
+    try {
+      return (await loadExtensionSettingsFromStorage()).storage.driveRootFolderName;
+    } catch (error) {
+      this.L.warn('Could not read the Drive folder name for this recording:', error);
       return undefined;
     }
   }

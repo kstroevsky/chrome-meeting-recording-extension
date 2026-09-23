@@ -65,7 +65,7 @@ describe('RecordingController', () => {
       endOpen: jest.fn(async (_id: string, id: string, tEndMs: number) => ({ id, tStartMs: 0, tEndMs, text: '' })),
       removeAll: jest.fn().mockResolvedValue(undefined),
     };
-    transcripts = { removeAll: jest.fn().mockResolvedValue(undefined) };
+    transcripts = { removeAll: jest.fn().mockResolvedValue(undefined), get: jest.fn().mockResolvedValue(undefined) };
     transcriptCapture = { flushAtBoundary: jest.fn().mockResolvedValue(undefined) };
     const L = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     controller = new RecordingController({
@@ -449,6 +449,34 @@ describe('RecordingController', () => {
     it('stops without a sidecar when the run has no notes', async () => {
       record();
       notations.list.mockResolvedValueOnce([]);
+
+      await controller.stop('popup stop button');
+
+      const stopCall = offscreen.rpc.mock.calls.find(([msg]) => msg.type === 'OFFSCREEN_STOP')?.[0];
+      expect(stopCall).toEqual({ type: 'OFFSCREEN_STOP' });
+    });
+
+    it('exports the run\u2019s transcript with the stop too (ADR-0007)', async () => {
+      const historyId = record();
+      notations.list.mockResolvedValueOnce([]);
+      transcripts.get.mockResolvedValueOnce({
+        source: 'meet-captions',
+        segments: [{ tStartMs: 48_000, tEndMs: 52_500, speaker: 'Maria', text: 'Q3 target moved.' }],
+      });
+
+      await controller.stop('popup stop button');
+
+      expect(transcripts.get).toHaveBeenCalledWith(historyId);
+      const stopCall = offscreen.rpc.mock.calls.find(([msg]) => msg.type === 'OFFSCREEN_STOP')?.[0];
+      expect(stopCall.transcriptSidecar.vtt).toContain('WEBVTT');
+      expect(stopCall.transcriptSidecar.vtt).toContain('00:00:48.000 --> 00:00:52.500');
+      expect(stopCall.transcriptSidecar.vtt).toContain('<v Maria>Q3 target moved.');
+    });
+
+    it('still stops when the transcript cannot be read', async () => {
+      record();
+      notations.list.mockResolvedValueOnce([]);
+      transcripts.get.mockRejectedValueOnce(new Error('IndexedDB is unavailable'));
 
       await controller.stop('popup stop button');
 

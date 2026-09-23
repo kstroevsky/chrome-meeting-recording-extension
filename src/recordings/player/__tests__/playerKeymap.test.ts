@@ -23,6 +23,13 @@ describe('resolvePlayerAction', () => {
     expect(resolvePlayerAction({ key: 'm' })).toEqual({ kind: 'mute' });
     expect(resolvePlayerAction({ key: 'F' })).toEqual({ kind: 'fullscreen' });
     expect(resolvePlayerAction({ key: 'c' })).toEqual({ kind: 'subtitles' });
+    expect(resolvePlayerAction({ key: 'R' })).toEqual({ kind: 'rename' });
+  });
+
+  it('sends / to the rail search, but not from inside a field (f19)', () => {
+    expect(resolvePlayerAction({ key: '/' })).toEqual({ kind: 'search' });
+    expect(resolvePlayerAction({ key: '/' }, { inField: true })).toBeNull();
+    expect(resolvePlayerAction({ key: 'r' }, { inField: true })).toBeNull();
   });
 
   it('walks notes forward, and backward with shift', () => {
@@ -137,9 +144,13 @@ describe('KEYBOARD_HELP', () => {
 });
 
 describe('topic navigation (ADR-0007)', () => {
-  it('walks topics with T, and backwards with shift', () => {
-    expect(resolvePlayerAction({ key: 't' })).toEqual({ kind: 'topic', direction: 1 });
-    expect(resolvePlayerAction({ key: 'T', shiftKey: true })).toEqual({ kind: 'topic', direction: -1 });
+  it('walks topics with G, and backwards with shift', () => {
+    expect(resolvePlayerAction({ key: 'g' })).toEqual({ kind: 'topic', direction: 1 });
+    expect(resolvePlayerAction({ key: 'G', shiftKey: true })).toEqual({ kind: 'topic', direction: -1 });
+  });
+
+  it('gives T to the transcript itself, as the map says (f19)', () => {
+    expect(resolvePlayerAction({ key: 't' })).toEqual({ kind: 'transcript' });
   });
 
   it('never fires while a field has focus', () => {
@@ -153,6 +164,7 @@ describe('topic navigation (ADR-0007)', () => {
   });
 
   it('is described in the map the ? overlay renders', () => {
-    expect(KEYBOARD_HELP.some((row) => row.keys === 'T / ⇧T')).toBe(true);
+    expect(KEYBOARD_HELP.some((row) => row.keys === 'G / ⇧G')).toBe(true);
+    expect(KEYBOARD_HELP.some((row) => row.keys === 'T')).toBe(true);
   });
 });

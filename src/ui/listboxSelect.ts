@@ -29,6 +29,32 @@
 
 export type ListboxOption = { value: string; label: string };
 
+/**
+ * A search row at the top of a long list (design 7D: "the picker gains search
+ * past ~8 folders"), with a count of what it kept once something is typed.
+ */
+export type ListboxSearch = {
+  /** Offered only when there are more options than this. */
+  minOptions: number;
+  placeholder: string;
+  /** Plural noun for the count line: `4 OF 26 FOLDERS`. */
+  noun: string;
+};
+
+/**
+ * An opt-in last row that makes a new option instead of choosing one (design
+ * 7A). Deliberately not a `role="option"`: it is an action, not a choice, so
+ * the search row never filters it away and choosing by keyboard never lands on
+ * it by accident.
+ */
+export type ListboxCreate = {
+  /** The row's own label, e.g. `New folder…`. */
+  label: string;
+  placeholder: string;
+  /** Returns the option to add and select, or null when the name was refused. */
+  onCreate: (name: string) => Promise<ListboxOption | null>;
+};
+
 export type ListboxSelectConfig = {
   /** Accessible name for the trigger and the listbox alike. */
   label: string;
@@ -37,6 +63,10 @@ export type ListboxSelectConfig = {
   value?: string;
   /** Extra class on the wrapper, so a page can scope its own skin. */
   className?: string;
+  /** Opt-in search row for a long list; see {@link ListboxSearch}. */
+  search?: ListboxSearch;
+  /** Opt-in row that creates a new option; see {@link ListboxCreate}. */
+  create?: ListboxCreate;
   onChange: (value: string) => void;
   doc?: Document;
 };
@@ -54,6 +84,8 @@ export type BindListboxConfig = {
   onChange?: (value: string) => void;
   /** Runs on every sync, for a trigger that shows more than a label. */
   onSync?: (elements: { select: HTMLSelectElement; trigger: HTMLButtonElement; list: HTMLElement }) => void;
+  /** Runs as the list opens; an element it returns takes focus instead of the selected option. */
+  onOpen?: () => HTMLElement | null;
 };
 
 export type ListboxBinding = {
@@ -69,7 +101,19 @@ export type ListboxBinding = {
 };
 
 /** A binding that also owns the markup, so `destroy` takes the DOM with it. */
-export type ListboxSelect = ListboxBinding & { readonly root: HTMLElement };
+export type ListboxSelect = ListboxBinding & {
+  readonly root: HTMLElement;
+  /** Shows or hides the create row; a caller that cannot create hides it. */
+  setCreateEnabled(enabled: boolean): void;
+};
+
+const SEARCH_SVG =
+  '<svg class="select-search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<circle cx="7" cy="7" r="4.2" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2L13.5 13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
+const PLUS_SVG =
+  '<svg class="select-create-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M8 3.4v9.2M3.4 8h9.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
 
 const CHECK_SVG =
   '<svg class="select-check" width="12" height="10" viewBox="0 0 14 11" fill="none" aria-hidden="true">' +
@@ -111,13 +155,185 @@ export function createListboxSelect(config: ListboxSelectConfig): ListboxSelect 
 
   root.append(select, trigger, list);
 
-  const binding = bindListbox({ select, trigger, list, doc }, { onChange: config.onChange });
-  binding.setOptions(config.options, config.value);
+  const search = config.search ? createSearch(doc, list, root, config.search) : null;
+  const binding = bindListbox({ select, trigger, list, doc }, {
+    onChange: config.onChange,
+    ...(search ? { onOpen: () => search.open() } : {}),
+  });
+  const setOptions = (options: ListboxOption[], value?: string) => {
+    binding.setOptions(options, value);
+    search?.decorate();
+    // Last, after the search row's count, so the action stays below the choices.
+    creator?.mount();
+  };
+  const creator = config.create
+    ? createCreator(doc, list, config.create, (option) => {
+      const existing = Array.from(select.options).map((o) => ({ value: o.value, label: o.text }));
+      setOptions([...existing, option], option.value);
+      config.onChange(option.value);
+      binding.close();
+    })
+    : null;
+  setOptions(config.options, config.value);
 
   return {
     ...binding,
+    setOptions,
     root,
+    close: () => { creator?.reset(); binding.close(); },
+    setCreateEnabled: (enabled: boolean) => { creator?.setEnabled(enabled); },
     destroy: () => { binding.destroy(); root.remove(); },
+  };
+}
+
+/**
+ * The create row, and the field it becomes. Kept outside the options so a
+ * `setOptions` rebuild can put it back at the bottom of the new list.
+ */
+function createCreator(
+  doc: Document,
+  list: HTMLElement,
+  config: ListboxCreate,
+  onCreated: (option: ListboxOption) => void,
+) {
+  const row = doc.createElement('button');
+  row.type = 'button';
+  row.className = 'select-create';
+  row.dataset.selectCreate = '';
+  row.insertAdjacentHTML('afterbegin', PLUS_SVG);
+  const rowLabel = doc.createElement('span');
+  rowLabel.textContent = config.label;
+  row.append(rowLabel);
+
+  const form = doc.createElement('div');
+  form.className = 'select-create-form';
+  form.hidden = true;
+  const input = doc.createElement('input');
+  input.type = 'text';
+  input.className = 'select-create-input';
+  input.autocomplete = 'off';
+  input.placeholder = config.placeholder;
+  input.setAttribute('aria-label', config.label);
+  form.append(input);
+
+  let busy = false;
+  let enabled = true;
+  const reset = () => {
+    busy = false;
+    input.value = '';
+    input.removeAttribute('aria-invalid');
+    form.hidden = true;
+    row.hidden = false;
+  };
+  const submit = async () => {
+    const name = input.value.trim();
+    if (!name || busy) return;
+    busy = true;
+    input.setAttribute('aria-busy', 'true');
+    try {
+      const option = await config.onCreate(name);
+      if (!option) {
+        // Refused — a duplicate, or one folder too many. The name stays put so
+        // it can be edited rather than retyped.
+        input.setAttribute('aria-invalid', 'true');
+        return;
+      }
+      reset();
+      onCreated(option);
+    } finally {
+      busy = false;
+      input.removeAttribute('aria-busy');
+    }
+  };
+
+  row.addEventListener('click', (event) => {
+    event.stopPropagation();
+    row.hidden = true;
+    form.hidden = false;
+    input.focus();
+  });
+  input.addEventListener('input', () => input.removeAttribute('aria-invalid'));
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); void submit(); }
+    // Escape gives the row back before the list itself may close.
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); reset(); }
+  });
+
+  return {
+    mount: () => { if (enabled) list.append(row, form); },
+    reset,
+    setEnabled: (next: boolean) => {
+      enabled = next;
+      if (next) { list.append(row, form); return; }
+      reset();
+      row.remove();
+      form.remove();
+    },
+  };
+}
+
+/**
+ * The search row and its count, kept outside the options so a `setOptions`
+ * rebuild can put them back around the new list.
+ */
+function createSearch(doc: Document, list: HTMLElement, root: HTMLElement, config: ListboxSearch) {
+  const row = doc.createElement('div');
+  row.className = 'select-search';
+  row.insertAdjacentHTML('afterbegin', SEARCH_SVG);
+  const input = doc.createElement('input');
+  input.type = 'text';
+  input.className = 'select-search-input';
+  input.autocomplete = 'off';
+  input.placeholder = config.placeholder;
+  input.setAttribute('aria-label', config.placeholder);
+  row.append(input);
+  const count = doc.createElement('div');
+  count.className = 'select-count';
+  count.setAttribute('aria-live', 'polite');
+
+  const options = () => Array.from(list.querySelectorAll<HTMLButtonElement>('[role="option"]'));
+  const active = () => options().length > config.minOptions;
+  const filter = () => {
+    const query = input.value.trim().toLowerCase();
+    const all = options();
+    let shown = 0;
+    for (const option of all) {
+      option.hidden = Boolean(query) && !(option.textContent ?? '').toLowerCase().includes(query);
+      if (!option.hidden) shown += 1;
+    }
+    count.hidden = !query;
+    count.textContent = `${shown} OF ${all.length} ${config.noun}`;
+  };
+
+  input.addEventListener('input', filter);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      // Enter takes the first match, the one the eye is already on.
+      event.preventDefault();
+      options().find((option) => !option.hidden)?.click();
+    } else if (event.key === 'Escape' && input.value) {
+      // The first Escape clears the search; only the next one closes the list.
+      event.preventDefault();
+      event.stopPropagation();
+      input.value = '';
+      filter();
+    }
+  });
+
+  return {
+    decorate: () => {
+      const on = active();
+      root.classList.toggle('listbox--searchable', on);
+      if (on) { list.prepend(row); list.append(count); } else { row.remove(); count.remove(); }
+      filter();
+    },
+    /** Opens on an empty search, with the caret in it. */
+    open: (): HTMLElement | null => {
+      if (!active()) return null;
+      input.value = '';
+      filter();
+      return input;
+    },
   };
 }
 
@@ -134,7 +350,8 @@ export function bindListbox(elements: ListboxElements, config: BindListboxConfig
   const abort = new AbortController();
   const signal = abort.signal;
 
-  const items = () => Array.from(list.querySelectorAll<HTMLButtonElement>('[role="option"]'));
+  // Filtered-out options are hidden, and the keyboard walks only what is shown.
+  const items = () => Array.from(list.querySelectorAll<HTMLButtonElement>('[role="option"]')).filter((item) => !item.hidden);
 
   const sync = () => {
     const selected = select.selectedOptions[0];
@@ -163,6 +380,8 @@ export function bindListbox(elements: ListboxElements, config: BindListboxConfig
   const open = (initialOffset = 0) => {
     list.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
+    const custom = config.onOpen?.();
+    if (custom) { custom.focus(); return; }
     const selected = items().findIndex((item) => item.getAttribute('aria-selected') === 'true');
     focusOption(Math.max(0, selected) + initialOffset);
   };
@@ -196,7 +415,7 @@ export function bindListbox(elements: ListboxElements, config: BindListboxConfig
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       focusOption(index + (event.key === 'ArrowDown' ? 1 : -1));
-    } else if (event.key === 'Home' || event.key === 'End') {
+    } else if ((event.key === 'Home' || event.key === 'End') && !(event.target instanceof HTMLInputElement)) {
       event.preventDefault();
       focusOption(event.key === 'Home' ? 0 : all.length - 1);
     } else if (event.key === 'Escape') {
@@ -228,7 +447,11 @@ export function bindListbox(elements: ListboxElements, config: BindListboxConfig
       item.setAttribute('role', 'option');
       item.dataset.value = option.value;
       item.setAttribute('aria-selected', 'false');
-      item.append(doc.createTextNode(option.label));
+      // Wrapped so a long label can end in an ellipsis inside the flex row.
+      const label = doc.createElement('span');
+      label.className = 'select-option-label';
+      label.textContent = option.label;
+      item.append(label);
       item.insertAdjacentHTML('beforeend', CHECK_SVG);
       list.append(item);
     }

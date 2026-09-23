@@ -36,6 +36,23 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
       load: (recordingId) => readNotations({ type: 'LIST_RECORDING_NOTATIONS', recordingId }),
       rename: (recordingId, id, text) => readNotations({ type: 'UPDATE_RECORDING_NOTATION', recordingId, id, text }),
       remove: (recordingId, id) => readNotations({ type: 'REMOVE_RECORDING_NOTATION', recordingId, id }),
+      // The add command answers with the one note it made; the editor wants the list.
+      add: async (recordingId, note) => {
+        const response = await sendToBackground({ type: 'ADD_RECORDING_NOTATION', recordingId, ...note });
+        if (!response.ok) throw new Error(response.error || 'Could not add the note');
+        return readNotations({ type: 'LIST_RECORDING_NOTATIONS', recordingId });
+      },
+      update: (recordingId, id, patch) => readNotations({ type: 'UPDATE_RECORDING_NOTATION', recordingId, id, ...patch }),
+    },
+    // Read lazily: the controller is made after the view.
+    editor: {
+      transcript: (recordingId) => controller.transcript(recordingId),
+      playback: {
+        getManifest: (recordingId) => controller.playback.getManifest(recordingId),
+        prepareDriveSource: (recordingId, fileId, refresh) => controller.playback.prepareDriveSource(recordingId, fileId, refresh),
+        warn: (...args) => controller.playback.warn(...args),
+      },
+      notesChanged: () => controller.notesChanged(),
     },
   });
   controller = new RecordingsController(view);

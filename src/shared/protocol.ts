@@ -117,6 +117,29 @@ export type PopupFileRecordingToDestination = {
 /** Recordings whose bytes are in the library but not yet written to Downloads. */
 /** Storage the retained library occupies, and whether it is safe from eviction. */
 export type PopupGetStorageUsage = { type: 'GET_STORAGE_USAGE' };
+/**
+ * Renames the folder every recording lives under, in Drive, to match the name
+ * the user just typed in Settings. Sent before the setting is written: folders
+ * resolve by name, so a setting that disagrees with Drive splits the library.
+ */
+export type SettingsRenameDriveRootFolder = {
+  type: 'RENAME_DRIVE_ROOT_FOLDER';
+  from: string;
+  to: string;
+};
+/**
+ * Recordings a crash left in OPFS, for the popup to offer (8D). Answers with an
+ * empty list — and wakes nothing — unless a capture is known to be unaccounted
+ * for, because answering otherwise means creating the offscreen document.
+ */
+export type PopupListUnsavedRecordings = { type: 'LIST_UNSAVED_RECORDINGS' };
+/** Saves a recording a crash left behind, or throws it away (8D). */
+export type PopupResolveUnsavedRecording = {
+  type: 'RESOLVE_UNSAVED_RECORDING';
+  key: string;
+  action: 'save' | 'discard';
+  name?: string;
+};
 export type PopupListPendingLocalDeliveries = { type: 'LIST_PENDING_LOCAL_DELIVERIES' };
 /** Writes a deferred local recording into the chosen folder; null means Downloads itself. */
 export type PopupDeliverLocalRecording = {
@@ -192,6 +215,9 @@ export type PopupToBg =
   | PopupGetPlaybackManifest
   | PopupFileRecordingToDestination
   | PopupGetStorageUsage
+  | SettingsRenameDriveRootFolder
+  | PopupListUnsavedRecordings
+  | PopupResolveUnsavedRecording
   | PopupListPendingLocalDeliveries
   | PopupDeliverLocalRecording
   | PopupPreparePlaybackSource
@@ -231,6 +257,12 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupListRecordingNotations ? NotationListResult :
   T extends PopupGetStorageUsage
     ? { ok: true; usage: import('./playback').StorageUsage } | { ok: false; error: string } :
+  T extends SettingsRenameDriveRootFolder
+    ? { ok: true; result: import('../background/DriveRootFolder').RootRenameResult } | { ok: false; error: string } :
+  T extends PopupListUnsavedRecordings
+    ? { ok: true; recordings: import('../offscreen/storage/recoverOrphanRecordings').UnsavedRecording[] }
+      | { ok: false; error: string } :
+  T extends PopupResolveUnsavedRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupListPendingLocalDeliveries
     ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :
@@ -378,6 +410,18 @@ export type BgToOffscreenRpc =
        * Absent when the recording has no notes.
        */
       notesSidecar?: { vtt: string };
+      /**
+       * The run's transcript, rendered to WebVTT by the background (which owns
+       * it, ADR-0007) so the offscreen delivers it beside the notes, ahead of
+       * the media. Absent when the recording has no transcript.
+       */
+      transcriptSidecar?: { vtt: string };
+      /**
+       * The Drive folder everything lives under, from settings. The offscreen
+       * document has no `chrome.storage` to read it from, so the stop message
+       * carries it; absent falls back to the name the constant used to hold.
+       */
+      driveRootFolderName?: string;
     }>
   | RpcRequest<{ type: 'OFFSCREEN_DISCARD' }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
@@ -392,6 +436,25 @@ export type BgToOffscreenRpc =
    * URL here rather than holding a stale one.
    */
   | RpcRequest<{ type: 'OFFSCREEN_OPEN_RETAINED'; key: string }>
+  /**
+   * Lists recordings a crash left in OPFS, without touching them (8D). Asked
+   * only when the unsaved-capture flag is set, because asking means creating
+   * this document.
+   */
+  | RpcRequest<{ type: 'OFFSCREEN_LIST_UNSAVED' }>
+  /**
+   * Acts on one of those: saves it under a name to the configured destination,
+   * or throws it away. The decision is the user's, so nothing here happens
+   * until they make it (8D).
+   */
+  | RpcRequest<{
+      type: 'OFFSCREEN_RESOLVE_UNSAVED';
+      key: string;
+      action: 'save' | 'discard';
+      /** The title to save it under; ignored when discarding. */
+      name?: string;
+      storageMode?: 'local' | 'drive';
+    }>
   | RpcRequest<{ type: 'OFFSCREEN_CANCEL_UPLOAD'; jobId: string }>
   | RpcRequest<{
       type: 'OFFSCREEN_RENAME_DRIVE_RESOURCES';
@@ -439,7 +502,7 @@ export type OffscreenToBg =
   | { type: 'OFFSCREEN_READY'; version?: string }
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
-  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: 'notes'; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
+  | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: import('./recordingTypes').RecordingArtifactKind; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
   | { type: 'OFFSCREEN_ANALYSIS_STATE'; job: import('./analysis/job').AnalysisJob }
   /**
    * A completed analysis, on its way to the `analyses` store. Separate from the

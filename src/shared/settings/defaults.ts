@@ -25,6 +25,21 @@ export const MAX_DRIVE_FOLDER_PRESETS = 20;
 export const MAX_DRIVE_FOLDER_NAME_LENGTH = 60;
 export const MAX_LOCAL_FOLDER_PRESETS = 20;
 export const MAX_LOCAL_FOLDER_NAME_LENGTH = 60;
+
+/**
+ * Everything this extension writes to Drive lives under one folder, and every
+ * destination is a sub-folder of it. Before the name was a setting it was a
+ * constant, so an installation that predates the setting keeps the old name:
+ * folders are resolved by name, and handing an existing user a new root would
+ * leave half their recordings in a folder nothing looks in any more.
+ */
+export const DEFAULT_DRIVE_ROOT_FOLDER_NAME = 'Recordings';
+export const LEGACY_DRIVE_ROOT_FOLDER_NAME = 'Google Meet Records';
+/**
+ * Where a recording goes when the user picks no destination. A sub-folder
+ * rather than the root itself, so the root holds folders and nothing else.
+ */
+export const DRIVE_DEFAULT_DESTINATION_NAME = 'Rest';
 export const THEME_OPTIONS = ['system', 'light', 'dark'] as const satisfies readonly ThemePreference[];
 export const RECORDING_MODE_OPTIONS = ['opfs', 'drive'] as const;
 export const MICROPHONE_MODE_OPTIONS = ['off', 'mixed', 'separate'] as const;
@@ -109,8 +124,9 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     selfVideoUseAutoResolution: true,
   }),
   storage: Object.freeze({
-    // No presets to begin with: every recording lands in the single built-in
-    // folder, exactly as it did before destinations existed.
+    driveRootFolderName: DEFAULT_DRIVE_ROOT_FOLDER_NAME,
+    // No presets to begin with: every recording lands in the default
+    // destination, exactly as it did before destinations existed.
     driveFolderPresets: Object.freeze([]) as unknown as ExtensionSettings['storage']['driveFolderPresets'],
     localFolderPresets: Object.freeze([]) as unknown as ExtensionSettings['storage']['localFolderPresets'],
   }),

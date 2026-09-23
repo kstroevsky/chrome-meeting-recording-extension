@@ -1,5 +1,8 @@
 import {
+  listOrphanRecordings,
   recoverOrphanRecordings,
+  ORPHAN_DECISION_WINDOW_MS,
+  type OrphanListingDeps,
   type OrphanRecoveryDeps,
 } from '../recoverOrphanRecordings';
 
@@ -135,3 +138,81 @@ describe('recoverOrphanRecordings', () => {
     expect(deps.sealFile).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Listing is what the popup asks before the user has decided anything (8D), so
+ * the one thing it must not do is anything.
+ */
+describe('listOrphanRecordings', () => {
+  const listing = (over: Partial<OrphanListingDeps> = {}): OrphanListingDeps => ({
+    cutoffMs: CUTOFF,
+    listOrphanCandidates: jest.fn(async () => [{ key: KEY, filename: NAME, lastModifiedMs: CUTOFF - 1 }]),
+    excludedNames: jest.fn(async () => new Set<string>()),
+    fileSize: jest.fn(async () => 63 * 1024 * 1024),
+    ...over,
+  });
+
+  it('describes what is there, with the size the popup shows', async () => {
+    await expect(listOrphanRecordings(listing())).resolves.toEqual([
+      { key: KEY, filename: NAME, lastModifiedMs: CUTOFF - 1, sizeBytes: 63 * 1024 * 1024 },
+    ]);
+  });
+
+  it('puts the newest first — the one they just lost is the one they mean', async () => {
+    const deps = listing({
+      listOrphanCandidates: jest.fn(async () => [
+        { key: 'staging/old', filename: NAME, lastModifiedMs: CUTOFF - 5000 },
+        { key: 'staging/new', filename: NAME, lastModifiedMs: CUTOFF - 10 },
+      ]),
+    });
+    const listed = await listOrphanRecordings(deps);
+    expect(listed.map((entry) => entry.key)).toEqual(['staging/new', 'staging/old']);
+  });
+
+  it('leaves out a capture that never wrote anything', async () => {
+    await expect(listOrphanRecordings(listing({ fileSize: jest.fn(async () => 0) }))).resolves.toEqual([]);
+  });
+
+  it('leaves out this session\'s own file, and anything an upload already owns', async () => {
+    await expect(listOrphanRecordings(listing({
+      listOrphanCandidates: jest.fn(async () => [{ key: KEY, filename: NAME, lastModifiedMs: CUTOFF + 1 }]),
+    }))).resolves.toEqual([]);
+    await expect(listOrphanRecordings(listing({
+      excludedNames: jest.fn(async () => new Set([KEY])),
+    }))).resolves.toEqual([]);
+  });
+});
+
+/**
+ * Asking beats guessing, but a question nobody answers must not become bytes
+ * nobody reclaims — so the silent path takes over after the window (8D).
+ */
+describe('the window a recording is left for the user to decide about', () => {
+  it('leaves a recent orphan alone, for the popup to offer', async () => {
+    const deps = makeDeps({
+      decisionWindowMs: ORPHAN_DECISION_WINDOW_MS,
+      listOrphanCandidates: jest.fn(async () => [{ key: KEY, filename: NAME, lastModifiedMs: CUTOFF - 1000 }]),
+    });
+    await recoverOrphanRecordings(deps);
+    expect(deps.saveRecovered).not.toHaveBeenCalled();
+    expect(deps.removeOpfsFile).not.toHaveBeenCalled();
+  });
+
+  it('recovers it once the question has gone unanswered long enough', async () => {
+    const deps = makeDeps({
+      decisionWindowMs: ORPHAN_DECISION_WINDOW_MS,
+      listOrphanCandidates: jest.fn(async () => [
+        { key: KEY, filename: NAME, lastModifiedMs: CUTOFF - ORPHAN_DECISION_WINDOW_MS - 1 },
+      ]),
+    });
+    await recoverOrphanRecordings(deps);
+    expect(deps.saveRecovered).toHaveBeenCalledWith(NAME, expect.anything(), KEY);
+  });
+
+  it('still recovers everything when no window is given, as it did before', async () => {
+    const deps = makeDeps();
+    await recoverOrphanRecordings(deps);
+    expect(deps.saveRecovered).toHaveBeenCalledTimes(1);
+  });
+});
+

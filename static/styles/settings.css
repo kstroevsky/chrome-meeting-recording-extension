@@ -94,11 +94,23 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
    the page-wide box-shadow ring, so nothing here restyles it. */
 .destinations-intro { margin: 0 0 12px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 .destinations-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.destination-row { display: flex; align-items: center; gap: 8px; }
-.destination-name { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--tile); color: var(--ink); font: 500 12px 'IBM Plex Mono', monospace; }
+.destination-row, .folder-row { display: flex; align-items: center; gap: 8px; }
+.destination-name, .folder-name { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--tile); color: var(--ink); font: 500 12px 'IBM Plex Mono', monospace; }
 .destination-remove { flex-shrink: 0; width: 32px; height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-meta); font-size: 15px; line-height: 1; cursor: pointer; transition: background 140ms ease-out, color 140ms ease-out; }
 .destination-remove:hover { background: var(--tile); color: var(--accent); }
 .destination-add { height: 32px; padding: 0 14px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--body); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 140ms ease-out, color 140ms ease-out; }
 .destination-add:hover { background: var(--tile); }
 .destination-add:disabled { opacity: .5; cursor: default; }
 .destinations-note { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); }
+/* The nesting is the whole point of this section, so it is drawn rather than
+   described: a labelled group, indented behind a rule, holding the folders that
+   live inside the one above it. */
+.destinations-group-label { margin: 0 0 6px; color: var(--subtle); font: 600 9.5px 'Space Grotesk', sans-serif; letter-spacing: .14em; }
+.destinations-note--quiet { margin: 6px 0 0; }
+.destinations-inside { margin-top: 18px; padding-left: 14px; border-left: 2px solid var(--border); }
+/* The default folder is shown, not editable: it is where unsorted recordings
+   go, and removing it would leave them nowhere. The padding stands in for the
+   remove button the editable rows have, so every tile ends on the same edge. */
+.folder-row--fixed { padding-right: 40px; }
+.folder-name--fixed { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); }
+.destination-fixed-tag { flex-shrink: 0; color: var(--subtle); font: 600 9px 'Space Grotesk', sans-serif; letter-spacing: .12em; }

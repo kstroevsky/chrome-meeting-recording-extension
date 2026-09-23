@@ -1,13 +1,20 @@
 /** User-named Drive destinations: sanitised, because a name becomes a folder. */
 import { normalizeExtensionSettings } from '../normalize';
-import { MAX_DRIVE_FOLDER_NAME_LENGTH, MAX_DRIVE_FOLDER_PRESETS } from '../defaults';
+import {
+  DEFAULT_DRIVE_ROOT_FOLDER_NAME,
+  LEGACY_DRIVE_ROOT_FOLDER_NAME,
+  MAX_DRIVE_FOLDER_NAME_LENGTH,
+  MAX_DRIVE_FOLDER_PRESETS,
+} from '../defaults';
+import { DEFAULT_EXTENSION_SETTINGS } from '../defaults';
 
 const withStorage = (storage: unknown) => normalizeExtensionSettings({ storage }).storage;
 const preset = (id: string, name: string) => ({ id, name });
 
 describe('drive folder presets', () => {
   it('defaults to none, which is the pre-presets behaviour', () => {
-    expect(normalizeExtensionSettings({}).storage).toEqual({ driveFolderPresets: [], localFolderPresets: [] });
+    expect(normalizeExtensionSettings({}).storage)
+      .toEqual({ driveRootFolderName: LEGACY_DRIVE_ROOT_FOLDER_NAME, driveFolderPresets: [], localFolderPresets: [] });
   });
 
   it('keeps well-formed destinations in order', () => {
@@ -64,5 +71,37 @@ describe('drive folder presets', () => {
     const clone = normalizeExtensionSettings(settings);
     clone.storage.driveFolderPresets[0].name = 'Mutated';
     expect(settings.storage.driveFolderPresets[0].name).toBe('Work');
+  });
+});
+
+/**
+ * The root folder is resolved by name, so the name a given installation ends up
+ * with decides which folder its recordings are findable in.
+ */
+describe('the root folder everything lives in', () => {
+  it('is the new name for an installation that has never stored settings', () => {
+    expect(DEFAULT_EXTENSION_SETTINGS.storage.driveRootFolderName).toBe(DEFAULT_DRIVE_ROOT_FOLDER_NAME);
+  });
+
+  it('stays the old name for an installation that predates the setting', () => {
+    // Its recordings are already in that folder; handing it the new default
+    // would leave half a library somewhere nothing looks.
+    expect(withStorage({ driveFolderPresets: [] }).driveRootFolderName).toBe(LEGACY_DRIVE_ROOT_FOLDER_NAME);
+  });
+
+  it('keeps a name the user chose', () => {
+    expect(withStorage({ driveRootFolderName: 'Meetings' }).driveRootFolderName).toBe('Meetings');
+  });
+
+  it('falls back rather than leaving the recordings with no folder to live in', () => {
+    expect(withStorage({ driveRootFolderName: '   ' }).driveRootFolderName).toBe(LEGACY_DRIVE_ROOT_FOLDER_NAME);
+    expect(withStorage({ driveRootFolderName: '///' }).driveRootFolderName).toBe(LEGACY_DRIVE_ROOT_FOLDER_NAME);
+    expect(withStorage({ driveRootFolderName: 42 }).driveRootFolderName).toBe(LEGACY_DRIVE_ROOT_FOLDER_NAME);
+  });
+
+  it('sanitises a name the way a destination name is sanitised', () => {
+    expect(withStorage({ driveRootFolderName: '  My  Recordings/2026 ' }).driveRootFolderName).toBe('My Recordings 2026');
+    expect(withStorage({ driveRootFolderName: 'x'.repeat(MAX_DRIVE_FOLDER_NAME_LENGTH + 10) }).driveRootFolderName)
+      .toHaveLength(MAX_DRIVE_FOLDER_NAME_LENGTH);
   });
 });

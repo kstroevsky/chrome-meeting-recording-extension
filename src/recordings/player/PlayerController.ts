@@ -10,8 +10,9 @@
  */
 
 import { isStreamableSource, masterTrack, type PlaybackManifest, type PlaybackTrack } from '../../shared/playback';
+import type { RecordingNotation } from '../../shared/notations';
 import type { Transcript } from '../../shared/transcript';
-import { resolveTrackSource, type SourceResolverDeps } from './playbackSource';
+import { playbackUrl, type SourceResolverDeps } from './playbackSource';
 import { PlayerView, type PlayerStatus } from './PlayerView';
 import { PlaybackClock } from './PlaybackClock';
 import { adjacentMarkStart, isFieldTarget, nextSpeed, resolvePlayerAction, type PlayerAction } from './playerKeymap';
@@ -39,6 +40,8 @@ export type PlayerControllerDeps = {
   remove?: (recordingId: string) => void;
   /** The recording's persisted transcript (ADR-0007), for the rail and the subtitles (f10). */
   getTranscript?: (recordingId: string) => Promise<Transcript | undefined>;
+  /** Renames a note from its rail heading (f18); the same write the details dialog makes. */
+  renameNotation?: (recordingId: string, id: string, text: string) => Promise<RecordingNotation[] | void>;
   resolver?: SourceResolverDeps;
   warn?: (...args: unknown[]) => void;
 };
@@ -51,6 +54,7 @@ export class PlayerController {
   private clock: PlaybackClock | null = null;
   private driftTimer: ReturnType<typeof setInterval> | null = null;
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKey(event);
+  private readonly onFullscreenChange = () => this.view.setFullscreen(document.fullscreenElement === this.view.overlay);
   /** Which files are switched on; the rest stay listed but silent and hidden. */
   private shown = new Set<string>();
   private readonly levels = new Map<string, number>();
@@ -90,11 +94,29 @@ export class PlayerController {
       },
       setSkipSeconds: (seconds) => { this.skipSeconds = seconds; this.view.setSettings(this.skipSeconds, this.speed); },
       setSpeed: (rate) => this.applySpeed(rate),
+      ...(deps.renameNotation ? { renameNote: (id: string, text: string) => this.renameNote(id, text) } : {}),
     });
     this.bindMedia();
     // Bound on the document rather than the dialog: the shortcuts should work
     // wherever focus happens to sit inside the modal.
     document.addEventListener('keydown', this.onKeyDown);
+    document.addEventListener('fullscreenchange', this.onFullscreenChange);
+  }
+
+  /** Writes a note's new name, and keeps the manifest in step when it lands. */
+  private async renameNote(id: string, text: string): Promise<boolean> {
+    const manifest = this.manifest;
+    if (!manifest || !this.deps.renameNotation) return false;
+    try {
+      await this.deps.renameNotation(manifest.recordingId, id, text);
+    } catch (error) {
+      this.deps.warn?.('Could not rename the note', error);
+      return false;
+    }
+    if (this.manifest === manifest) {
+      this.manifest = { ...manifest, notations: manifest.notations.map((note) => (note.id === id ? { ...note, text } : note)) };
+    }
+    return true;
   }
 
   private handleKey(event: KeyboardEvent): void {
@@ -152,6 +174,9 @@ export class PlayerController {
         if (this.view.toggleSubtitles()) this.view.setSettings(this.skipSeconds, this.speed);
         return;
       }
+      case 'transcript': { this.view.toggleRail(); return; }
+      case 'rename': { this.view.renameNoteAt(video.currentTime * 1000); return; }
+      case 'search': { this.view.focusSearch(); return; }
       case 'help': { this.view.toggleHelp(); return; }
       case 'escape': {
         // Escape unwinds one layer at a time: the map, then fullscreen, then the
@@ -312,16 +337,8 @@ export class PlayerController {
    * than playing its picture alone.
    */
   private async urlFor(track: PlaybackTrack, refresh = false): Promise<{ url: string; revoke?: () => void } | undefined> {
-    if (!refresh && track.sources.some((source) => source.kind === 'opfs')) {
-      const resolved = await resolveTrackSource(track, this.deps.resolver);
-      if (resolved.kind === 'opfs') return { url: resolved.url, revoke: resolved.revoke };
-    }
-    if (track.sources.some((source) => source.kind === 'drive') && this.manifest) {
-      const url = await this.deps.prepareDriveSource(this.manifest.recordingId, track.fileId, refresh)
-        .catch((error) => { this.deps.warn?.('Drive playback preparation failed', error); return undefined; });
-      if (url) return { url };
-    }
-    return undefined;
+    if (!this.manifest) return undefined;
+    return playbackUrl(this.manifest.recordingId, track, this.deps, refresh);
   }
 
   private async attach(track: PlaybackTrack, refresh = false): Promise<void> {
@@ -393,6 +410,7 @@ export class PlayerController {
 
   close(): void {
     document.removeEventListener('keydown', this.onKeyDown);
+    document.removeEventListener('fullscreenchange', this.onFullscreenChange);
     this.reset();
     this.element.remove();
   }

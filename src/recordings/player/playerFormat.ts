@@ -61,6 +61,40 @@ export function toNoteMarks(notations: readonly RecordingNotation[], durationMs:
     .sort((a, b) => a.leftPct - b.leftPct);
 }
 
+/** One mark on the scrubber: a single note, or several that would have overlapped (f20). */
+export type NoteMarkGroup = {
+  leftPct: number;
+  widthPct: number;
+  /** In time order; more than one means the mark is drawn taller, with an inset edge. */
+  notes: NoteMark[];
+  /** Pale only when every note in it is unnamed. */
+  named: boolean;
+};
+
+/** Marks closer than this (in % of the track) read as one, so they merge. */
+const MERGE_GAP_PCT = 0.2;
+
+/**
+ * Merges marks that would overlap into one wider mark (f20), so a dense
+ * recording's scrubber never turns into a solid gold bar and its count stays
+ * honest: a merged mark says how many notes it holds instead of hiding them.
+ */
+export function mergeNoteMarks(marks: readonly NoteMark[]): NoteMarkGroup[] {
+  const groups: NoteMarkGroup[] = [];
+  for (const mark of [...marks].sort((a, b) => a.leftPct - b.leftPct)) {
+    const last = groups[groups.length - 1];
+    const lastEnd = last ? last.leftPct + last.widthPct : -Infinity;
+    if (last && mark.leftPct < lastEnd + MERGE_GAP_PCT) {
+      last.widthPct = Math.max(lastEnd, mark.leftPct + mark.widthPct) - last.leftPct;
+      last.notes.push(mark);
+      last.named ||= mark.named;
+      continue;
+    }
+    groups.push({ leftPct: mark.leftPct, widthPct: mark.widthPct, notes: [mark], named: mark.named });
+  }
+  return groups;
+}
+
 /** Fraction of the track a pointer landed on, clamped to [0, 1]. */
 export function seekFraction(clientX: number, rect: { left: number; width: number }): number {
   if (rect.width <= 0) return 0;

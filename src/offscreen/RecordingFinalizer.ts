@@ -7,11 +7,12 @@
  * with bounded concurrency, and falls back to local download per-file if Drive fails.
  */
 
-import type { RecordingArtifactContext, RecordingStream, UploadSummary } from '../shared/recording';
+import type { RecordingArtifactContext, RecordingArtifactKind, RecordingStream, UploadSummary } from '../shared/recording';
 import { recordingHistoryFileId } from '../shared/recordingHistory';
 import { DriveTarget } from './DriveTarget';
 import { DriveFolderResolver } from './drive/DriveFolderResolver';
 import { DRIVE_ROOT_FOLDER_NAME } from './drive/constants';
+import { DRIVE_DEFAULT_DESTINATION_NAME } from '../shared/settings';
 import { inferDriveRecordingFolderName } from './drive/folderNaming';
 import { createCachedTokenProvider, type TokenProvider } from './drive/request';
 import type { PendingUploadStore } from './drive/PendingUploadStore';
@@ -64,7 +65,7 @@ export type RecordingFinalizerDeps = {
 export type LocalSaveRequest = RecordingArtifactContext & {
   stream: RecordingStream;
   /** The notes sidecar rides a media stream, so `stream` alone cannot identify it. */
-  kind?: 'notes';
+  kind?: RecordingArtifactKind;
   /**
    * Set once the artifact has been promoted into the retained library. Its
    * presence is what tells the delivery side these bytes are owned rather than
@@ -100,6 +101,13 @@ export type FinalizeArtifactsOptions = RecordingArtifactContext & {
    * caller can say which file is moving and which is still waiting its turn.
    */
   onUploadProgress?: UploadProgressSink;
+  /**
+   * The Drive folder everything lives under, from the user's settings — which
+   * the offscreen document cannot read, so background sends it on the stop
+   * message. Absent means a stop from an older background build, and those
+   * installations are the ones still on the legacy name.
+   */
+  driveRootFolderName?: string;
   /**
    * Suppresses the local-download failsafe when a Drive upload fails (ADR-0004). Set
    * for a *retry*: the file was already downloaded on the original failure, so failing
@@ -161,6 +169,7 @@ export class RecordingFinalizer {
       const summary = await this.uploadArtifactsToDrive(
         orderedArtifacts,
         recordingFolderName,
+        options.driveRootFolderName?.trim() || DRIVE_ROOT_FOLDER_NAME,
         options.onUploadProgress,
         options.skipLocalFallback === true,
         options.signal,
@@ -201,7 +210,7 @@ export class RecordingFinalizer {
     stream: RecordingStream,
     reason: 'local' | 'fallback',
     context: RecordingArtifactContext,
-    kind?: 'notes',
+    kind?: RecordingArtifactKind,
   ) {
     // Ownership transfers *before* delivery is attempted. That ordering is the
     // point: if the download then fails, the recording is still playable from
@@ -241,7 +250,7 @@ export class RecordingFinalizer {
     artifact: SealedStorageFile,
     stream: RecordingStream,
     context: RecordingArtifactContext,
-    kind?: 'notes',
+    kind?: RecordingArtifactKind,
   ): Promise<{ key: string; file: File } | undefined> {
     const stagingKey = artifact.opfsFilename;
     // No history row means nothing owns the bytes long-term (legacy orphan
@@ -273,6 +282,7 @@ export class RecordingFinalizer {
   private async uploadArtifactsToDrive(
     artifacts: CompletedRecordingArtifact[],
     recordingFolderName: string,
+    rootFolderName: string,
     onUploadProgress?: UploadProgressSink,
     skipLocalFallback = false,
     signal?: AbortSignal,
@@ -286,7 +296,7 @@ export class RecordingFinalizer {
     try {
       if (signal?.aborted) throw new DOMException('Upload canceled', 'AbortError');
       folderId = await folderResolver.resolveUploadParentId(
-        { rootFolderName: DRIVE_ROOT_FOLDER_NAME, recordingFolderName },
+        { rootFolderName, destinationFolderName: DRIVE_DEFAULT_DESTINATION_NAME, recordingFolderName },
         signal,
       );
       if (signal?.aborted) throw new DOMException('Upload canceled', 'AbortError');
@@ -337,7 +347,8 @@ export class RecordingFinalizer {
         }
 
         const driveTarget = new DriveTarget(artifact.filename, sharedGetUploadToken, (filename) => this.deps.log('Drive target complete:', filename), {
-          rootFolderName: DRIVE_ROOT_FOLDER_NAME,
+          rootFolderName,
+          destinationFolderName: DRIVE_DEFAULT_DESTINATION_NAME,
           recordingFolderName,
           shared: { getUploadToken: sharedGetUploadToken, folderResolver, log: this.deps.log },
           onProgress: (uploaded) => { loadedPerFile[index] = uploaded; reportProgress(); },
@@ -354,6 +365,8 @@ export class RecordingFinalizer {
             filename: artifact.filename,
             stream,
             recordingFolderName,
+            rootFolderName,
+            destinationFolderName: DRIVE_DEFAULT_DESTINATION_NAME,
             ...(context.historyId ? { historyId: context.historyId } : {}),
             ...(context.uploadJobId ? { jobId: context.uploadJobId } : {}),
           });

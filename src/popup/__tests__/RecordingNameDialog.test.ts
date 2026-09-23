@@ -193,3 +193,53 @@ describe('RecordingNameDialog', () => {
     });
   });
 });
+
+/**
+ * Two recordings are allowed to share a name (7C), so this warns and keeps
+ * both — it never refuses, and it never quietly overwrites.
+ */
+describe('RecordingNameDialog when that name is taken', () => {
+  beforeEach(() => { document.body.replaceChildren(); });
+
+  const taken = (name: string) => (name.trim() === 'Team sync' ? 'Team sync (2)' : null);
+  const line = () => document.querySelector<HTMLElement>('.recording-name-taken');
+  const field = () => document.querySelector<HTMLInputElement>('.recording-name-input')!;
+  const type = (value: string) => { field().value = value; field().dispatchEvent(new Event('input')); };
+
+  it('says what the name would become, without blocking the save', () => {
+    const dialog = new RecordingNameDialog();
+    void dialog.ask({ title: 'Name', message: '', initialValue: 'Team sync', duplicateOf: taken, onSave: jest.fn() });
+
+    expect(line()!.hidden).toBe(false);
+    expect(line()!.textContent)
+      .toBe('That name is taken. Saving keeps both — this one becomes Team sync (2).');
+    expect(field().classList.contains('recording-name-input--taken')).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('[data-recording-name-save]')!.disabled).toBe(false);
+  });
+
+  it('saves under the name it promised, not the one typed', async () => {
+    const onSave = jest.fn(async () => {});
+    const dialog = new RecordingNameDialog();
+    void dialog.ask({ title: 'Name', message: '', initialValue: 'Team sync', duplicateOf: taken, onSave });
+
+    document.querySelector<HTMLButtonElement>('[data-recording-name-save]')!.click();
+    await flush();
+    expect(onSave).toHaveBeenCalledWith('Team sync (2)', null);
+  });
+
+  it('clears the warning as soon as the name is free again', () => {
+    const dialog = new RecordingNameDialog();
+    void dialog.ask({ title: 'Name', message: '', initialValue: 'Team sync', duplicateOf: taken, onSave: jest.fn() });
+
+    type('Team sync — Thursday');
+    expect(line()!.hidden).toBe(true);
+    expect(field().classList.contains('recording-name-input--taken')).toBe(false);
+  });
+
+  it('says nothing at all when the caller does not check names', () => {
+    const dialog = new RecordingNameDialog();
+    void dialog.ask({ title: 'Name', message: '', initialValue: 'Team sync', onSave: jest.fn() });
+    expect(line()!.hidden).toBe(true);
+  });
+});
+

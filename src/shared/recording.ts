@@ -22,6 +22,7 @@ export type {
   ObservedState,
   RecordingPhase,
   RecordingArtifactContext,
+  RecordingArtifactKind,
   RecordingRunConfig,
   RecordingSessionSnapshot,
   RecordingStatusView,

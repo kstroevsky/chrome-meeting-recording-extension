@@ -10,7 +10,7 @@ const settingsHtml = readFileSync(
 
 describe('settings page', () => {
   const savedSettings: ExtensionSettings = {
-    storage: { driveFolderPresets: [], localFolderPresets: [] },
+    storage: { driveRootFolderName: 'Recordings', driveFolderPresets: [], localFolderPresets: [] },
     privacy: {
       anonymousDiagnostics: true,
     },
@@ -82,10 +82,11 @@ describe('settings page', () => {
     (document.getElementById('self-video-resolution-preset') as HTMLSelectElement).value = '640x360';
     (document.getElementById('tab-resolution-preset') as HTMLSelectElement).value = '1920x1080';
     (document.getElementById('save-settings') as HTMLButtonElement).click();
-    await Promise.resolve();
+    // Saving now asks Drive about the root folder before it writes anything.
+    for (let i = 0; i < 4; i++) await Promise.resolve();
 
     expect(saveExtensionSettingsToStorage).toHaveBeenCalledWith({
-      storage: { driveFolderPresets: [], localFolderPresets: [] },
+      storage: { driveRootFolderName: 'Recordings', driveFolderPresets: [], localFolderPresets: [] },
       privacy: {
         anonymousDiagnostics: false,
       },

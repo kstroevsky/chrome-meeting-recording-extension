@@ -56,8 +56,15 @@ export type ExtensionSettings = {
   };
   storage: {
     /**
-     * Destinations the user defined. Empty means everything goes to the single
-     * built-in folder, which is the behaviour before presets existed.
+     * The one folder in Drive everything this extension writes lives under.
+     * Destinations are sub-folders of it, never siblings: a recording should be
+     * findable by opening one folder, not by remembering which names at the top
+     * of My Drive happen to be ours.
+     */
+    driveRootFolderName: string;
+    /**
+     * Destinations the user defined. Empty means everything goes to the default
+     * destination, which is the behaviour before presets existed.
      */
     driveFolderPresets: FolderPreset[];
     /**

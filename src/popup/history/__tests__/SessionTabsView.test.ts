@@ -23,6 +23,7 @@ const makeEl = (): PopupElements => ({
   uploadJobFiles: document.createElement('ul'),
   uploadJobNotesLine: document.createElement('div'),
   uploadJobNotesState: document.createElement('span'),
+  uploadJobTranscript: (() => { const b = document.createElement('button'); b.append(document.createElement('span')); return b; })(),
   uploadJobOpenDrive: document.createElement('button'),
   uploadJobRetry: document.createElement('button'),
   uploadJobCancel: document.createElement('button'),
@@ -294,6 +295,46 @@ describe('SessionTabsView', () => {
     it('stays hidden for a recording with no notes', () => {
       view.renderJobView(job());
       expect(el.uploadJobNotesLine!.hidden).toBe(true);
+    });
+  });
+
+  describe('transcript sidecar (d4, n2a)', () => {
+    const withTranscript = (status: 'uploading' | 'uploaded', jobStatus: 'uploading' | 'completed' = 'uploading') => job({
+      status: jobStatus,
+      files: [
+        { stream: 'tab', kind: 'notes', filename: 'meet-notes.vtt', status: 'uploaded', bytes: 400 },
+        { stream: 'tab', kind: 'transcript', filename: 'meet-transcript.vtt', status, bytes: 34_800, webViewLink: 'https://drive.google.com/file/d/t/view' },
+        { stream: 'tab', filename: 'tab.webm', status: 'uploading', bytes: 1_000_000 },
+      ],
+    });
+    const transcriptRow = () => el.uploadJobTranscript!;
+
+    it('rides the notes line while it uploads, and waits for both to land (d4)', () => {
+      view.renderJobView(withTranscript('uploading'));
+      expect(el.uploadJobNotesLine!.hidden).toBe(false);
+      expect(el.uploadJobNotesState!.textContent).toBe('SAVING FIRST');
+
+      view.renderJobView(withTranscript('uploaded'));
+      expect(el.uploadJobNotesState!.textContent).toBe('SAVED FIRST');
+    });
+
+    it('is listed with its size on the saved screen, and opens where it landed (n2a)', () => {
+      view.renderJobView(withTranscript('uploaded', 'completed'));
+      expect(transcriptRow().hidden).toBe(false);
+      expect(transcriptRow().querySelector('span')!.textContent).toBe('VTT · 34 KB');
+      expect(transcriptRow().dataset.webViewLink).toBe('https://drive.google.com/file/d/t/view');
+    });
+
+    it('is not offered for a recording that has none', () => {
+      view.renderJobView(job({ status: 'completed' }));
+      expect(transcriptRow().hidden).toBe(true);
+    });
+
+    it('keeps out of the media list, count and size, as the notes do', () => {
+      view.renderJobView(withTranscript('uploaded'));
+      expect(el.uploadJobFiles!.children).toHaveLength(1);
+      expect(el.uploadJobFiles!.textContent).not.toContain('meet-transcript.vtt');
+      expect(el.uploadJobSub!.textContent).toBe('0 OF 1 FILE');
     });
   });
 });

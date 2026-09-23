@@ -16,8 +16,14 @@ export const DRIVE_FILES_URL =
 /** Google Drive MIME type that identifies folders. */
 export const DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
 
-/** Root folder used by this extension to keep recordings organized. */
-export const DRIVE_ROOT_FOLDER_NAME = 'Google Meet Records';
+/**
+ * The root folder's name is a user setting now, and it reaches the offscreen
+ * document on the stop message. This is the fallback for the paths that have no
+ * settings to read: a stop sent by an older background build, and an upload
+ * resumed from a marker written before the setting existed. Both of those
+ * belong to installations whose recordings are already under the old name.
+ */
+export { LEGACY_DRIVE_ROOT_FOLDER_NAME as DRIVE_ROOT_FOLDER_NAME } from '../../shared/settings';
 
 /** Size of each resumable upload chunk for finished-file Drive uploads. */
 export const DRIVE_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;

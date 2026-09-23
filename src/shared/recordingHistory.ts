@@ -1,4 +1,6 @@
+import { recordingGroupName } from './recordingFilename';
 import type { RecordingStream, StorageMode } from './recording';
+import { isArtifactKind, type RecordingArtifactKind } from './recordingTypes';
 import { contentTypeForRecordingFilename } from './recordingFormats';
 
 /**
@@ -25,8 +27,8 @@ export type ArtifactDelivery = {
 export type RecordingHistoryFile = {
   id: string;
   stream: RecordingStream;
-  /** Absent for media; `notes` marks the WebVTT sidecar (ADR-0005). */
-  kind?: 'notes';
+  /** Absent for media; `notes` and `transcript` mark the WebVTT sidecars (ADR-0005, ADR-0007). */
+  kind?: RecordingArtifactKind;
   filename: string;
   /** Container type of the stored bytes; derived from the filename on legacy rows. */
   mimeType: string;
@@ -112,8 +114,8 @@ export type RecordingHistoryMessage =
  * collide with that stream's media row. Derived in one place because three call
  * sites deriving it independently is how they drifted apart.
  */
-export function recordingHistoryFileId(historyId: string, stream: RecordingStream, kind?: 'notes'): string {
-  return kind === 'notes' ? `${historyId}:notes` : `${historyId}:${stream}`;
+export function recordingHistoryFileId(historyId: string, stream: RecordingStream, kind?: RecordingArtifactKind): string {
+  return kind ? `${historyId}:${kind}` : `${historyId}:${stream}`;
 }
 
 export function createRecordingHistoryId(): string {
@@ -121,7 +123,7 @@ export function createRecordingHistoryId(): string {
 }
 
 export function recordingLabelFromFilename(filename: string): string {
-  return filename.replace(/-(recording|mic|self-video)\.(?:webm|mp4|m4a)$/, '') || filename;
+  return recordingGroupName(filename) ?? filename;
 }
 
 /** Decodes durable history data before it reaches callers. Invalid rows are skipped. */
@@ -209,7 +211,7 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
   return {
     id,
     stream,
-    ...(candidate.kind === 'notes' ? { kind: 'notes' as const } : {}),
+    ...(isArtifactKind(candidate.kind) ? { kind: candidate.kind } : {}),
     filename,
     mimeType: optionalString('mimeType') ?? contentTypeForRecordingFilename(filename),
     ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),

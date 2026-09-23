@@ -39,6 +39,8 @@ function makeActions(over: Partial<CompletedNamingActions> = {}): jest.Mocked<Co
     notify: jest.fn(),
     rename: jest.fn(async () => undefined),
     destinations: jest.fn(() => [{ id: 'dest-a', name: 'Psychotherapy' }]),
+    driveRootFolder: jest.fn(() => 'Recordings'),
+    createDestination: jest.fn(async (name: string) => ({ id: 'dest-new', name })),
     fileTo: jest.fn(async () => undefined),
     localFolders: jest.fn(() => [{ id: 'local-a', name: 'Therapy 2026' }]),
     pendingLocal: jest.fn(() => []),
@@ -62,9 +64,20 @@ describe('CompletedNamingPrompt destinations', () => {
 
     expect(asked().destinations).toEqual({
       presets: [{ id: 'dest-a', name: 'Psychotherapy' }],
-      unfiledLabel: 'Google Meet Records',
+      unfiledLabel: 'Rest',
       initialId: null,
+      onCreate: expect.any(Function),
     });
+  });
+
+  it('makes a folder from the dialog and hands it back to be selected (7A)', async () => {
+    const { dialog, asked } = stubDialog();
+    const actions = makeActions();
+    new CompletedNamingPrompt(dialog, actions).queue('idle', session());
+    await flush();
+
+    await expect(asked().destinations!.onCreate!('Standups')).resolves.toEqual({ id: 'dest-new', name: 'Standups' });
+    expect(actions.createDestination).toHaveBeenCalledWith('Standups');
   });
 
   it('omits the picker when no destinations are configured', async () => {
@@ -91,7 +104,7 @@ describe('CompletedNamingPrompt destinations', () => {
     expect(actions.fileTo).toHaveBeenCalledWith('rec-1', 'dest-a');
   });
 
-  it('does not touch Drive folders when the built-in folder is kept', async () => {
+  it('does not touch Drive folders when the default destination is kept', async () => {
     const { dialog, asked } = stubDialog();
     const actions = makeActions();
     new CompletedNamingPrompt(dialog, actions).queue('idle', session());
@@ -180,7 +193,7 @@ describe('CompletedNamingPrompt destinations', () => {
       // The upload job is claimed first and keeps the Drive wording; the local
       // recording is then asked about in turn rather than being skipped.
       expect(askedAt(0).title).toBe('Name this recording');
-      expect(askedAt(0).destinations?.unfiledLabel).toBe('Google Meet Records');
+      expect(askedAt(0).destinations?.unfiledLabel).toBe('Rest');
       // The local prompt is the save itself (9L); with folders offered, FOLDER replaces the hint.
       expect(askedAt(1).title).toBe('Save recording');
       expect(askedAt(1).message).toBe('');

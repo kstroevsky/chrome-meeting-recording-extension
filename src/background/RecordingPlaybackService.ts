@@ -42,10 +42,11 @@ export class RecordingPlaybackService {
     const entry = await this.deps.getEntry(recordingId);
     if (!entry || entry.deletedAt) return undefined;
 
-    // The sidecar is notes, not media. Filtered by `kind` *and* by media type,
-    // because rows written before the sidecar carried its own identity can be
-    // stored without `kind` and would otherwise arrive as a playable track.
-    const media = entry.files.filter((file) => file.kind !== 'notes'
+    // A sidecar is notes or a transcript, not media. Filtered by `kind` *and*
+    // by media type, because rows written before a sidecar carried its own
+    // identity can be stored without `kind` and would otherwise arrive as a
+    // playable track.
+    const media = entry.files.filter((file) => file.kind == null
       && (file.mimeType.startsWith('video/') || file.mimeType.startsWith('audio/')));
     return {
       recordingId: entry.id,

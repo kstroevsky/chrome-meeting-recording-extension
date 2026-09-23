@@ -11,8 +11,8 @@
  */
 
 import type { PlaybackManifest } from '../../shared/playback';
-import { formatClock, seekFraction, toNoteMarks, toTopicBands } from './playerFormat';
-import { activeSegmentIndex, railItems, sortSegments, toSrt } from './playerTranscript';
+import { formatClock, mergeNoteMarks, seekFraction, toNoteMarks, toTopicBands } from './playerFormat';
+import { activeSegmentIndex, noteAt, railItems, sortSegments, toSrt } from './playerTranscript';
 import type { RecordingNotation } from '../../shared/notations';
 import type { TranscriptSegment } from '../../shared/transcript';
 import { audioTracks, shownCount, type TrackDescriptor } from './playerTracks';
@@ -21,6 +21,20 @@ import { KEYBOARD_HELP, SKIP_STEPS, SPEED_STEPS } from './playerKeymap';
 
 /** The header dropdowns' chevron (f12): 8px, in the faint ink. */
 const DROPDOWN_CHEVRON = '<svg class="player__files-chevron" width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5l3 3 3-3"/></svg>';
+
+const RAIL_ICON = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M10 3v10"/></svg>';
+const ENTER_FULLSCREEN_ICON = '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg>';
+const LEAVE_FULLSCREEN_ICON = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2v3H2M9 2v3h3M5 12V9H2M9 12V9h3"/></svg>';
+const PENCIL_ICON = '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
+const TICK_ICON = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.8 5.2L4 7.4l4.2-4.6"/></svg>';
+const SEARCH_ICON = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="5.2" cy="5.2" r="3.4"/><path d="M7.8 7.8l2.4 2.4"/></svg>';
+
+/**
+ * A recording with this many notes gets the rail's index treatment (f20): a
+ * search field, and each heading's start time, so the list reads as contents.
+ * Below it the headings are few enough to scroll (f10, f18).
+ */
+export const RAIL_INDEX_NOTES = 12;
 
 const $ = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) => {
   const el = document.createElement(tag);
@@ -52,6 +66,8 @@ export type PlayerViewCallbacks = {
   toggleTrackMuted: (fileId: string) => void;
   setSkipSeconds: (seconds: number) => void;
   setSpeed: (rate: number) => void;
+  /** Renames a note from its rail heading (f18); resolves false when the write failed. */
+  renameNote?: (id: string, text: string) => Promise<boolean>;
 };
 
 export class PlayerView {
@@ -90,9 +106,25 @@ export class PlayerView {
   private readonly railList = $('div', 'player__rail-list');
   private readonly railToggle = document.createElement('button');
   private readonly subtitle = $('div', 'player__subtitle');
+  /** Fullscreen only (f15): the name and date move onto the picture, top left. */
+  private readonly pictureTitle = $('div', 'player__picture-title');
+  private readonly pictureName = $('span', 'player__picture-name');
+  private readonly pictureDate = $('span', 'player__picture-date');
+  private readonly fullscreenButton = document.createElement('button');
+  /** Fullscreen only: brings back a rail its own hide button put away. */
+  private readonly pictureRailButton = document.createElement('button');
+  private readonly railSearch = $('div', 'player__rail-search');
+  private readonly railQuery = document.createElement('input');
+  private readonly railEmpty = $('p', 'player__rail-empty');
   /** Time-sorted transcript lines; empty means no rail at all, not a hidden one. */
   private segments: TranscriptSegment[] = [];
+  private notations: RecordingNotation[] = [];
   private lineElements: HTMLElement[] = [];
+  /** The rail's rows with the text each answers to, for search (f20). */
+  private railEntries: Array<{ element: HTMLElement; kind: 'heading' | 'line'; noteId: string | null; text: string }> = [];
+  private readonly headings = new Map<string, HTMLElement>();
+  private query = '';
+  private renamingId: string | null = null;
   private activeIndex = -1;
   private railOpen = true;
   private subtitlesOn = true;
@@ -156,7 +188,7 @@ export class PlayerView {
     // Shown only when there is a transcript: the header loses it otherwise (f11/f12).
     this.railToggle.className = 'player__rail-toggle'; this.railToggle.type = 'button';
     this.railToggle.hidden = true;
-    this.railToggle.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M10 3v10"/></svg>';
+    this.railToggle.innerHTML = RAIL_ICON;
     this.railToggle.addEventListener('click', () => this.setRailOpen(!this.railOpen));
 
     header.append(back, this.title, $('span', 'player__divider'), filesWrap, topicsWrap, this.railToggle, this.date, close);
@@ -165,7 +197,8 @@ export class PlayerView {
     this.video.className = 'player__video';
     this.video.setAttribute('playsinline', '');
     this.video.preload = 'metadata';
-    this.stage.append(this.video, this.auxiliaries, $('span', 'player__scrim'));
+    this.pictureTitle.append(this.pictureName, this.pictureDate);
+    this.stage.append(this.video, this.auxiliaries, $('span', 'player__scrim'), this.pictureTitle);
 
     const scrub = $('div', 'player__scrub');
     const hit = $('span', 'player__hit');
@@ -187,11 +220,14 @@ export class PlayerView {
     this.playButton.className = 'player__play'; this.playButton.type = 'button';
     this.playButton.addEventListener('click', () => this.callbacks.togglePlay());
     this.clock.className = 'player__clock';
-    const fullscreen = document.createElement('button');
-    fullscreen.className = 'player__icon player__icon--on-picture'; fullscreen.type = 'button';
-    fullscreen.title = 'Fullscreen'; fullscreen.setAttribute('aria-label', 'Fullscreen');
-    fullscreen.innerHTML = '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg>';
-    fullscreen.addEventListener('click', () => this.callbacks.toggleFullscreen());
+    this.fullscreenButton.className = 'player__icon player__icon--on-picture'; this.fullscreenButton.type = 'button';
+    this.fullscreenButton.addEventListener('click', () => this.callbacks.toggleFullscreen());
+    this.setFullscreen(false);
+    this.pictureRailButton.className = 'player__icon player__icon--on-picture player__picture-rail'; this.pictureRailButton.type = 'button';
+    this.pictureRailButton.title = 'Show the transcript'; this.pictureRailButton.setAttribute('aria-label', 'Show the transcript');
+    this.pictureRailButton.innerHTML = RAIL_ICON;
+    this.pictureRailButton.hidden = true;
+    this.pictureRailButton.addEventListener('click', () => this.setRailOpen(true));
     this.volumeButton.className = 'player__icon player__icon--on-picture'; this.volumeButton.type = 'button';
     this.volumeButton.title = 'Volume · tab audio and microphone';
     this.volumeButton.setAttribute('aria-label', 'Volume');
@@ -214,7 +250,7 @@ export class PlayerView {
     const settingsWrap = $('span', 'player__popover player__popover--up');
     settingsWrap.append(this.settingsButton, this.settingsMenu);
 
-    controls.append(this.playButton, this.clock, volumeWrap, settingsWrap, fullscreen);
+    controls.append(this.playButton, this.clock, volumeWrap, settingsWrap, this.pictureRailButton, this.fullscreenButton);
 
     this.help.hidden = true;
     this.help.setAttribute('role', 'dialog');
@@ -463,10 +499,13 @@ export class PlayerView {
   /** Renders everything the manifest determines; sources are attached separately. */
   render(manifest: PlaybackManifest): void {
     this.title.textContent = manifest.title;
+    this.pictureName.textContent = manifest.title;
     this.durationMs = manifest.durationMs ?? 0;
     // `JUL 19 · 22:40`: the day it was made, and how long it runs (f12).
     const day = new Date(manifest.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
     this.date.textContent = this.durationMs ? `${day} · ${formatClock(this.durationMs)}` : day;
+    this.pictureDate.textContent = this.date.textContent;
+    this.notations = manifest.notations;
     this.renderMarks(manifest);
     this.renderTopics(manifest);
     this.setPosition(0);
@@ -525,15 +564,20 @@ export class PlayerView {
 
   private renderMarks(manifest: PlaybackManifest): void {
     this.marks.replaceChildren();
-    for (const mark of toNoteMarks(manifest.notations, this.durationMs)) {
-      const el = $('span', `player__mark${mark.named ? '' : ' player__mark--unnamed'}`);
-      el.style.left = `${mark.leftPct}%`;
-      el.style.width = `${mark.widthPct}%`;
-      el.title = mark.label;
+    for (const group of mergeNoteMarks(toNoteMarks(manifest.notations, this.durationMs))) {
+      const merged = group.notes.length > 1;
+      const el = $('span', `player__mark${group.named ? '' : ' player__mark--unnamed'}${merged ? ' player__mark--merged' : ''}`);
+      el.style.left = `${group.leftPct}%`;
+      el.style.width = `${group.widthPct}%`;
+      el.dataset.noteIds = group.notes.map((note) => note.id).join(' ');
+      el.title = merged ? `${group.notes.length} notes here · zoom or use the list` : group.notes[0].label;
       el.addEventListener('click', (event) => {
         // A mark is a seek target, not part of the track behind it.
         event.stopPropagation();
-        this.callbacks.seekTo(mark.startMs);
+        // A merged mark cannot know which note was meant, so it opens them in
+        // the list instead of guessing (f20); a lone mark just plays.
+        if (merged && this.revealNotes(group.notes.map((note) => note.id))) return;
+        this.callbacks.seekTo(group.notes[0].startMs);
       });
       this.marks.append(el);
     }
@@ -552,53 +596,90 @@ export class PlayerView {
 
   /**
    * The rail (f10): a header with the note count and SRT, then the transcript,
-   * each run of lines said during a note under that note's sticky heading.
+   * each run of lines said during a note under that note's sticky heading. In
+   * fullscreen (f15) the header also names itself and carries its own hide
+   * button, since the popup header that held the toggle is gone.
    */
   private buildRail(): void {
     this.rail.hidden = true;
     this.rail.setAttribute('aria-label', 'Transcript');
     const head = $('div', 'player__rail-head');
+    const label = $('span', 'player__rail-label');
+    const name = $('span', 'player__rail-name'); name.textContent = 'TRANSCRIPT';
+    label.append(name, this.railCount);
     const srt = document.createElement('button');
     srt.className = 'player__rail-srt'; srt.type = 'button';
     srt.title = 'Download subtitles · .srt';
     srt.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 1.6v6.2M3.6 5.6L6 8l2.4-2.4M2.2 10.2h7.6"/></svg>';
     srt.append('SRT');
     srt.addEventListener('click', () => this.downloadSrt());
-    head.append(this.railCount, srt);
+    const hide = document.createElement('button');
+    hide.className = 'player__rail-hide'; hide.type = 'button';
+    hide.title = 'Hide the transcript'; hide.setAttribute('aria-label', 'Hide the transcript');
+    hide.innerHTML = RAIL_ICON;
+    hide.addEventListener('click', () => this.setRailOpen(false));
+    head.append(label, srt, hide);
+
+    // Search (f20): only a long rail gets it, see RAIL_INDEX_NOTES.
+    this.railSearch.hidden = true;
+    const field = $('label', 'player__rail-search-field');
+    field.insertAdjacentHTML('afterbegin', SEARCH_ICON);
+    this.railQuery.className = 'player__rail-query';
+    this.railQuery.type = 'search';
+    this.railQuery.placeholder = 'Search notes and lines';
+    this.railQuery.setAttribute('aria-label', 'Search notes and lines');
+    this.railQuery.addEventListener('input', () => this.applyQuery(this.railQuery.value));
+    this.railQuery.addEventListener('keydown', (event) => {
+      // Escape clears first and only then leaves the field; it never closes the player from here.
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      if (this.railQuery.value) { this.railQuery.value = ''; this.applyQuery(''); } else this.railQuery.blur();
+    });
+    field.append(this.railQuery);
+    this.railSearch.append(field);
+    this.railEmpty.hidden = true;
+
     // Only a person scrolling pauses the follow; the rail's own scrolls do not.
     const userScroll = () => { if (!this.programmaticScroll) this.userScrolledAt = Date.now(); };
     this.railList.addEventListener('wheel', userScroll, { passive: true });
     this.railList.addEventListener('scroll', userScroll, { passive: true });
-    this.rail.append(head, this.railList);
+    this.rail.append(head, this.railSearch, this.railList);
   }
 
   /** Gives the player its transcript, or leaves the rail absent (null or empty). */
   setTranscript(segments: TranscriptSegment[] | null, notations: RecordingNotation[], title: string): void {
     this.segments = segments?.length ? sortSegments(segments) : [];
+    this.notations = notations;
     this.transcriptTitle = title || 'transcript';
     this.activeIndex = -1;
     this.lineElements = [];
+    this.railEntries = [];
+    this.headings.clear();
+    this.renamingId = null;
     this.railList.replaceChildren();
     const present = this.segments.length > 0;
     this.railToggle.hidden = !present;
     this.subtitle.hidden = true;
     if (!present) {
       this.rail.hidden = true;
+      this.pictureRailButton.hidden = true;
       this.body.classList.remove('player__body--rail');
       return;
     }
     this.railCount.textContent = notations.length
       ? `${notations.length} ${notations.length === 1 ? 'NOTE' : 'NOTES'}`
-      : 'TRANSCRIPT';
+      : 'NO NOTES';
+    this.rail.classList.toggle('player__rail--counted', notations.length > 0);
+    const indexed = notations.length >= RAIL_INDEX_NOTES;
+    this.railSearch.hidden = !indexed;
+    this.railQuery.value = '';
+    this.query = '';
     for (const item of railItems(this.segments, notations)) {
       if (item.kind === 'heading') {
-        const heading = document.createElement('button');
-        heading.type = 'button';
-        heading.className = `player__rail-heading${item.notation.text ? '' : ' player__rail-heading--unnamed'}`;
-        heading.title = 'Play from the start of this note';
-        heading.textContent = item.notation.text || 'Unnamed note';
-        heading.addEventListener('click', () => this.callbacks.seekTo(item.notation.tStartMs));
+        const heading = this.heading(item.notation, indexed);
         this.railList.append(heading);
+        this.headings.set(item.notation.id, heading);
+        this.railEntries.push({ element: heading, kind: 'heading', noteId: item.notation.id, text: item.notation.text.toLowerCase() });
         continue;
       }
       const line = document.createElement('button');
@@ -621,20 +702,238 @@ export class PlayerView {
       line.addEventListener('click', () => this.callbacks.seekTo(item.segment.tStartMs));
       this.railList.append(line);
       this.lineElements[item.index] = line;
+      this.railEntries.push({
+        element: line,
+        kind: 'line',
+        noteId: item.noteId,
+        text: `${item.segment.speaker ?? ''} ${item.segment.text}`.toLowerCase(),
+      });
     }
+    this.railList.append(this.railEmpty);
     this.setRailOpen(this.railOpen);
     this.syncTranscript(this.positionMs);
+  }
+
+  /**
+   * A note's sticky heading. The row plays from the note; its name and the
+   * pencil that hovering reveals rename it in place (f18). A long rail adds the
+   * start time on the right, so the headings read as a contents page (f20).
+   */
+  private heading(notation: RecordingNotation, indexed: boolean): HTMLElement {
+    const heading = $('div', `player__rail-heading${notation.text ? '' : ' player__rail-heading--unnamed'}`);
+    heading.title = 'Play from the start of this note';
+    heading.tabIndex = 0;
+    heading.dataset.noteId = notation.id;
+    const play = () => this.callbacks.seekTo(notation.tStartMs);
+    heading.addEventListener('click', play);
+    heading.addEventListener('keydown', (event) => {
+      if (event.target === heading && event.key === 'Enter') { event.preventDefault(); play(); }
+    });
+    this.paintHeading(heading, notation, indexed);
+    return heading;
+  }
+
+  private paintHeading(heading: HTMLElement, notation: RecordingNotation, indexed = this.railSearch.hidden === false): void {
+    heading.classList.remove('player__rail-heading--editing');
+    heading.classList.toggle('player__rail-heading--unnamed', !notation.text);
+    heading.tabIndex = 0;
+    const name = $('span', 'player__rail-heading-name');
+    name.textContent = notation.text || 'Unnamed';
+    heading.replaceChildren(name);
+    if (this.callbacks.renameNote) {
+      const rename = (event: Event) => { event.stopPropagation(); this.beginRename(notation.id); };
+      name.addEventListener('click', rename);
+      const pencil = document.createElement('button');
+      pencil.type = 'button';
+      pencil.className = 'player__rail-rename';
+      pencil.title = 'Rename this note'; pencil.setAttribute('aria-label', 'Rename this note');
+      pencil.innerHTML = PENCIL_ICON;
+      pencil.addEventListener('click', rename);
+      heading.append(pencil);
+    }
+    if (indexed) {
+      const time = $('span', 'player__rail-heading-time');
+      time.textContent = formatClock(notation.tStartMs);
+      heading.append(time);
+    }
+  }
+
+  /**
+   * Turns a heading into its name field (f18): Enter or the tick keeps the
+   * name, Escape puts the old one back. The mark keeps its place throughout,
+   * since a name never touches the timing.
+   */
+  beginRename(id: string): boolean {
+    const heading = this.headings.get(id);
+    const notation = this.notations.find((candidate) => candidate.id === id);
+    if (!heading || !notation || !this.callbacks.renameNote) return false;
+    if (this.renamingId && this.renamingId !== id) {
+      const open = this.headings.get(this.renamingId);
+      const openNote = this.notations.find((candidate) => candidate.id === this.renamingId);
+      if (open && openNote) this.paintHeading(open, openNote);
+    }
+    this.renamingId = id;
+    heading.classList.add('player__rail-heading--editing');
+    heading.removeAttribute('tabindex');
+    const field = $('span', 'player__rail-rename-field');
+    const input = document.createElement('input');
+    input.className = 'player__rail-rename-input';
+    input.value = notation.text;
+    input.placeholder = 'Name this note';
+    input.setAttribute('aria-label', 'Note name');
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'player__rail-rename-save';
+    save.title = 'Save'; save.setAttribute('aria-label', 'Save the name');
+    save.innerHTML = TICK_ICON;
+    field.append(input, save);
+    heading.replaceChildren(field);
+
+    let settled = false;
+    const finish = (keep: boolean) => {
+      if (settled) return;
+      settled = true;
+      void this.finishRename(notation, keep ? input.value.trim() : notation.text);
+    };
+    field.addEventListener('click', (event) => event.stopPropagation());
+    // Pressing the tick blurs the field first; mousedown keeps focus so the
+    // click, not the blur, is what saves.
+    save.addEventListener('mousedown', (event) => event.preventDefault());
+    save.addEventListener('click', () => finish(true));
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); finish(true); }
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(false); }
+    });
+    if (!this.rail.hidden) {
+      this.programmaticScroll = true;
+      heading.scrollIntoView?.({ block: 'nearest' });
+      requestAnimationFrame(() => { this.programmaticScroll = false; });
+    }
+    input.focus();
+    input.select();
+    return true;
+  }
+
+  private async finishRename(notation: RecordingNotation, text: string): Promise<void> {
+    const heading = this.headings.get(notation.id);
+    if (this.renamingId === notation.id) this.renamingId = null;
+    if (!heading) return;
+    const previous = notation.text;
+    if (text === previous) { this.paintHeading(heading, notation); heading.focus({ preventScroll: true }); return; }
+    // Shown at once and put back if the write fails: the name is the user's,
+    // and waiting on the background would make the field feel stuck.
+    this.applyNoteName(notation.id, text);
+    heading.focus({ preventScroll: true });
+    const saved = await this.callbacks.renameNote?.(notation.id, text);
+    if (saved === false) this.applyNoteName(notation.id, previous);
+  }
+
+  /** One note's name, everywhere the player shows it: its heading, its mark, the search. */
+  private applyNoteName(id: string, text: string): void {
+    this.notations = this.notations.map((note) => (note.id === id ? { ...note, text } : note));
+    const notation = this.notations.find((note) => note.id === id);
+    const heading = this.headings.get(id);
+    if (notation && heading && this.renamingId !== id) this.paintHeading(heading, notation);
+    const entry = this.railEntries.find((candidate) => candidate.kind === 'heading' && candidate.noteId === id);
+    if (entry) entry.text = text.toLowerCase();
+    for (const mark of Array.from(this.marks.querySelectorAll<HTMLElement>('.player__mark'))) {
+      const ids = mark.dataset.noteIds?.split(' ') ?? [];
+      if (ids.length !== 1 || ids[0] !== id) continue;
+      mark.title = text || 'Name this one';
+      mark.classList.toggle('player__mark--unnamed', !text);
+    }
+  }
+
+  /** `T`, and the header's panel button: the rail, when there is one to show. */
+  toggleRail(): boolean {
+    if (!this.segments.length) return false;
+    this.setRailOpen(!this.railOpen);
+    return true;
+  }
+
+  /** `R`: renames the note under the playhead, opening the rail to do it. */
+  renameNoteAt(positionMs: number): boolean {
+    const notation = noteAt(this.notations, positionMs);
+    if (!notation || !this.headings.has(notation.id)) return false;
+    if (!this.railOpen) this.setRailOpen(true);
+    return this.beginRename(notation.id);
+  }
+
+  /** `/`: into the rail's search, when the rail is long enough to have one. */
+  focusSearch(): boolean {
+    if (!this.segments.length || this.railSearch.hidden) return false;
+    if (!this.railOpen) this.setRailOpen(true);
+    this.railQuery.focus();
+    this.railQuery.select();
+    return true;
+  }
+
+  /** A merged mark's notes, brought into view in the rail (f20). False when there is no rail to show them in. */
+  private revealNotes(ids: string[]): boolean {
+    const first = ids.map((id) => this.headings.get(id)).find(Boolean);
+    if (!first) return false;
+    if (!this.railOpen) this.setRailOpen(true);
+    if (this.query) { this.railQuery.value = ''; this.applyQuery(''); }
+    this.userScrolledAt = Date.now();
+    this.programmaticScroll = true;
+    first.scrollIntoView?.({ block: 'start' });
+    requestAnimationFrame(() => { this.programmaticScroll = false; });
+    for (const id of ids) {
+      const heading = this.headings.get(id);
+      if (!heading) continue;
+      heading.classList.remove('player__rail-heading--revealed');
+      // Restarted rather than toggled, so a second click flashes again.
+      void heading.offsetWidth;
+      heading.classList.add('player__rail-heading--revealed');
+    }
+    return true;
+  }
+
+  /**
+   * Filters the rail to what matches (f20): a line by its words or speaker, a
+   * heading by its name. A matching heading keeps its lines, and a matching line
+   * keeps its heading, so every hit still says which note it sits in.
+   */
+  private applyQuery(value: string): void {
+    this.query = value.trim().toLowerCase();
+    const query = this.query;
+    const headingHit = new Set<string>();
+    const lineHit = new Set<string>();
+    for (const entry of this.railEntries) {
+      if (!query || !entry.text.includes(query) || !entry.noteId) continue;
+      (entry.kind === 'heading' ? headingHit : lineHit).add(entry.noteId);
+    }
+    let shown = 0;
+    for (const entry of this.railEntries) {
+      const visible = !query
+        || entry.text.includes(query)
+        || (entry.noteId != null && (entry.kind === 'heading' ? lineHit.has(entry.noteId) : headingHit.has(entry.noteId)));
+      entry.element.hidden = !visible;
+      if (visible && entry.kind === 'line') shown += 1;
+    }
+    this.railEmpty.hidden = !query || shown > 0 || this.railEntries.some((entry) => entry.kind === 'heading' && !entry.element.hidden);
+    this.railEmpty.textContent = `NOTHING MATCHES “${value.trim().toUpperCase()}”`;
+    if (!query) this.syncTranscript(this.positionMs, true);
   }
 
   private setRailOpen(open: boolean): void {
     this.railOpen = open;
     const present = this.segments.length > 0;
     this.rail.hidden = !present || !open;
+    this.pictureRailButton.hidden = !present || open;
     this.body.classList.toggle('player__body--rail', present && open);
     this.railToggle.classList.toggle('player__rail-toggle--open', open);
     this.railToggle.setAttribute('aria-pressed', String(open));
     this.railToggle.title = open ? 'Hide transcript' : 'Show transcript';
     this.railToggle.setAttribute('aria-label', this.railToggle.title);
+  }
+
+  /** Swaps the fullscreen button between entering and leaving (f15). */
+  setFullscreen(on: boolean): void {
+    this.fullscreenButton.title = on ? 'Leave fullscreen' : 'Fullscreen';
+    this.fullscreenButton.setAttribute('aria-label', this.fullscreenButton.title);
+    this.fullscreenButton.innerHTML = on ? LEAVE_FULLSCREEN_ICON : ENTER_FULLSCREEN_ICON;
   }
 
   /** The `C` key and the Subtitles row: the band on the picture, not the rail. */
@@ -650,19 +949,20 @@ export class PlayerView {
   }
 
   /** Keeps the playing line and the subtitle in step; touches the DOM only on a change. */
-  private syncTranscript(positionMs: number): void {
+  private syncTranscript(positionMs: number, force = false): void {
     if (!this.segments.length) return;
     const index = activeSegmentIndex(this.segments, positionMs);
-    if (index === this.activeIndex) return;
+    if (index === this.activeIndex && !force) return;
     this.lineElements[this.activeIndex]?.classList.remove('player__rail-line--active');
     this.activeIndex = index;
     const line = this.lineElements[index];
     line?.classList.add('player__rail-line--active');
     this.paintSubtitle();
-    // Follow the conversation, unless the user is reading elsewhere in it.
-    if (line && !this.rail.hidden && Date.now() - this.userScrolledAt > 4000) {
+    // Follow the conversation, unless the user is reading elsewhere in it,
+    // searching it, or naming a note in it.
+    if (line && !line.hidden && !this.rail.hidden && !this.query && !this.renamingId && Date.now() - this.userScrolledAt > 4000) {
       this.programmaticScroll = true;
-      line.scrollIntoView({ block: 'nearest' });
+      line.scrollIntoView?.({ block: 'nearest' });
       requestAnimationFrame(() => { this.programmaticScroll = false; });
     }
   }

@@ -1,5 +1,6 @@
 import type { DownloadSettledResult } from '../platform/chrome/downloads';
-import type { RecordingStream, StorageMode, UploadJob } from '../shared/recording';
+import type { RecordingArtifactKind, RecordingStream, StorageMode, UploadJob } from '../shared/recording';
+import { isArtifactKind } from '../shared/recordingTypes';
 import { buildRenamedRecordingFilename, slugifyRecordingTitle } from '../shared/recording';
 import {
   pendingArtifactFields,
@@ -268,15 +269,15 @@ export class RecordingHistoryService {
           delivery: { ...file.delivery, status: 'pending' as const },
         };
       });
-      // A job file with no row yet — the sidecar, which is created during the
-      // run rather than at finalize — becomes its own row instead of vanishing.
+      // A job file with no row yet — a sidecar, which is created during the run
+      // rather than at finalize — becomes its own row instead of vanishing.
       const extra = job.files
-        .filter((candidate) => candidate.kind === 'notes'
-          && !files.some((file) => file.kind === 'notes'))
+        .filter((candidate) => isArtifactKind(candidate.kind)
+          && !files.some((file) => file.kind === candidate.kind))
         .map((candidate) => ({
-          id: recordingHistoryFileId(historyId, candidate.stream, 'notes'),
+          id: recordingHistoryFileId(historyId, candidate.stream, candidate.kind),
           stream: candidate.stream,
-          kind: 'notes' as const,
+          kind: candidate.kind!,
           filename: candidate.filename,
           ...pendingArtifactFields(candidate.filename, 'drive'),
           ...(candidate.status === 'uploaded' && candidate.driveFileId
@@ -324,7 +325,7 @@ export class RecordingHistoryService {
     downloadId: number | undefined,
     settled: DownloadSettledResult,
     error?: string,
-    kind?: 'notes',
+    kind?: RecordingArtifactKind,
   ): Promise<void> {
     await this.repository.update(historyId, (current) => {
       if (!current || current.deletedAt) return current;
@@ -446,7 +447,7 @@ function createEntryFromUploadJob(job: UploadJob): RecordingHistoryEntry {
     // stream, and its own `kind` has to survive for the rename to name it.
     id: recordingHistoryFileId(historyId, file.stream, file.kind),
     stream: file.stream,
-    ...(file.kind === 'notes' ? { kind: 'notes' as const } : {}),
+    ...(isArtifactKind(file.kind) ? { kind: file.kind } : {}),
     filename: file.filename,
     ...(file.startOffsetMs != null ? { captureStartOffsetMs: file.startOffsetMs } : {}),
     ...pendingArtifactFields(file.filename, 'drive'),

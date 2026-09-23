@@ -33,13 +33,13 @@ test.describe('Drive destinations (integration)', () => {
       await open();
 
       // Starts empty: every recording goes to the built-in folder until asked otherwise.
-      await expect(page.locator('.destination-row')).toHaveCount(0);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(0);
 
       for (const name of ['Work meetings', 'Psychotherapy', 'Interviews']) {
         await page.locator('#destination-add').click();
         await page.locator('.destination-name').last().fill(name);
       }
-      await expect(page.locator('.destination-row')).toHaveCount(3);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(3);
       await page.locator('#save-settings').click();
 
       await open();
@@ -48,7 +48,7 @@ test.describe('Drive destinations (integration)', () => {
       // Renaming keeps the row; removing takes only that row.
       await page.locator('.destination-name').nth(1).fill('Therapy');
       await page.locator('.destination-remove').nth(0).click();
-      await expect(page.locator('.destination-row')).toHaveCount(2);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(2);
       await page.locator('#save-settings').click();
 
       await open();
@@ -58,7 +58,7 @@ test.describe('Drive destinations (integration)', () => {
       await page.locator('#destination-add').click();
       await page.locator('#save-settings').click();
       await open();
-      await expect(page.locator('.destination-row')).toHaveCount(2);
+      await expect(page.locator('#destinations-list .destination-row')).toHaveCount(2);
     } finally {
       await closeHarness(harness);
     }
@@ -109,7 +109,7 @@ test.describe('Drive destinations (integration)', () => {
 
       // A recording made before it was filed reads as unfiled, not as a guess.
       await expect(trigger).toBeVisible({ timeout: 20_000 });
-      await expect(trigger).toHaveText('Google Meet Records (unfiled)');
+      await expect(trigger).toHaveText('Rest (unfiled)');
 
       await chooseDestination('Psychotherapy');
       await expect.poll(() => Object.values(drive.resources).includes('Psychotherapy'), {
@@ -125,13 +125,13 @@ test.describe('Drive destinations (integration)', () => {
 
       // And it can be unfiled again — back to the built-in folder.
       const movesBefore = drive.folderMoves;
-      await chooseDestination('Google Meet Records (unfiled)');
+      await chooseDestination('Rest (unfiled)');
       await expect.poll(() => drive.folderMoves, { timeout: 20_000 }).toBeGreaterThan(movesBefore);
-      await expect(trigger).toHaveText('Google Meet Records (unfiled)', { timeout: 20_000 });
+      await expect(trigger).toHaveText('Rest (unfiled)', { timeout: 20_000 });
 
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.locator('.recording-row').first().click();
-      await expect(trigger).toHaveText('Google Meet Records (unfiled)');
+      await expect(trigger).toHaveText('Rest (unfiled)');
     } finally {
       await closeHarness(harness);
     }

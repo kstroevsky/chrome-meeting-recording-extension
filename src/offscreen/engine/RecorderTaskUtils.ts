@@ -13,36 +13,20 @@ import { BitrateObserver } from './BitrateObserver';
 import type { RecorderEngineDeps, SealedStorageFile, StorageTarget } from './RecorderEngineTypes';
 import { InMemoryStorageTarget } from './RecorderEngineTypes';
 import type { RecordingStream } from '../../shared/recording';
-import type { RecordingFileExtension } from '../../shared/recordingFormats';
 import { isWebmRecordingFilename } from '../../shared/recordingFormats';
 
 /**
- * Formats the current time as a filesystem-safe UTC datetime string:
- * `YYYYMMDDTHHmmssZ` — no colons or slashes that would break file paths.
- */
-function utcDatetimeStamp(date = new Date()): string {
-  // Format: YYYYMMDDTHHmmss (UTC). Seconds are included so two recordings of the
-  // same meeting or same-titled page started within the same minute don't collide
-  // on filename (and silently overwrite each other in storage).
-  return date.toISOString().slice(0, 19).replace(/[-:]/g, '');
-}
-
-/**
- * Builds a recording filename from an optional context slug and a stream type.
+ * Builds a recording filename from an optional context slug and a stream.
+ *
+ * The grammar lives in `shared/recordingFilename.ts`, which also parses it —
+ * they were separate once, and drifted apart twice without anything failing.
  *
  * Examples:
  *   `meet-abc-defg-hij-20260618T143045-recording.webm`  (Google Meet)
  *   `my-page-title-github-20260618T143045-recording.webm` (non-Meet tab)
  *   `20260618T143045-recording.webm`                     (no slug)
  */
-export function buildRecordingFilename(
-  slug: string,
-  type: 'recording' | 'mic' | 'self-video',
-  extension: RecordingFileExtension = 'webm',
-): string {
-  const slugPart = slug ? `${slug}-` : '';
-  return `${slugPart}${utcDatetimeStamp()}-${type}.${extension}`;
-}
+export { buildRecordingFilename } from '../../shared/recordingFilename';
 
 /**
  * Whether a stream may degrade to a RAM buffer when disk storage can't open.

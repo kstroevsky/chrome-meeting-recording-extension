@@ -73,6 +73,9 @@
   --done-ink: #3f7f5c;
   /* An edit field lifts off the surface: white in light, near-black in dark (7G, 7H). */
   --field-bg: #fff;
+  /* The save dialog's open folder list (9FD, 7D): the picked row, and the idle icons. */
+  --pick-bg: #efe9df;
+  --pick-icon: #a49c8e;
   /* The naming dialog's disk sits on a green bed (9L); dark keeps it dim (7F). */
   --name-bed: #e8efe9;
   /* A sheet over the popup sits a touch brighter than the page (3c). */
@@ -129,6 +132,8 @@
   --saved-bed: color-mix(in srgb, #4fae7d 16%, transparent);
   --done-ink: #4fae7d;
   --field-bg: #17140f;
+  --pick-bg: #2c2721;
+  --pick-icon: #8a7f6d;
   --name-bed: #1e2a22;
   --sheet-bg: #1a1714;
   --note-pale: #57452b;
@@ -183,6 +188,8 @@
     --saved-bed: color-mix(in srgb, #4fae7d 16%, transparent);
     --done-ink: #4fae7d;
     --field-bg: #17140f;
+    --pick-bg: #2c2721;
+    --pick-icon: #8a7f6d;
     --name-bed: #1e2a22;
     --sheet-bg: #1a1714;
     --note-pale: #57452b;

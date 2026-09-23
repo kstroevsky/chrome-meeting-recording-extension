@@ -52,6 +52,20 @@ is wrapped in a gold `<b>` in both the name and the notes preview. The count
 becomes `3 OF 42 · IN NAMES, NOTES AND TOPICS`, because a bare count is only useful next
 to what it was drawn from.
 
+## Adding notes later (f5, f6)
+
+ADD beside the note count in the details dialog opens `NoteEditor` in the dialog's place. The NOTES column stays blank until its digest lands, rather than showing a dash it has not read. A recording nobody noted still shows its notes section — the empty track and ADD — so the absence reads (`f4`). The editor leaves by its back button or Done to the details dialog, since naming and deleting the other notes still happen there, and by × to the list; either way the NOTES column refreshes.
+
+With a transcript (`f5`) the lines are the editor: dragging over them sets a span, a click plays from a line, and a double-click takes one line. Without a mouse, a focused line plays on Enter and Shift+Enter marks the span from where the last one began (`f19`); Shift+click does the same. The span's lines turn warm with a ticked rail so they never read as part of a saved note; saved notes keep a solid rail with their name in the gutter. The composer under the lines holds the range, the length and the name. On the timeline the span is drawn full height with a grab handle at each end, and dragging one trims it while a bubble reads the range; saved notes sit at half height and open for editing only when their name is clicked. VIDEO in the header, off by default, pulls in the picture beside the line under the playhead. The speaker column is 44px rather than the design's 26px, because it holds a name, not `TAB` or `MIC`.
+
+Without a transcript (`f6`) the saved notes take the lines' place in their details rows (`RecordingNotesSection` in its bare mode), with rename and delete as in the dialog. NOTE opens a span at the playhead and END closes and keeps it; while it runs it is listed in time order as `running`, named in the composer, and Discard throws it away rather than saving it unnamed. Done keeps a finished span, and a running one that has a name, ended at the playhead; × keeps nothing.
+
+Notes are written through `ADD_RECORDING_NOTATION` and `UPDATE_RECORDING_NOTATION` (which also moves a note's start and end). Playback reuses the player's source resolution (`player/playbackSource.playbackUrl`). The Drive `notes.vtt` is written once when recording stops, so notes added or re-timed here are not in it.
+
+## Sidecar rows
+
+A recording's notes and transcript are delivered as WebVTT files beside the media (ADR-0005, ADR-0007), so history carries them as rows with a `kind`. They are not playable tracks — the playback manifest keeps only rows with no `kind` — and in the files list they are named for what they are, `NOTES` and `VTT`, since the stream a sidecar rides says nothing about it.
+
 ## Pagination and reconciliation
 
 History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make **Load more** scan every deleted record. `loadMore()` appends only entries not already present, so a repeated response cannot duplicate a card.
@@ -65,6 +79,9 @@ Rename and delete update the rendered list from their command responses rather t
 | `../recordings.ts` | page entrypoint: finds the static elements, creates the view and controller |
 | `RecordingsController.ts` | cursor state, RPC calls, response reconciliation, and action error handling |
 | `RecordingsView.ts` | DOM-only rendering and interaction callbacks |
+| `RecordingNotesSection.ts` | a recording's notes in the details dialog (`f2`): timeline, NOTES spoiler, rows, ADD; bare list mode for the editor |
+| `NoteEditor.ts` | adding and re-timing notes on a finished recording (`f5`, `f6`) |
+| `noteEditorModel.ts` | what the editor shows: lines by note, a drag's span, the lines a span covers, span text |
 
 The durable domain types and message guard are [`shared/recordingHistory.ts`](../shared/recordingHistory.ts). The repository and transition service are documented in [`background`](../background/README.md).
 

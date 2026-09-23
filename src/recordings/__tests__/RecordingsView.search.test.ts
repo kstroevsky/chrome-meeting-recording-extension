@@ -85,3 +85,17 @@ describe('RecordingsView search', () => {
     expect(input.placeholder).toBe('Search name, note or topic…');
   });
 });
+
+describe('RecordingsView NOTES column', () => {
+  it('stays blank until the digest lands, rather than claiming a dash it has not read', () => {
+    const { view, list } = mount();
+    view.render([entry('a', 'Weekly sync')]);
+    const cell = () => list.querySelector<HTMLElement>('.recording-row__notes')!;
+    expect(cell().textContent).toBe('');
+    expect(cell().classList.contains('recording-row__notes--none')).toBe(false);
+
+    view.setNoteSummaries({});
+    view.render([entry('a', 'Weekly sync')]);
+    expect(cell().textContent).toBe('—');
+  });
+});

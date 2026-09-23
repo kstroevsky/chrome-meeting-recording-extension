@@ -19,6 +19,7 @@ import {
 export {
   loadExtensionSettingsFromStorage,
   saveExtensionSettingsToStorage,
+  toStorageMode,
   resetExtensionSettingsToDefaults,
   buildRecorderRuntimeSettingsSnapshot,
   buildDefaultRunConfigFromSettings,
@@ -49,6 +50,9 @@ export {
 
 export {
   DEFAULT_EXTENSION_SETTINGS,
+  DEFAULT_DRIVE_ROOT_FOLDER_NAME,
+  DRIVE_DEFAULT_DESTINATION_NAME,
+  LEGACY_DRIVE_ROOT_FOLDER_NAME,
   MAX_DRIVE_FOLDER_NAME_LENGTH,
   MAX_DRIVE_FOLDER_PRESETS,
   MAX_LOCAL_FOLDER_NAME_LENGTH,

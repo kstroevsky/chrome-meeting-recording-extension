@@ -9,6 +9,7 @@
  * the runtime sampler timer, and the concrete engine/finalizer construction.
  */
 
+import { stripStreamSuffix } from '../shared/recordingFilename';
 import { describeRuntimeError } from './errors';
 import type { OffscreenPhaseUpdate } from '../shared/protocol';
 import {
@@ -25,6 +26,17 @@ import type { CompletedRecordingArtifact } from './engine/RecorderEngineTypes';
 /** The run's notes, rendered to WebVTT by the background, which owns them. */
 export type NotesSidecar = { vtt: string };
 
+/** What the background renders for the offscreen to deliver ahead of the media. */
+export type Sidecars = { notes?: NotesSidecar; transcript?: NotesSidecar };
+
+/**
+ * What a detached upload needs beyond the artifacts. The root folder name rides
+ * along because it comes from settings, which only background can read, and it
+ * is frozen per job so a change made while an upload is in flight cannot
+ * re-aim it.
+ */
+export type UploadHandoffContext = RecordingArtifactContext & { driveRootFolderName?: string };
+
 /**
  * Wraps the rendered VTT as an artifact the finalizer can deliver like any
  * other. The name is derived from a media artifact rather than sent with the
@@ -32,17 +44,21 @@ export type NotesSidecar = { vtt: string };
  * never captured — so `cleanup` is a no-op and crash recovery has nothing to
  * reclaim.
  */
-function notesArtifact(
+function sidecarArtifact(
   { vtt }: NotesSidecar,
-  media: CompletedRecordingArtifact[],
+  kind: 'notes' | 'transcript',
+  media: CompletedRecordingArtifact | undefined,
 ): CompletedRecordingArtifact | null {
-  const source = media[0]?.artifact.filename;
+  const source = media?.artifact.filename;
   if (!source) return null;
-  const filename = `${source.replace(/-(recording|mic|self-video)\.[a-z0-9]+$/i, '')}-notes.vtt`;
+  // Named off the media it rides with, so the two sit together. Permissive on
+  // purpose — a recording renamed after the fact no longer carries a stamp —
+  // but the suffix list it strips is the grammar's, not this file's own.
+  const filename = `${stripStreamSuffix(source)}-${kind}.vtt`;
   const file = new File([vtt], filename, { type: 'text/vtt' });
   return {
-    stream: media[0].stream,
-    kind: 'notes',
+    stream: media.stream,
+    kind,
     artifact: { filename, file, mimeType: 'text/vtt', cleanup: async () => {} },
   };
 }
@@ -88,7 +104,7 @@ export class OffscreenController {
   private finalizeRunPromise: Promise<void> | null = null;
   private engine: FinalizableEngine | null = null;
   private finalizer: ArtifactFinalizer | null = null;
-  private enqueueUpload: ((artifacts: CompletedRecordingArtifact[], context: RecordingArtifactContext) => void) | null = null;
+  private enqueueUpload: ((artifacts: CompletedRecordingArtifact[], context: UploadHandoffContext) => void) | null = null;
   private readonly now: () => number;
 
   constructor(private readonly deps: OffscreenControllerDeps) {
@@ -103,7 +119,7 @@ export class OffscreenController {
   attachServices(
     engine: FinalizableEngine,
     finalizer: ArtifactFinalizer,
-    enqueueUpload?: (artifacts: CompletedRecordingArtifact[], context: RecordingArtifactContext) => void
+    enqueueUpload?: (artifacts: CompletedRecordingArtifact[], context: UploadHandoffContext) => void
   ): void {
     this.engine = engine;
     this.finalizer = finalizer;
@@ -130,7 +146,9 @@ export class OffscreenController {
     if (this.phase !== 'idle') this.pushState(this.phase);
   };
 
-  onStopRequested = (notesSidecar?: NotesSidecar): void => { void this.finalize(notesSidecar); };
+  onStopRequested = (sidecars?: Sidecars, driveRootFolderName?: string): void => {
+    void this.finalize(sidecars, driveRootFolderName);
+  };
   onDiscardRequested = (): Promise<void> => this.discard();
 
   /** Advances the broadcast phase, rebaselining the lag clock on a new active phase. */
@@ -166,7 +184,7 @@ export class OffscreenController {
    * Stops capture, uploads or saves the sealed artifacts, and returns the
    * session to idle. Concurrent calls share one in-flight run.
    */
-  finalize(notesSidecar?: NotesSidecar): Promise<void> {
+  finalize(sidecars: Sidecars = {}, driveRootFolderName?: string): Promise<void> {
     if (this.finalizeRunPromise) return this.finalizeRunPromise;
     const engine = this.engine;
     const finalizer = this.finalizer;
@@ -176,18 +194,24 @@ export class OffscreenController {
 
     this.finalizeRunPromise = (async () => {
       const artifacts = await engine.stop();
-      // Notes lead the delivery: a reader has them while the video is still
-      // uploading, which is the whole point of sending them first (ADR-0005).
-      if (artifacts.length > 0 && notesSidecar) {
-        const notes = notesArtifact(notesSidecar, artifacts);
-        if (notes) artifacts.unshift(notes);
+      // The sidecars lead the delivery: a reader has the notes and the
+      // transcript while the video is still uploading, which is the whole point
+      // of sending them first (ADR-0005, ADR-0007). Kilobytes each, so they
+      // cost the media nothing. Both are named after the first media file —
+      // held here, because unshifting would otherwise make the second sidecar
+      // name itself after the first. Unshifted in reverse, so notes stay first.
+      const named = artifacts[0];
+      for (const [kind, sidecar] of [['transcript', sidecars.transcript], ['notes', sidecars.notes]] as const) {
+        if (!sidecar) continue;
+        const built = sidecarArtifact(sidecar, kind, named);
+        if (built) artifacts.unshift(built);
       }
       if (artifacts.length > 0) {
         if (this.storageMode === 'drive') {
           // ADR-0004: capture is sealed — hand it to the background upload manager
           // and return to idle at once so a new recording can start while it uploads.
           if (!this.enqueueUpload) throw new Error('Drive finalize requires an upload manager');
-          this.enqueueUpload(artifacts, { historyId: this.historyId, telemetryRunId: this.telemetryRunId });
+          this.enqueueUpload(artifacts, { historyId: this.historyId, telemetryRunId: this.telemetryRunId, driveRootFolderName });
         } else {
           // Local saves are instant; finalize inline.
           await finalizer.finalize({ artifacts, storageMode: 'local', historyId: this.historyId });

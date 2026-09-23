@@ -20,8 +20,11 @@ export type PlayerAction =
   | { kind: 'mute' }
   | { kind: 'note'; direction: -1 | 1 }
   | { kind: 'topic'; direction: -1 | 1 }
+  | { kind: 'transcript' }
   | { kind: 'fullscreen' }
   | { kind: 'subtitles' }
+  | { kind: 'rename' }
+  | { kind: 'search' }
   | { kind: 'help' }
   | { kind: 'escape' };
 
@@ -60,6 +63,7 @@ export function resolvePlayerAction(event: KeyLike, options: KeymapOptions = {})
 
   // `?` is shifted on most layouts, so match the character rather than the key.
   if (event.key === '?') return { kind: 'help' };
+  if (event.key === '/') return { kind: 'search' };
 
   const skip = options.skipSeconds ?? 10;
   switch (event.key) {
@@ -78,10 +82,13 @@ export function resolvePlayerAction(event: KeyLike, options: KeymapOptions = {})
     case 'm': return { kind: 'mute' };
     case 'f': return { kind: 'fullscreen' };
     case 'c': return { kind: 'subtitles' };
+    case 'r': return { kind: 'rename' };
     case 'n': return { kind: 'note', direction: event.shiftKey ? -1 : 1 };
     // Same shape as N, because it is the same gesture against the other set of
     // marks: walk the conversation by subject rather than by note (ADR-0007).
-    case 't': return { kind: 'topic', direction: event.shiftKey ? -1 : 1 };
+    // G, not T: the map gives T to the transcript itself (f19).
+    case 'g': return { kind: 'topic', direction: event.shiftKey ? -1 : 1 };
+    case 't': return { kind: 'transcript' };
     default: return null;
   }
 }
@@ -128,9 +135,12 @@ export const KEYBOARD_HELP: ReadonlyArray<{ keys: string; description: string }>
   { keys: 'M', description: 'Mute every track' },
   { keys: '↑ / ↓', description: 'Volume' },
   { keys: 'N / ⇧N', description: 'Next or previous note' },
-  { keys: 'T / ⇧T', description: 'Next or previous topic' },
+  { keys: 'G / ⇧G', description: 'Next or previous topic' },
+  { keys: 'T', description: 'Show or hide the transcript' },
   { keys: 'F', description: 'Fullscreen' },
   { keys: 'C', description: 'Subtitles' },
+  { keys: 'R', description: 'Rename the note being played' },
+  { keys: '/', description: 'Search the transcript' },
   { keys: '?', description: 'This map' },
   { keys: 'Esc', description: 'Leave fullscreen, then close' },
 ];

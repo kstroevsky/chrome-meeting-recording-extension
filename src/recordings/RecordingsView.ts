@@ -1,4 +1,5 @@
 import type { DriveFolderPreset } from '../shared/settings';
+import { DRIVE_DEFAULT_DESTINATION_NAME } from '../shared/settings';
 import { createListboxSelect, type ListboxSelect } from '../ui/listboxSelect';
 import {
   dayLabel,
@@ -18,6 +19,7 @@ import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 import { RecordingNotesSection, type RecordingNotesSectionActions } from './RecordingNotesSection';
+import { NoteEditor, type NoteEditorDeps } from './NoteEditor';
 
 export type RecordingsViewCallbacks = {
   rename: (id: string, name: string) => void;
@@ -29,7 +31,9 @@ export type RecordingsViewCallbacks = {
   play: (recordingId: string) => void;
   loadMore: () => void;
   /** The open recording's notes (f2); the view supplies the undo toast itself. */
-  notes: Omit<RecordingNotesSectionActions, 'offerUndo'>;
+  notes: Omit<RecordingNotesSectionActions, 'offerUndo' | 'openEditor'> & Partial<Pick<NoteEditorDeps['notes'], 'add' | 'update'>>;
+  /** What the note editor (f5, f6) reads besides notes; without it there is no ADD. */
+  editor?: Pick<NoteEditorDeps, 'transcript' | 'playback'> & { notesChanged?: () => void };
 };
 
 const WARNING_ICON = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7.4"/><path d="M10 6.4v4.4M10 13.6v.5"/></svg>';
@@ -84,6 +88,8 @@ export class RecordingsView {
   private selected = new Set<string>();
   /** Note counts + searchable note text per recording (ADR-0005). */
   private noteSummaries: Record<string, RecordingNotationSummary> = {};
+  /** Until the digest lands, the column stays blank rather than claiming a dash. */
+  private noteSummariesRead = false;
   /** Topic keywords per recording, for the column and the search (ADR-0007). */
   private topicSummaries: Record<string, RecordingTopicSummary> = {};
 
@@ -93,6 +99,7 @@ export class RecordingsView {
    */
   setNoteSummaries(summaries: Record<string, RecordingNotationSummary>): void {
     this.noteSummaries = summaries;
+    this.noteSummariesRead = true;
   }
 
   /**
@@ -111,6 +118,8 @@ export class RecordingsView {
   private notesSection: { id: string; section: RecordingNotesSection; loaded: Promise<void> } | null = null;
   /** The recording waiting on its notes to open, so a slow one cannot open over a later click. */
   private pendingOpenId: string | null = null;
+  /** The note editor (f5, f6), while it is open. */
+  private editor: NoteEditor | null = null;
   /** The page's one toast, for UNDO after a note is deleted (f17). */
   private toast: { element: HTMLElement; settle: (undone: boolean) => void } | null = null;
   /** The remove-from-history confirmation (f17), while it is open. */
@@ -428,7 +437,7 @@ export class RecordingsView {
       withHit(preview, `${formatDurationMs(summary.firstAtMs)} ${label}`, this.query.trim().toLocaleLowerCase());
       notes.append(chip, preview);
       notes.title = summary.count === 1 ? '1 note' : `${summary.count} notes`;
-    } else {
+    } else if (this.noteSummariesRead) {
       notes.classList.add('recording-row__notes--none');
       notes.textContent = '—';
     }
@@ -457,7 +466,7 @@ export class RecordingsView {
       label: 'Google Drive destination',
       className: 'detail-destination__select',
       options: [
-        { value: '', label: 'Google Meet Records (unfiled)' },
+        { value: '', label: `${DRIVE_DEFAULT_DESTINATION_NAME} (unfiled)` },
         ...this.destinations.map((preset) => ({ value: preset.id, label: preset.name })),
       ],
       value: entry.driveFolderPresetId ?? '',
@@ -471,7 +480,7 @@ export class RecordingsView {
 
     if (!this.destinations.length) {
       const hint = $('p', 'detail-destination__hint');
-      hint.textContent = 'Add destinations in Settings to sort recordings into your own folders.';
+      hint.textContent = 'Add folders in Settings to sort recordings into your own.';
       row.append(hint);
     }
     return row;
@@ -511,12 +520,47 @@ export class RecordingsView {
     this.redraw();
   }
 
+  private canEditNotes(): boolean {
+    return Boolean(this.callbacks.editor && this.callbacks.notes.add && this.callbacks.notes.update);
+  }
+
+  /**
+   * ADD beside the note count (f2 → f5): the editor takes the details dialog's
+   * place, and returns to it rather than closing, since naming and deleting
+   * the rest still happen there.
+   */
+  private async openEditor(entry: RecordingHistoryEntry): Promise<void> {
+    const { add, update } = this.callbacks.notes;
+    const editorDeps = this.callbacks.editor;
+    if (!add || !update || !editorDeps) return;
+    this.editor?.close();
+    this.closeDetail();
+    const finish = (details: boolean) => {
+      editor.close();
+      if (this.editor === editor) this.editor = null;
+      editorDeps.notesChanged?.();
+      if (details) void this.openDetail(entry);
+    };
+    const editor = new NoteEditor({
+      recording: { id: entry.id, name: entry.name, ...(durationOf(entry) ? { durationMs: durationOf(entry) } : {}) },
+      notes: { ...this.callbacks.notes, add, update, offerUndo: (message, windowMs) => this.offerUndo(message, windowMs) },
+      ...(editorDeps.transcript ? { transcript: editorDeps.transcript } : {}),
+      ...(editorDeps.playback ? { playback: editorDeps.playback } : {}),
+      onDetails: () => finish(true),
+      onClose: () => finish(false),
+    });
+    this.editor = editor;
+    document.body.append(editor.element);
+    await editor.open();
+  }
+
   /** The recording's notes section, started on first use and then kept. */
   private notesFor(entry: RecordingHistoryEntry): { section: RecordingNotesSection; loaded: Promise<void> } {
     if (this.notesSection?.id !== entry.id) {
       const section = new RecordingNotesSection(entry.id, durationOf(entry), {
         ...this.callbacks.notes,
         offerUndo: (message, windowMs) => this.offerUndo(message, windowMs),
+        ...(this.canEditNotes() ? { openEditor: () => void this.openEditor(entry) } : {}),
       });
       this.notesSection = { id: entry.id, section, loaded: section.load() };
     }
@@ -728,7 +772,10 @@ export class RecordingsView {
 
   private fileRow(entry: RecordingHistoryEntry, file: RecordingHistoryFile): HTMLElement {
     const item = $('li', 'recording-files__row');
-    const kind = $('span', 'file-kind'); kind.textContent = streamLabel(file.stream);
+    // A sidecar rides a media stream, so its stream says nothing: it is named
+    // for what it is. VTT for the transcript, matching the popup's own label.
+    const kind = $('span', 'file-kind');
+    kind.textContent = file.kind === 'notes' ? 'NOTES' : file.kind === 'transcript' ? 'VTT' : streamLabel(file.stream);
     const name = $('span', 'file-name'); name.textContent = file.filename; name.title = file.filename;
     const destination = $('span', `file-destination${file.status === 'available' ? '' : ` file-destination--${file.status}`}`);
     destination.textContent = file.destination.toUpperCase();

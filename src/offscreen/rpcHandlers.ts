@@ -30,12 +30,16 @@ export type RpcHandlerDeps = {
   currentPhase: () => RecordingPhase;
   isFinalizing: () => boolean;
   onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number, historyId: string, telemetryRunId?: string) => void;
-  onStopRequested: (notesSidecar?: { vtt: string }) => void;
+  onStopRequested: (sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } }, driveRootFolderName?: string) => void;
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
   retryUpload: (jobId: string) => boolean | Promise<boolean>;
   /** Reads retained library bytes back so a deferred delivery can be written. */
   openRetained?: (key: string) => Promise<File | null>;
+  /** Lists what a crash left in OPFS, for the popup to offer (8D). */
+  listUnsaved?: () => Promise<import('./storage/recoverOrphanRecordings').UnsavedRecording[]>;
+  /** Saves one of those under a name, or throws it away (8D). */
+  resolveUnsaved?: (key: string, action: 'save' | 'discard', name?: string, storageMode?: 'local' | 'drive') => Promise<void>;
   /** Cancels an active/queued upload and starts local fallback downloads. */
   cancelUpload: (jobId: string) => boolean;
   acknowledgeUploadState: (jobId: string) => Promise<void>;
@@ -101,14 +105,17 @@ async function handleOffscreenStart(
 }
 
 async function handleOffscreenStop(
-  msg: { notesSidecar?: { vtt: string } },
+  msg: { notesSidecar?: { vtt: string }; transcriptSidecar?: { vtt: string }; driveRootFolderName?: string },
   deps: RpcHandlerDeps
 ): Promise<{ ok: boolean; error?: string }> {
   if (!deps.engine.isRecording()) {
     return { ok: false, error: 'Stop requested but recorder is not active' };
   }
   deps.pushState('stopping');
-  void deps.onStopRequested(msg.notesSidecar);
+  void deps.onStopRequested({
+    ...(msg.notesSidecar ? { notes: msg.notesSidecar } : {}),
+    ...(msg.transcriptSidecar ? { transcript: msg.transcriptSidecar } : {}),
+  }, msg.driveRootFolderName);
   return { ok: true };
 }
 
@@ -182,6 +189,27 @@ async function handleOffscreenOpenRetained(
   const file = await deps.openRetained?.(msg.key);
   if (!file) return { ok: false, error: 'Those bytes are no longer in the library' };
   return { ok: true, blobUrl: URL.createObjectURL(file) };
+}
+
+async function handleOffscreenListUnsaved(
+  deps: RpcHandlerDeps
+): Promise<{ ok: boolean; recordings?: import('./storage/recoverOrphanRecordings').UnsavedRecording[] }> {
+  return { ok: true, recordings: (await deps.listUnsaved?.()) ?? [] };
+}
+
+async function handleOffscreenResolveUnsaved(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_RESOLVE_UNSAVED' }>,
+  deps: RpcHandlerDeps
+): Promise<{ ok: boolean; error?: string }> {
+  if (typeof msg.key !== 'string' || !msg.key) return { ok: false, error: 'Missing key' };
+  if (msg.action !== 'save' && msg.action !== 'discard') return { ok: false, error: 'Unknown action' };
+  if (!deps.resolveUnsaved) return { ok: false, error: 'Recovery is unavailable' };
+  try {
+    await deps.resolveUnsaved(msg.key, msg.action, msg.name, msg.storageMode);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function handleOffscreenRetryUpload(
@@ -300,6 +328,8 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_SET_INPUT_DEVICE: (msg) => handleOffscreenSetInputDevice(msg, deps),
       OFFSCREEN_SET_PAUSED: (msg) => handleOffscreenSetPaused(msg, deps),
       OFFSCREEN_OPEN_RETAINED: (msg) => handleOffscreenOpenRetained(msg, deps),
+      OFFSCREEN_LIST_UNSAVED: () => handleOffscreenListUnsaved(deps),
+      OFFSCREEN_RESOLVE_UNSAVED: (msg) => handleOffscreenResolveUnsaved(msg, deps),
       OFFSCREEN_RETRY_UPLOAD: (msg) => handleOffscreenRetryUpload(msg, deps),
       OFFSCREEN_CANCEL_UPLOAD: (msg) => handleOffscreenCancelUpload(msg, deps),
       OFFSCREEN_RENAME_DRIVE_RESOURCES: (msg) => handleOffscreenRenameDriveResources(msg, deps),

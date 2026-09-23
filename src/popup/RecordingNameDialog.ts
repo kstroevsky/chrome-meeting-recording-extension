@@ -12,6 +12,13 @@ export type RecordingNameDialogDestinations = {
   /** Reads as the built-in folder, which is where an unfiled recording is. */
   unfiledLabel: string;
   initialId: string | null;
+  /**
+   * Makes a folder without leaving the dialog (7A), returning it to be selected
+   * — or null when the name was refused. Absent hides the row: choosing an
+   * existing folder is the point of the picker, and creating one is the
+   * secondary thing you can also do from here.
+   */
+  onCreate?: (name: string) => Promise<DriveFolderPreset | null>;
 };
 
 export type RecordingNameDialogOptions = {
@@ -24,6 +31,12 @@ export type RecordingNameDialogOptions = {
   saveLabel?: string;
   cancelLabel?: string;
   destinations?: RecordingNameDialogDestinations;
+  /**
+   * The name this one would take because that name is already used, or null
+   * when it is free (7C). Saving keeps both, so this warns rather than blocks —
+   * and the name it returns is the one actually saved.
+   */
+  duplicateOf?: (name: string) => string | null;
   /** Receives the destination the user picked, or null for the built-in folder. */
   onSave: (name: string, destinationId: string | null) => Promise<void>;
 };
@@ -42,6 +55,8 @@ type DialogParts = {
   input: HTMLInputElement;
   destinationRow: HTMLElement;
   destinationSelect: ListboxSelect;
+  /** The 7C line: what the name would become, because that one is taken. */
+  taken: HTMLElement;
   error: HTMLElement;
   saveBtn: HTMLButtonElement;
   cancelBtn: HTMLButtonElement;
@@ -79,6 +94,8 @@ export class RecordingNameDialog {
     let settle!: (outcome: RecordingNameDialogOutcome) => void;
     const promise = new Promise<RecordingNameDialogOutcome>((resolve) => { settle = resolve; });
     this.pending = { promise, settle, options };
+    // After `pending`, because the check it runs lives on the open request.
+    this.syncDuplicate();
     parts.shell.open(parts.input);
     parts.input.select();
     return promise;
@@ -98,10 +115,12 @@ export class RecordingNameDialog {
     const pending = this.pending;
     const parts = this.parts;
     if (!pending || !parts || this.busy) return;
-    const name = parts.input.value.trim();
+    const typed = parts.input.value.trim();
     const destinationId = pending.options.destinations ? parts.destinationSelect.getValue() || null : null;
-    if (!name) { this.showError(BLANK_NAME); return; }
-    if (!slugifyRecordingTitle(name)) { this.showError('Use at least one letter or number'); return; }
+    if (!typed) { this.showError(BLANK_NAME); return; }
+    if (!slugifyRecordingTitle(typed)) { this.showError('Use at least one letter or number'); return; }
+    // The warning said what this would become; saving has to keep that promise.
+    const name = pending.options.duplicateOf?.(typed) ?? typed;
 
     this.showError();
     this.setBusy(true);
@@ -154,6 +173,30 @@ export class RecordingNameDialog {
     const blank = !this.parts.input.value.trim();
     this.parts.saveBtn.disabled = blank;
     this.showError(blank ? BLANK_NAME : '');
+    if (!blank) this.syncDuplicate();
+  }
+
+  /**
+   * Says what the name would become, as it is typed (7C).
+   *
+   * A warning, not an error: the save stays enabled and the field keeps the
+   * caution tone rather than the refusal one, because nothing here is wrong —
+   * two recordings are simply allowed to share a name.
+   */
+  private syncDuplicate(): void {
+    const parts = this.parts;
+    const pending = this.pending;
+    if (!parts || !pending) return;
+    const typed = parts.input.value.trim();
+    const becomes = typed ? pending.options.duplicateOf?.(typed) ?? null : null;
+    parts.input.classList.toggle('recording-name-input--taken', Boolean(becomes));
+    parts.taken.hidden = !becomes;
+    if (!becomes) { parts.taken.replaceChildren(); return; }
+    const lead = this.doc.createTextNode('That name is taken. Saving keeps both — this one becomes ');
+    const name = this.doc.createElement('span');
+    name.className = 'recording-name-taken__name';
+    name.textContent = becomes;
+    parts.taken.replaceChildren(lead, name, this.doc.createTextNode('.'));
   }
 
   private build(): DialogParts {
@@ -195,11 +238,30 @@ export class RecordingNameDialog {
     const destinationSelect = createListboxSelect({
       label: 'Google Drive destination',
       className: 'recording-name-destination__select',
+      // A long list gains a search row (7D); a short one stays a plain list (9FD).
+      search: { minOptions: 8, placeholder: 'Search folders', noun: 'FOLDERS' },
+      // The last row makes a folder rather than choosing one (7A). It reads the
+      // handler off the open request, because the control outlives each ask.
+      create: {
+        label: 'New folder\u2026',
+        placeholder: 'Folder name',
+        onCreate: async (name) => {
+          const make = this.pending?.options.destinations?.onCreate;
+          const preset = await make?.(name);
+          return preset ? { value: preset.id, label: preset.name } : null;
+        },
+      },
       options: [],
       onChange: () => {},
       doc: this.doc,
     });
     destinationRow.append(destinationLabel, destinationSelect.root);
+
+    // Under the field, in the caution tone: a note about what will happen, not
+    // a complaint about what was typed.
+    const taken = this.doc.createElement('p');
+    taken.className = 'recording-name-taken';
+    taken.hidden = true;
 
     const error = this.doc.createElement('p');
     error.className = 'recording-name-error';
@@ -218,7 +280,7 @@ export class RecordingNameDialog {
     cancelBtn.dataset.recordingNameCancel = '';
     shell.actions.append(saveBtn, cancelBtn);
     // The hint sits under the field it explains; an error takes its line.
-    shell.body.append(label('NAME'), input, shell.message, error, destinationRow);
+    shell.body.append(label('NAME'), input, shell.message, taken, error, destinationRow);
 
     saveBtn.addEventListener('click', () => void this.submit());
     cancelBtn.addEventListener('click', () => this.close('canceled'));
@@ -229,7 +291,7 @@ export class RecordingNameDialog {
       if (event.key === 'Enter') { event.preventDefault(); void this.submit(); }
     });
 
-    return { shell, summary, input, destinationRow, destinationSelect, error, saveBtn, cancelBtn };
+    return { shell, summary, input, destinationRow, destinationSelect, taken, error, saveBtn, cancelBtn };
   }
 
   /** Hidden unless the caller offers destinations, so a plain rename is unchanged. */
@@ -239,6 +301,7 @@ export class RecordingNameDialog {
       parts.destinationSelect.setOptions([]);
       return;
     }
+    parts.destinationSelect.setCreateEnabled(Boolean(destinations.onCreate));
     parts.destinationSelect.setOptions([
       { value: '', label: destinations.unfiledLabel },
       ...destinations.presets.map((preset) => ({ value: preset.id, label: preset.name })),

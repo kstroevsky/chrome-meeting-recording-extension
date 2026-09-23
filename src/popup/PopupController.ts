@@ -22,10 +22,17 @@ import { RecordingControlsView } from './recording/RecordingControlsView';
 import { PopupStatusView } from './recording/PopupStatusView';
 import { PopupNotations } from './notes/PopupNotations';
 import { CompletedNamingPrompt, previewDriveNaming } from './history/CompletedNamingPrompt';
+import { UnsavedRecordingPrompt } from './history/UnsavedRecordingPrompt';
+import { suffixedRecordingName } from '../shared/recordingNames';
 import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import type { DriveFolderPreset } from '../shared/settings';
+import {
+  DEFAULT_DRIVE_ROOT_FOLDER_NAME,
+  loadExtensionSettingsFromStorage,
+  saveExtensionSettingsToStorage,
+} from '../shared/settings';
 import { SessionTabsView } from './history/SessionTabsView';
 import { PopupStateController } from './controllers/PopupStateController';
 import type {
@@ -38,7 +45,7 @@ import {
   POPUP_TOAST_TEXT,
 } from './popupMessages';
 import { setActiveView, type PopupElements } from './popupView';
-import { createRuntimeTab } from '../platform/chrome/tabs';
+import { createExternalTab, createRuntimeTab } from '../platform/chrome/tabs';
 import { sendToBackground } from '../shared/messages';
 import type {
   BgToPopup,
@@ -91,6 +98,8 @@ export class PopupController {
   private readonly devicePicker: DevicePickerView;
   private readonly commands: RecordingCommands;
   private readonly naming: CompletedNamingPrompt;
+  /** Offers back a recording a crash left behind (8D). */
+  private readonly unsaved: UnsavedRecordingPrompt;
   private readonly notations: PopupNotations;
   private readonly status: PopupStatusView;
   private readonly controls: RecordingControlsView;
@@ -110,6 +119,13 @@ export class PopupController {
   private previewing = false;
   /** Drive destinations offered when naming; empty until settings load. */
   private destinations: DriveFolderPreset[] = [];
+  private driveRootFolder = DEFAULT_DRIVE_ROOT_FOLDER_NAME;
+  /**
+   * Names already in the library, for the naming prompt's "that name is taken"
+   * line (7C). Read from history rather than Drive: it is the same answer, it
+   * works offline, and offline is exactly when a recording finishes.
+   */
+  private recordingNames: string[] = [];
   /** Download sub-folders offered when naming a local recording. */
   private localFolders: DriveFolderPreset[] = [];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
@@ -118,10 +134,27 @@ export class PopupController {
   constructor(el: PopupElements) {
     this.el = el;
     this.timer = new RecordingTimer(el.recTimer);
+    this.unsaved = new UnsavedRecordingPrompt({
+      list: async () => {
+        const response = await sendToBackground({ type: 'LIST_UNSAVED_RECORDINGS' });
+        return response.ok ? response.recordings ?? [] : [];
+      },
+      resolve: async (key, action, name) => {
+        const response = await sendToBackground({
+          type: 'RESOLVE_UNSAVED_RECORDING', key, action, ...(name ? { name } : {}),
+        });
+        if (response.ok === false) throw new Error(response.error || 'Could not save that recording');
+      },
+      notify: (message) => this.toast(message),
+      suspended: () => this.destroyed || this.previewing,
+    });
     this.naming = new CompletedNamingPrompt(this.recordingNameDialog, {
       notify: (message) => this.toast(message),
       rename: (historyId, name) => this.renameRecording(historyId, name),
       destinations: () => this.destinations,
+      driveRootFolder: () => this.driveRootFolder,
+      createDestination: (name) => this.createDestination(name),
+      recordingNames: () => this.recordingNames,
       fileTo: (historyId, presetId) => this.fileRecordingToDestination(historyId, presetId),
       localFolders: () => this.localFolders,
       pendingLocal: () => this.pendingLocal,
@@ -155,6 +188,7 @@ export class PopupController {
       onPhaseChange: (phase, session) => this.onPhaseChange(phase, session),
       onSettings: (settings) => {
         this.destinations = settings.storage.driveFolderPresets;
+        this.driveRootFolder = settings.storage.driveRootFolderName;
         this.localFolders = settings.storage.localFolderPresets;
       },
       onToast: (msg) => this.toast(msg),
@@ -229,10 +263,21 @@ export class PopupController {
     this.wireUploadNavigation();
     this.detail.wire();
     this.wireDiagnosticsLink();
-    document.getElementById('upload-job-transcript')?.addEventListener('click', () => this.el.saveBtn?.click());
+    // The uploaded transcript opens where it lives; without one, the button
+    // still saves the live transcript it used to (n2a).
+    this.el.uploadJobTranscript?.addEventListener('click', (event) => {
+      const link = (event.currentTarget as HTMLElement).dataset.webViewLink;
+      if (link) void createExternalTab(link);
+      else this.el.saveBtn?.click();
+    });
     this.sessionTabs.wireEvents();
     void this.recordingsList.refreshCount();
-    void this.state.refreshInitialState();
+    // Chained after the state refresh rather than raced with it: the popup
+    // should paint first, and asking any earlier would also mean asking before
+    // the session's phase is known — and a capture in flight owns staging.
+    void this.state.refreshInitialState()
+      .then(() => this.loadRecordingNames())
+      .then(() => this.unsaved.offerNext());
   }
 
   /**
@@ -284,8 +329,34 @@ export class PopupController {
     this.renderPreviewSetup(preview.setup);
     if (preview.devicePicker) this.devicePicker.showPreview(preview.devicePicker.device, preview.devicePicker.options);
     if (preview.confirmDiscard) void this.commands.askDiscard().confirmation;
+    if (preview.unsavedRecording) {
+      const { filename, sizeBytes } = preview.unsavedRecording;
+      // Its own prompt rather than the shared one, with stubbed actions: a
+      // story must show the dialog without writing to anyone's Drive.
+      void new UnsavedRecordingPrompt({
+        list: async () => [{ key: `staging/${filename}`, filename, sizeBytes, lastModifiedMs: 0 }],
+        resolve: async () => {},
+        notify: () => {},
+        suspended: () => false,
+      }).offerNext();
+    }
     const namingJob = preview.naming && preview.session.uploadJobs?.find((job) => job.id === preview.selectedUploadJobId);
-    if (preview.naming && namingJob) void this.recordingNameDialog.ask(previewDriveNaming(namingJob, preview.naming.folders));
+    if (preview.naming && namingJob) {
+      const { folders, picked, open, query } = preview.naming;
+      void this.recordingNameDialog.ask({
+        ...previewDriveNaming(namingJob, folders, picked ?? null),
+        ...(preview.takenNames
+          ? { duplicateOf: (name: string) => suffixedRecordingName(name, preview.takenNames!) }
+          : {}),
+      });
+      // The picker's own controls, driven the way a person would (9FD, 7D).
+      if (open) document.querySelector<HTMLButtonElement>('.recording-name-destination__select .select-trigger')?.click();
+      const search = document.querySelector<HTMLInputElement>('.recording-name-destination__select .select-search-input');
+      if (open && query && search) {
+        search.value = query;
+        search.dispatchEvent(new Event('input'));
+      }
+    }
   }
 
   /** Wires the controller-owned interactions that are safe inside a static preview. */
@@ -302,6 +373,7 @@ export class PopupController {
     this.sessionTabs.dispose();
     this.confirmDialog.dispose();
     this.recordingNameDialog.dispose();
+    this.unsaved.dispose();
     this.devicePicker.close(false);
   }
 
@@ -584,6 +656,30 @@ export class PopupController {
   }
 
   /**
+   * Adds a Drive folder from the naming dialog (7A) and hands it back to be
+   * selected.
+   *
+   * Written to settings, which is the one list of folders — so a folder made
+   * here is the same kind of thing as one added in Settings, and appears there.
+   * The saved settings are read back rather than trusted: the normalizer is
+   * what decides whether a name is usable and whether there is room for
+   * another, and a folder it dropped must not be offered as though it existed.
+   */
+  private async createDestination(name: string): Promise<DriveFolderPreset | null> {
+    const settings = await loadExtensionSettingsFromStorage();
+    const preset = { id: `dest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name };
+    const saved = await saveExtensionSettingsToStorage({
+      ...settings,
+      storage: {
+        ...settings.storage,
+        driveFolderPresets: [...settings.storage.driveFolderPresets, preset],
+      },
+    });
+    this.destinations = saved.storage.driveFolderPresets;
+    return this.destinations.find((candidate) => candidate.id === preset.id) ?? null;
+  }
+
+  /**
    * Mounts the notes disclosure under the saved screen's file list (n2a → n2c),
    * once per recording so a re-render does not stack duplicates.
    *
@@ -642,6 +738,26 @@ export class PopupController {
     this.paintSavedExtras(current);
   }
 
+  /**
+   * Reads the names already in use, once per popup open. A page is enough: a
+   * collision the user will recognise is a recent one, and the prompt warns
+   * rather than enforces, so a name missed off the end costs nothing.
+   */
+  private async loadRecordingNames(): Promise<void> {
+    if (this.previewing) return;
+    try {
+      const response = await sendToBackground({ type: 'LIST_RECORDING_HISTORY' });
+      if (!response.ok) return;
+      this.recordingNames = response.entries
+        .filter((entry) => !entry.deletedAt)
+        .map((entry) => entry.name)
+        .filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
+    } catch {
+      // Without the list nothing is claimed to be taken, which is the safe way
+      // to be wrong: the save still works and keeps the typed name.
+    }
+  }
+
   /** A just-finished recording is always on the first history page. */
   private async recordingDuration(historyId: string): Promise<number | undefined> {
     if (this.previewing) return this.previewSavedDurationMs;
@@ -665,8 +781,11 @@ export class PopupController {
       if (extras.notes && uploadPanelState(job) === 'saved') parts.push(`${extras.notes} ${extras.notes === 1 ? 'NOTE' : 'NOTES'}`);
       sub.textContent = parts.join(' · ');
     }
-    if (this.el.uploadJobNotesLabel && extras.notes) {
-      this.el.uploadJobNotesLabel.textContent = `${extras.notes} ${extras.notes === 1 ? 'note' : 'notes'}`;
+    if (this.el.uploadJobNotesLabel) {
+      const notes = extras.notes ? `${extras.notes} ${extras.notes === 1 ? 'note' : 'notes'}` : '';
+      const transcript = job.files.some((file) => file.kind === 'transcript') ? 'transcript' : '';
+      const label = [notes, transcript].filter(Boolean).join(' + ');
+      if (label) this.el.uploadJobNotesLabel.textContent = label;
     }
   }
 
