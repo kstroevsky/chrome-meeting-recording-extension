@@ -195,6 +195,52 @@ describe('ShareUploadManager', () => {
     expect(await store.list('share-1')).toEqual([expect.objectContaining({ status: 'completed', offset: 10 })]);
   });
 
+  it('falls back to the default chunk size when the server returns a fractional chunk size', async () => {
+    const store = new ShareUploadStore(memoryArea());
+    const uploaded: number[] = [];
+    const api = transport({
+      beginTrackUpload: jest.fn(async () => ({ uploadId: 'upload-1', chunkSize: 3.5 })),
+      uploadTrackChunk: jest.fn(async ({ chunk }) => { uploaded.push(chunk.size); }),
+    });
+    const bytes = new Blob(['0123456789']);
+    const manager = new ShareUploadManager({
+      store,
+      source: async () => ({ size: bytes.size, read: async (start, end) => bytes.slice(start, end) }),
+      transport: api,
+    });
+
+    await manager.upload('share-1', [plan()]);
+
+    expect(uploaded).toEqual([10]);
+  });
+
+  it('caps pathological server chunk sizes at the 64 MiB client boundary', async () => {
+    const store = new ShareUploadStore(memoryArea());
+    const size = 8 * 1024 * 1024 + 1;
+    const oversizedChunk = 64 * 1024 * 1024 + 1;
+    const uploaded: number[] = [];
+    const largePlan = plan();
+    largePlan.tracks[0].source.bytes = size;
+    largePlan.tracks[0].published.bytes = size;
+    largePlan.recording.tracks[0].bytes = size;
+    const api = transport({
+      beginTrackUpload: jest.fn(async () => ({ uploadId: 'upload-1', chunkSize: oversizedChunk })),
+      uploadTrackChunk: jest.fn(async ({ chunk }) => { uploaded.push(chunk.size); }),
+    });
+    const manager = new ShareUploadManager({
+      store,
+      source: async () => ({
+        size,
+        read: async (start, end) => new Blob([new Uint8Array(end - start)]),
+      }),
+      transport: api,
+    });
+
+    await manager.upload('share-1', [largePlan]);
+
+    expect(uploaded).toEqual([8 * 1024 * 1024, 1]);
+  });
+
   it('discards a gone backend session and restarts the same track from byte zero', async () => {
     const store = new ShareUploadStore(memoryArea());
     let session = 0;

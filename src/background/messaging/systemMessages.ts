@@ -71,12 +71,17 @@ export function handleSystemIngress(
         response.headers.forEach((value, name) => {
           headers[name] = value;
         });
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
         sendResponse({
           ok: true,
           status: response.status,
           statusText: response.statusText,
           headers,
-          body: await response.text(),
+          bodyBase64: btoa(binary),
         });
       })
       .catch((error) => {

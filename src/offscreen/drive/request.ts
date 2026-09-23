@@ -16,8 +16,18 @@ type E2EDriveFetchResponse = {
   statusText?: string;
   headers?: Record<string, string>;
   body?: string;
+  bodyBase64?: string;
   error?: string;
 };
+
+function decodeBase64Bytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
   if (!headers) return {};
@@ -54,7 +64,10 @@ export async function driveFetch(
   if (!response?.ok || response.status == null) {
     throw new TypeError(response?.error ?? 'E2E Drive fetch bridge failed');
   }
-  return new Response(response.body ?? '', {
+  const responseBody = response.bodyBase64 != null
+    ? decodeBase64Bytes(response.bodyBase64)
+    : response.body ?? '';
+  return new Response(responseBody, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
