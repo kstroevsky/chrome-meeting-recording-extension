@@ -115,7 +115,7 @@ function l2(vector: number[]): number {
   return Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
 }
 
-test.describe('packaged embedding runtime, extension page (ADR-0007 4A)', () => {
+test.describe('@production-build packaged embedding runtime, extension page (ADR-0007 4A)', () => {
   let harness: ExtensionHarness;
   const attempted: string[] = [];
 

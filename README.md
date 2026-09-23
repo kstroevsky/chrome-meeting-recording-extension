@@ -60,7 +60,7 @@ Everything runs in your browser. Capture is **local-first**: recording data stre
 ## Requirements
 
 - **Google Chrome** (or the supported Chromium-based browsers: Edge, Brave, Opera, Vivaldi, and Arc) with Manifest V3, `tabCapture`, and the Offscreen API. Chrome 116+ is sufficient. Firefox is not currently supported because its capture/media-host adapters have not been implemented.
-- **Node.js 18+** and **npm** to build the extension.
+- **Node.js 24+** and **npm** to build the extension.
 - **FFmpeg and FFprobe** for performance E2E artifact analysis.
 
 The extension requests the following Chrome permissions: `activeTab`, `downloads`, `tabCapture`, `offscreen`, `storage`, `tabs`, `desktopCapture`, `alarms`. The one-shot alarm retries a queued anonymous diagnostics batch after a retryable network failure; it does not create a periodic heartbeat.
@@ -283,7 +283,8 @@ Renaming the root folder in Settings renames it in Drive too, before the setting
 | `npm run release:version` | Print the release version of the checked-out commit (`a.b.c.d`, counted from git) |
 | `npm run hooks:install` | Install the commit-msg hook that checks commit prefixes (also runs on `npm install`) |
 | `npm run release:build` | Production build to `dist/` then the production guards (version + no E2E markers) |
-| `npm run test:e2e` / `npm run test:e2e:mock` | Functional mocked-Meet E2E plus performance smoke |
+| `npm run test:e2e` / `npm run test:e2e:mock` | Deterministic mocked-Meet functional E2E plus performance smoke; excludes production-runtime integration |
+| `npm run test:e2e:production` | Production `dist/` integration E2E, including the real packaged embedding runtime (requires production build env) |
 | `npm run test:e2e:perf:smoke` | Three critical browser/extension performance cases |
 | `npm run test:e2e:perf:full` / `npm run test:e2e:perf` | Complete pairwise matrix and repeated benchmarks |
 | `npm run test:e2e:perf:endurance` | Ten-minute local and two-minute throttled-Drive runs |

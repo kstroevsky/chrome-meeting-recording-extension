@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run typecheck
@@ -79,6 +79,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
+      TELEMETRY_ENDPOINT: https://recording-extension-telemetry.kstroevsky.workers.dev/api/telemetry/batches
       FULL_VALIDATION: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +88,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -100,7 +101,7 @@ jobs:
           npx playwright test --config=playwright.config.ts
           --only-changed="origin/${GITHUB_BASE_REF}"
           --pass-with-no-tests
-          --grep-invert "@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
 
       - name: Run mandatory mock E2E smoke tests
         run: npx playwright test --config=playwright.config.ts --grep "@smoke"
@@ -109,7 +110,17 @@ jobs:
         if: env.FULL_VALIDATION == 'true'
         run: >-
           npx playwright test --config=playwright.config.ts
-          --grep-invert "@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+
+      - name: Build production extension for integration E2E
+        if: env.FULL_VALIDATION == 'true'
+        run: npm run build
+
+      - name: Run production integration E2E
+        if: env.FULL_VALIDATION == 'true'
+        env:
+          EXTENSION_PATH: dist
+        run: npx playwright test --config=playwright.config.ts --grep "@production-build"
 
       - name: Upload Playwright diagnostics
         if: ${{ !cancelled() }}

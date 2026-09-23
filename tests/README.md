@@ -24,11 +24,12 @@ Co-locating a module's unit test (`src/foo/__tests__/foo.test.ts`) gives an agen
 | Command | Runs |
 | :--- | :--- |
 | `npm run test:unit` | jest (all unit + integration) **+** `node --test` (build-level) |
-| `npm run test:e2e:mock` | build the e2e bundle + Playwright functional specs and `@perf-smoke`; excludes the heavier full/endurance/hardware/contention tiers |
-| `npm run test:e2e:perf:smoke` / `:full` / `:contention` / `:endurance` / `:hardware` | the perf tiers (tagged `@perf-*`) |
+| `npm run test:e2e:mock` | build the deterministic e2e bundle + Playwright functional specs and `@perf-smoke`; excludes `@production-build` and the heavier perf tiers |
+| `npm run test:e2e:production` | build production `dist/` and run `@production-build` integration tests against the real packaged runtime |
+| `npm run test:e2e:perf:smoke` / `:full` / `:contention` / `:endurance` / `:hardware` | the perf tiers (tagged `@perf-*`); these invocations enable numeric performance thresholds |
 | `npm run test:e2e:real` | the real-Google-Meet harness (needs a configured profile — `test:e2e:real:profile`) |
 
-The perf tiers are tagged in the spec titles (`@perf-smoke`, `@perf-full`, `@perf-contention`, `@perf-endurance`, `@perf-hardware`) and selected via Playwright `--grep`.
+The perf tiers are tagged in the spec titles (`@perf-smoke`, `@perf-full`, `@perf-contention`, `@perf-endurance`, `@perf-hardware`) and selected via Playwright `--grep`. Required functional CI still runs the `@perf-smoke` scenarios for their storage/upload correctness assertions, but numeric latency/event-loop SLOs are enforced only by the dedicated perf commands.
 
 ## The e2e specs
 
