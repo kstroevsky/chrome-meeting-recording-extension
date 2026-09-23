@@ -41,6 +41,45 @@ test('classifies representative repository paths conservatively', () => {
       ['verify', 'sharing', 'mock-e2e'],
     ],
     [
+      'src/background/offscreen/OffscreenManager.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/offscreen/storage/opfsLayout.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/offscreen/storage/indexedDbKeyValueArea.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/platform/capabilities/AuthProvider.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/platform/capabilities/auth/ChromeIdentityAuthProvider.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/platform/chrome/identity.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/platform/chrome/offscreen.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/platform/chrome/runtime.ts',
+      ['verify', 'sharing', 'mock-e2e'],
+    ],
+    ['src/shared/rpc.ts', ['verify', 'sharing', 'mock-e2e']],
+    ['src/shared/async.ts', ['verify', 'sharing', 'mock-e2e']],
+    ['src/shared/timeouts.ts', ['verify', 'sharing', 'mock-e2e']],
+    [
+      'src/shared/build.ts',
+      ['verify', 'sharing', 'mock-e2e', 'production-e2e'],
+    ],
+    [
       'src/offscreen.ts',
       ['verify', 'sharing', 'mock-e2e', 'production-e2e'],
     ],
@@ -66,6 +105,7 @@ test('classifies representative repository paths conservatively', () => {
     ['package-lock.json', DOMAIN_NAMES],
     ['.github/workflows/ci.yml', DOMAIN_NAMES],
     ['static/manifest.json', DOMAIN_NAMES],
+    ['public/gear.png', DOMAIN_NAMES],
   ]);
 
   for (const [path, expected] of cases) {
@@ -73,19 +113,30 @@ test('classifies representative repository paths conservatively', () => {
   }
 });
 
-test('unknown executable/config paths force every domain and report ownership', () => {
-  const result = classifyChangedFiles(['src/exporting/foo.ts']);
+test('unknown paths force every domain and report missing ownership', () => {
+  const result = classifyChangedFiles(['src/exporting/foo.py']);
   assert.deepEqual(result.relevant, {
     verify: true,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,
   });
-  assert.deepEqual(result.unknownPaths, ['src/exporting/foo.ts']);
+  assert.deepEqual(result.unknownPaths, ['src/exporting/foo.py']);
 });
 
-test('non-executable unknown assets do not force validation', () => {
-  const result = classifyChangedFiles(['public/icon128.png']);
+test('unknown assets also fail closed unless explicitly ignored', () => {
+  const result = classifyChangedFiles(['assets/new-image.png']);
+  assert.deepEqual(result.relevant, {
+    verify: true,
+    'mock-e2e': true,
+    sharing: true,
+    'production-e2e': true,
+  });
+  assert.deepEqual(result.unknownPaths, ['assets/new-image.png']);
+});
+
+test('explicit inert docs stay ignored', () => {
+  const result = classifyChangedFiles(['docs/new-note.md']);
   assert.deepEqual(result.relevant, {
     verify: false,
     'mock-e2e': false,
@@ -157,6 +208,37 @@ test('shared extension harness invalidates mock, sharing and production', () => 
       domain,
     );
   }
+});
+
+test('sharing runtime dependencies invalidate the sharing fingerprint', () => {
+  const before = [
+    { path: '.github/workflows/ci.yml', blob: 'ci-1' },
+    { path: 'src/background/offscreen/OffscreenManager.ts', blob: 'offscreen-manager-1' },
+    { path: 'src/shared/build.ts', blob: 'build-1' },
+  ];
+  const offscreenChanged = before.map((entry) =>
+    entry.path.endsWith('OffscreenManager.ts')
+      ? { ...entry, blob: 'offscreen-manager-2' }
+      : entry,
+  );
+  const buildChanged = before.map((entry) =>
+    entry.path === 'src/shared/build.ts'
+      ? { ...entry, blob: 'build-2' }
+      : entry,
+  );
+
+  assert.notEqual(
+    computeDomainFingerprint('sharing', before),
+    computeDomainFingerprint('sharing', offscreenChanged),
+  );
+  assert.notEqual(
+    computeDomainFingerprint('sharing', before),
+    computeDomainFingerprint('sharing', buildChanged),
+  );
+  assert.notEqual(
+    computeDomainFingerprint('production-e2e', before),
+    computeDomainFingerprint('production-e2e', buildChanged),
+  );
 });
 
 test('PR relevance stays PR-wide while unchanged fingerprints are reusable', () => {
