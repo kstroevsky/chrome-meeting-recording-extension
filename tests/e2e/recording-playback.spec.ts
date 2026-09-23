@@ -19,7 +19,7 @@ import {
  * the bug that shipped past them was a `File` invalidated by `move()`.
  */
 test.describe('recording playback (integration)', () => {
-  test('promotes a local recording and plays it back from the retained copy', async ({}, testInfo) => {
+  test('promotes a local recording and plays it back from the retained copy @smoke', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
     try {
       const meetPage = await openMockMeetPage(harness.context);

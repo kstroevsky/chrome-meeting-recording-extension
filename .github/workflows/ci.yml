@@ -2,39 +2,122 @@ name: CI
 
 on:
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - converted_to_draft
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       TELEMETRY_ENDPOINT: https://recording-extension-telemetry.kstroevsky.workers.dev/api/telemetry/batches
+      FULL_VALIDATION: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run test:unit
-      - run: npm run build
-      - run: npm run test:production-guards
+      - run: npm run typecheck:e2e
+
+      - name: Select draft Jest scope
+        if: env.FULL_VALIDATION != 'true'
+        id: jest-scope
+        shell: bash
+        run: |
+          git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" > "$RUNNER_TEMP/changed-files.txt"
+          if grep -Eq '^(package(-lock)?\.json|jest\.config\.js|tests/setup\.ts|tsconfig[^/]*\.json|webpack\.config\.js)$' "$RUNNER_TEMP/changed-files.txt"; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run full Jest suite
+        if: env.FULL_VALIDATION == 'true' || steps.jest-scope.outputs.full == 'true'
+        run: npm run test:unit:jest
+
+      - name: Run affected Jest tests
+        if: env.FULL_VALIDATION != 'true' && steps.jest-scope.outputs.full != 'true'
+        run: npm run test:unit:jest -- --changedSince="origin/${GITHUB_BASE_REF}" --passWithNoTests
+
+      - name: Run Node tests
+        run: npm run test:unit:node
+
+      - name: Run draft architecture guard
+        if: env.FULL_VALIDATION != 'true'
+        run: npm run check:background-architecture
+
+      - name: Build production extension
+        if: env.FULL_VALIDATION == 'true'
+        run: npm run build
+
+      - name: Run production guards
+        if: env.FULL_VALIDATION == 'true'
+        run: npm run test:production-guards
 
   mock-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      FULL_VALIDATION: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
           cache: npm
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e:mock
+      - run: npm run build:e2e:mock
+
+      - name: Run affected draft mock E2E tests
+        if: env.FULL_VALIDATION != 'true'
+        run: >-
+          npx playwright test --config=playwright.config.ts
+          --only-changed="origin/${GITHUB_BASE_REF}"
+          --pass-with-no-tests
+          --grep-invert "@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+
+      - name: Run mandatory mock E2E smoke tests
+        run: npx playwright test --config=playwright.config.ts --grep "@smoke"
+
+      - name: Run remaining full mock E2E suite
+        if: env.FULL_VALIDATION == 'true'
+        run: >-
+          npx playwright test --config=playwright.config.ts
+          --grep-invert "@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+
+      - name: Upload Playwright diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/playwright/html-report/
+            output/playwright/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
