@@ -1,5 +1,6 @@
 import { ownerOriginAllowed } from '../http/cors';
 import { json } from '../http/responses';
+import { enforceOwnerMutationRate } from '../security/limits';
 import { ownerSessionTtl, signOwnerSession, verifyOwnerSession } from './ownerSession';
 
 export type OwnerIdentity = {
@@ -7,7 +8,7 @@ export type OwnerIdentity = {
   id: string;
 };
 
-const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
+const GOOGLE_TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
 
 export async function createOwnerSession(request: Request, env: Env): Promise<Response> {
   if (!ownerOriginAllowed(request, env)) return json({ code: 'ORIGIN_NOT_ALLOWED' }, 403);
@@ -16,9 +17,9 @@ export async function createOwnerSession(request: Request, env: Env): Promise<Re
 
   let response: Response;
   try {
-    response = await fetch(GOOGLE_USERINFO_URL, {
-      headers: { authorization: `Bearer ${token}` },
-    });
+    const url = new URL(GOOGLE_TOKENINFO_URL);
+    url.searchParams.set('access_token', token);
+    response = await fetch(url, { headers: { accept: 'application/json' } });
   } catch {
     return json({ code: 'OWNER_IDENTITY_UNAVAILABLE' }, 503);
   }
@@ -27,14 +28,20 @@ export async function createOwnerSession(request: Request, env: Env): Promise<Re
   }
   if (!response.ok) return json({ code: 'OWNER_IDENTITY_UNAVAILABLE' }, 503);
 
-  const body = await response.json().catch(() => null) as { sub?: unknown } | null;
+  const body = await response.json().catch(() => null) as { sub?: unknown; aud?: unknown } | null;
   const subject = body?.sub;
-  if (typeof subject !== 'string' || !subject.trim()) {
+  const audience = body?.aud;
+  if (
+    typeof subject !== 'string' || !subject.trim()
+    || typeof audience !== 'string' || audience !== env.GOOGLE_OAUTH_CLIENT_ID
+  ) {
     return json({ code: 'OWNER_IDENTITY_INVALID' }, 401);
   }
 
   const expiresAt = Math.floor(Date.now() / 1000) + ownerSessionTtl(env);
   const ownerId = `google:${subject.trim()}`;
+  const limited = await enforceOwnerMutationRate(env, ownerId);
+  if (limited) return limited;
   const session = await signOwnerSession({ kind: 'owner', ownerId, expiresAt }, env.SESSION_KEY);
   return json({ token: session, expiresAt });
 }

@@ -11,9 +11,9 @@ type CleanupUploadRow = {
 type CleanupTrackRow = { object_key: string };
 
 /**
- * Permanently removes one already-authorized share. The caller must revoke it
- * first so any cleanup failure leaves a closed capability rather than a partly
- * destroyed public share.
+ * Permanently removes one already-authorized share. Active shares must be
+ * revoked by the caller first; drafts and abandoned publications can be
+ * removed directly by scheduled cleanup.
  */
 export async function deletePublishedShare(env: Env, share: ShareRow): Promise<void> {
   const uploads = await env.SHARING_DB.prepare(

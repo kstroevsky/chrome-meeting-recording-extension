@@ -1,6 +1,8 @@
-import { integerField, json, readJson, stringField } from '../http/responses';
+import { integerField, json, readBodyBytes, readJson, stringField } from '../http/responses';
 import { parseContentRange } from '../http/range';
+import { ensureAdditionalStorageQuota } from '../security/limits';
 import { getOwnedShare, type TrackRow } from '../shares/ShareRepository';
+import { SHARING_CONTRACT_LIMITS } from '../../../src/shared/sharingContract';
 import {
   abandonUpload,
   getOwnedUpload,
@@ -56,7 +58,10 @@ async function beginUpload(
   const body = await readJson(request);
   const mimeType = stringField(body, 'mimeType');
   const bytes = integerField(body, 'bytes');
-  if (!mimeType || bytes == null || bytes < 0) {
+  if (
+    !mimeType || mimeType.length > SHARING_CONTRACT_LIMITS.mimeTypeChars
+    || bytes == null || bytes < 0 || bytes > SHARING_CONTRACT_LIMITS.publishedBytes
+  ) {
     return json({ code: 'INVALID_UPLOAD', message: 'mimeType and non-negative bytes are required' }, 400);
   }
 
@@ -72,6 +77,17 @@ async function beginUpload(
   if (!track) return json({ code: 'TRACK_NOT_FOUND' }, 404);
   if (track.mime_type !== mimeType || (track.bytes != null && track.bytes !== bytes)) {
     return json({ code: 'TRACK_METADATA_MISMATCH' }, 409);
+  }
+
+  if (track.bytes == null) {
+    const shareBytes = await env.SHARING_DB.prepare(
+      'SELECT COALESCE(SUM(bytes), 0) AS bytes FROM share_tracks WHERE share_id = ?',
+    ).bind(shareId).first<{ bytes: number }>();
+    if (Number(shareBytes?.bytes ?? 0) + bytes > SHARING_CONTRACT_LIMITS.publishedBytes) {
+      return json({ code: 'SHARE_STORAGE_LIMIT_EXCEEDED' }, 413);
+    }
+    const quota = await ensureAdditionalStorageQuota(env, ownerId, bytes);
+    if (quota) return quota;
   }
 
   const existing = await env.SHARING_DB.prepare(
@@ -161,11 +177,14 @@ async function uploadChunk(uploadId: string, offset: number, request: Request, e
   }
   if (!request.body) return json({ code: 'EMPTY_CHUNK' }, 400);
 
+  const body = await readBodyBytes(request, chunkBytes);
+  if (body.byteLength !== chunkBytes) return json({ code: 'CONTENT_LENGTH_MISMATCH' }, 400);
+
   const partNumber = Math.floor(offset / upload.chunk_size) + 1;
   const multipart = env.SHARING_MEDIA.resumeMultipartUpload(upload.object_key, upload.r2_upload_id);
   let part: R2UploadedPart;
   try {
-    part = await multipart.uploadPart(partNumber, request.body);
+    part = await multipart.uploadPart(partNumber, body);
   } catch (error) {
     if (await recoverCompletedObject(upload, env)) return new Response(null, { status: 204 });
     if (isMultipartSessionGone(error)) {

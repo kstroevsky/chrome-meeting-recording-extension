@@ -52,7 +52,7 @@ async function openCapability(encodedCapability: string, request: Request, env: 
   const capability = decodeURIComponent(encodedCapability);
   const capabilityHash = await sha256Base64Url(capability);
   const share = await env.SHARING_DB.prepare(
-    `SELECT id, owner_id, status, manifest_json, capability_hash, capability_version,
+    `SELECT id, owner_id, status, manifest_json, capability_hash, capability_version, capability_key_id,
             created_at, updated_at, finalized_at, revoked_at
        FROM shares WHERE capability_hash = ? LIMIT 1`,
   ).bind(capabilityHash).first<ShareRow>();

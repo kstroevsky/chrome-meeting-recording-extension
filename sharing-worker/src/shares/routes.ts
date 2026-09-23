@@ -1,6 +1,9 @@
 import { capabilityUrl, deriveCapability, shareUrl } from '../auth/capability';
+import { activeCapabilityKey } from '../auth/capabilityKeys';
 import { sha256Base64Url } from '../auth/crypto';
 import { json, readJson } from '../http/responses';
+import { ensureNewShareQuota } from '../security/limits';
+import { SHARING_CONTRACT_LIMITS } from '../../../src/shared/sharingContract';
 import { canonicalizeManifest, canonicalizeStoredManifest } from './manifestSchema';
 import { deletePublishedShare } from './deleteShare';
 import { getOwnedShare, getShare, mediaObjectKey, type ShareRow } from './ShareRepository';
@@ -37,7 +40,7 @@ export async function routeShareOwnerRequest(
 }
 
 async function putShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
-  const body = await readJson(request);
+  const body = await readJson(request, SHARING_CONTRACT_LIMITS.manifestBytes);
   const manifest = canonicalizeManifest(body, shareId);
   if (!manifest) return json({ code: 'INVALID_MANIFEST' }, 400);
 
@@ -52,6 +55,14 @@ async function putShare(shareId: string, request: Request, env: Env, ownerId: st
     if (existing.status === 'revoked') return json({ code: 'SHARE_REVOKED' }, 410);
     return new Response(null, { status: 200 });
   }
+
+  const reservedBytes = manifest.recordings.reduce(
+    (recordingTotal, recording) => recordingTotal
+      + recording.tracks.reduce((trackTotal, track) => trackTotal + (track.bytes ?? 0), 0),
+    0,
+  );
+  const quota = await ensureNewShareQuota(env, ownerId, reservedBytes);
+  if (quota) return quota;
 
   const now = Date.now();
   const statements: D1PreparedStatement[] = [
@@ -86,7 +97,7 @@ async function putShare(shareId: string, request: Request, env: Env, ownerId: st
 
 async function listShares(request: Request, env: Env, ownerId: string): Promise<Response> {
   const result = await env.SHARING_DB.prepare(
-    `SELECT id, owner_id, status, manifest_json, capability_hash, capability_version,
+    `SELECT id, owner_id, status, manifest_json, capability_hash, capability_version, capability_key_id,
             created_at, updated_at, finalized_at, revoked_at
        FROM shares WHERE owner_id = ? ORDER BY created_at DESC`,
   ).bind(ownerId).all<ShareRow>();
@@ -155,14 +166,16 @@ async function finalizeShare(shareId: string, request: Request, env: Env, ownerI
   ).bind(shareId).first<{ count: number }>();
   if (!pending || pending.count !== 0) return json({ code: 'SHARE_UPLOADS_INCOMPLETE' }, 409);
 
-  const capability = await deriveCapability(share.id, share.capability_version, env.CAPABILITY_KEY);
+  const key = activeCapabilityKey(env);
+  const capability = await deriveCapability(share.id, share.capability_version, key.secret);
   const capabilityHash = await sha256Base64Url(capability);
   const now = Date.now();
   await env.SHARING_DB.prepare(
     `UPDATE shares
-        SET status = 'active', capability_hash = ?, finalized_at = COALESCE(finalized_at, ?), updated_at = ?
+        SET status = 'active', capability_hash = ?, capability_key_id = ?,
+            finalized_at = COALESCE(finalized_at, ?), updated_at = ?
       WHERE id = ? AND status IN ('draft', 'uploading')`,
-  ).bind(capabilityHash, now, now, share.id).run();
+  ).bind(capabilityHash, key.id, now, now, share.id).run();
 
   const active = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
   if (!active || active.status !== 'active') return json({ code: 'FINALIZE_CONFLICT' }, 409);
