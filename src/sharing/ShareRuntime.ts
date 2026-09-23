@@ -58,6 +58,16 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
     publications,
     publisher: new SharePublisher({ publications }),
     registry,
+    async revoke(shareId: string): Promise<void> {
+      const local = await publicationStore.get(shareId);
+      if (local) await publications.revoke(shareId);
+      else await service.revokeShare(shareId);
+    },
+    async delete(shareId: string): Promise<void> {
+      await service.deleteShare(shareId);
+      await uploads.clearShare(shareId).catch(() => {});
+      await publicationStore.remove(shareId);
+    },
     async snapshot(): Promise<ShareRuntimeSnapshot> {
       let remote: RemoteShare[] = [];
       let local = await publicationStore.list();

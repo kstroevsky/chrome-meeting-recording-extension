@@ -77,9 +77,10 @@ describe('ShareServiceClient', () => {
     expect(fetcher.mock.calls[2][0]).toBe('https://share.example/api/share-uploads/upl%2F1/complete');
   });
 
-  it('finalizes and revokes a share', async () => {
+  it('finalizes, revokes, and permanently deletes a share through distinct operations', async () => {
     const fetcher = jest.fn()
       .mockResolvedValueOnce(jsonResponse({ shareUrl: 'https://share.example/s/q4fB9-independent-capability' }))
+      .mockResolvedValueOnce(mockResponse('', 204))
       .mockResolvedValueOnce(mockResponse('', 204));
     const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
 
@@ -87,9 +88,11 @@ describe('ShareServiceClient', () => {
       shareUrl: 'https://share.example/s/q4fB9-independent-capability',
     });
     await client.revokeShare('owner-control-id');
+    await client.deleteShare('owner-control-id');
 
     expect(fetcher.mock.calls.map((call) => [call[0], call[1].method])).toEqual([
       ['https://share.example/api/shares/owner-control-id/finalize', 'POST'],
+      ['https://share.example/api/shares/owner-control-id/revoke', 'POST'],
       ['https://share.example/api/shares/owner-control-id', 'DELETE'],
     ]);
   });

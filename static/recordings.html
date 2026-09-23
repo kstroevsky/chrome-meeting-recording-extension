@@ -15,12 +15,22 @@
           <span class="recordings-brand__indicator" aria-hidden="true"></span>
           <span>Meet Recorder</span>
         </div>
-        <p class="recordings-header__label">RECORDINGS</p>
+        <nav class="recordings-header__nav" aria-label="Library views">
+          <button id="recordings-tab" class="recordings-header__tab recordings-header__tab--active" type="button">RECORDINGS</button>
+          <button id="shared-tab" class="recordings-header__tab" type="button" hidden>SHARED</button>
+        </nav>
       </header>
-      <p id="recordings-error" class="recordings-error" role="alert" hidden></p>
-      <p id="recordings-empty" class="recordings-empty" hidden>No recordings yet.</p>
-      <section id="recordings-list" class="recordings-list" aria-live="polite" aria-label="Recording history"></section>
-      <button id="recordings-load-more" class="load-more" type="button" hidden>Load more</button>
+      <section id="recordings-surface">
+        <p id="recordings-error" class="recordings-error" role="alert" hidden></p>
+        <p id="recordings-empty" class="recordings-empty" hidden>No recordings yet.</p>
+        <section id="recordings-list" class="recordings-list" aria-live="polite" aria-label="Recording history"></section>
+        <button id="recordings-load-more" class="load-more" type="button" hidden>Load more</button>
+      </section>
+      <section id="shared-surface" hidden>
+        <p id="shared-error" class="recordings-error" role="alert" hidden></p>
+        <p id="shared-empty" class="recordings-empty" hidden>No published shares yet.</p>
+        <section id="shared-list" class="shared-list" aria-live="polite" aria-label="Published shares"></section>
+      </section>
     </main>
     <script src="recordings.js"></script>
   </body>

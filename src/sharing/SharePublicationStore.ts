@@ -48,6 +48,10 @@ export class SharePublicationStore {
     return (await this.list()).find((publication) => publication.id === id);
   }
 
+  async remove(id: string): Promise<void> {
+    await this.area.remove(SHARE_PUBLICATION_PREFIX + id);
+  }
+
   async list(): Promise<SharePublication[]> {
     const all = await this.area.getAll();
     return Object.entries(all)

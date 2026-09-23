@@ -259,8 +259,9 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     } : undefined,
     shareSnapshot: sharingRuntime ? () => sharingRuntime.snapshot() : undefined,
     revokeShare: sharingRuntime ? async (shareId) => {
-      await sharingRuntime.publications.revoke(shareId);
+      await sharingRuntime.revoke(shareId);
     } : undefined,
+    deleteShare: sharingRuntime ? (shareId) => sharingRuntime.delete(shareId) : undefined,
     pushState: controller.pushState,
     log: L.log,
     error: L.error,

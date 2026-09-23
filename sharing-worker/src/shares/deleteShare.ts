@@ -1,0 +1,49 @@
+import { isMultipartSessionGone } from '../uploads/UploadRepository';
+import type { ShareRow } from './ShareRepository';
+
+type CleanupUploadRow = {
+  id: string;
+  r2_upload_id: string;
+  object_key: string;
+  status: 'uploading' | 'completed' | 'abandoned';
+};
+
+type CleanupTrackRow = { object_key: string };
+
+/**
+ * Permanently removes one already-authorized share. The caller must revoke it
+ * first so any cleanup failure leaves a closed capability rather than a partly
+ * destroyed public share.
+ */
+export async function deletePublishedShare(env: Env, share: ShareRow): Promise<void> {
+  const uploads = await env.SHARING_DB.prepare(
+    `SELECT id, r2_upload_id, object_key, status
+       FROM share_uploads WHERE share_id = ?`,
+  ).bind(share.id).all<CleanupUploadRow>();
+
+  for (const upload of uploads.results) {
+    if (upload.status === 'completed') continue;
+    const multipart = env.SHARING_MEDIA.resumeMultipartUpload(upload.object_key, upload.r2_upload_id);
+    try {
+      await multipart.abort();
+    } catch (error) {
+      if (!isMultipartSessionGone(error)) throw error;
+    }
+  }
+
+  const tracks = await env.SHARING_DB.prepare(
+    `SELECT object_key FROM share_tracks WHERE share_id = ?`,
+  ).bind(share.id).all<CleanupTrackRow>();
+  const objectKeys = [...new Set(tracks.results.map((track) => track.object_key))];
+  if (objectKeys.length) await env.SHARING_MEDIA.delete(objectKeys);
+
+  await env.SHARING_DB.batch([
+    env.SHARING_DB.prepare(
+      `DELETE FROM share_upload_parts
+        WHERE upload_id IN (SELECT id FROM share_uploads WHERE share_id = ?)`,
+    ).bind(share.id),
+    env.SHARING_DB.prepare('DELETE FROM share_uploads WHERE share_id = ?').bind(share.id),
+    env.SHARING_DB.prepare('DELETE FROM share_tracks WHERE share_id = ?').bind(share.id),
+    env.SHARING_DB.prepare('DELETE FROM shares WHERE id = ?').bind(share.id),
+  ]);
+}
