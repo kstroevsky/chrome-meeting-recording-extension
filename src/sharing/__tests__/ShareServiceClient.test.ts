@@ -158,6 +158,16 @@ describe('ShareServiceClient', () => {
     await expect(client.getShare('share-1')).rejects.toThrow('active share without a URL');
   });
 
+  it('retries a permanent delete once when the server completed it but the response was lost', async () => {
+    const fetcher = jest.fn()
+      .mockResolvedValueOnce(mockResponse('{"code":"E2E_LOST_RESPONSE"}', 503))
+      .mockResolvedValueOnce(mockResponse('', 204));
+    const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
+
+    await expect(client.deleteShare('share-1')).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it('fails closed on non-HTTPS or path-bearing service URLs and malformed sessions', async () => {
     expect(() => new ShareServiceClient('http://share.example')).toThrow('bare HTTPS origin');
     expect(() => new ShareServiceClient('https://share.example/api')).toThrow('bare HTTPS origin');
