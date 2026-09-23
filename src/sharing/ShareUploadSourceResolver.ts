@@ -9,7 +9,7 @@
 
 import type { PlaybackTrack } from '../shared/playback';
 import { readFileByKey, type DirectoryHandleLike } from '../offscreen/storage/opfsLayout';
-import { createCachedTokenProvider, fetchWithAuthRetry, type TokenProvider } from '../offscreen/drive/request';
+import { createCachedTokenProvider, driveFetch, fetchWithAuthRetry, type TokenProvider } from '../offscreen/drive/request';
 import type { ShareUploadSource, ShareUploadSourceResolver } from './ShareUploadManager';
 
 const DRIVE_MEDIA_ORIGIN = 'https://www.googleapis.com';
@@ -43,8 +43,7 @@ export function createShareUploadSourceResolver(
 
 function resolveFetcher(injected?: typeof fetch): typeof fetch {
   if (injected) return injected;
-  if (typeof globalThis.fetch === 'function') return globalThis.fetch.bind(globalThis);
-  throw new Error('No fetch implementation is available for Drive sharing uploads');
+  return driveFetch;
 }
 
 function blobSource(blob: Blob): ShareUploadSource {

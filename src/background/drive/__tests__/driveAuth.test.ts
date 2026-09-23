@@ -1,5 +1,6 @@
 import { fetchDriveTokenWithFallback, setAuthProvider } from '../driveAuth';
 import type { AuthProvider } from '../../../platform/capabilities/AuthProvider';
+import { DRIVE_OAUTH_SCOPES } from '../../../platform/capabilities/auth/createAuthProvider';
 
 type AuthReply = { token?: string; error?: string };
 
@@ -46,7 +47,11 @@ describe('driveAuth', () => {
 
     expect(result).toEqual({ ok: true, token: 'silent-token' });
     expect(chrome.identity.getAuthToken).toHaveBeenCalledTimes(1);
-    expect(chrome.identity.getAuthToken).toHaveBeenNthCalledWith(1, { interactive: false }, expect.any(Function));
+    expect(chrome.identity.getAuthToken).toHaveBeenNthCalledWith(
+      1,
+      { interactive: false, scopes: [...DRIVE_OAUTH_SCOPES] },
+      expect.any(Function),
+    );
   });
 
   it('retries with interactive auth when silent auth fails', async () => {
@@ -59,8 +64,16 @@ describe('driveAuth', () => {
 
     expect(result).toEqual({ ok: true, token: 'interactive-token' });
     expect(chrome.identity.getAuthToken).toHaveBeenCalledTimes(2);
-    expect(chrome.identity.getAuthToken).toHaveBeenNthCalledWith(1, { interactive: false }, expect.any(Function));
-    expect(chrome.identity.getAuthToken).toHaveBeenNthCalledWith(2, { interactive: true }, expect.any(Function));
+    expect(chrome.identity.getAuthToken).toHaveBeenNthCalledWith(
+      1,
+      { interactive: false, scopes: [...DRIVE_OAUTH_SCOPES] },
+      expect.any(Function),
+    );
+    expect(chrome.identity.getAuthToken).toHaveBeenNthCalledWith(
+      2,
+      { interactive: true, scopes: [...DRIVE_OAUTH_SCOPES] },
+      expect.any(Function),
+    );
   });
 
   it('returns actionable error for bad client id', async () => {

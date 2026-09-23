@@ -10,6 +10,16 @@ export type OwnerIdentity = {
 
 const GOOGLE_TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
 
+function tokenInfoUrl(env: Env, token: string): URL {
+  const configured = (env as Env & { GOOGLE_TOKENINFO_URL?: string }).GOOGLE_TOKENINFO_URL?.trim();
+  const url = new URL(configured || GOOGLE_TOKENINFO_URL);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '::1'].includes(url.hostname))) {
+    throw new Error('Google token introspection endpoint must use HTTPS');
+  }
+  url.searchParams.set('access_token', token);
+  return url;
+}
+
 export async function createOwnerSession(request: Request, env: Env): Promise<Response> {
   if (!ownerOriginAllowed(request, env)) return json({ code: 'ORIGIN_NOT_ALLOWED' }, 403);
   const token = bearerToken(request);
@@ -17,8 +27,7 @@ export async function createOwnerSession(request: Request, env: Env): Promise<Re
 
   let response: Response;
   try {
-    const url = new URL(GOOGLE_TOKENINFO_URL);
-    url.searchParams.set('access_token', token);
+    const url = tokenInfoUrl(env, token);
     response = await fetch(url, { headers: { accept: 'application/json' } });
   } catch {
     return json({ code: 'OWNER_IDENTITY_UNAVAILABLE' }, 503);
