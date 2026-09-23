@@ -1,6 +1,7 @@
 import { authorizeOwner, createOwnerSession } from './auth/ownerAuth';
 import { ownerCorsPreflight, withOwnerCors } from './http/cors';
 import { json } from './http/responses';
+import { observeSharingResponse } from './observability';
 import { enforceOwnerMutationRate } from './security/limits';
 import { routeShareOwnerRequest } from './shares/routes';
 import { routeUploadOwnerRequest } from './uploads/routes';
@@ -26,10 +27,16 @@ export async function route(request: Request, env: Env): Promise<Response> {
       if (limited) return withOwnerCors(limited, request, env);
     }
     const response = await routeOwner(request, env, url, owner.id);
+    observeSharingResponse(url, response);
     return withOwnerCors(response, request, env);
   }
 
-  return await routeViewerRequest(request, env, url) ?? json({ code: 'NOT_FOUND' }, 404);
+  const viewerResponse = await routeViewerRequest(request, env, url);
+  if (viewerResponse) {
+    observeSharingResponse(url, viewerResponse);
+    return viewerResponse;
+  }
+  return json({ code: 'NOT_FOUND' }, 404);
 }
 
 async function routeOwner(request: Request, env: Env, url: URL, ownerId: string): Promise<Response> {

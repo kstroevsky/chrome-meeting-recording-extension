@@ -1,4 +1,5 @@
 import { integerField, json, readBodyBytes, readJson, stringField } from '../http/responses';
+import { sharingMetric } from '../observability';
 import { parseContentRange } from '../http/range';
 import { ensureAdditionalStorageQuota } from '../security/limits';
 import { getOwnedShare, type TrackRow } from '../shares/ShareRepository';
@@ -169,6 +170,7 @@ async function uploadChunk(uploadId: string, offset: number, request: Request, e
   ).bind(uploadId, offset).first<UploadPartRow>();
   if (committed) {
     if (committed.bytes !== chunkBytes) return json({ code: 'CHUNK_REPLAY_MISMATCH' }, 409);
+    sharingMetric('sharing_upload_chunk_replayed', { bytes: chunkBytes });
     return new Response(null, { status: 204 });
   }
 
@@ -248,5 +250,6 @@ async function completeUpload(uploadId: string, request: Request, env: Env, owne
   }
 
   await markUploadComplete(upload, env);
+  sharingMetric('sharing_storage_committed', { bytes: upload.bytes });
   return new Response(null, { status: 204 });
 }
