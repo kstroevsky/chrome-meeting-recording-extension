@@ -55,7 +55,7 @@ export class SharedView {
     title.textContent = share.recordingTitles.join(' · ') || 'Published recording';
     const meta = document.createElement('p');
     meta.className = 'shared-card__meta';
-    meta.textContent = `Created ${new Date(share.createdAt).toLocaleString()} · ${share.tracks.length} track${share.tracks.length === 1 ? '' : 's'}`;
+    meta.textContent = `Created ${new Date(share.createdAt).toLocaleString()} · ${share.trackCount} track${share.trackCount === 1 ? '' : 's'}`;
     titles.append(title, meta);
     const state = document.createElement('span');
     state.className = `shared-card__state shared-card__state--${share.status}`;
@@ -63,7 +63,7 @@ export class SharedView {
     head.append(titles, state);
     card.append(head);
 
-    if (share.totalBytes != null && share.status !== 'active' && share.status !== 'revoked') {
+    if (share.totalBytes != null && share.percent != null && share.status !== 'active' && share.status !== 'revoked') {
       const progress = document.createElement('div');
       progress.className = 'shared-card__progress';
       const bar = document.createElement('span');

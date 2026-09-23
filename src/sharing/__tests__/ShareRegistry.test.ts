@@ -32,6 +32,9 @@ function remote(overrides: Partial<RemoteShare> = {}): RemoteShare {
   return {
     id: 'share-1',
     status: 'active',
+    recordingTitles: [],
+    recordingCount: 0,
+    trackCount: 0,
     manifest: { id: 'share-1', createdAt: 1, recordings: [] },
     createdAt: 1,
     updatedAt: 5,

@@ -7,10 +7,10 @@
  */
 
 import type { SharePublication, SharePublicationStore } from './SharePublicationStore';
-import type { RemoteShare, ShareRegistryApi } from './ShareServiceClient';
+import type { RemoteShare, RemoteShareSummary, ShareRegistryApi } from './ShareServiceClient';
 
 export type ShareRegistrySnapshot = {
-  remote: RemoteShare[];
+  remote: RemoteShareSummary[];
   local: SharePublication[];
 };
 
@@ -38,13 +38,12 @@ export class ShareRegistry {
     return { remote, local: await this.store.get(shareId) };
   }
 
-  private async reconcile(local: SharePublication, remote: RemoteShare): Promise<void> {
+  private async reconcile(local: SharePublication, remote: RemoteShareSummary): Promise<void> {
     if (remote.status === 'revoked') {
       if (local.status === 'revoked' && !local.error && !local.resumeFrom) return;
       await this.store.put({
         ...local,
         status: 'revoked',
-        manifest: structuredClone(remote.manifest),
         resumeFrom: undefined,
         error: undefined,
         updatedAt: Math.max(local.updatedAt, remote.updatedAt),
@@ -57,7 +56,6 @@ export class ShareRegistry {
     await this.store.put({
       ...local,
       status: 'active',
-      manifest: structuredClone(remote.manifest),
       shareUrl: remote.shareUrl,
       resumeFrom: undefined,
       error: undefined,

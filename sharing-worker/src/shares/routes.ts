@@ -6,7 +6,16 @@ import { ensureNewShareQuota } from '../security/limits';
 import { SHARING_CONTRACT_LIMITS } from '../../../src/shared/sharingContract';
 import { canonicalizeManifest, canonicalizeStoredManifest } from './manifestSchema';
 import { deletePublishedShare } from './deleteShare';
-import { getOwnedShare, getShare, mediaObjectKey, type ShareRow } from './ShareRepository';
+import {
+  getOwnedShare,
+  getShare,
+  mediaObjectKey,
+  type ShareRow,
+  type ShareSummaryRow,
+} from './ShareRepository';
+
+const DEFAULT_SHARE_LIST_LIMIT = 50;
+const MAX_SHARE_LIST_LIMIT = 100;
 
 export async function routeShareOwnerRequest(
   request: Request,
@@ -40,11 +49,14 @@ export async function routeShareOwnerRequest(
 }
 
 async function putShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
-  const body = await readJson(request, SHARING_CONTRACT_LIMITS.manifestBytes);
+  const body = await readJson(request, SHARING_CONTRACT_LIMITS.manifestRequestBytes);
   const manifest = canonicalizeManifest(body, shareId);
   if (!manifest) return json({ code: 'INVALID_MANIFEST' }, 400);
 
   const manifestJson = JSON.stringify(manifest);
+  if (new TextEncoder().encode(manifestJson).byteLength > SHARING_CONTRACT_LIMITS.manifestBytes) {
+    return json({ code: 'MANIFEST_TOO_LARGE' }, 413);
+  }
   const existing = await getShare(env.SHARING_DB, shareId);
   if (existing) {
     if (existing.owner_id !== ownerId) return json({ code: 'SHARE_NOT_FOUND' }, 404);
@@ -61,15 +73,31 @@ async function putShare(shareId: string, request: Request, env: Env, ownerId: st
       + recording.tracks.reduce((trackTotal, track) => trackTotal + (track.bytes ?? 0), 0),
     0,
   );
+  const allTrackBytesKnown = manifest.recordings.every((recording) =>
+    recording.tracks.every((track) => track.bytes != null));
+  const recordingTitlesJson = JSON.stringify(manifest.recordings.map((recording) => recording.title));
+  const trackCount = manifest.recordings.reduce((total, recording) => total + recording.tracks.length, 0);
   const quota = await ensureNewShareQuota(env, ownerId, reservedBytes);
   if (quota) return quota;
 
   const now = Date.now();
   const statements: D1PreparedStatement[] = [
     env.SHARING_DB.prepare(
-      `INSERT INTO shares (id, owner_id, status, manifest_json, created_at, updated_at)
-       VALUES (?, ?, 'draft', ?, ?, ?)`,
-    ).bind(shareId, ownerId, manifestJson, now, now),
+      `INSERT INTO shares
+         (id, owner_id, status, manifest_json, recording_titles_json, recording_count,
+          track_count, total_bytes, created_at, updated_at)
+       VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      shareId,
+      ownerId,
+      manifestJson,
+      recordingTitlesJson,
+      manifest.recordings.length,
+      trackCount,
+      allTrackBytesKnown ? reservedBytes : null,
+      now,
+      now,
+    ),
   ];
 
   for (const recording of manifest.recordings) {
@@ -96,14 +124,24 @@ async function putShare(shareId: string, request: Request, env: Env, ownerId: st
 }
 
 async function listShares(request: Request, env: Env, ownerId: string): Promise<Response> {
+  const url = new URL(request.url);
+  const limit = boundedPositiveInteger(url.searchParams.get('limit'), DEFAULT_SHARE_LIST_LIMIT, MAX_SHARE_LIST_LIMIT);
+  const offset = boundedNonNegativeInteger(url.searchParams.get('cursor'));
   const result = await env.SHARING_DB.prepare(
-    `SELECT id, owner_id, status, manifest_json, capability_hash, capability_version, capability_key_id,
+    `SELECT id, status, capability_version, capability_key_id,
+            recording_titles_json, recording_count, track_count, total_bytes,
             created_at, updated_at, finalized_at, revoked_at
-       FROM shares WHERE owner_id = ? ORDER BY created_at DESC`,
-  ).bind(ownerId).all<ShareRow>();
+       FROM shares
+      WHERE owner_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?`,
+  ).bind(ownerId, limit, offset).all<ShareSummaryRow>();
 
-  const shares = await Promise.all(result.results.map((share) => ownerShareView(share, request, env)));
-  return json({ shares });
+  const shares = await Promise.all(result.results.map((share) => ownerShareSummary(share, request, env)));
+  return json({
+    shares,
+    ...(result.results.length === limit ? { nextCursor: String(offset + result.results.length) } : {}),
+  });
 }
 
 async function getShareResponse(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
@@ -114,9 +152,49 @@ async function getShareResponse(shareId: string, request: Request, env: Env, own
 
 async function ownerShareView(share: ShareRow, request: Request, env: Env): Promise<Record<string, unknown>> {
   return {
+    ...(await ownerShareSummaryFromDetail(share, request, env)),
+    manifest: JSON.parse(share.manifest_json),
+  };
+}
+
+async function ownerShareSummary(
+  share: ShareSummaryRow,
+  request: Request,
+  env: Env,
+): Promise<Record<string, unknown>> {
+  return {
     id: share.id,
     status: share.status,
-    manifest: JSON.parse(share.manifest_json),
+    recordingTitles: parseRecordingTitles(share.recording_titles_json),
+    recordingCount: share.recording_count,
+    trackCount: share.track_count,
+    ...(share.total_bytes != null ? { totalBytes: share.total_bytes } : {}),
+    createdAt: share.created_at,
+    updatedAt: share.updated_at,
+    ...(share.finalized_at != null ? { finalizedAt: share.finalized_at } : {}),
+    ...(share.revoked_at != null ? { revokedAt: share.revoked_at } : {}),
+    ...(share.status === 'active' ? { shareUrl: await shareUrl(share, request, env) } : {}),
+  };
+}
+
+async function ownerShareSummaryFromDetail(
+  share: ShareRow,
+  request: Request,
+  env: Env,
+): Promise<Record<string, unknown>> {
+  const manifest = canonicalizeStoredManifest(share.manifest_json, share.id);
+  const recordings = manifest?.recordings ?? [];
+  const trackCount = recordings.reduce((total, recording) => total + recording.tracks.length, 0);
+  const bytes = recordings.flatMap((recording) => recording.tracks).map((track) => track.bytes);
+  return {
+    id: share.id,
+    status: share.status,
+    recordingTitles: recordings.map((recording) => recording.title),
+    recordingCount: recordings.length,
+    trackCount,
+    ...(bytes.every((value) => value != null) ? {
+      totalBytes: bytes.reduce((total, value) => total + (value ?? 0), 0),
+    } : {}),
     createdAt: share.created_at,
     updatedAt: share.updated_at,
     ...(share.finalized_at != null ? { finalizedAt: share.finalized_at } : {}),
@@ -153,6 +231,27 @@ async function deleteShare(shareId: string, env: Env, ownerId: string): Promise<
   }
   await deletePublishedShare(env, share);
   return new Response(null, { status: 204 });
+}
+
+function parseRecordingTitles(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((title): title is string => typeof title === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function boundedPositiveInteger(value: string | null, fallback: number, maximum: number): number {
+  if (value == null) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
+}
+
+function boundedNonNegativeInteger(value: string | null): number {
+  if (value == null) return 0;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 async function finalizeShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {

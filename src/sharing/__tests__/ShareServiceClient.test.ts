@@ -98,32 +98,43 @@ describe('ShareServiceClient', () => {
   });
 
   it('lists and fetches authenticated owner shares', async () => {
-    const active = {
+    const activeSummary = {
       id: 'share-1',
       status: 'active',
-      manifest: { id: 'share-1', createdAt: 1, recordings: [] },
+      recordingTitles: ['Customer call'],
+      recordingCount: 1,
+      trackCount: 2,
+      totalBytes: 42,
       createdAt: 1,
       updatedAt: 3,
       finalizedAt: 2,
       shareUrl: 'https://share.example/s/viewer-capability',
     };
-    const revoked = {
+    const revokedSummary = {
       id: 'share-2',
       status: 'revoked',
-      manifest: { id: 'share-2', createdAt: 4, recordings: [] },
+      recordingTitles: ['Second call'],
+      recordingCount: 1,
+      trackCount: 1,
       createdAt: 4,
       updatedAt: 6,
       revokedAt: 6,
     };
+    const active = {
+      ...activeSummary,
+      manifest: { id: 'share-1', createdAt: 1, recordings: [] },
+    };
     const fetcher = jest.fn()
-      .mockResolvedValueOnce(jsonResponse({ shares: [active, revoked] }))
+      .mockResolvedValueOnce(jsonResponse({ shares: [activeSummary], nextCursor: '1' }))
+      .mockResolvedValueOnce(jsonResponse({ shares: [revokedSummary] }))
       .mockResolvedValueOnce(jsonResponse(active));
     const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
 
-    await expect(client.listShares()).resolves.toEqual([active, revoked]);
+    await expect(client.listShares()).resolves.toEqual([activeSummary, revokedSummary]);
     await expect(client.getShare('share-1')).resolves.toEqual(active);
     expect(fetcher.mock.calls.map((call) => [call[0], call[1].method])).toEqual([
-      ['https://share.example/api/shares', 'GET'],
+      ['https://share.example/api/shares?limit=50', 'GET'],
+      ['https://share.example/api/shares?limit=50&cursor=1', 'GET'],
       ['https://share.example/api/shares/share-1', 'GET'],
     ]);
   });
@@ -134,6 +145,9 @@ describe('ShareServiceClient', () => {
       .mockResolvedValueOnce(jsonResponse({
         id: 'share-1',
         status: 'active',
+        recordingTitles: [],
+        recordingCount: 0,
+        trackCount: 0,
         manifest: { id: 'share-1', createdAt: 1, recordings: [] },
         createdAt: 1,
         updatedAt: 2,

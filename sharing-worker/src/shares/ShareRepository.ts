@@ -12,6 +12,23 @@ export type ShareRow = {
   revoked_at: number | null;
 };
 
+export type ShareSummaryRow = Pick<
+  ShareRow,
+  | 'id'
+  | 'status'
+  | 'capability_version'
+  | 'capability_key_id'
+  | 'created_at'
+  | 'updated_at'
+  | 'finalized_at'
+  | 'revoked_at'
+> & {
+  recording_titles_json: string;
+  recording_count: number;
+  track_count: number;
+  total_bytes: number | null;
+};
+
 export type TrackRow = {
   share_id: string;
   recording_id: string;

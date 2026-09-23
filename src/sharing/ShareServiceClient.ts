@@ -25,10 +25,13 @@ import type { ShareUploadSession, ShareUploadTransport } from './ShareUploadMana
 
 export type RemoteShareStatus = 'draft' | 'uploading' | 'active' | 'revoked';
 
-export type RemoteShare = {
+export type RemoteShareSummary = {
   id: string;
   status: RemoteShareStatus;
-  manifest: PublishedPlaybackManifest;
+  recordingTitles: string[];
+  recordingCount: number;
+  trackCount: number;
+  totalBytes?: number;
   createdAt: number;
   updatedAt: number;
   finalizedAt?: number;
@@ -36,8 +39,12 @@ export type RemoteShare = {
   shareUrl?: string;
 };
 
+export type RemoteShare = RemoteShareSummary & {
+  manifest: PublishedPlaybackManifest;
+};
+
 export interface ShareRegistryApi {
-  listShares(): Promise<RemoteShare[]>;
+  listShares(): Promise<RemoteShareSummary[]>;
   getShare(shareId: string): Promise<RemoteShare>;
 }
 
@@ -154,15 +161,29 @@ export class ShareServiceClient implements SharePublicationApi, ShareUploadTrans
     });
   }
 
-  async listShares(): Promise<RemoteShare[]> {
-    const body = await this.requestJson('/api/shares', {
-      method: 'GET',
-      statuses: [200],
-    });
-    if (!isRecord(body) || !Array.isArray(body.shares)) {
-      throw new Error('Sharing service returned an invalid share list');
-    }
-    return body.shares.map(parseRemoteShare);
+  async listShares(): Promise<RemoteShareSummary[]> {
+    const shares: RemoteShareSummary[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const path = cursor == null
+        ? '/api/shares?limit=50'
+        : `/api/shares?limit=50&cursor=${encodeURIComponent(cursor)}`;
+      const body = await this.requestJson(path, {
+        method: 'GET',
+        statuses: [200],
+      });
+      if (!isRecord(body) || !Array.isArray(body.shares)) {
+        throw new Error('Sharing service returned an invalid share list');
+      }
+      shares.push(...body.shares.map(parseRemoteShareSummary));
+      cursor = optionalStringField(body, 'nextCursor');
+      if (cursor != null) {
+        if (seenCursors.has(cursor)) throw new Error('Sharing service returned a repeated share-list cursor');
+        seenCursors.add(cursor);
+      }
+    } while (cursor != null);
+    return shares;
   }
 
   async getShare(shareId: string): Promise<RemoteShare> {
@@ -266,16 +287,47 @@ function numberField(value: unknown, field: string): number | undefined {
   return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : undefined;
 }
 
+function nonNegativeIntegerField(value: unknown, field: string): number | undefined {
+  const candidate = numberField(value, field);
+  return candidate != null && Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : undefined;
+}
+
+function optionalNonNegativeIntegerField(value: Record<string, unknown>, field: string): number | undefined {
+  if (value[field] == null) return undefined;
+  const candidate = nonNegativeIntegerField(value, field);
+  if (candidate == null) throw new Error(`Sharing service returned an invalid ${field}`);
+  return candidate;
+}
+
+function stringArrayField(value: Record<string, unknown>, field: string): string[] | undefined {
+  const candidate = value[field];
+  if (!Array.isArray(candidate) || !candidate.every((item) => typeof item === 'string')) return undefined;
+  return [...candidate];
+}
+
 function parseRemoteShare(value: unknown): RemoteShare {
+  const summary = parseRemoteShareSummary(value);
+  if (!isRecord(value)) throw new Error('Sharing service returned an invalid share');
+  return {
+    ...summary,
+    manifest: parseRemoteManifest(value.manifest, summary.id),
+  };
+}
+
+function parseRemoteShareSummary(value: unknown): RemoteShareSummary {
   if (!isRecord(value)) throw new Error('Sharing service returned an invalid share');
   const id = stringField(value, 'id');
   const status = value.status;
   const createdAt = numberField(value, 'createdAt');
   const updatedAt = numberField(value, 'updatedAt');
-  if (!id || !isRemoteShareStatus(status) || createdAt == null || updatedAt == null) {
+  const recordingCount = nonNegativeIntegerField(value, 'recordingCount');
+  const trackCount = nonNegativeIntegerField(value, 'trackCount');
+  const recordingTitles = stringArrayField(value, 'recordingTitles');
+  if (!id || !isRemoteShareStatus(status) || createdAt == null || updatedAt == null
+    || recordingCount == null || trackCount == null || !recordingTitles) {
     throw new Error('Sharing service returned an invalid share');
   }
-  const manifest = parseRemoteManifest(value.manifest, id);
+  const totalBytes = optionalNonNegativeIntegerField(value, 'totalBytes');
   const finalizedAt = optionalNumberField(value, 'finalizedAt');
   const revokedAt = optionalNumberField(value, 'revokedAt');
   const shareUrl = optionalStringField(value, 'shareUrl');
@@ -285,7 +337,10 @@ function parseRemoteShare(value: unknown): RemoteShare {
   return {
     id,
     status,
-    manifest,
+    recordingTitles,
+    recordingCount,
+    trackCount,
+    ...(totalBytes != null ? { totalBytes } : {}),
     createdAt,
     updatedAt,
     ...(finalizedAt != null ? { finalizedAt } : {}),

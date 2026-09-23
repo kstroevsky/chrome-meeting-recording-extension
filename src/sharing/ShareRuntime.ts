@@ -14,7 +14,7 @@ import { ShareServiceClient } from './ShareServiceClient';
 import { ShareUploadManager } from './ShareUploadManager';
 import { createShareUploadSourceResolver } from './ShareUploadSourceResolver';
 import { createShareUploadStore } from './ShareUploadStore';
-import type { RemoteShare } from './ShareServiceClient';
+import type { RemoteShareSummary } from './ShareServiceClient';
 import type { SharePublication } from './SharePublicationStore';
 import type { ShareUploadJob } from './ShareUploadStore';
 
@@ -26,7 +26,7 @@ export type ShareRuntimeAuth = {
 };
 
 export type ShareRuntimeSnapshot = {
-  remote: RemoteShare[];
+  remote: RemoteShareSummary[];
   local: SharePublication[];
   uploads: ShareUploadJob[];
   refreshedAt: number;
@@ -69,7 +69,7 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
       await publicationStore.remove(shareId);
     },
     async snapshot(): Promise<ShareRuntimeSnapshot> {
-      let remote: RemoteShare[] = [];
+      let remote: RemoteShareSummary[] = [];
       let local = await publicationStore.list();
       let remoteError: string | undefined;
       try {

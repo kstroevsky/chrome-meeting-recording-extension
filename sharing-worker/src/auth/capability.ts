@@ -14,7 +14,11 @@ export async function deriveCapability(shareId: string, version: number, secret:
   return hmacBase64Url(secret, `share:${shareId}:v${version}`);
 }
 
-export async function shareUrl(share: ShareRow, request: Request, env: Env): Promise<string> {
+export async function shareUrl(
+  share: Pick<ShareRow, 'id' | 'capability_version' | 'capability_key_id'>,
+  request: Request,
+  env: Env,
+): Promise<string> {
   const capability = await deriveCapability(
     share.id,
     share.capability_version,
