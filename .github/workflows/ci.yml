@@ -47,6 +47,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
 
       - name: Plan validation domains
         id: plan
@@ -59,7 +62,7 @@ jobs:
         id: cache-verify
         if: github.event_name == 'pull_request' && steps.plan.outputs.verify_relevant == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/verify.json
           key: ${{ steps.plan.outputs.verify_cache_key }}
@@ -69,7 +72,7 @@ jobs:
         id: cache-mock-e2e
         if: github.event_name == 'pull_request' && steps.plan.outputs.mock_e2e_relevant == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/mock-e2e.json
           key: ${{ steps.plan.outputs.mock_e2e_cache_key }}
@@ -79,7 +82,7 @@ jobs:
         id: cache-sharing
         if: github.event_name == 'pull_request' && steps.plan.outputs.sharing_relevant == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/sharing.json
           key: ${{ steps.plan.outputs.sharing_cache_key }}
@@ -89,7 +92,7 @@ jobs:
         id: cache-production-e2e
         if: github.event_name == 'pull_request' && steps.plan.outputs.production_e2e_relevant == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/production-e2e.json
           key: ${{ steps.plan.outputs.production_e2e_cache_key }}
@@ -140,7 +143,7 @@ jobs:
           .ci-validation-cache/verify.json
       - name: Save verify success marker
         continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/verify.json
           key: ${{ needs.plan.outputs.verify_cache_key }}
@@ -193,7 +196,7 @@ jobs:
           .ci-validation-cache/mock-e2e.json
       - name: Save mock E2E success marker
         continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/mock-e2e.json
           key: ${{ needs.plan.outputs.mock_e2e_cache_key }}
@@ -244,7 +247,7 @@ jobs:
           .ci-validation-cache/sharing.json
       - name: Save sharing success marker
         continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/sharing.json
           key: ${{ needs.plan.outputs.sharing_cache_key }}
@@ -294,7 +297,7 @@ jobs:
           .ci-validation-cache/production-e2e.json
       - name: Save production E2E success marker
         continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-validation-cache/production-e2e.json
           key: ${{ needs.plan.outputs.production_e2e_cache_key }}

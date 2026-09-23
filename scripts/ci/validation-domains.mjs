@@ -24,7 +24,13 @@ export const IGNORED_RULES = [
   prefix('docs/'),
   prefix('graphify-out/'),
   regex(/(^|\/)README\.md$/i, /\.md$/i),
-  exact('.env.example', '.github/dependabot.yml', 'LICENSE', 'LICENSE.md'),
+  exact(
+    '.env.example',
+    '.gitignore',
+    '.github/dependabot.yml',
+    'LICENSE',
+    'LICENSE.md',
+  ),
 ];
 
 export const RELEVANCE_RULES = [
@@ -34,6 +40,7 @@ export const RELEVANCE_RULES = [
     match: [
       exact(
         '.github/workflows/ci.yml',
+        '.nvmrc',
         'package.json',
         'package-lock.json',
         'webpack.config.js',
@@ -125,12 +132,37 @@ export const RELEVANCE_RULES = [
     match: [exact('static/manifest.json', 'static/offscreen.html')],
   },
   {
+    name: 'sharing-runtime-build-dependency',
+    domains: VERIFY_SHARING_MOCK_PRODUCTION,
+    match: [exact('src/shared/build.ts')],
+  },
+  {
+    name: 'sharing-runtime-dependencies',
+    domains: VERIFY_SHARING_MOCK,
+    match: [
+      prefix(
+        'src/background/offscreen/',
+        'src/platform/capabilities/auth/',
+      ),
+      exact(
+        'src/offscreen/storage/opfsLayout.ts',
+        'src/offscreen/storage/indexedDbKeyValueArea.ts',
+        'src/platform/capabilities/AuthProvider.ts',
+        'src/platform/chrome/identity.ts',
+        'src/platform/chrome/offscreen.ts',
+        'src/platform/chrome/runtime.ts',
+        'src/shared/rpc.ts',
+        'src/shared/async.ts',
+        'src/shared/timeouts.ts',
+      ),
+    ],
+  },
+  {
     name: 'production-analysis-packaging',
     domains: VERIFY_MOCK_PRODUCTION,
     match: [
       prefix('src/offscreen/analysis/', 'src/shared/analysis/'),
       exact(
-        'src/shared/build.ts',
         'src/buildFlags.d.ts',
         'scripts/fetch-analysis-model.mjs',
         'scripts/lib/analysisModel.cjs',
@@ -197,6 +229,11 @@ export const RELEVANCE_RULES = [
     match: [prefix('static/')],
   },
   {
+    name: 'public-extension-assets',
+    domains: ALL,
+    match: [prefix('public/')],
+  },
+  {
     name: 'verify-config',
     domains: VERIFY,
     match: [
@@ -213,28 +250,6 @@ export const RELEVANCE_RULES = [
     ],
   },
 ];
-
-const POTENTIALLY_EXECUTABLE_EXTENSIONS = new Set([
-  '.cjs',
-  '.css',
-  '.html',
-  '.js',
-  '.json',
-  '.jsonc',
-  '.jsx',
-  '.mjs',
-  '.sql',
-  '.ts',
-  '.tsx',
-  '.yaml',
-  '.yml',
-]);
-
-function extensionOf(path) {
-  const slash = path.lastIndexOf('/');
-  const dot = path.lastIndexOf('.');
-  return dot > slash ? path.slice(dot).toLowerCase() : '';
-}
 
 function matchesMatcher(path, matcher) {
   if (matcher.exact?.includes(path)) {
@@ -257,20 +272,6 @@ export function isIgnoredPath(path) {
   return matchesAny(path, IGNORED_RULES);
 }
 
-export function isPotentiallyExecutableOrConfig(path) {
-  if (isIgnoredPath(path)) {
-    return false;
-  }
-  if (
-    path === 'package.json' ||
-    path === 'package-lock.json' ||
-    path.startsWith('.github/workflows/')
-  ) {
-    return true;
-  }
-  return POTENTIALLY_EXECUTABLE_EXTENSIONS.has(extensionOf(path));
-}
-
 export function classifyPath(path) {
   if (isIgnoredPath(path)) {
     return { path, domains: [], rule: 'ignored', unknown: false };
@@ -287,16 +288,12 @@ export function classifyPath(path) {
     }
   }
 
-  if (isPotentiallyExecutableOrConfig(path)) {
-    return {
-      path,
-      domains: [...ALL],
-      rule: 'unknown-executable-or-config',
-      unknown: true,
-    };
-  }
-
-  return { path, domains: [], rule: 'untracked-by-ci', unknown: false };
+  return {
+    path,
+    domains: [...ALL],
+    rule: 'unknown-path',
+    unknown: true,
+  };
 }
 
 export function classifyChangedFiles(paths) {
