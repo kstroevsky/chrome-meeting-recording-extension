@@ -112,6 +112,15 @@ jobs:
           npx playwright test --config=playwright.config.ts
           --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
 
+      - name: Ensure full git history for production versioning
+        if: env.FULL_VALIDATION == 'true'
+        shell: bash
+        run: |
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch --unshallow --tags origin
+          fi
+          test "$(git rev-parse --is-shallow-repository)" = "false"
+
       - name: Build production extension for integration E2E
         if: env.FULL_VALIDATION == 'true'
         run: npm run build
