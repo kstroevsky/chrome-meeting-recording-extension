@@ -30,6 +30,16 @@ export function getRuntimeId(): string | null {
   return chrome.runtime.id ?? null;
 }
 
+export function reloadRuntime(): void {
+  chrome.runtime.reload();
+}
+
+export function addRuntimeMessageListener(
+  listener: Parameters<typeof chrome.runtime.onMessage.addListener>[0],
+): void {
+  chrome.runtime.onMessage.addListener(listener);
+}
+
 export function pokeRuntime(): void {
   chrome.runtime.getPlatformInfo(() => {});
 }

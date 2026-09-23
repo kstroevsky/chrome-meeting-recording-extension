@@ -400,13 +400,14 @@ button { -webkit-font-smoothing: antialiased; }
 
 /* FILES dropdown and the volume popup (design: header control + fader popup). */
 .player__popover { position: relative; display: inline-flex; flex-shrink: 0; }
-.player__files { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; transition: var(--hover-transition); }
-.player__files:hover { background: var(--field); }
-.player__files[hidden] { display: none; }
+.player__files, .player__topics { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; transition: var(--hover-transition); }
+.player__files:hover, .player__topics:hover { background: var(--field); }
+.player__files[hidden], .player__topics[hidden] { display: none; }
 .player__files-label { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600; letter-spacing: .08em; color: var(--detail); }
-.player__files-count { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: var(--note-icon); }
+.player__files-count, .player__topics-count { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; color: var(--note-icon); }
 .player__files-chevron { flex: 0 0 auto; color: var(--faint); transition: transform 180ms var(--ease); }
-.player__files[aria-expanded='true'] .player__files-chevron { transform: rotate(180deg); }
+.player__files[aria-expanded='true'] .player__files-chevron,
+.player__topics[aria-expanded='true'] .player__files-chevron { transform: rotate(180deg); }
 .player__menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 4; min-width: 180px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 14px 30px -10px rgba(28, 26, 23, .28); }
 .player__menu[hidden] { display: none; }
 .player__popover--up .player__menu { top: auto; bottom: calc(100% + 6px); }

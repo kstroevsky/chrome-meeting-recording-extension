@@ -16,7 +16,7 @@
 import { RetainedMediaStore } from './offscreen/storage/RetainedMediaStore';
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
 import { addStorageChangedListener } from './platform/chrome/storage';
-import { getBuildId } from './shared/build';
+import { getBuildId, isE2EMockAnalysisBuild } from './shared/build';
 import { makeLogger } from './shared/logger';
 import { sendToBackground } from './shared/messages';
 import { RecorderEngine } from './offscreen/RecorderEngine';
@@ -32,6 +32,8 @@ import { EmbeddingWorkerClient } from './offscreen/analysis/EmbeddingWorkerClien
 import { analysisEngineConfig, spawnAnalysisWorker } from './offscreen/analysis/engineConfig';
 import { createAnalysisJobStateOutbox } from './offscreen/analysis/AnalysisJobStateOutbox';
 import { AnalysisSealLedger } from './offscreen/analysis/AnalysisSealLedger';
+import { AnalysisE2EGate } from './offscreen/analysis/AnalysisE2EGate';
+import { AnalysisE2EMockEngine } from './offscreen/analysis/AnalysisE2EMockEngine';
 import { toWireAnalysis } from './shared/analysis/storedAnalysis';
 import { isTerminalAnalysisJob } from './shared/analysis/job';
 import { renameDriveResources } from './offscreen/drive/DriveMetadataRenamer';
@@ -198,7 +200,9 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     getPort,
     connectPort,
     currentPhase: controller.currentPhase,
+    currentEpoch: controller.currentEpoch,
     isFinalizing: controller.isFinalizing,
+    currentFinalization: controller.currentFinalization,
     clearWarnings: controller.clearWarnings,
     onStartRequested: (runConfig, storageMode, epoch, historyId, telemetryRunId) => {
       if (telemetryRunId) {
@@ -367,19 +371,24 @@ const analysisSeals = new AnalysisSealLedger(
   { acknowledge: (jobId) => analysisManager.acknowledge(jobId) },
   { warn: L.warn },
 );
+const mockAnalysis = isE2EMockAnalysisBuild();
+const analysisE2EGate = mockAnalysis ? new AnalysisE2EGate() : undefined;
 
 const analysisManager = new AnalysisManager({
-  openEngine: () => EmbeddingWorkerClient.create(
-    analysisEngineConfig((path) => chrome.runtime.getURL(path)),
-    {
-      spawn: () => spawnAnalysisWorker((path) => chrome.runtime.getURL(path)),
-      reportWarning: controller.reportWarning,
-    },
-  ),
+  openEngine: mockAnalysis
+    ? async () => new AnalysisE2EMockEngine()
+    : () => EmbeddingWorkerClient.create(
+      analysisEngineConfig((path) => chrome.runtime.getURL(path)),
+      {
+        spawn: () => spawnAnalysisWorker((path) => chrome.runtime.getURL(path)),
+        reportWarning: controller.reportWarning,
+      },
+    ),
   report: reportAnalysisJob,
   deliver: deliverAnalysisResult,
   warn: L.warn,
-  isUnsupported: () => EmbeddingWorkerClient.unsupported,
+  isUnsupported: mockAnalysis ? () => false : () => EmbeddingWorkerClient.unsupported,
+  beforeAnalyze: analysisE2EGate?.wait,
 });
 
 async function reportAnalysisJob(job: import('./shared/analysis/job').AnalysisJob): Promise<void> {

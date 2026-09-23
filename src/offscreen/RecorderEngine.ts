@@ -6,7 +6,12 @@
  * per-stream recording tasks live in ./engine/Tab|Mic|SelfVideoRecorderTask.
  */
 
-import { captureTabStreamFromId, maybeGetMicStream, maybeGetSelfVideoStream } from './RecorderCapture';
+import {
+  captureTabStreamFromId,
+  maybeGetMicStream,
+  maybeGetSelfVideoStream,
+  triggerE2EMockTabMarker,
+} from './RecorderCapture';
 import { buildRecorderRuntimeSettingsSnapshot, type RecorderRuntimeSettingsSnapshot } from '../shared/settings';
 import { DEFAULT_RECORDING_RUN_CONFIG, isStoppablePhase, type CapturedTabResolution, type MicMode, type RecordingCaptureDevices, type RecordingInputDevice, type RecordingRunConfig, type RecordingStream } from '../shared/recording';
 import { describeMediaError } from './RecorderSupport';
@@ -335,7 +340,10 @@ export class RecorderEngine {
       this.pendingStartPromises = startTasks;
       await Promise.all(startTasks);
       this.pendingStartPromises = [];
-      if (this.runId === runId && this.state === 'starting') this.state = 'recording';
+      if (this.runId === runId && this.state === 'starting') {
+        this.state = 'recording';
+        triggerE2EMockTabMarker(this.tabCaptureStream);
+      }
       debugPerf(this.deps.log, 'lifecycle', 'start_completed', {
         durationMs: roundMs(nowMs() - runStartedAt),
         activeTracks: this.tracks.length,

@@ -190,6 +190,17 @@ export type RecordedSpan = {
   mediaStartMs: number;
 };
 
+/** Durable identity and intent for a run that is being finalized. */
+export type RecordingRunFinalization = {
+  historyId: string;
+  epoch: number;
+  targetTabId?: number;
+  durationMs: number;
+  disposition: 'kept' | 'discarded';
+  /** Background-derived state (transcript/notations) is sealed for sidecars. */
+  backgroundFinalized?: boolean;
+};
+
 /**
  * Bound on the span ledger, following the house rule that durable lists are
  * always bounded. One span per pause/resume, so this is a runaway guard against
@@ -288,6 +299,13 @@ export type RecordingSessionSnapshot = {
    * is reset on the next `start()`. Bounded by {@link MAX_RECORDED_SPANS}.
    */
   recordedSpans?: RecordedSpan[];
+  /**
+   * Durable end-of-run intent. It intentionally survives the transition back
+   * to idle so a restarted MV3 worker cannot forget that a run was discarded,
+   * lose the transcript sweep target, or reinterpret an interrupted finalize.
+   * The next start replaces it with the next run's lifecycle.
+   */
+  finalization?: RecordingRunFinalization;
   /**
    * Real delivered dimensions from the captured tab video track's getSettings().
    * Only meaningful while an active run exists; omitted when Chrome does not

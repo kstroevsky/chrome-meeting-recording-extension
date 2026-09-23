@@ -55,7 +55,7 @@ test.describe('recordings page notes (integration)', () => {
 
       // Searching the note's text keeps the recording; searching for something
       // absent from name, note and notes alike drops it.
-      const search = page.getByPlaceholder('Search name or note…');
+      const search = page.getByPlaceholder('Search name, note or topic…');
       await search.fill('pricing');
       await expect(page.locator('.recording-row')).toHaveCount(1);
 
@@ -63,7 +63,7 @@ test.describe('recordings page notes (integration)', () => {
       await expect(page.locator('.recording-day--match .recording-day__label').first())
         .toHaveText('MATCHED IN NOTES');
       await expect(page.locator('.recording-row__hit').first()).toHaveText('pricing');
-      await expect(page.locator('.recordings-count')).toContainText('IN NAMES AND NOTES');
+      await expect(page.locator('.recordings-count')).toContainText('IN NAMES, NOTES AND TOPICS');
 
       await search.fill('nothing matches this');
       await expect(page.locator('.recording-row')).toHaveCount(0);

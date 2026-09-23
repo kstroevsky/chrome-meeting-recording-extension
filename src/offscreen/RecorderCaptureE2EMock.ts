@@ -7,7 +7,7 @@
  * sentinel `__E2E_MOCK_TAB_CAPTURE__`. Kept out of `RecorderCapture.ts` so the
  * production capture path carries no test scaffolding.
  *
- * The stream is a `<canvas>` animation (a moving frame counter + a periodic
+ * The stream is a `<canvas>` animation (a moving frame counter + a single
  * black/white marker) plus a matching audio tone, so an e2e assertion can verify the
  * recorded artifact actually contains changing video and synchronized audio.
  */
@@ -16,6 +16,14 @@ import { debugPerf, nowMs, roundMs } from '../shared/perf';
 import type { TabCaptureSettings } from '../shared/settings';
 import type { RecorderCaptureDeps } from './RecorderCapture';
 import { describeMediaError } from './RecorderSupport';
+
+const markerTriggers = new WeakMap<MediaStream, () => void>();
+
+/** Starts the one-shot A/V marker for a mock stream once its recorder is live. */
+export function triggerE2EMockTabMarker(stream: MediaStream | null | undefined): void {
+  if (!stream) return;
+  markerTriggers.get(stream)?.();
+}
 
 /** Wraps `track.stop()` so the synthetic stream's timers/audio context are torn down once. */
 function patchTrackStop(track: MediaStreamTrack | undefined, cleanup: () => void): void {
@@ -43,6 +51,19 @@ export function createE2EMockTabStream(
   const ctx = canvas.getContext('2d');
   let frame = 0;
   const captureFrameRate = Math.max(1, Math.min(tabOutput.maxFrameRate, 30));
+  // One recorder-triggered marker is deliberately non-periodic. A periodic pulse let the
+  // video detector lock onto pulse N while the audio detector locked onto N+1,
+  // producing an apparent ~1 s A/V drift on loaded CI runners. RecorderEngine
+  // arms this only after every expected MediaRecorder has fired `onstart`, then
+  // we keep one second of black/silence so ffmpeg can establish the pre-marker
+  // segment before the pulse. A slow startup therefore cannot move the marker
+  // before capture begins, and an immediate start cannot hide its black_end.
+  let markerStartFrame: number | null = null;
+  const markerLeadInFrames = captureFrameRate;
+  const markerActiveFrames = Math.max(2, Math.round(captureFrameRate * 0.5));
+  const markerSize = 256;
+  const markerLeft = canvas.width - 320;
+  const markerTop = 32;
   let markerGain: GainNode | null = null;
   let markerOscillator: OscillatorNode | null = null;
 
@@ -56,9 +77,11 @@ export function createE2EMockTabStream(
     ctx.fillText('E2E mock tab capture', 32, 72);
     ctx.font = '24px sans-serif';
     ctx.fillText(`Frame ${frame}`, 32, 116);
-    const markerActive = frame % captureFrameRate < Math.max(1, Math.round(captureFrameRate / 10));
+    const markerActive = markerStartFrame != null
+      && frame >= markerStartFrame
+      && frame < markerStartFrame + markerActiveFrames;
     ctx.fillStyle = markerActive ? '#ffffff' : '#000000';
-    ctx.fillRect(canvas.width - 96, 32, 64, 64);
+    ctx.fillRect(markerLeft, markerTop, markerSize, markerSize);
     if (markerGain && markerOscillator) {
       markerGain.gain.value = markerActive ? 0.08 : 0;
       markerOscillator.frequency.value = markerActive ? 880 : 440;
@@ -69,6 +92,9 @@ export function createE2EMockTabStream(
   draw();
   const timer = window.setInterval(draw, 1000 / captureFrameRate);
   const stream = canvas.captureStream(captureFrameRate);
+  markerTriggers.set(stream, () => {
+    if (markerStartFrame == null) markerStartFrame = frame + markerLeadInFrames;
+  });
   const cleanupCallbacks: Array<() => void> = [() => clearInterval(timer)];
 
   try {

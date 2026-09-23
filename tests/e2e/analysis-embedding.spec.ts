@@ -102,6 +102,9 @@ async function embedInExtensionPage(
           wasmBaseUrl: chrome.runtime.getURL('ort/'),
           modelId: 'Xenova/multilingual-e5-small',
           device,
+          // This E2E validates each packaged backend directly. Production
+          // fallback is owned and separately tested by EmbeddingWorkerClient.
+          allowFallback: false,
           dtype: 'q8',
         });
       });
@@ -111,11 +114,30 @@ async function embedInExtensionPage(
   }
 }
 
+async function hasWebGpuAdapter(harness: ExtensionHarness): Promise<boolean> {
+  const page = await harness.context.newPage();
+  await page.goto(`chrome-extension://${harness.extensionId}/offscreen.html?runtime=tab`, {
+    waitUntil: 'domcontentloaded',
+  });
+
+  try {
+    return await page.evaluate(async () => {
+      const gpu = (navigator as Navigator & {
+        gpu?: { requestAdapter: () => Promise<unknown | null> };
+      }).gpu;
+      if (!gpu) return false;
+      return (await gpu.requestAdapter()) != null;
+    });
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 function l2(vector: number[]): number {
   return Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
 }
 
-test.describe('packaged embedding runtime, extension page (ADR-0007 4A)', () => {
+test.describe('@production-build packaged embedding runtime, extension page (ADR-0007 4A)', () => {
   let harness: ExtensionHarness;
   const attempted: string[] = [];
 
@@ -141,16 +163,23 @@ test.describe('packaged embedding runtime, extension page (ADR-0007 4A)', () => 
 
   for (const requested of ['webgpu', 'wasm'] as const) {
     test(`embeds two sentences with the network blocked (requested: ${requested})`, async () => {
+      if (requested === 'webgpu') {
+        test.skip(
+          !(await hasWebGpuAdapter(harness)),
+          'WebGPU adapter is unavailable on this runner',
+        );
+      }
+
       attempted.length = 0;
       const result = await embedInExtensionPage(harness, requested);
 
       expect(result.error ?? '').toBe('');
       expect(result.ok).toBe(true);
 
-      // The worker reports which rung of the ladder actually ran, rather than
-      // leaving it to be inferred from timing (RES-06, RES-08).
-      expect(['webgpu', 'wasm']).toContain(result.device);
-      if (requested === 'wasm') expect(result.device).toBe('wasm');
+      // These are direct backend proofs. Fallback behavior belongs to the
+      // EmbeddingWorkerClient tests, so an available requested backend must be
+      // the backend that actually ran here (RES-06, RES-08).
+      expect(result.device).toBe(requested);
       expect(result.dtype).toBe('q8');
 
       expect(result.dimensions).toBe(384);

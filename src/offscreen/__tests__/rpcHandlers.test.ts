@@ -26,7 +26,9 @@ function wire(overrides: Partial<Record<string, any>> = {}) {
     getPort: () => port,
     connectPort: jest.fn(),
     currentPhase: () => phase,
+    currentEpoch: () => overrides.currentEpoch ?? 1,
     isFinalizing: () => overrides.isFinalizing ?? false,
+    currentFinalization: () => overrides.currentFinalization ?? null,
     onStartRequested: jest.fn(),
     onStopRequested: jest.fn(),
     onDiscardRequested: jest.fn(),
@@ -78,7 +80,9 @@ describe('offscreen rpc handlers', () => {
       getPort: () => port,
       connectPort: jest.fn(),
       currentPhase: () => phase,
+      currentEpoch: () => 1,
       isFinalizing: () => false,
+      currentFinalization: () => null,
       onStartRequested: jest.fn(),
       onStopRequested: jest.fn(),
       onDiscardRequested: jest.fn(),
@@ -194,7 +198,7 @@ describe('offscreen rpc handlers', () => {
     it('rejects a stop when the recorder is not active', async () => {
       const engine = { isRecording: jest.fn().mockReturnValue(false) };
       const { port, deps, listener } = wire({ engine });
-      await listener({ __id: 'stop-1', type: 'OFFSCREEN_STOP' });
+      await listener({ __id: 'stop-1', type: 'OFFSCREEN_STOP', epoch: 1 });
 
       expect(responseFor(port, 'stop-1')).toEqual({
         ok: false,
@@ -205,18 +209,46 @@ describe('offscreen rpc handlers', () => {
 
     it('marks stopping and requests stop when the recorder is active', async () => {
       const { port, deps, listener } = wire();
-      await listener({ __id: 'stop-2', type: 'OFFSCREEN_STOP' });
+      await listener({ __id: 'stop-2', type: 'OFFSCREEN_STOP', epoch: 1 });
 
       expect(deps.pushState).toHaveBeenCalledWith('stopping');
       expect(deps.onStopRequested).toHaveBeenCalledTimes(1);
       expect(responseFor(port, 'stop-2')).toEqual({ ok: true });
+    });
+
+    it('acknowledges the same STOP while that epoch is already finalizing', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(false) };
+      const { port, deps, listener } = wire({
+        engine,
+        currentEpoch: 7,
+        currentFinalization: { epoch: 7, disposition: 'kept', status: 'running' },
+      });
+
+      await listener({ __id: 'stop-restart', type: 'OFFSCREEN_STOP', epoch: 7 });
+
+      expect(responseFor(port, 'stop-restart')).toEqual({ ok: true });
+      expect(deps.onStopRequested).not.toHaveBeenCalled();
+    });
+
+    it('acknowledges a duplicate STOP after the same epoch already completed', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(false) };
+      const { port, deps, listener } = wire({
+        engine,
+        currentEpoch: 7,
+        currentFinalization: { epoch: 7, disposition: 'kept', status: 'completed' },
+      });
+
+      await listener({ __id: 'stop-complete', type: 'OFFSCREEN_STOP', epoch: 7 });
+
+      expect(responseFor(port, 'stop-complete')).toEqual({ ok: true });
+      expect(deps.onStopRequested).not.toHaveBeenCalled();
     });
   });
 
   describe('OFFSCREEN_DISCARD', () => {
     it('marks stopping and starts the destructive cleanup path when active', async () => {
       const { port, deps, listener } = wire();
-      await listener({ __id: 'discard-1', type: 'OFFSCREEN_DISCARD' });
+      await listener({ __id: 'discard-1', type: 'OFFSCREEN_DISCARD', epoch: 1 });
 
       expect(deps.pushState).toHaveBeenCalledWith('stopping');
       expect(deps.onDiscardRequested).toHaveBeenCalledTimes(1);
@@ -226,7 +258,7 @@ describe('offscreen rpc handlers', () => {
     it('rejects discard when the recorder is not active', async () => {
       const engine = { isRecording: jest.fn().mockReturnValue(false) };
       const { port, deps, listener } = wire({ engine });
-      await listener({ __id: 'discard-2', type: 'OFFSCREEN_DISCARD' });
+      await listener({ __id: 'discard-2', type: 'OFFSCREEN_DISCARD', epoch: 1 });
 
       expect(responseFor(port, 'discard-2')).toEqual({
         ok: false,
@@ -234,6 +266,55 @@ describe('offscreen rpc handlers', () => {
       });
       expect(deps.onDiscardRequested).not.toHaveBeenCalled();
     });
+
+    it('acknowledges a duplicate DISCARD while cleanup is already running', async () => {
+      const engine = { isRecording: jest.fn().mockReturnValue(false) };
+      const { port, deps, listener } = wire({
+        engine,
+        currentEpoch: 9,
+        currentFinalization: { epoch: 9, disposition: 'discarded', status: 'running' },
+      });
+
+      await listener({ __id: 'discard-running', type: 'OFFSCREEN_DISCARD', epoch: 9 });
+
+      expect(responseFor(port, 'discard-running')).toEqual({ ok: true });
+      expect(deps.onDiscardRequested).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rejects stale-epoch STOP and DISCARD commands before touching the recorder', async () => {
+    const { port, deps, engine, listener } = wire({ currentEpoch: 12 });
+
+    await listener({ __id: 'stale-stop', type: 'OFFSCREEN_STOP', epoch: 11 });
+    await listener({ __id: 'stale-discard', type: 'OFFSCREEN_DISCARD', epoch: 11 });
+
+    expect(responseFor(port, 'stale-stop')).toEqual(expect.objectContaining({
+      ok: false,
+      error: expect.stringContaining('Stale finalization command'),
+    }));
+    expect(responseFor(port, 'stale-discard')).toEqual(expect.objectContaining({
+      ok: false,
+      error: expect.stringContaining('Stale finalization command'),
+    }));
+    expect(engine.isRecording).not.toHaveBeenCalled();
+    expect(deps.onStopRequested).not.toHaveBeenCalled();
+    expect(deps.onDiscardRequested).not.toHaveBeenCalled();
+  });
+
+  it('rejects a conflicting finalization disposition for the same epoch', async () => {
+    const { port, deps, listener } = wire({
+      currentEpoch: 4,
+      currentFinalization: { epoch: 4, disposition: 'kept', status: 'running' },
+    });
+
+    await listener({ __id: 'conflict', type: 'OFFSCREEN_DISCARD', epoch: 4 });
+
+    expect(responseFor(port, 'conflict')).toEqual(expect.objectContaining({
+      ok: false,
+      error: expect.stringContaining('Finalization conflict'),
+      finalizationDisposition: 'kept',
+    }));
+    expect(deps.onDiscardRequested).not.toHaveBeenCalled();
   });
 
   describe('REVOKE_BLOB_URL (one-way)', () => {

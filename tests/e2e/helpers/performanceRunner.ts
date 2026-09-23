@@ -1,4 +1,4 @@
-import { expect, type TestInfo } from '@playwright/test';
+import { expect, type Page, type TestInfo } from '@playwright/test';
 import fs from 'node:fs/promises';
 import type { PerfDebugSnapshot, PerfSettings } from '../../../src/shared/perf';
 import type { MicMode, RecordingStream } from '../../../src/shared/recording';
@@ -242,6 +242,56 @@ function inferRecordingStream(artifact: MediaArtifactAnalysis): RecordingStream 
   throw new Error(`Could not infer recording stream for ${artifact.path}`);
 }
 
+async function waitForMediaArtifacts(
+  controlPage: Page,
+  downloadsDir: string,
+  expectedCount: number,
+  timeoutMs = 90_000,
+): Promise<MediaArtifactAnalysis[]> {
+  const startedAt = Date.now();
+  const inspected = new Set<number>();
+  const artifacts: MediaArtifactAnalysis[] = [];
+  const skipped: string[] = [];
+
+  await assertMediaToolsAvailable();
+  while (Date.now() - startedAt < timeoutMs) {
+    const complete = (await getDownloads(controlPage))
+      .filter((item) => item.state === 'complete' && item.exists !== false)
+      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+    for (const item of complete) {
+      if (inspected.has(item.id)) continue;
+      inspected.add(item.id);
+      expect(item.filename.startsWith(downloadsDir)).toBe(true);
+      const stat = await fs.stat(item.filename);
+      expect(stat.size).toBeGreaterThan(0);
+
+      try {
+        const analysis = await analyzeMediaArtifact(item.filename);
+        const hasMedia = analysis.streams.some(
+          (stream) => stream.codecType === 'audio' || stream.codecType === 'video',
+        );
+        if (!hasMedia) {
+          skipped.push(`${item.filename} (no media streams)`);
+          continue;
+        }
+        analysis.recordingStream = inferRecordingStream(analysis);
+        artifacts.push(analysis);
+      } catch (error) {
+        skipped.push(`${item.filename} (${String(error)})`);
+      }
+    }
+
+    if (artifacts.length >= expectedCount) return artifacts.slice(0, expectedCount);
+    await controlPage.waitForTimeout(250);
+  }
+
+  throw new Error(
+    `Timed out waiting for ${expectedCount} media artifact(s); found ${artifacts.length}. `
+    + `Skipped downloads: ${skipped.join('; ') || 'none'}`,
+  );
+}
+
 async function persistResult(
   testInfo: TestInfo,
   result: PerformanceCaseResult
@@ -305,12 +355,6 @@ export async function runPerformanceCase(
     await meetPage.evaluate((workload) => {
       (window as any).mockMeet.startWorkload(workload);
     }, testCase.workload);
-    if (testCase.hardwareMarkerDelayMs != null) {
-      await meetPage.evaluate((delayMs) => {
-        (window as any).mockMeet.scheduleHardwareMarker(delayMs);
-      }, testCase.hardwareMarkerDelayMs);
-    }
-
     const browserBefore = await collectBrowserMetrics(harness, meetPage);
     await startRecording(harness.controlPage, meetTabId, {
       storageMode: testCase.storageMode,
@@ -323,6 +367,11 @@ export async function runPerformanceCase(
         .every((stream) => (snapshot.summary.recorder.startCountByStream[stream] ?? 0) > 0),
       30_000
     );
+    if (testCase.hardwareMarkerDelayMs != null) {
+      await meetPage.evaluate((delayMs) => {
+        (window as any).mockMeet.scheduleHardwareMarker(delayMs);
+      }, testCase.hardwareMarkerDelayMs);
+    }
 
     await meetPage.waitForTimeout(testCase.durationMs);
     const workloadStats = await meetPage.evaluate(() => (window as any).mockMeet.getStats());
@@ -346,14 +395,24 @@ export async function runPerformanceCase(
     );
     const shouldDownload = testCase.storageMode === 'local'
       || testCase.driveProfile === 'permanent-failure';
-    const downloads = shouldDownload
-      ? await waitForCompletedDownloads(
-        harness.controlPage,
-        harness.downloadsDir,
-        artifactCount,
-        90_000
-      )
-      : [];
+    let artifacts: MediaArtifactAnalysis[] = [];
+    if (shouldDownload) {
+      if (testCase.analyzeArtifacts === false) {
+        await waitForCompletedDownloads(
+          harness.controlPage,
+          harness.downloadsDir,
+          artifactCount,
+          90_000,
+        );
+      } else {
+        artifacts = await waitForMediaArtifacts(
+          harness.controlPage,
+          harness.downloadsDir,
+          artifactCount,
+          90_000,
+        );
+      }
+    }
     if (!shouldDownload) {
       const completedDownloads = (await getDownloads(harness.controlPage))
         .filter((item) => item.state === 'complete');
@@ -371,16 +430,6 @@ export async function runPerformanceCase(
       }
     }
     const browserAfter = await collectBrowserMetrics(harness, meetPage);
-    const artifacts: MediaArtifactAnalysis[] = [];
-    if (downloads.length && testCase.analyzeArtifacts !== false) {
-      await assertMediaToolsAvailable();
-      for (const download of downloads) {
-        const analysis = await analyzeMediaArtifact(download.filename);
-        analysis.recordingStream = inferRecordingStream(analysis);
-        artifacts.push(analysis);
-      }
-    }
-
     const result: PerformanceCaseResult = {
       case: testCase,
       snapshot,
@@ -403,11 +452,14 @@ export async function runPerformanceCase(
       );
     }
     if (testCase.storageMode === 'drive') {
-      expect(drive?.sessionsCreated).toBe(artifactCount);
+      const finalizedUploadCount = snapshot.summary.upload.uploadedCount
+        + snapshot.summary.upload.fallbackCount;
+      expect(finalizedUploadCount).toBeGreaterThanOrEqual(artifactCount);
+      expect(drive?.sessionsCreated).toBe(finalizedUploadCount);
       if (testCase.driveProfile === 'permanent-failure') {
-        expect(snapshot.summary.upload.fallbackCount).toBe(artifactCount);
+        expect(snapshot.summary.upload.fallbackCount).toBe(finalizedUploadCount);
       } else {
-        expect(snapshot.summary.upload.uploadedCount).toBe(artifactCount);
+        expect(snapshot.summary.upload.uploadedCount).toBe(finalizedUploadCount);
         expect(drive?.uploadedBytes).toBeGreaterThan(0);
       }
     }

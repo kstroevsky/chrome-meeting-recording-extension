@@ -86,10 +86,10 @@ export const RECORDING_ANALYSIS_MESSAGE_TYPES = [
 ] as const;
 
 /**
- * Popup commands whose failures answer `{ ok: false, error }` and must **not**
- * fail the recording session. Everything else is a capture command whose
- * failure *is* a session failure, so a data-plane message that is missing here
- * would take a live recording down with it.
+ * Library aggregate commands whose failures answer `{ ok: false, error }`.
+ * Recording-session failure policy is deliberately owned by MessageRouter;
+ * response shape and whether canonical capture state should fail are separate
+ * decisions.
  */
 export const NON_SESSION_RESPONSE_MESSAGE_TYPES = [
   ...RECORDING_HISTORY_MESSAGE_TYPES,

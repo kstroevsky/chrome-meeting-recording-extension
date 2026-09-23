@@ -92,7 +92,7 @@ export class PlayerView {
   private readonly filesCount = $('span', 'player__files-count');
   private readonly filesMenu = $('div', 'player__menu player__menu--files');
   private readonly topicsButton = document.createElement('button');
-  private readonly topicsCount = $('span', 'player__files-count');
+  private readonly topicsCount = $('span', 'player__topics-count');
   private readonly topicsMenu = $('div', 'player__menu player__menu--topics');
   private readonly volumeButton = document.createElement('button');
   private readonly volumeMenu = $('div', 'player__menu player__menu--volume');
@@ -172,7 +172,7 @@ export class PlayerView {
     const filesWrap = $('span', 'player__popover');
     filesWrap.append(this.filesButton, this.filesMenu);
 
-    this.topicsButton.className = 'player__files'; this.topicsButton.type = 'button';
+    this.topicsButton.className = 'player__topics'; this.topicsButton.type = 'button';
     this.topicsButton.title = 'What this recording was about';
     this.topicsButton.setAttribute('aria-haspopup', 'true');
     const topicsLabel = $('span', 'player__files-label'); topicsLabel.textContent = 'TOPICS';

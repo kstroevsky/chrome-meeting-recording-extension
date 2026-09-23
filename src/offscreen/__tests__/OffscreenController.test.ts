@@ -200,12 +200,22 @@ describe('OffscreenController', () => {
       const b = controller.finalize();
       expect(a).toBe(b);
       expect(controller.isFinalizing()).toBe(true);
+      expect(controller.currentFinalization()).toEqual({
+        epoch: 0,
+        disposition: 'kept',
+        status: 'running',
+      });
 
       release();
       await a;
 
       expect(stop).toHaveBeenCalledTimes(1);
       expect(controller.isFinalizing()).toBe(false);
+      expect(controller.currentFinalization()).toEqual({
+        epoch: 0,
+        disposition: 'kept',
+        status: 'completed',
+      });
     });
 
     it('reports a failed phase when the pipeline throws and clears the in-flight flag', async () => {
@@ -250,6 +260,11 @@ describe('OffscreenController', () => {
       expect(finalize).not.toHaveBeenCalled();
       expect(enqueueUpload).not.toHaveBeenCalled();
       expect(lastState(postMessage)).toEqual({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 0 });
+      expect(controller.currentFinalization()).toEqual({
+        epoch: 0,
+        disposition: 'discarded',
+        status: 'completed',
+      });
     });
 
     it('reports failure when any artifact cannot be deleted after attempting all cleanups', async () => {

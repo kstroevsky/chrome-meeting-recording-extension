@@ -146,7 +146,10 @@ export async function analyzeMediaArtifact(
       '-map',
       '0:v:0',
       '-vf',
-      'crop=64:64:iw-96:32,blackdetect=d=0.2:pix_th=0.10',
+      // Sample well inside the synthetic marker. Keeping codec block edges and
+      // the animated background out of the crop prevents compression noise
+      // from creating fake black transitions under 1080p load.
+      'crop=128:128:iw-256:96,blackdetect=d=0.2:pix_th=0.10',
     ])
     : null;
 

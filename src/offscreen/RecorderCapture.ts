@@ -18,7 +18,7 @@ import {
 } from '../shared/settings';
 import { TIMEOUTS } from '../shared/timeouts';
 import { describeMediaError } from './RecorderSupport';
-import { createE2EMockTabStream } from './RecorderCaptureE2EMock';
+import { createE2EMockTabStream, triggerE2EMockTabMarker } from './RecorderCaptureE2EMock';
 import {
   formatSelfVideoProfile,
   getSelfVideoConstraintRequests,
@@ -30,6 +30,8 @@ export type RecorderCaptureDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
 };
+
+export { triggerE2EMockTabMarker };
 
 type SelfVideoDiagnostics = {
   ok: boolean;

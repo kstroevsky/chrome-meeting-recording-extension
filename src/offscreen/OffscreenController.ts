@@ -91,6 +91,13 @@ export type OffscreenControllerDeps = {
   now?: () => number;
 };
 
+export type OffscreenFinalizationState = {
+  epoch: number;
+  disposition: 'kept' | 'discarded';
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+};
+
 export class OffscreenController {
   private phase: RecordingPhase = 'idle';
   private warnings: string[] = [];
@@ -102,6 +109,7 @@ export class OffscreenController {
   /** Run epoch from the latest OFFSCREEN_START; echoed in every OFFSCREEN_STATE (ADR-0003). */
   private epoch = 0;
   private finalizeRunPromise: Promise<void> | null = null;
+  private finalization: OffscreenFinalizationState | null = null;
   private engine: FinalizableEngine | null = null;
   private finalizer: ArtifactFinalizer | null = null;
   private enqueueUpload: ((artifacts: CompletedRecordingArtifact[], context: UploadHandoffContext) => void) | null = null;
@@ -130,6 +138,9 @@ export class OffscreenController {
   currentEpoch = (): number => this.epoch;
   currentWarnings = (): string[] => this.warnings;
   isFinalizing = (): boolean => this.finalizeRunPromise !== null;
+  currentFinalization = (): OffscreenFinalizationState | null => (
+    this.finalization ? { ...this.finalization } : null
+  );
   clearWarnings = (): void => { this.warnings = []; };
 
   onStartRequested = (_runConfig: RecordingRunConfig, storageMode: StorageMode, epoch: number, historyId: string, telemetryRunId?: string): void => {
@@ -138,6 +149,7 @@ export class OffscreenController {
     this.historyId = historyId || undefined;
     this.telemetryRunId = telemetryRunId || undefined;
     this.capturedDevices = undefined;
+    this.finalization = null;
   };
 
   /** Stores a delivered input-device label and re-broadcasts the active phase. */
@@ -146,9 +158,9 @@ export class OffscreenController {
     if (this.phase !== 'idle') this.pushState(this.phase);
   };
 
-  onStopRequested = (sidecars?: Sidecars, driveRootFolderName?: string): void => {
-    void this.finalize(sidecars, driveRootFolderName);
-  };
+  onStopRequested = (sidecars?: Sidecars, driveRootFolderName?: string): Promise<void> => (
+    this.finalize(sidecars, driveRootFolderName)
+  );
   onDiscardRequested = (): Promise<void> => this.discard();
 
   /** Advances the broadcast phase, rebaselining the lag clock on a new active phase. */
@@ -185,13 +197,24 @@ export class OffscreenController {
    * session to idle. Concurrent calls share one in-flight run.
    */
   finalize(sidecars: Sidecars = {}, driveRootFolderName?: string): Promise<void> {
-    if (this.finalizeRunPromise) return this.finalizeRunPromise;
+    const existing = this.finalization;
+    if (existing?.epoch === this.epoch) {
+      if (existing.disposition !== 'kept') {
+        return Promise.reject(new Error('Stop conflicts with discard finalization for this recording epoch'));
+      }
+      if (existing.status === 'completed') return Promise.resolve();
+      if (existing.status === 'failed') {
+        return Promise.reject(new Error(existing.error || 'Stop finalization already failed'));
+      }
+      if (this.finalizeRunPromise) return this.finalizeRunPromise;
+    }
     const engine = this.engine;
     const finalizer = this.finalizer;
     if (!engine || !finalizer) {
       throw new Error('OffscreenController.attachServices must be called before finalize');
     }
 
+    this.finalization = { epoch: this.epoch, disposition: 'kept', status: 'running' };
     this.finalizeRunPromise = (async () => {
       const artifacts = await engine.stop();
       // The sidecars lead the delivery: a reader has the notes and the
@@ -217,12 +240,15 @@ export class OffscreenController {
           await finalizer.finalize({ artifacts, storageMode: 'local', historyId: this.historyId });
         }
       }
+      this.finalization = { epoch: this.epoch, disposition: 'kept', status: 'completed' };
       this.pushState('idle');
     })()
       .catch((e) => {
-        this.deps.error('Stop/finalize pipeline failed', describeRuntimeError(e));
+        const error = describeRuntimeError(e);
+        this.finalization = { epoch: this.epoch, disposition: 'kept', status: 'failed', error };
+        this.deps.error('Stop/finalize pipeline failed', error);
         this.deps.onFinalizeFailed?.(e);
-        this.pushState('failed', { error: describeRuntimeError(e) });
+        this.pushState('failed', { error });
       })
       .finally(() => {
         this.finalizeRunPromise = null;
@@ -237,10 +263,21 @@ export class OffscreenController {
    * cannot create a download, Drive upload, or retained upload job.
    */
   discard(): Promise<void> {
-    if (this.finalizeRunPromise) return this.finalizeRunPromise;
+    const existing = this.finalization;
+    if (existing?.epoch === this.epoch) {
+      if (existing.disposition !== 'discarded') {
+        return Promise.reject(new Error('Discard conflicts with stop finalization for this recording epoch'));
+      }
+      if (existing.status === 'completed') return Promise.resolve();
+      if (existing.status === 'failed') {
+        return Promise.reject(new Error(existing.error || 'Discard finalization already failed'));
+      }
+      if (this.finalizeRunPromise) return this.finalizeRunPromise;
+    }
     const engine = this.engine;
     if (!engine) throw new Error('OffscreenController.attachServices must be called before discard');
 
+    this.finalization = { epoch: this.epoch, disposition: 'discarded', status: 'running' };
     this.finalizeRunPromise = (async () => {
       let artifacts = await engine.stop();
       try {
@@ -257,11 +294,14 @@ export class OffscreenController {
         // buffers collectible as soon as the discard command completes.
         artifacts = [];
       }
+      this.finalization = { epoch: this.epoch, disposition: 'discarded', status: 'completed' };
       this.pushState('idle');
     })()
       .catch((e) => {
-        this.deps.error('Discard pipeline failed', describeRuntimeError(e));
-        this.pushState('failed', { error: describeRuntimeError(e) });
+        const error = describeRuntimeError(e);
+        this.finalization = { epoch: this.epoch, disposition: 'discarded', status: 'failed', error };
+        this.deps.error('Discard pipeline failed', error);
+        this.pushState('failed', { error });
         throw e;
       })
       .finally(() => {

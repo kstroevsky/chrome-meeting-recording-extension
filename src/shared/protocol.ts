@@ -35,6 +35,13 @@ export type RpcId = string;
 export type RpcRequest<T extends { type: string }> = T & { __id?: RpcId };
 export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
 
+export type OffscreenFinalizationCommandResult = {
+  ok: boolean;
+  error?: string;
+  /** Present when a command conflicts with an already-authoritative ending. */
+  finalizationDisposition?: 'kept' | 'discarded';
+};
+
 export type CommandResult =
   | { ok: true; session: RecordingStatusView }
   | { ok: false; error: string; session: RecordingStatusView };
@@ -258,7 +265,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupGetStorageUsage
     ? { ok: true; usage: import('./playback').StorageUsage } | { ok: false; error: string } :
   T extends SettingsRenameDriveRootFolder
-    ? { ok: true; result: import('../background/DriveRootFolder').RootRenameResult } | { ok: false; error: string } :
+    ? { ok: true; result: import('../background/drive/DriveRootFolder').RootRenameResult } | { ok: false; error: string } :
   T extends PopupListUnsavedRecordings
     ? { ok: true; recordings: import('../offscreen/storage/recoverOrphanRecordings').UnsavedRecording[] }
       | { ok: false; error: string } :
@@ -404,6 +411,8 @@ export type BgToOffscreenRpc =
     }>
   | RpcRequest<{
       type: 'OFFSCREEN_STOP';
+      /** Monotonic run epoch; stale or conflicting finalization commands are rejected. */
+      epoch: number;
       /**
        * The run's notes, already rendered to WebVTT by the background (which
        * owns them) for the offscreen to deliver ahead of the media (ADR-0005).
@@ -423,7 +432,11 @@ export type BgToOffscreenRpc =
        */
       driveRootFolderName?: string;
     }>
-  | RpcRequest<{ type: 'OFFSCREEN_DISCARD' }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_DISCARD';
+      /** Monotonic run epoch; stale or conflicting finalization commands are rejected. */
+      epoch: number;
+    }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_MIC_MUTED'; muted: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_CAMERA_MUTED'; muted: boolean }>
   | RpcRequest<{ type: 'OFFSCREEN_SET_INPUT_DEVICE'; device: RecordingInputDevice; deviceId: string }>

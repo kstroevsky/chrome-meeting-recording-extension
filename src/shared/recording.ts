@@ -24,6 +24,7 @@ export type {
   RecordingArtifactContext,
   RecordingArtifactKind,
   RecordingRunConfig,
+  RecordingRunFinalization,
   RecordingSessionSnapshot,
   RecordingStatusView,
   RecordingStream,

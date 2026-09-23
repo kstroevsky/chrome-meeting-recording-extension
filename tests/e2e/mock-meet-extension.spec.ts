@@ -16,7 +16,7 @@ import {
 } from './helpers/extensionHarness';
 
 test.describe('mock Meet extension E2E', () => {
-  test('injects into the mocked Meet origin and serves transcript messages', async ({}, testInfo) => {
+  test('injects into the mocked Meet origin and serves transcript messages @smoke', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
     try {
       const meetPage = await openMockMeetPage(harness.context);

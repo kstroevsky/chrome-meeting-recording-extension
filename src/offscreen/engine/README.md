@@ -123,7 +123,7 @@ The popup toggles, the background commands, the engine **actuates** — never in
 
 ## Observability
 
-The engine emits the `lifecycle.*` events (`start_requested`/`start_completed`, `stop_requested`/`stop_completed`, `failure`, recorder/required-stream failures) and the `capture.*` / `recorder.*` metrics (per-stream attempt/success/failure, requested-vs-delivered profile, start latency, chunk throughput, seal duration, last bitrate/timeslice). `background/PerfDebugStore` keeps the rich development timeline/distributions for [`debug`](../../debug/README.md); the allowlisted production reducer separately keeps bounded counts/totals/maxima and turns terminal recorder or required-stream failures into sanitized incidents. Neither path can include media bytes or device labels.
+The engine emits the `lifecycle.*` events (`start_requested`/`start_completed`, `stop_requested`/`stop_completed`, `failure`, recorder/required-stream failures) and the `capture.*` / `recorder.*` metrics (per-stream attempt/success/failure, requested-vs-delivered profile, start latency, chunk throughput, seal duration, last bitrate/timeslice). `background/observability/perf/PerfDebugStore` keeps the rich development timeline/distributions for [`debug`](../../debug/README.md); the allowlisted production reducer separately keeps bounded counts/totals/maxima and turns terminal recorder or required-stream failures into sanitized incidents. Neither path can include media bytes or device labels.
 
 ## Testing notes
 

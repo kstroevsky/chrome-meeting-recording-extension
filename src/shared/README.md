@@ -36,7 +36,7 @@ The displayed `RecordingPhase` (`idle | starting | recording | stopping | failed
 | `false` | `idle` | `starting`/`recording`/`stopping` | **`stopping`** | observation lagging the stop |
 | `false` | `idle` | `none`/`idle` | **`idle`** | settled |
 
-`starting` and `stopping` are therefore *derived gaps* between intent and observation, not stored states — which is exactly why the [phase watchdog](../background/phaseWatchdog.ts) watches them (a gap that never closes is an orphaned session).
+`starting` and `stopping` are therefore *derived gaps* between intent and observation, not stored states — which is exactly why the [phase watchdog](../background/recording/phaseWatchdog.ts) watches them (a gap that never closes is an orphaned session).
 
 ### Derived-phase lifecycle
 
@@ -212,7 +212,7 @@ Two carriers, by design: **commands** (`OFFSCREEN_START`/`STOP`/`DISCARD`, uploa
 
 - [ADR-0003](../../docs/adr/0003-recording-phase-ownership-and-stale-offscreen-status.md) — the full decision: epoch fence (D1), keep state transfer (D3), the desired/observed split (D4).
 - [ADR-0004](../../docs/adr/0004-decouple-uploads-from-the-recording-session.md) — why Drive work is a detached job instead of a recording phase.
-- [`background/phaseWatchdog.ts`](../background/phaseWatchdog.ts) — the liveness backstop for the derived `starting`/`stopping` gaps.
+- [`background/recording/phaseWatchdog.ts`](../background/recording/phaseWatchdog.ts) — the liveness backstop for the derived `starting`/`stopping` gaps.
 - [`recordings`](../recordings/README.md) — the history page that consumes this domain.
 
 ## External references

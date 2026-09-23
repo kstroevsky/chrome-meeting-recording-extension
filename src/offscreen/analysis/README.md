@@ -19,7 +19,7 @@ offscreen document (long-lived)                   │
     ▼                                             │
 EmbeddingWorkerClient ──▶ analysisWorker (Worker) │
                           Transformers.js + ORT   │
-                          WebGPU → WASM           │
+                          one requested backend   │
     │                                             │
     └── OFFSCREEN_ANALYSIS_STATE / _RESULT ───────┘
 ```
@@ -39,8 +39,8 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 - **An offscreen document has no `chrome.storage`.** Its `chrome` object is `runtime` only — measured, not assumed. Anything here that needs durable state uses IndexedDB, which belongs to the extension origin and is shared with the service worker and extension pages. The outbox was first written against `chrome.storage.local`; because `platform/chrome/storage.ts` no-ops rather than throws when the area is missing, those writes *succeeded* and stored nothing. (`UploadJobStateOutbox` and `PendingUploadStore` in `../drive/` had the same defect; repaired on `fix/offscreen-durable-state`.)
 - **The worker is told where its artifacts are; it never looks them up.** No `chrome.*` in `analysisWorker.ts` — the parent hands it `modelBaseUrl` and `wasmBaseUrl`. That keeps it testable outside an extension and keeps extension knowledge in the one place that has it.
 - **No network, enforced rather than assumed.** `env.allowRemoteModels = false`, so a wrong path fails loudly instead of quietly reaching a CDN. Stated precisely because the stronger claim is false: a worker still *has* `fetch`. `tests/e2e/analysis-embedding.spec.ts` proves it from outside by blocking all outbound HTTP(S) and still getting vectors.
-- **The backend probe happens *inside* each attempt.** A driver can advertise WebGPU, initialize, and then fail on its first inference. Probing after the loop would report that as a hard failure instead of falling through to WASM; probing inside it, with `dispose()` on failure, is what makes the ladder real.
-- **A downgrade is reported, never silent.** `EmbeddingWorkerClient` calls `reportWarning` when the backend that loaded is not the one requested — the house rule `WorkerStorageTarget` established. A machine without WebGPU is an ordinary tier (RES-06/08), but the user is about to wait considerably longer.
+- **The client owns the production backend ladder.** WebGPU and WASM each get a fresh worker and a bounded share of the total open budget, so a hung or partially initialized WebGPU runtime cannot prevent or contaminate the WASM attempt. The worker still supports an internal fallback when `allowFallback` is left enabled for direct harnesses, and its probe stays inside each attempt so a backend that initializes but fails first inference is rejected.
+- **A downgrade is reported, never silent.** `EmbeddingWorkerClient` calls `reportWarning` when the backend that loaded is not the one requested — the house rule `WorkerStorageTarget` established. A machine without usable WebGPU is an ordinary tier (RES-06/08); the warning reports which backend actually ran without making an unmeasured performance or result-equivalence promise.
 - **Concurrency is 1 and not configurable.** Two analyses contend for one GPU and one model; the second finishes no sooner for having started, and a live capture alongside would feel both.
 - **The engine is released when the queue drains.** A loaded ONNX graph holds GPU buffers and analysis is a rare per-recording event, so one model load serves a whole queue and nothing stays resident between recordings.
 - **A deliberately unsealed result is released without touching the outbox.** After bounded seal failures a result is delivered anyway (liveness over crash durability, for derived data only). Acknowledging it must not then ask the same broken store to remove a row that was never written — that failure would hold the payload forever, which is precisely what the fallback exists to prevent.
@@ -55,7 +55,7 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 
 | Failure | Detected by | Recovery | Blast radius |
 | :--- | :--- | :--- | :--- |
-| No WebGPU on this machine | worker's first inference throws | falls through to WASM, warns | slower analysis, same topics |
+| No usable WebGPU on this machine | WebGPU worker rejects or exceeds its bounded open budget | terminate it, open WASM in a fresh worker, warn | analysis continues on the fallback backend; threshold-boundary results may differ by floating-point noise |
 | Neither backend loads | both ladder rungs throw | `unsupported` latches for the session; jobs end `unsupported` | no topics; recording unaffected |
 | Worker crashes mid-batch | `worker.onerror` | every in-flight request rejects; the job ends `failed` and the engine is dropped | one job |
 | Worker wedges silently | per-request timeout | request rejects, job reaches a terminal state | one job; without this the outbox entry would never settle |
@@ -73,9 +73,9 @@ The worker exists for the same reason `opfsWorker` does: the offscreen main thre
 
 | File | Role |
 | :--- | :--- |
-| `analysisWorker.ts` | The engine: Transformers.js + ONNX Runtime, the WebGPU→WASM ladder, mean-pooled and L2-normalized output |
+| `analysisWorker.ts` | The engine: Transformers.js + ONNX Runtime for one requested backend, plus optional direct-harness fallback; mean-pooled and L2-normalized output |
 | `analysisWorkerProtocol.ts` | The wire between document and worker. Deliberately free of `chrome.*` |
-| `EmbeddingWorkerClient.ts` | Spawn, open handshake, promise-per-seq, the `unsupported` latch, batch splitting |
+| `EmbeddingWorkerClient.ts` | The production WebGPU→WASM ladder, fresh-worker retries, bounded open handshakes, promise-per-seq, the `unsupported` latch, batch splitting |
 | `engineConfig.ts` | Where the packaged artifacts are — the URLs only an extension context can form |
 | `AnalysisManager.ts` | The queue: one job at a time, progress, cancellation, engine lifetime, held results |
 | `AnalysisJobStateOutbox.ts` | Terminal job state in IndexedDB (`analysis-job-outbox`), one key per job; the acknowledgement ordering |
@@ -105,7 +105,7 @@ Everything involving real weights is E2E, because that is the only place the CSP
 | Bumping `@huggingface/transformers` or ORT | re-run the bench and the agreement dump; the pinned ORT variant list in `webpack.config.js` is derived from what ORT actually demands, not from file names |
 | Changing the model or its dtype | update `scripts/fetch-analysis-model.mjs`'s pins, then re-run 4B — thresholds are calibrated against one encoder's cosine distribution |
 | Changing a `shared/analysis` stage's behaviour | bump `PIPELINE_VERSION`; stored results go stale and recompute rather than being compared against new ones |
-| Adding a runtime device | extend the ladder in `analysisWorker.ts`, not in the client — the client reports what loaded, it does not choose |
+| Adding a runtime device | extend the client-owned production ladder and the protocol/worker device support together; keep each production backend attempt isolated in its own worker |
 
 ## Related
 

@@ -114,8 +114,7 @@ describe('PlayerView topics', () => {
     const view = new PlayerView(callbacks());
     view.render(manifest([REDIS, HIRING]));
 
-    const trigger = all(view.overlay, '.player__files')
-      .find((b) => b.textContent?.startsWith('TOPICS'))!;
+    const trigger = view.overlay.querySelector<HTMLButtonElement>('.player__topics')!;
     expect(trigger.hidden).toBe(false);
     expect(trigger.textContent).toBe('TOPICS2');
   });
@@ -124,8 +123,7 @@ describe('PlayerView topics', () => {
     const view = new PlayerView(callbacks());
     view.render(manifest([]));
 
-    const trigger = all(view.overlay, '.player__files')
-      .find((b) => b.textContent?.startsWith('TOPICS'))!;
+    const trigger = view.overlay.querySelector<HTMLButtonElement>('.player__topics')!;
     // An empty "TOPICS 0" would promise something the player cannot deliver.
     expect(trigger.hidden).toBe(true);
     expect(view.overlay.querySelector<HTMLElement>('.player__topics-band')!.hidden).toBe(true);

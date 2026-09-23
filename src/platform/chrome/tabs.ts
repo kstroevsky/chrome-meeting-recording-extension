@@ -8,8 +8,12 @@
 import { getRuntimeUrl } from './runtime';
 import { isE2EMockCaptureBuild } from '../../shared/build';
 
+export async function queryTabs(queryInfo: chrome.tabs.QueryInfo = {}): Promise<chrome.tabs.Tab[]> {
+  return await chrome.tabs.query(queryInfo);
+}
+
 export async function queryActiveTab(): Promise<chrome.tabs.Tab | undefined> {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabs = await queryTabs({ active: true, currentWindow: true });
   return tabs[0];
 }
 

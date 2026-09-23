@@ -486,11 +486,11 @@ The outbox now lives in IndexedDB, which belongs to the extension origin and is 
 
 - **Every reload path now honours analysis.** `onUpdateAvailable` and the deferred reload checked only capture and uploads, so an idle session reloaded straight over a running analysis. All of them now read one definition of critical work, a deferred reload is re-evaluated when analysis settles (which changes nothing in `RecordingSession`), and before applying an update the data plane is asked directly — background's own view is empty after a restart. The worker is kept alive during analysis too: Chrome installs a pending update by itself when the service worker unloads.
 - **`completed` holds the recording** until its result is stored or discarded, so a second run cannot start while the first result is still in flight.
-- **The deletion fence is the tombstone**, not service-worker memory. An absent history row is deliberately *not* treated as deleted: analysis is queued at `markStopping`, before finalize creates the row, so a short recording's result can legitimately arrive first.
+- **The deletion fence is the tombstone**, not service-worker memory. An absent history row is deliberately *not* treated as deleted: history delivery and analysis completion are asynchronous relative to one another, so a short recording's result can legitimately arrive first.
 - **A result lost with its offscreen document is re-run.** A `completed` row replayed with nothing behind it is reported as a lost result instead of leaving background waiting for it forever.
 - **Provenance travels with the job** and returns with the result, with the backend stamped on as a diagnostic that staleness does not compare.
 - **`PIPELINE_VERSION` is 2**, for the tail-window and centroid corrections, which changed outputs without changing a threshold.
-- **A discarded run is not swept or analysed.** Found while tracing the fence: discard fires the same run-finished hook as stop, so the final transcript sweep raced the discard's removal and could re-create the transcript, and analysis then ran on it. The run now announces whether it is being kept.
+- **A discarded run is not analysed.** The durable finalization intent records whether the run is kept or discarded at `markStopping`; the run-finished hook fires only after the offscreen data plane confirms idle and carries that disposition to the analysis trigger.
 
 ### The post-completion window, proven — **RUN, PASSED**
 

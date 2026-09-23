@@ -72,7 +72,7 @@ flowchart LR
 | `renderers/EventTableRenderer.ts` | incremental, auto-scrolling events table |
 | `renderers/SystemInfoReader.ts` | WebGL/WebGPU + hardware capability strings (and the CPU caveat) |
 
-Entry: `../debug.ts` (page wiring). The snapshot **type** lives in `shared/types/perfTypes.ts`; the **producers** are `background/PerfDebugStore` + `offscreen` `RuntimeSampler`.
+Entry: `../debug.ts` (page wiring). The snapshot **type** lives in `shared/types/perfTypes.ts`; the **producers** are `background/observability/perf/PerfDebugStore` + `offscreen` `RuntimeSampler`.
 
 ## Testing notes
 

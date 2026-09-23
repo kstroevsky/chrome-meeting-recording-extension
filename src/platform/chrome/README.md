@@ -29,12 +29,15 @@ A boundary between our logic and the Chrome extension platform. Most wrappers ju
 | File | Wraps / provides |
 | :--- | :--- |
 | `storage.ts` | local + session get/set/remove + `onChanged`; the **no-op-on-missing-area** degradation |
-| `tabs.ts` | active-tab query, runtime/external-page tabs, tab messaging, `getMediaStreamIdForTab` (tabCapture), `getCapturedTabs` (conflict detection), `onRemoved`/`onUpdated` (the auto-stop triggers) |
+| `tabs.ts` | general/active-tab queries, runtime/external-page tabs, tab messaging, `getMediaStreamIdForTab` (tabCapture), `getCapturedTabs` (conflict detection), `onRemoved`/`onUpdated` (the auto-stop triggers) |
 | `downloads.ts` | `downloadFile`, `awaitDownloadSettled` (event-driven terminal-state wait), and `openDownloadedFile` (history-safe local open) |
-| `runtime.ts` | port connect, runtime messaging, `getManifest`/`getBuildId`, keep-alive poke |
+| `runtime.ts` | port connect, runtime messaging/listener registration, runtime identity/URL, reload, manifest access, keep-alive poke |
 | `identity.ts` | `getRedirectURL` + `launchWebAuthFlow` (consumed by the auth seam) |
 | `offscreen.ts` | create / close / has-offscreen-document |
 | `action.ts` | toolbar badge / action state |
+| `alarms.ts` | alarm creation and listener registration |
+| `commands.ts` | command listener registration |
+| `system.ts` | optional development-only `system.cpu` capability/read access |
 
 ## Testing notes
 

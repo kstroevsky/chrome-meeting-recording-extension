@@ -1,5 +1,4 @@
-import { AnalysisManager } from '../AnalysisManager';
-import type { EmbeddingWorkerClient } from '../EmbeddingWorkerClient';
+import { AnalysisManager, type AnalysisEmbeddingEngine } from '../AnalysisManager';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisResult } from '../../../shared/analysis/analyzeTranscript';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
@@ -61,7 +60,7 @@ function transcriptOf(schedule: [string, number][]): TranscriptSegment[] {
 function fakeEngine(overrides: { device?: 'webgpu' | 'wasm'; failAfter?: number } = {}) {
   let batches = 0;
   const state = { disposed: 0, batches: 0 };
-  const client = {
+  const client: AnalysisEmbeddingEngine = {
     info: { device: overrides.device ?? 'webgpu', dimensions: 2, dtype: 'q8' as const, loadMs: 1 },
     encoder: () => async (texts: string[]) => {
       batches += 1;
@@ -72,7 +71,7 @@ function fakeEngine(overrides: { device?: 'webgpu' | 'wasm'; failAfter?: number 
       return embed(texts);
     },
     dispose: () => { state.disposed += 1; },
-  } as unknown as EmbeddingWorkerClient;
+  };
   return { client, state };
 }
 
@@ -89,6 +88,7 @@ function harness(options: {
   deliverFails?: () => boolean;
   isUnsupported?: () => boolean;
   openFails?: Error;
+  beforeAnalyze?: (job: AnalysisJob) => Promise<void>;
 } = {}): Harness {
   const engine = options.engine ?? fakeEngine();
   const reported: AnalysisJob[] = [];
@@ -107,6 +107,7 @@ function harness(options: {
       delivered.push({ job, result, provenance });
     },
     isUnsupported: options.isUnsupported,
+    beforeAnalyze: options.beforeAnalyze,
     now: () => 1_000,
     genId: () => 'ana_1',
   });
@@ -137,6 +138,32 @@ describe('AnalysisManager', () => {
     // report predates knowing which backend answered.
     expect(h.reported[0]).toMatchObject({ id, historyId: 'rec_1', status: 'analyzing', progress: 0 });
     expect(h.reported[0].device).toBeUndefined();
+  });
+
+  it('can pause a running job before opening the engine for deterministic E2E synchronization', async () => {
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const reachedGate = new Promise<void>((resolve) => { reached = resolve; });
+    const h = harness({
+      beforeAnalyze: async () => {
+        reached();
+        await gate;
+      },
+    });
+
+    h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
+    await reachedGate;
+
+    expect(h.manager.activeJobs()).toEqual([
+      expect.objectContaining({ historyId: 'rec_1', status: 'analyzing' }),
+    ]);
+    expect(h.opens).toBe(0);
+
+    release();
+    await settle();
+    expect(h.opens).toBe(1);
+    expect(last(h.reported)?.status).toBe('completed');
   });
 
   it('runs the pipeline and delivers the result with the job', async () => {

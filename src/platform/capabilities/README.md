@@ -2,7 +2,7 @@
 
 > The OAuth token-*acquisition* capability behind a single port (`AuthProvider`). Within the **supported Chromium family** (ADR-0002), Chrome ties tokens to its Google sign-in; the other supported Chromium browsers use the standard OAuth2 redirect flow. For symbol-level structure use codegraph (`codegraph_explore "AuthProvider createAuthProvider"`).
 
-> **Archetype:** *External Integration* (seam). Small but pivotal — it's the file you change to support a new browser. Token *use* (caching, refresh-on-401) is [`offscreen/drive`](../../offscreen/drive/README.md); the silent→interactive *policy* is `background/driveAuth.ts`; this folder only **acquires** a token.
+> **Archetype:** *External Integration* (seam). Small but pivotal — it's the file you change to support a new browser. Token *use* (caching, refresh-on-401) is [`offscreen/drive`](../../offscreen/drive/README.md); the silent→interactive *policy* is `background/drive/driveAuth.ts`; this folder only **acquires** a token.
 
 ## Purpose & mental model
 
@@ -34,7 +34,7 @@ flowchart TD
 
 ## Key invariants & gotchas
 
-- **This folder only acquires.** It returns a token string; it does **not** decide silent-vs-interactive retries or diagnose bad client ids — that policy is `background/driveAuth.ts`, layered on top of `getToken`.
+- **This folder only acquires.** It returns a token string; it does **not** decide silent-vs-interactive retries or diagnose bad client ids — that policy is `background/drive/driveAuth.ts`, layered on top of `getToken`.
 - **`createAuthProvider` is the only place a concrete provider is chosen.** Add a browser there, behind the same guard pattern.
 - **Capability guard, not just build flag.** Always pair the target check with a runtime `typeof chrome.identity?.getAuthToken === 'function'` so a misconfigured build degrades instead of throwing.
 - **Scope is `drive.file`** (per-file Drive access) — the minimum the uploader needs.
@@ -51,7 +51,7 @@ flowchart TD
 
 ## Testing notes
 
-- `auth/__tests__/authProvider.test.ts` covers each strategy against a mocked `chrome.identity` / `launchWebAuthFlow`, and the `createAuthProvider` selection logic (target + capability guard). `background/driveAuth.ts` is tested separately for the silent→interactive + bad-client-id policy that wraps this.
+- `auth/__tests__/authProvider.test.ts` covers each strategy against a mocked `chrome.identity` / `launchWebAuthFlow`, and the `createAuthProvider` selection logic (target + capability guard). `background/drive/driveAuth.ts` is tested separately for the silent→interactive + bad-client-id policy that wraps this.
 
 ## Related
 
