@@ -5,25 +5,37 @@ import type {
 } from './sharing';
 
 export const SHARING_CONTRACT_LIMITS = Object.freeze({
-  manifestBytes: 8 * 1024 * 1024,
+  /** Canonical JSON persisted in D1. Leaves headroom below D1's 2 MB row/string limit. */
+  manifestBytes: 1_500_000,
+  /** Raw owner request budget; canonical JSON is checked separately before persistence. */
+  manifestRequestBytes: 2_000_000,
   recordings: 16,
   tracksPerRecording: 3,
   publishedBytes: 100 * 1024 * 1024 * 1024,
   idChars: 200,
   titleChars: 500,
   mimeTypeChars: 200,
-  transcriptSegments: 50_000,
-  transcriptTextChars: 4_000_000,
+  transcriptSegments: 10_000,
+  transcriptTextChars: 750_000,
   speakerChars: 500,
-  topics: 500,
-  topicKeywords: 32,
-  keywordChars: 200,
-  topicSpans: 5_000,
-  notations: 10_000,
-  notationTextChars: 16_000,
+  topics: 250,
+  topicKeywords: 24,
+  keywordChars: 120,
+  topicKeywordTextChars: 60_000,
+  topicSpans: 100,
+  topicSpansTotal: 5_000,
+  notations: 2_000,
+  notationTextChars: 2_000,
+  notationTextTotalChars: 250_000,
 });
 
-type ParseBudget = { transcriptTextChars: number; publishedBytes: number };
+type ParseBudget = {
+  transcriptTextChars: number;
+  publishedBytes: number;
+  topicKeywordTextChars: number;
+  topicSpans: number;
+  notationTextChars: number;
+};
 
 export function canonicalizePublishedManifest(
   value: unknown,
@@ -34,7 +46,13 @@ export function canonicalizePublishedManifest(
 
   const recordingIds = new Set<string>();
   const recordings: SharedRecording[] = [];
-  const budget: ParseBudget = { transcriptTextChars: 0, publishedBytes: 0 };
+  const budget: ParseBudget = {
+    transcriptTextChars: 0,
+    publishedBytes: 0,
+    topicKeywordTextChars: 0,
+    topicSpans: 0,
+    notationTextChars: 0,
+  };
   for (const rawRecording of value.recordings) {
     const recording = canonicalRecording(rawRecording, recordingIds, budget);
     if (!recording) return null;
@@ -72,9 +90,9 @@ function canonicalRecording(value: unknown, recordingIds: Set<string>, budget: P
 
   const transcript = value.transcript == null ? undefined : canonicalTranscript(value.transcript, budget);
   if (value.transcript != null && !transcript) return null;
-  const topics = value.topics == null ? undefined : canonicalTopics(value.topics);
+  const topics = value.topics == null ? undefined : canonicalTopics(value.topics, budget);
   if (value.topics != null && !topics) return null;
-  const notations = value.notations == null ? undefined : canonicalNotations(value.notations);
+  const notations = value.notations == null ? undefined : canonicalNotations(value.notations, budget);
   if (value.notations != null && !notations) return null;
 
   return {
@@ -135,7 +153,7 @@ function canonicalTranscript(value: unknown, budget: ParseBudget): SharedRecordi
   return { source: value.source, segments };
 }
 
-function canonicalTopics(value: unknown): NonNullable<SharedRecording['topics']> | null {
+function canonicalTopics(value: unknown, budget: ParseBudget): NonNullable<SharedRecording['topics']> | null {
   if (!Array.isArray(value) || value.length > SHARING_CONTRACT_LIMITS.topics) return null;
   const topics: NonNullable<SharedRecording['topics']> = [];
   for (const rawTopic of value) {
@@ -145,6 +163,13 @@ function canonicalTopics(value: unknown): NonNullable<SharedRecording['topics']>
       || !Array.isArray(rawTopic.spans) || rawTopic.spans.length === 0 || rawTopic.spans.length > SHARING_CONTRACT_LIMITS.topicSpans
       || !isNonNegativeFiniteNumber(rawTopic.totalMs) || !isFiniteNumber(rawTopic.importance)
       || rawTopic.importance < 0 || rawTopic.importance > 1) return null;
+    for (const keyword of rawTopic.keywords) {
+      budget.topicKeywordTextChars += keyword.length;
+      if (budget.topicKeywordTextChars > SHARING_CONTRACT_LIMITS.topicKeywordTextChars) return null;
+    }
+    budget.topicSpans += rawTopic.spans.length;
+    if (budget.topicSpans > SHARING_CONTRACT_LIMITS.topicSpansTotal) return null;
+
     const spans: NonNullable<SharedRecording['topics']>[number]['spans'] = [];
     for (const rawSpan of rawTopic.spans) {
       if (!isRecord(rawSpan) || !isNonNegativeFiniteNumber(rawSpan.tStartMs)
@@ -162,7 +187,7 @@ function canonicalTopics(value: unknown): NonNullable<SharedRecording['topics']>
   return topics;
 }
 
-function canonicalNotations(value: unknown): NonNullable<SharedRecording['notations']> | null {
+function canonicalNotations(value: unknown, budget: ParseBudget): NonNullable<SharedRecording['notations']> | null {
   if (!Array.isArray(value) || value.length > SHARING_CONTRACT_LIMITS.notations) return null;
   const notations: NonNullable<SharedRecording['notations']> = [];
   for (const rawNotation of value) {
@@ -171,6 +196,8 @@ function canonicalNotations(value: unknown): NonNullable<SharedRecording['notati
       || typeof rawNotation.text !== 'string' || rawNotation.text.length > SHARING_CONTRACT_LIMITS.notationTextChars
       || (rawNotation.tEndMs != null && (!isNonNegativeFiniteNumber(rawNotation.tEndMs) || rawNotation.tEndMs < rawNotation.tStartMs))
       || (rawNotation.endedBy != null && ((rawNotation.endedBy !== 'user' && rawNotation.endedBy !== 'auto') || rawNotation.tEndMs == null))) return null;
+    budget.notationTextChars += rawNotation.text.length;
+    if (budget.notationTextChars > SHARING_CONTRACT_LIMITS.notationTextTotalChars) return null;
     notations.push({
       id: rawNotation.id,
       tStartMs: rawNotation.tStartMs,

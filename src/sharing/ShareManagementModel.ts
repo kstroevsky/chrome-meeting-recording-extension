@@ -22,6 +22,7 @@ export type ManagedShare = {
   shareUrl?: string;
   error?: string;
   tracks: ManagedShareTrack[];
+  trackCount: number;
   uploadedBytes: number;
   totalBytes?: number;
   percent?: number;
@@ -37,13 +38,13 @@ export function managedShares(snapshot: ShareRuntimeSnapshot): ManagedShare[] {
   return [...ids].map((id): ManagedShare | null => {
     const remote = remoteById.get(id);
     const local = localById.get(id);
-    const manifest = local?.manifest ?? remote?.manifest;
-    if (!manifest) return null;
+    const manifest = local?.manifest;
+    if (!manifest && !remote) return null;
     const jobs = snapshot.uploads.filter((job) => job.shareId === id);
     const jobByTrack = new Map(jobs.map((job) => [`${job.recordingId}:${job.trackId}`, job]));
     const terminalActive = local?.status === 'active' || (!local && remote?.status === 'active');
 
-    const tracks: ManagedShareTrack[] = manifest.recordings.flatMap((recording) =>
+    const tracks: ManagedShareTrack[] = manifest ? manifest.recordings.flatMap((recording) =>
       recording.tracks.map((track) => {
         const job = jobByTrack.get(`${recording.id}:${track.id}`);
         const bytes = job?.bytes ?? track.bytes;
@@ -66,10 +67,10 @@ export function managedShares(snapshot: ShareRuntimeSnapshot): ManagedShare[] {
                     ? 'uploading'
                     : 'pending',
         };
-      }));
+      })) : [];
 
     const knownSizes = tracks.filter((track) => track.bytes != null);
-    const totalBytes = knownSizes.length === tracks.length
+    const totalBytes = manifest && knownSizes.length === tracks.length
       ? knownSizes.reduce((sum, track) => sum + (track.bytes ?? 0), 0)
       : undefined;
     const uploadedBytes = tracks.reduce((sum, track) => sum + track.uploadedBytes, 0);
@@ -77,18 +78,21 @@ export function managedShares(snapshot: ShareRuntimeSnapshot): ManagedShare[] {
 
     return {
       id,
-      createdAt: local?.createdAt ?? remote?.createdAt ?? manifest.createdAt,
-      updatedAt: Math.max(local?.updatedAt ?? 0, remote?.updatedAt ?? 0, manifest.createdAt),
-      recordingTitles: manifest.recordings.map((recording) => recording.title),
+      createdAt: local?.createdAt ?? remote?.createdAt ?? manifest!.createdAt,
+      updatedAt: Math.max(local?.updatedAt ?? 0, remote?.updatedAt ?? 0, manifest?.createdAt ?? 0),
+      recordingTitles: manifest?.recordings.map((recording) => recording.title) ?? remote?.recordingTitles ?? [],
       sourceRecordingIds: local?.sourceRecordingIds ?? [],
       status,
       phaseLabel: phaseLabel(status, local?.resumeFrom, jobs),
       ...(local?.shareUrl ?? remote?.shareUrl ? { shareUrl: local?.shareUrl ?? remote?.shareUrl } : {}),
       ...(local?.error ? { error: local.error } : {}),
       tracks,
+      trackCount: manifest ? tracks.length : remote?.trackCount ?? 0,
       uploadedBytes,
+      ...((totalBytes ?? remote?.totalBytes) != null ? {
+        totalBytes: totalBytes ?? remote?.totalBytes,
+      } : {}),
       ...(totalBytes != null ? {
-        totalBytes,
         percent: totalBytes === 0 ? 100 : Math.min(100, Math.floor((uploadedBytes / totalBytes) * 100)),
       } : {}),
       resumable: Boolean(local && status !== 'active' && status !== 'revoked'),

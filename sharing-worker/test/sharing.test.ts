@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { applyD1Migrations, reset, type D1Migration } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SHARING_CONTRACT_LIMITS } from '../../src/shared/sharingContract';
 import worker from '../src/index';
 
 const origin = 'https://sharing.test';
@@ -93,6 +94,62 @@ describe('sharing worker vertical slice', () => {
       expect.objectContaining({ id: 'share-owner-id', status: 'active', shareUrl: first.shareUrl }),
     ]);
     expect(googleIdentityRequests).toBe(1);
+  });
+
+  it('returns paginated registry summaries without embedding full manifests', async () => {
+    expect((await putManifest()).status).toBe(201);
+    const second = structuredClone(manifest);
+    second.id = 'share-owner-id-2';
+    second.recordings[0].id = 'public-recording-id-2';
+    second.recordings[0].title = 'Second customer call';
+    second.recordings[0].tracks[0].mediaEndpoint = '/media/recordings/public-recording-id-2/tracks/tab-track';
+    expect((await ownerFetch('/api/shares/share-owner-id-2', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(second),
+    })).status).toBe(201);
+
+    const firstPage = await ownerFetch('/api/shares?limit=1');
+    const firstBody = await firstPage.json<{ shares: any[]; nextCursor?: string }>();
+    expect(firstBody.shares).toHaveLength(1);
+    expect(firstBody.shares[0]).toEqual(expect.objectContaining({
+      recordingTitles: expect.any(Array),
+      recordingCount: 1,
+      trackCount: 1,
+      totalBytes: 6,
+    }));
+    expect(firstBody.shares[0].manifest).toBeUndefined();
+    expect(firstBody.nextCursor).toBe('1');
+
+    const secondPage = await ownerFetch(`/api/shares?limit=1&cursor=${firstBody.nextCursor}`);
+    const secondBody = await secondPage.json<{ shares: any[]; nextCursor?: string }>();
+    expect(secondBody.shares).toHaveLength(1);
+    expect(secondBody.shares[0].manifest).toBeUndefined();
+  });
+
+  it('rejects a canonical manifest that exceeds the D1 persistence budget', async () => {
+    const oversized = structuredClone(manifest) as any;
+    oversized.recordings[0].transcript = {
+      source: 'meet-captions',
+      segments: Array.from({ length: 8_000 }, (_, index) => ({
+        tStartMs: index * 10,
+        tEndMs: index * 10 + 5,
+        speaker: 'speaker'.repeat(12),
+        text: 'transcript'.repeat(6),
+      })),
+    };
+    const body = JSON.stringify(oversized);
+    const bytes = new TextEncoder().encode(body).byteLength;
+    expect(bytes).toBeGreaterThan(SHARING_CONTRACT_LIMITS.manifestBytes);
+    expect(bytes).toBeLessThanOrEqual(SHARING_CONTRACT_LIMITS.manifestRequestBytes);
+
+    const response = await ownerFetch('/api/shares/share-owner-id', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ code: 'MANIFEST_TOO_LARGE' });
   });
 
   it('treats a committed chunk retry as idempotent and supports ranged media before revocation', async () => {
