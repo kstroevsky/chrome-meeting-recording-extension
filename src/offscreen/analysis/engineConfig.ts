@@ -24,7 +24,8 @@ export function analysisEngineConfig(getURL: (path: string) => string): Embeddin
     wasmBaseUrl: getURL(WASM_DIRECTORY),
     modelId: model.id,
     dtype: model.dtype,
-    // WebGPU first; the worker falls through to WASM on its own (RES-06).
+    // WebGPU first; EmbeddingWorkerClient retries WASM in a fresh worker if
+    // WebGPU fails or exhausts its bounded share of the open budget (RES-06).
     preferredDevice: 'webgpu',
   };
 }

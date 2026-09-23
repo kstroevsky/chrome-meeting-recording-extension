@@ -32,7 +32,7 @@ export type EmbeddingEngineConfig = {
   wasmBaseUrl: string;
   modelId: string;
   dtype: EmbeddingDtype;
-  /** The rung to attempt first; the worker falls through to `wasm` on failure. */
+  /** The rung to attempt first; the client adds the WASM fallback when needed. */
   preferredDevice?: EmbeddingDevice;
 };
 
