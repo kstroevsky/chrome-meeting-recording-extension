@@ -40,12 +40,19 @@ export class RecordingLifecycleCommands {
     interruption?: RecordingInterruption['reason'],
   ): Promise<CommandResult> {
     let snapshot = this.deps.session.getSnapshot();
-    if (snapshot.phase === 'stopping' && snapshot.finalization?.disposition === 'kept') {
-      return this.finishKeptStop(
-        snapshot.finalization.historyId,
-        reason,
-        snapshot.finalization.epoch,
-      );
+    if (snapshot.phase === 'stopping') {
+      if (snapshot.finalization?.disposition === 'kept') {
+        return this.finishKeptStop(
+          snapshot.finalization.historyId,
+          reason,
+          snapshot.finalization.epoch,
+        );
+      }
+      if (snapshot.finalization?.disposition === 'discarded') {
+        return this.deps.result.fail(
+          'Stop cannot replace a discard that is already finalizing',
+        );
+      }
     }
     if (!isStoppablePhase(snapshot.phase)) {
       return this.deps.result.fail('Stop requested but no recording session is active');
@@ -102,7 +109,7 @@ export class RecordingLifecycleCommands {
     const finalization = snapshot.finalization;
     if (!finalization) return null;
     if (
-      snapshot.phase === 'idle'
+      (snapshot.phase === 'idle' || snapshot.phase === 'failed')
       && finalization.disposition === 'discarded'
       && !finalization.backgroundFinalized
     ) {
@@ -111,17 +118,6 @@ export class RecordingLifecycleCommands {
       return cleaned
         ? this.deps.result.ok()
         : this.deps.result.fail('Discard cleanup is still pending');
-    }
-    if (
-      snapshot.phase === 'failed'
-      && finalization.disposition === 'discarded'
-      && !finalization.backgroundFinalized
-    ) {
-      return this.resumeDiscard(
-        finalization.historyId,
-        'resume pending discard cleanup after failure',
-        snapshot,
-      );
     }
     if (snapshot.phase !== 'stopping') return null;
     return finalization.disposition === 'discarded'
@@ -188,7 +184,6 @@ export class RecordingLifecycleCommands {
   ): Promise<CommandResult> {
     const finalization = snapshot.finalization;
     const commandEpoch = finalization?.epoch ?? snapshot.epoch;
-    await this.discardData.fence(commandEpoch);
 
     try {
       await this.deps.offscreen.ensureReady();
@@ -214,6 +209,7 @@ export class RecordingLifecycleCommands {
         this.deps.session.fail(message);
         return this.deps.result.fail(message);
       }
+      await this.discardData.fence(commandEpoch);
       if (historyId && finalization?.backgroundFinalized !== true) {
         await this.discardData.cleanup(historyId);
       }

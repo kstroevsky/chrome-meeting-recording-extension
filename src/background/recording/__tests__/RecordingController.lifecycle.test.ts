@@ -151,45 +151,36 @@ describe('RecordingController', () => {
       expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
     });
 
-    it('does not erase failed-state discard cleanup before a new START', async () => {
+    it('cleans a failed discarded run without replaying its epoch to a replacement offscreen', async () => {
       session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
       const discarded = session.getSnapshot();
-      transcripts.removeAll
-        .mockRejectedValueOnce(new Error('first cleanup failed'))
-        .mockRejectedValueOnce(new Error('retry cleanup failed'));
+      offscreen.rpc.mockRejectedValueOnce(new Error('port disconnected'));
 
-      await controller.discard();
+      await expect(controller.discard()).resolves.toEqual(expect.objectContaining({
+        ok: false,
+        error: expect.stringContaining('outcome unknown'),
+      }));
       expect(session.getSnapshot().finalization?.backgroundFinalized).not.toBe(true);
       session.fail('discard watchdog timed out');
       expect(session.getSnapshot().phase).toBe('failed');
       offscreen.rpc.mockClear();
-
-      const blocked = await controller.start(startMsg());
-
-      expect(blocked).toEqual(expect.objectContaining({
-        ok: false,
-        error: 'Discard cleanup is still pending',
-      }));
-      expect(offscreen.rpc).toHaveBeenCalledWith({
-        type: 'OFFSCREEN_DISCARD',
-        epoch: discarded.epoch,
+      offscreen.rpc.mockImplementation(async (message: { type: string }) => {
+        if (message.type === 'OFFSCREEN_DISCARD') {
+          return {
+            ok: false,
+            error: `Stale finalization command for epoch ${discarded.epoch}; current epoch is 0`,
+          };
+        }
+        return { ok: true };
       });
-      expect(offscreen.rpc).not.toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'OFFSCREEN_START' }),
-      );
-      expect(session.getSnapshot().finalization).toEqual(expect.objectContaining({
-        historyId: discarded.historyId,
-        disposition: 'discarded',
-      }));
 
-      offscreen.rpc.mockClear();
-      await expect(controller.start(startMsg())).resolves.toEqual(
-        expect.objectContaining({ ok: true }),
-      );
-      expect(offscreen.rpc.mock.calls.map(([msg]) => msg.type)).toEqual([
-        'OFFSCREEN_DISCARD',
-        'OFFSCREEN_START',
-      ]);
+      const result = await controller.start(startMsg());
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(transcriptCapture.abandon).toHaveBeenCalledWith(discarded.epoch);
+      expect(notations.removeAll).toHaveBeenCalledWith(discarded.historyId);
+      expect(transcripts.removeAll).toHaveBeenCalledWith(discarded.historyId);
+      expect(offscreen.rpc.mock.calls.map(([msg]) => msg.type)).toEqual(['OFFSCREEN_START']);
     });
 
     it('forwards the frozen recorder snapshot on OFFSCREEN_START and leaves the session starting', async () => {
@@ -472,6 +463,9 @@ describe('RecordingController', () => {
 
       expect(offscreen.ensureReady).toHaveBeenCalledTimes(1);
       expect(offscreen.rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_DISCARD', epoch: 1 });
+      expect(transcriptCapture.abandon).toHaveBeenCalledWith(1);
+      expect(offscreen.rpc.mock.invocationCallOrder[0])
+        .toBeLessThan(transcriptCapture.abandon.mock.invocationCallOrder[0]);
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(session.getSnapshot().phase).toBe('stopping');
     });
@@ -536,6 +530,9 @@ describe('RecordingController', () => {
       }));
       expect(session.getSnapshot().phase).toBe('stopping');
       expect(session.getSnapshot().finalization?.disposition).toBe('discarded');
+      expect(transcriptCapture.abandon).not.toHaveBeenCalled();
+      expect(notations.removeAll).not.toHaveBeenCalled();
+      expect(transcripts.removeAll).not.toHaveBeenCalled();
     });
 
     it('keeps derived data and reconciles to kept when protective finalization wins', async () => {
@@ -553,11 +550,12 @@ describe('RecordingController', () => {
         ok: false,
         error: expect.stringContaining('Finalization conflict'),
       }));
-      expect(transcriptCapture.abandon).toHaveBeenCalledWith(run.epoch);
-      expect(transcriptCapture.abandon.mock.invocationCallOrder[0])
-        .toBeLessThan(offscreen.rpc.mock.invocationCallOrder[0]);
+      expect(transcriptCapture.abandon).not.toHaveBeenCalled();
       expect(notations.removeAll).not.toHaveBeenCalled();
       expect(transcripts.removeAll).not.toHaveBeenCalled();
+      expect(transcriptCapture.finish).toHaveBeenCalledWith(run.historyId);
+      expect(offscreen.rpc.mock.invocationCallOrder[0])
+        .toBeLessThan(transcriptCapture.finish.mock.invocationCallOrder[0]);
       expect(session.getSnapshot().phase).toBe('stopping');
       expect(session.getSnapshot().finalization).toEqual(expect.objectContaining({
         historyId: run.historyId,
@@ -591,6 +589,30 @@ describe('RecordingController', () => {
       await expect(discard).resolves.toEqual(expect.objectContaining({
         ok: false,
         error: 'Discard cannot replace a stop that is already finalizing',
+      }));
+    });
+
+    it('does not let stop reinterpret a discard whose transport outcome is unknown', async () => {
+      session.start({ ...RUN_CONFIG }, { targetTabId: 42 });
+      const epoch = session.getSnapshot().epoch;
+      offscreen.rpc.mockRejectedValueOnce(new Error('port disconnected'));
+
+      await expect(controller.discard()).resolves.toEqual(expect.objectContaining({
+        ok: false,
+        error: expect.stringContaining('outcome unknown'),
+      }));
+      offscreen.rpc.mockClear();
+
+      await expect(controller.stop('recorded tab closed', 'tab-closed')).resolves.toEqual(
+        expect.objectContaining({
+          ok: false,
+          error: 'Stop cannot replace a discard that is already finalizing',
+        }),
+      );
+      expect(offscreen.rpc).not.toHaveBeenCalled();
+      expect(session.getSnapshot().finalization).toEqual(expect.objectContaining({
+        epoch,
+        disposition: 'discarded',
       }));
     });
   });
