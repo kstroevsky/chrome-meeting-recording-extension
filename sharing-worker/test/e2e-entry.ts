@@ -96,7 +96,7 @@ export default {
 async function configureFaults(request: Request): Promise<Response> {
   const body = await request.json().catch(() => null) as Partial<Faults> | null;
   if (!body) return new Response('invalid fault config', { status: 400 });
-  if (body.delayNextChunkMs != null) faults.delayNextChunkMs = Math.max(0, Math.min(30_000, Math.floor(body.delayNextChunkMs)));
+  if (body.delayNextChunkMs != null) faults.delayNextChunkMs = Math.max(0, Math.min(90_000, Math.floor(body.delayNextChunkMs)));
   if (body.dropNextChunkResponse != null) faults.dropNextChunkResponse = body.dropNextChunkResponse === true;
   if (body.dropNextDeleteResponse != null) faults.dropNextDeleteResponse = body.dropNextDeleteResponse === true;
   if (body.expireNextUpload != null) faults.expireNextUpload = body.expireNextUpload === true;
