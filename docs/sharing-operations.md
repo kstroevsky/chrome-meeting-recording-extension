@@ -84,7 +84,7 @@ Default limits are:
 - 500 GiB reserved/stored bytes per owner;
 - 16 recordings per share and 3 tracks per recording;
 - 100 GiB total published bytes per share;
-- 8 MiB manifest request body;
+- 2,000,000-byte manifest request body and 1,500,000-byte canonical persisted manifest;
 - shared contract limits for titles, transcript segments/text, topics, spans, keywords, notations, and MIME/id lengths.
 
 Draft/uploading shares older than 7 days are cleaned up. Revoked shares retain media for 30 days unless the owner explicitly uses **Delete published data** first. The scheduled Worker cleanup runs every six hours and aborts unfinished multipart uploads before deleting R2 objects and D1 metadata.
