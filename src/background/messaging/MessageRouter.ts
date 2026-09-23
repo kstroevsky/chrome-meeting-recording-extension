@@ -14,6 +14,7 @@ import { isRecordingHistoryMessage } from '../../shared/recordingHistory';
 import { handleLibraryMessage } from './libraryMessages';
 import { handlePlaybackMessage } from './playbackMessages';
 import { handleRecordingMessage } from './recordingMessages';
+import { handleShareIdentityTokenMessage } from './sharingMessages';
 import {
   handleDriveTokenMessage,
   handleSystemIngress,
@@ -23,7 +24,7 @@ import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 const includes = (types: readonly string[], type: string): boolean => types.includes(type);
 
-type PopupRouteOwner = 'drive-token' | 'library' | 'playback' | 'recording' | 'system';
+type PopupRouteOwner = 'drive-token' | 'share-identity-token' | 'library' | 'playback' | 'recording' | 'system';
 
 /** Compile-time ownership table: every recognized popup message must have one background route. */
 export const POPUP_ROUTE_OWNERS = {
@@ -32,6 +33,11 @@ export const POPUP_ROUTE_OWNERS = {
   DISCARD_RECORDING: 'recording',
   GET_RECORDING_STATUS: 'recording',
   GET_DRIVE_TOKEN: 'drive-token',
+  GET_SHARE_IDENTITY_TOKEN: 'share-identity-token',
+  PUBLISH_SHARE: 'system',
+  LIST_SHARES: 'system',
+  REVOKE_SHARE: 'system',
+  DELETE_SHARE: 'system',
   SET_MIC_MUTED: 'recording',
   SET_CAMERA_MUTED: 'recording',
   SET_INPUT_DEVICE: 'recording',
@@ -138,6 +144,8 @@ export function createMessageListener(deps: MessageHandlersDeps) {
 
     const driveTokenResult = handleDriveTokenMessage(msg, sendResponse, deps);
     if (driveTokenResult !== undefined) return driveTokenResult;
+    const shareIdentityResult = handleShareIdentityTokenMessage(msg, sendResponse, deps);
+    if (shareIdentityResult !== undefined) return shareIdentityResult;
 
     let readinessPassed = deps.waitUntilReady == null;
     void (async () => {

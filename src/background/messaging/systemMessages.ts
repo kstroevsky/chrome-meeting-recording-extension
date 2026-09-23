@@ -161,6 +161,29 @@ export async function handleSystemPopupMessage(
   sendResponse: RuntimeSendResponse,
   deps: MessageHandlersDeps,
 ): Promise<boolean> {
+  if (msg.type === 'PUBLISH_SHARE') {
+    if (!deps.sharing) throw new Error('Sharing is unavailable');
+    const result = await deps.sharing.publish(msg.recordings, msg.options);
+    sendResponse({ ok: true, shareId: result.shareId });
+    return true;
+  }
+  if (msg.type === 'LIST_SHARES') {
+    if (!deps.sharing) throw new Error('Sharing is unavailable');
+    sendResponse({ ok: true, snapshot: await deps.sharing.snapshot() });
+    return true;
+  }
+  if (msg.type === 'REVOKE_SHARE') {
+    if (!deps.sharing) throw new Error('Sharing is unavailable');
+    await deps.sharing.revoke(msg.shareId);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'DELETE_SHARE') {
+    if (!deps.sharing) throw new Error('Sharing is unavailable');
+    await deps.sharing.delete(msg.shareId);
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.type === 'RENAME_DRIVE_ROOT_FOLDER') {
     if (!deps.renameDriveRootFolder) throw new Error('Google Drive is unavailable');
     sendResponse({

@@ -20,8 +20,9 @@ import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 import { RecordingNotesSection, type RecordingNotesSectionActions } from './RecordingNotesSection';
 import { NoteEditor, type NoteEditorDeps } from './NoteEditor';
-import { ShareDialog, type CreatedShareLink, type ShareProgressReporter } from './ShareDialog';
+import { ShareDialog, type QueuedShare, type ShareProgressReporter } from './ShareDialog';
 import type { PublishRecordingOptions } from '../sharing/PublishedManifestBuilder';
+import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
 
 export type RecordingsViewCallbacks = {
   rename: (id: string, name: string) => void;
@@ -36,8 +37,10 @@ export type RecordingsViewCallbacks = {
     recordingIds: string[],
     options: PublishRecordingOptions,
     report: ShareProgressReporter,
-  ) => Promise<CreatedShareLink>;
+  ) => Promise<QueuedShare>;
+  shareSnapshot?: () => Promise<ShareRuntimeSnapshot>;
   revokeShare?: (shareId: string) => Promise<void>;
+  sharesChanged?: () => void;
   /** The open recording's notes (f2); the view supplies the undo toast itself. */
   notes: Omit<RecordingNotesSectionActions, 'offerUndo' | 'openEditor'> & Partial<Pick<NoteEditorDeps['notes'], 'add' | 'update'>>;
   /** What the note editor (f5, f6) reads besides notes; without it there is no ADD. */
@@ -325,11 +328,13 @@ export class RecordingsView {
   }
 
   private openShareDialog(entries: RecordingHistoryEntry[]): void {
-    if (!this.callbacks.share || !entries.length) return;
+    if (!this.callbacks.share || !this.callbacks.shareSnapshot || !entries.length) return;
     const ids = entries.map((entry) => entry.id);
     const dialog = new ShareDialog(entries.map((entry) => entry.name), {
       publish: (options, report) => this.callbacks.share!(ids, options, report),
+      snapshot: () => this.callbacks.shareSnapshot!(),
       ...(this.callbacks.revokeShare ? { revoke: (shareId: string) => this.callbacks.revokeShare!(shareId) } : {}),
+      ...(this.callbacks.sharesChanged ? { changed: () => this.callbacks.sharesChanged!() } : {}),
     });
     dialog.open();
   }

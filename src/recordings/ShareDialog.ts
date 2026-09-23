@@ -1,11 +1,16 @@
 import type { PublishRecordingOptions } from '../sharing/PublishedManifestBuilder';
+import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
+import { managedShares, type ManagedShare } from '../sharing/ShareManagementModel';
 
 export type CreatedShareLink = { shareId: string; shareUrl: string };
+export type QueuedShare = { shareId: string };
 export type ShareProgressReporter = (message: string) => void;
 
 export type ShareDialogActions = {
-  publish: (options: PublishRecordingOptions, report: ShareProgressReporter) => Promise<CreatedShareLink>;
+  publish: (options: PublishRecordingOptions, report: ShareProgressReporter) => Promise<QueuedShare>;
+  snapshot: () => Promise<ShareRuntimeSnapshot>;
   revoke?: (shareId: string) => Promise<void>;
+  changed?: () => void;
 };
 
 /** One self-contained owner prompt: privacy choices, publish progress, then link actions. */
@@ -16,10 +21,13 @@ export class ShareDialog {
   private readonly options = document.createElement('div');
   private readonly actions = document.createElement('div');
   private readonly create = document.createElement('button');
+  private readonly progress = document.createElement('div');
   private readonly transcriptInput: HTMLInputElement;
   private readonly topicsInput: HTMLInputElement;
   private locked = false;
   private created: CreatedShareLink | null = null;
+  private queuedShareId: string | null = null;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     recordingNames: readonly string[],
@@ -70,6 +78,8 @@ export class ShareDialog {
     this.status.className = 'share-dialog__status';
     this.status.hidden = true;
     this.status.setAttribute('role', 'status');
+    this.progress.className = 'share-dialog__progress';
+    this.progress.hidden = true;
 
     this.actions.className = 'share-dialog__actions';
     const cancel = this.button('Cancel', 'share-dialog__button share-dialog__button--secondary', () => this.dismiss());
@@ -84,7 +94,7 @@ export class ShareDialog {
     }));
     this.actions.append(cancel, this.create);
 
-    this.card.append(heading, summary, description, this.options, this.status, this.actions);
+    this.card.append(heading, summary, description, this.options, this.status, this.progress, this.actions);
     this.overlay.append(this.card);
     this.overlay.addEventListener('click', (event) => { if (event.target === this.overlay) this.dismiss(); });
     this.overlay.addEventListener('keydown', (event) => {
@@ -118,12 +128,69 @@ export class ShareDialog {
     this.setLocked(true);
     this.setStatus('Preparing recordings…');
     try {
-      this.created = await this.callbacks.publish(options, (message) => this.setStatus(message));
-      this.renderCreated();
+      const queued = await this.callbacks.publish(options, (message) => this.setStatus(message));
+      this.queuedShareId = queued.shareId;
+      this.callbacks.changed?.();
+      this.options.hidden = true;
+      this.setLocked(false);
+      this.actions.replaceChildren(
+        this.button('Close', 'share-dialog__button share-dialog__button--secondary', () => this.dismiss()),
+      );
+      await this.refreshProgress();
     } catch (error) {
       this.setStatus(error instanceof Error ? error.message : String(error), true);
       this.setLocked(false);
     }
+  }
+
+  private async refreshProgress(): Promise<void> {
+    if (!this.queuedShareId || !this.overlay.isConnected) return;
+    try {
+      const snapshot = await this.callbacks.snapshot();
+      const share = managedShares(snapshot).find((item) => item.id === this.queuedShareId);
+      if (share) {
+        this.renderProgress(share);
+        if (share.status === 'active' && share.shareUrl) {
+          this.created = { shareId: share.id, shareUrl: share.shareUrl };
+          this.callbacks.changed?.();
+          this.renderCreated();
+          return;
+        }
+        if (share.status === 'revoked') return;
+      }
+    } catch (error) {
+      this.setStatus(`Could not refresh publication progress: ${error instanceof Error ? error.message : String(error)}`, true);
+    }
+    this.pollTimer = setTimeout(() => void this.refreshProgress(), 750);
+  }
+
+  private renderProgress(share: ManagedShare): void {
+    this.status.hidden = false;
+    this.status.classList.toggle('share-dialog__status--error', share.status === 'failed');
+    this.status.textContent = share.error ? `${share.phaseLabel}: ${share.error}` : share.phaseLabel;
+    this.progress.hidden = false;
+    this.progress.replaceChildren();
+
+    const headline = document.createElement('strong');
+    headline.textContent = `Publishing ${share.recordingTitles.length === 1 ? share.recordingTitles[0] : `${share.recordingTitles.length} recordings`}`;
+    const total = document.createElement('p');
+    total.className = 'share-dialog__progress-total';
+    total.textContent = share.totalBytes != null
+      ? `${formatBytes(share.uploadedBytes)} / ${formatBytes(share.totalBytes)} · ${share.percent ?? 0}%`
+      : `${formatBytes(share.uploadedBytes)} uploaded`;
+    const tracks = document.createElement('div');
+    tracks.className = 'share-dialog__progress-tracks';
+    for (const track of share.tracks) {
+      const row = document.createElement('p');
+      const name = share.recordingTitles.length > 1 ? `${track.recordingTitle} · ${streamName(track.stream)}` : streamName(track.stream);
+      row.textContent = track.bytes != null
+        ? `${name}    ${formatBytes(track.uploadedBytes)} / ${formatBytes(track.bytes)}`
+        : `${name}    ${formatBytes(track.uploadedBytes)}`;
+      tracks.append(row);
+    }
+    const footer = document.createElement('small');
+    footer.textContent = `${share.tracks.length} track${share.tracks.length === 1 ? '' : 's'}${share.resumable ? ' · resumable' : ''}`;
+    this.progress.append(headline, total, tracks, footer);
   }
 
   private renderCreated(): void {
@@ -131,6 +198,7 @@ export class ShareDialog {
     this.setLocked(false);
     this.options.hidden = true;
     this.status.hidden = true;
+    this.progress.hidden = true;
     this.actions.replaceChildren();
 
     const result = document.createElement('div');
@@ -176,6 +244,7 @@ export class ShareDialog {
     this.setStatus('Revoking link…');
     try {
       await this.callbacks.revoke(this.created.shareId);
+      this.callbacks.changed?.();
       this.setStatus('Link revoked. New playback requests will be denied.');
       this.setLocked(false);
       for (const button of Array.from(this.actions.querySelectorAll<HTMLButtonElement>('button'))) {
@@ -205,12 +274,27 @@ export class ShareDialog {
   private setLocked(locked: boolean): void {
     this.locked = locked;
     for (const control of Array.from(this.card.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button'))) {
-      control.disabled = locked;
+      if (!control.classList.contains('share-dialog__close')) control.disabled = locked;
     }
     if (!locked && !this.transcriptInput.checked) this.topicsInput.disabled = true;
   }
 
   private dismiss(): void {
-    if (!this.locked) this.overlay.remove();
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    this.overlay.remove();
   }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`;
+  const mib = bytes / (1024 * 1024);
+  if (mib < 1024) return `${mib >= 100 ? Math.round(mib) : mib.toFixed(1)} MB`;
+  return `${(mib / 1024).toFixed(2)} GB`;
+}
+
+function streamName(stream: 'tab' | 'mic' | 'self-video'): string {
+  if (stream === 'tab') return 'Meeting';
+  if (stream === 'mic') return 'Microphone';
+  return 'Camera';
 }

@@ -19,6 +19,32 @@ function entry(): RecordingHistoryEntry {
   };
 }
 
+function activeSnapshot() {
+  return {
+    remote: [{
+      id: 'share-id',
+      status: 'active' as const,
+      manifest: {
+        id: 'share-id',
+        createdAt: 10,
+        recordings: [{
+          id: 'published-recording',
+          title: 'Customer interview',
+          createdAt: 1,
+          tracks: [],
+          downloadsEnabled: false,
+        }],
+      },
+      createdAt: 10,
+      updatedAt: 11,
+      shareUrl: 'https://sharing.example/s/capability',
+    }],
+    local: [],
+    uploads: [],
+    refreshedAt: 12,
+  };
+}
+
 function mount(share: RecordingsViewCallbacks['share'], revokeShare?: RecordingsViewCallbacks['revokeShare']) {
   const list = document.createElement('div');
   const empty = document.createElement('div');
@@ -29,6 +55,7 @@ function mount(share: RecordingsViewCallbacks['share'], revokeShare?: Recordings
     rename: jest.fn(), note: jest.fn(), remove: jest.fn(), removeMany: jest.fn(),
     openLocal: jest.fn(), fileTo: jest.fn(), play: jest.fn(), loadMore: jest.fn(),
     share,
+    shareSnapshot: jest.fn(async () => activeSnapshot()),
     revokeShare,
   } as unknown as RecordingsViewCallbacks;
   const view = new RecordingsView(list, empty, error, loadMore, callbacks);
@@ -45,7 +72,6 @@ describe('RecordingsView sharing', () => {
   it('publishes selected recordings with privacy-preserving defaults', async () => {
     const share = jest.fn(async () => ({
       shareId: 'share-id',
-      shareUrl: 'https://sharing.example/s/capability',
     }));
     const { list } = mount(share);
     list.querySelector<HTMLButtonElement>('.recording-row .selection-box')!.click();
@@ -78,7 +104,7 @@ describe('RecordingsView sharing', () => {
   });
 
   it('revokes the created link through the durable owner lifecycle', async () => {
-    const share = jest.fn(async () => ({ shareId: 'share-id', shareUrl: 'https://sharing.example/s/capability' }));
+    const share = jest.fn(async () => ({ shareId: 'share-id' }));
     const revoke = jest.fn(async () => {});
     const { list } = mount(share, revoke);
     list.querySelector<HTMLButtonElement>('.recording-row .selection-box')!.click();

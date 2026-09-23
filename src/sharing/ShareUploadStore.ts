@@ -12,6 +12,7 @@ import type { PlaybackTrack } from '../shared/playback';
 const SHARE_UPLOAD_PREFIX = 'shareUpload:';
 
 export type ShareUploadStatus = 'queued' | 'uploading' | 'failed' | 'completed';
+export type ShareUploadActivity = 'uploading' | 'retrying' | 'resuming';
 
 export type ShareUploadJob = {
   id: string;
@@ -25,6 +26,10 @@ export type ShareUploadJob = {
   bytes?: number;
   offset: number;
   status: ShareUploadStatus;
+  /** Transient network activity persisted in the same durable job record. */
+  activity?: ShareUploadActivity;
+  /** Current request attempt within the uploader's bounded retry loop. */
+  attempt?: number;
   uploadId?: string;
   chunkSize?: number;
   error?: string;
@@ -69,6 +74,8 @@ function isShareUploadJob(value: unknown): value is ShareUploadJob {
     && (typeof job.bytes === 'undefined' || typeof job.bytes === 'number')
     && typeof job.offset === 'number'
     && ['queued', 'uploading', 'failed', 'completed'].includes(job.status)
+    && (typeof job.activity === 'undefined' || ['uploading', 'retrying', 'resuming'].includes(job.activity))
+    && (typeof job.attempt === 'undefined' || (Number.isInteger(job.attempt) && job.attempt > 0))
     && (typeof job.uploadId === 'undefined' || typeof job.uploadId === 'string')
     && (typeof job.chunkSize === 'undefined' || typeof job.chunkSize === 'number')
     && (typeof job.error === 'undefined' || typeof job.error === 'string')

@@ -4,10 +4,7 @@ import { initializeExtensionTheme } from './shared/theme';
 import { sendToBackground } from './shared/messages';
 import type { RecordingNotation } from './shared/notations';
 import type { PopupListRecordingNotations, PopupRemoveRecordingNotation, PopupUpdateRecordingNotation } from './shared/protocol';
-import { fetchDriveTokenWithFallback } from './background/driveAuth';
-import { fetchShareIdentityTokenWithFallback } from './background/shareIdentityAuth';
 import { sharingServiceOrigin } from './sharing/config';
-import { createShareRuntime } from './sharing/ShareRuntime';
 
 /** One recording's notes, read or rewritten through the background's keyed commands. */
 async function readNotations(
@@ -28,18 +25,7 @@ const loadMore = get('recordings-load-more');
 if (list && empty && error && loadMore instanceof HTMLButtonElement) {
   let controller: RecordingsController;
   const serviceOrigin = sharingServiceOrigin();
-  const sharing = serviceOrigin ? createShareRuntime(serviceOrigin, {
-    getDriveToken: async (options) => {
-      const result = await fetchDriveTokenWithFallback(options);
-      if (!result.ok) throw new Error(result.error);
-      return result.token;
-    },
-    getIdentityToken: async (options) => {
-      const result = await fetchShareIdentityTokenWithFallback(options);
-      if (!result.ok) throw new Error(result.error);
-      return result.token;
-    },
-  }) : undefined;
+  const sharingEnabled = Boolean(serviceOrigin);
   const view = new RecordingsView(list, empty, error, loadMore, {
     rename: (id, name) => void controller.rename(id, name),
     note: (id, note) => void controller.setNote(id, note),
@@ -49,8 +35,9 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
     play: (recordingId) => void controller.play(recordingId),
     fileTo: (recordingId, presetId) => void controller.fileTo(recordingId, presetId),
     loadMore: () => void controller.loadMore(),
-    ...(sharing ? {
+    ...(sharingEnabled ? {
       share: (recordingIds, options, report) => controller.share(recordingIds, options, report),
+      shareSnapshot: () => controller.shareSnapshot(),
       revokeShare: (shareId) => controller.revokeShare(shareId),
     } : {}),
     notes: {
@@ -76,9 +63,6 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
       notesChanged: () => controller.notesChanged(),
     },
   });
-  controller = new RecordingsController(view, sharing ? {
-    publisher: sharing.publisher,
-    publications: sharing.publications,
-  } : undefined);
+  controller = new RecordingsController(view, sharingEnabled ? { enabled: true } : undefined);
   void controller.init().catch((cause) => view.showError(cause instanceof Error ? cause.message : String(cause)));
 }
