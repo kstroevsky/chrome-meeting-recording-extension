@@ -119,12 +119,43 @@ describe('sharing worker vertical slice', () => {
       totalBytes: 6,
     }));
     expect(firstBody.shares[0].manifest).toBeUndefined();
-    expect(firstBody.nextCursor).toBe('1');
+    expect(firstBody.nextCursor).toEqual(expect.any(String));
 
     const secondPage = await ownerFetch(`/api/shares?limit=1&cursor=${firstBody.nextCursor}`);
     const secondBody = await secondPage.json<{ shares: any[]; nextCursor?: string }>();
     expect(secondBody.shares).toHaveLength(1);
     expect(secondBody.shares[0].manifest).toBeUndefined();
+  });
+
+  it('keeps share pagination stable when rows before the cursor are deleted', async () => {
+    expect((await putManifest()).status).toBe(201);
+    const second = structuredClone(manifest);
+    second.id = 'share-owner-id-2';
+    second.recordings[0].id = 'public-recording-id-2';
+    second.recordings[0].tracks[0].mediaEndpoint = '/media/recordings/public-recording-id-2/tracks/tab-track';
+    expect((await ownerFetch('/api/shares/share-owner-id-2', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(second),
+    })).status).toBe(201);
+
+    const firstPage = await ownerFetch('/api/shares?limit=1');
+    const firstBody = await firstPage.json<{ shares: Array<{ id: string }>; nextCursor?: string }>();
+    expect(firstBody.shares).toHaveLength(1);
+    expect(firstBody.nextCursor).toEqual(expect.any(String));
+
+    await env.SHARING_DB.prepare('DELETE FROM shares WHERE id = ?').bind(firstBody.shares[0].id).run();
+
+    const secondPage = await ownerFetch(`/api/shares?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor!)}`);
+    const secondBody = await secondPage.json<{ shares: Array<{ id: string }> }>();
+    expect(secondBody.shares).toHaveLength(1);
+    expect(secondBody.shares[0].id).not.toBe(firstBody.shares[0].id);
+  });
+
+  it('rejects malformed share-list cursors', async () => {
+    const response = await ownerFetch('/api/shares?cursor=not-a-valid-cursor');
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: 'INVALID_CURSOR' });
   });
 
   it('rejects a canonical manifest that exceeds the D1 persistence budget', async () => {
