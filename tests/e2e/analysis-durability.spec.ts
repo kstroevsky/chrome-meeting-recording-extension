@@ -24,6 +24,7 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { ANALYSIS_E2E_GATE_CHANNEL } from '../../src/shared/e2e';
+import type { AnalysisJob } from '../../src/shared/analysis/job';
 import {
   closeHarness,
   findMockMeetTabId,
@@ -35,9 +36,9 @@ import {
   stopRecording,
 } from './helpers/extensionHarness';
 
-test.setTimeout(300_000);
+test.setTimeout(120_000);
 
-/** Small real workload; the E2E gate, rather than CPU time, holds the kill window open. */
+/** Small pipeline workload; the E2E gate, rather than CPU time, holds the kill window open. */
 const UTTERANCES = 48;
 
 type Manifest = {
@@ -104,8 +105,8 @@ async function workerAlive(session: import('@playwright/test').CDPSession): Prom
  * document has no `chrome.storage`; an earlier version of this helper read
  * `chrome.storage.local`, found nothing, and let an assertion pass vacuously.
  */
-async function outboxRows(controlPage: Page): Promise<Array<{ id: string; status: string }>> {
-  return controlPage.evaluate(() => new Promise<Array<{ id: string; status: string }>>((resolve, reject) => {
+async function outboxRows(controlPage: Page): Promise<AnalysisJob[]> {
+  return controlPage.evaluate(() => new Promise<AnalysisJob[]>((resolve, reject) => {
     const open = indexedDB.open('analysis-job-outbox');
     open.onerror = () => reject(open.error);
     open.onupgradeneeded = () => {
@@ -119,16 +120,49 @@ async function outboxRows(controlPage: Page): Promise<Array<{ id: string; status
       const request = db.transaction('jobs', 'readonly').objectStore('jobs').getAll();
       request.onsuccess = () => {
         db.close();
-        resolve((request.result as any[]).map((job) => ({ id: job.id, status: job.status })));
+        resolve(request.result as AnalysisJob[]);
       };
       request.onerror = () => { db.close(); reject(request.error); };
     };
   }));
 }
 
+function assertNoTerminalAnalysisFailure(rows: AnalysisJob[], context: string): void {
+  const failed = rows.find((row) => row.status === 'failed' || row.status === 'unsupported');
+  if (!failed) return;
+  throw new Error(
+    `${context}: ${JSON.stringify({
+      id: failed.id,
+      historyId: failed.historyId,
+      status: failed.status,
+      error: failed.error,
+      device: failed.device,
+      progress: failed.progress,
+      windowsEncoded: failed.windowsEncoded,
+      windowsTotal: failed.windowsTotal,
+      topicCount: failed.topicCount,
+      segmentCount: failed.segmentCount,
+      startedAt: failed.startedAt,
+      finishedAt: failed.finishedAt,
+    })}`,
+  );
+}
+
+async function waitForCompletedOutbox(controlPage: Page, timeoutMs = 30_000): Promise<AnalysisJob> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await outboxRows(controlPage);
+    assertNoTerminalAnalysisFailure(rows, 'analysis entered a terminal failure before completing');
+    const completed = rows.find((row) => row.status === 'completed');
+    if (completed) return completed;
+    await controlPage.waitForTimeout(100);
+  }
+  throw new Error('The analysis never reached a completed outbox state');
+}
+
 async function waitForAnalysisWork(
   controlPage: Page,
-  timeoutMs = 120_000,
+  timeoutMs = 30_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -189,10 +223,18 @@ async function waitForAnalysisPaused(controlPage: Page): Promise<void> {
 
 async function releaseAnalysisGate(controlPage: Page): Promise<void> {
   await controlPage.evaluate(() => {
-    const state = (globalThis as any).__analysisE2EGate as { channel?: BroadcastChannel } | undefined;
+    const state = (globalThis as any).__analysisE2EGate as {
+      channel?: BroadcastChannel;
+      paused?: boolean;
+    } | undefined;
     if (!state?.channel) throw new Error('Analysis E2E gate is not armed');
+    state.paused = false;
     state.channel.postMessage({ type: 'release' });
   });
+}
+
+async function analysisGatePaused(controlPage: Page): Promise<boolean> {
+  return controlPage.evaluate(() => (globalThis as any).__analysisE2EGate?.paused === true);
 }
 
 /**
@@ -319,15 +361,19 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
       }
       expect(sawWorkerGone, 'the service worker never went away — nothing was actually killed').toBe(true);
 
-      // The kill window was held by the data plane itself. Let the small real
-      // analysis run only after the service worker termination was observed.
+      // The kill window was held by the data plane itself. Let the deterministic
+      // mock engine run the real analysis pipeline only after termination was observed.
       await releaseAnalysisGate(harness.controlPage);
 
       // Every poll wakes the service worker again, which is the reconnect the
       // outbox replays into. The analysis must arrive without a second run.
       let topics: Manifest['topics'] | null = null;
       for (let attempt = 0; attempt < 60 && !topics?.length; attempt += 1) {
-        await harness.controlPage.waitForTimeout(2_000);
+        await harness.controlPage.waitForTimeout(500);
+        assertNoTerminalAnalysisFailure(
+          await outboxRows(harness.controlPage),
+          'analysis failed after the service worker was killed',
+        );
         topics = await manifestTopics(harness.controlPage, historyId).catch(() => null);
       }
 
@@ -376,11 +422,10 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
    * with it — otherwise the run never entered the window and proves nothing.
    *
    * **And the assertion is *how* it recovers.** A lost result is no longer
-   * fatal: the data plane reports it and background re-runs the analysis. So
-   * "topics eventually appear" holds either way, and only redelivery is
-   * correct here. Redelivery is a reconnect and one write; recomputing repeats
-   * the whole run. Half the original run's duration is a bound only redelivery
-   * can meet.
+   * fatal: the data plane reports it and background can re-run the analysis. So
+   * "topics eventually appear" holds either way. After completion the test
+   * arms the analysis gate again: correct redelivery never reaches the engine,
+   * while recomputation pauses at that gate and fails the test deterministically.
    */
   test('keeps a finished analysis whose service worker dies before storing it', async ({}, testInfo) => {
     const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
@@ -413,21 +458,14 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
         'the analysis finished before the store was held',
       ).toBe(false);
 
-      const analysisStartedAt = Date.now();
       await releaseAnalysisGate(harness.controlPage);
 
       const session = await harness.context.newCDPSession(harness.controlPage);
       await session.send('ServiceWorker.enable' as never);
 
       // The worker stays alive throughout, so it genuinely receives the result.
-      let completed: { id: string; status: string } | undefined;
-      const deadline = Date.now() + 120_000;
-      while (!completed && Date.now() < deadline) {
-        await harness.controlPage.waitForTimeout(200);
-        completed = (await outboxRows(harness.controlPage)).find((row) => row.status === 'completed');
-      }
-      expect(completed, 'the analysis never reached a completed state').toBeTruthy();
-      const analysisMs = Date.now() - analysisStartedAt;
+      const completed = await waitForCompletedOutbox(harness.controlPage);
+      expect(completed.historyId).toBe(historyId);
 
       // Give background ample time to receive the result and block on the
       // store. Under release-on-delivery, the data plane has dropped its copy
@@ -437,6 +475,11 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
       // The guard: the job is finished and its row is still unacknowledged —
       // background has not stored it. Otherwise this run proves nothing.
       expect((await outboxRows(harness.controlPage)).map((row) => row.status)).toEqual(['completed']);
+
+      // Arm the gate again. Correct recovery is a redelivery of the held
+      // result and never reaches the analysis engine. A lost result would make
+      // background enqueue a replacement run, which this gate catches.
+      await armAnalysisGate(harness.controlPage);
 
       // Kill the worker mid-write, and prove it is gone.
       let dead = false;
@@ -457,37 +500,27 @@ test.describe('analysis durability (ADR-0007 HOST-01…04)', () => {
 
       // Let it come back. The only copy of the result is in offscreen memory;
       // it must be re-offered, stored, and acknowledged.
-      const releasedAt = Date.now();
       let topics: Manifest['topics'] | null = null;
-      while (!topics?.length && Date.now() - releasedAt < 120_000) {
-        await harness.controlPage.waitForTimeout(250);
+      const recoveryDeadline = Date.now() + 30_000;
+      while (!topics?.length && Date.now() < recoveryDeadline) {
+        await harness.controlPage.waitForTimeout(100);
+        if (await analysisGatePaused(harness.controlPage)) {
+          throw new Error('Recovery started a second analysis instead of redelivering the held result');
+        }
+        assertNoTerminalAnalysisFailure(
+          await outboxRows(harness.controlPage),
+          'analysis entered a terminal failure while recovering the held result',
+        );
         topics = await manifestTopics(harness.controlPage, historyId).catch(() => null);
       }
-      const recoveryMs = Date.now() - releasedAt;
 
       expect(topics, 'a finished analysis was lost when its service worker died before storing it').toBeTruthy();
       expect(topics!.length).toBeGreaterThan(0);
       expect(await analysisStored(harness.controlPage, historyId)).toBe(true);
-
-      /*
-       * *How* it came back is the actual assertion.
-       *
-       * A lost result is not the end of the world any more: the data plane
-       * reports it, and background re-runs the analysis from the transcript. So
-       * "topics eventually appear" holds whether the held result was redelivered
-       * or thrown away and recomputed — and only the first is correct here.
-       *
-       * The two are far apart in time. Redelivery is a reconnect and one write.
-       * Recomputing repeats the whole run, which took `analysisMs` the first
-       * time. Half of that is a bound only redelivery can meet.
-       */
-      // eslint-disable-next-line no-console
-      console.log(`    analysis took ${analysisMs} ms; recovery after the kill took ${recoveryMs} ms`);
       expect(
-        recoveryMs,
-        `recovery took ${recoveryMs} ms against an original run of ${analysisMs} ms — that is a recomputation, `
-        + 'which means the held result was released before it was stored',
-      ).toBeLessThan(analysisMs / 2);
+        await analysisGatePaused(harness.controlPage),
+        'recovery recomputed the analysis instead of redelivering its held result',
+      ).toBe(false);
 
       // Stored and acknowledged: nothing left to replay.
       await expect.poll(

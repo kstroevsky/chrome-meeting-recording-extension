@@ -14,6 +14,7 @@ const forbiddenMarkers = [
   '__E2E_MOCK_TAB_CAPTURE__',
   'E2E_DRIVE_FETCH',
   'E2E real capture tab runtime selected',
+  '__E2E_MOCK_ANALYSIS__',
 ];
 
 async function collectFiles(directory) {

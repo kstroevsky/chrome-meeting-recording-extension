@@ -136,6 +136,7 @@ module.exports = (_env, argv) => {
   const isDevBuild = mode === 'development'
   const e2eMockCapture = isTruthyEnvFlag(env.e2eMockCapture) || process.env.E2E_MOCK_CAPTURE === '1'
   const e2eMockDrive = isTruthyEnvFlag(env.e2eMockDrive) || process.env.E2E_MOCK_DRIVE === '1'
+  const e2eMockAnalysis = isTruthyEnvFlag(env.e2eMockAnalysis) || process.env.E2E_MOCK_ANALYSIS === '1'
   const e2eRealCaptureTab = isTruthyEnvFlag(env.e2eRealCaptureTab)
     || process.env.E2E_REAL_CAPTURE_TAB === '1'
   const browserTarget = resolveBrowserTarget(env.target)
@@ -228,10 +229,12 @@ module.exports = (_env, argv) => {
       new webpack.DefinePlugin({
         '__E2E_MOCK_CAPTURE_BUILD__': JSON.stringify(e2eMockCapture),
         '__E2E_MOCK_DRIVE_BUILD__': JSON.stringify(e2eMockDrive),
+        '__E2E_MOCK_ANALYSIS_BUILD__': JSON.stringify(e2eMockAnalysis),
         '__E2E_REAL_CAPTURE_TAB_BUILD__': JSON.stringify(e2eRealCaptureTab),
         'globalThis.__DEV_BUILD__': JSON.stringify(isDevBuild),
         'globalThis.__E2E_MOCK_CAPTURE__': JSON.stringify(e2eMockCapture),
         'globalThis.__E2E_MOCK_DRIVE__': JSON.stringify(e2eMockDrive),
+        'globalThis.__E2E_MOCK_ANALYSIS__': JSON.stringify(e2eMockAnalysis),
         'globalThis.__E2E_REAL_CAPTURE_TAB__': JSON.stringify(e2eRealCaptureTab),
         '__POPUP_GALLERY_BUILD__': JSON.stringify(isDevBuild),
         '__BROWSER_TARGET__': JSON.stringify(browserTarget),

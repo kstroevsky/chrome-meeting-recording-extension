@@ -27,16 +27,27 @@
  * offscreen's next connect attempt.
  */
 
-import { analyzeTranscript, type AnalysisResult } from '../../shared/analysis/analyzeTranscript';
+import {
+  analyzeTranscript,
+  type AnalysisResult,
+  type EncodeBatch,
+} from '../../shared/analysis/analyzeTranscript';
 import type { AnalysisJob } from '../../shared/analysis/job';
 import type { AnalysisProvenance } from '../../shared/analysis/provenance';
 import type { AnalysisConfig } from '../../shared/analysis/types';
 import type { TranscriptSegment } from '../../shared/transcript';
-import type { EmbeddingWorkerClient } from './EmbeddingWorkerClient';
+import type { EmbeddingEngineInfo } from './EmbeddingWorkerClient';
 import { describeRuntimeError } from '../errors';
 
+/** The small engine surface the analysis pipeline actually needs. */
+export type AnalysisEmbeddingEngine = {
+  readonly info: EmbeddingEngineInfo;
+  encoder(): EncodeBatch;
+  dispose(): void;
+};
+
 /** What the manager needs to open an engine; supplied so tests need no worker. */
-export type EmbeddingEngineFactory = () => Promise<EmbeddingWorkerClient>;
+export type EmbeddingEngineFactory = () => Promise<AnalysisEmbeddingEngine>;
 
 export type AnalysisManagerDeps = {
   /** Opens an embedding engine. Called at most once per drained queue. */
@@ -76,7 +87,7 @@ export class AnalysisManager {
   private readonly tasks = new Map<string, AnalysisTask>();
   /** Completed results awaiting a background ack; see the file docblock. */
   private readonly undelivered = new Map<string, HeldResult>();
-  private engine: EmbeddingWorkerClient | null = null;
+  private engine: AnalysisEmbeddingEngine | null = null;
   private active = 0;
   private seq = 0;
 
@@ -298,7 +309,7 @@ export class AnalysisManager {
     await this.emit(settled);
   }
 
-  private async acquireEngine(): Promise<EmbeddingWorkerClient> {
+  private async acquireEngine(): Promise<AnalysisEmbeddingEngine> {
     if (this.engine) return this.engine;
     this.engine = await this.deps.openEngine();
     return this.engine;

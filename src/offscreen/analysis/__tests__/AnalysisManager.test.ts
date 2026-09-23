@@ -1,5 +1,4 @@
-import { AnalysisManager } from '../AnalysisManager';
-import type { EmbeddingWorkerClient } from '../EmbeddingWorkerClient';
+import { AnalysisManager, type AnalysisEmbeddingEngine } from '../AnalysisManager';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisResult } from '../../../shared/analysis/analyzeTranscript';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
@@ -61,7 +60,7 @@ function transcriptOf(schedule: [string, number][]): TranscriptSegment[] {
 function fakeEngine(overrides: { device?: 'webgpu' | 'wasm'; failAfter?: number } = {}) {
   let batches = 0;
   const state = { disposed: 0, batches: 0 };
-  const client = {
+  const client: AnalysisEmbeddingEngine = {
     info: { device: overrides.device ?? 'webgpu', dimensions: 2, dtype: 'q8' as const, loadMs: 1 },
     encoder: () => async (texts: string[]) => {
       batches += 1;
@@ -72,7 +71,7 @@ function fakeEngine(overrides: { device?: 'webgpu' | 'wasm'; failAfter?: number 
       return embed(texts);
     },
     dispose: () => { state.disposed += 1; },
-  } as unknown as EmbeddingWorkerClient;
+  };
   return { client, state };
 }
 
