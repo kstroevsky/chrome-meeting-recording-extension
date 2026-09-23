@@ -186,10 +186,12 @@ module.exports = (_env, argv) => {
       // A worker has no `document`, so it cannot use webpack's default
       // JSONP chunk loading. @huggingface/transformers splits its ONNX backends
       // into async chunks, so this entry needs the worker-native loader.
-      analysisWorker: {
-        import: './src/offscreen/analysis/analysisWorker.ts',
-        chunkLoading: 'import-scripts',
-      },
+      ...(!e2eMockAnalysis ? {
+        analysisWorker: {
+          import: './src/offscreen/analysis/analysisWorker.ts',
+          chunkLoading: 'import-scripts',
+        },
+      } : {}),
       micsetup: './src/micsetup.ts',
       camsetup: './src/camsetup.ts',
       settings: './src/settings.ts',
@@ -286,42 +288,44 @@ module.exports = (_env, argv) => {
           // Exactly one ONNX export ships. The cache may hold several — 4A
           // measures Q8 and FP16 as separate builds — so everything under
           // `onnx/` except the selected one is filtered out here.
-          {
-            from: modelCacheDir(),
-            to: `models/${ANALYSIS_MODEL.id}`,
-            filter: (resourcePath) => {
-              const relative = path.relative(modelCacheDir(), resourcePath).split(path.sep).join('/')
-              return !relative.startsWith('onnx/') || relative === ANALYSIS_MODEL.onnxPath
+          ...(!e2eMockAnalysis ? [
+            {
+              from: modelCacheDir(),
+              to: `models/${ANALYSIS_MODEL.id}`,
+              filter: (resourcePath) => {
+                const relative = path.relative(modelCacheDir(), resourcePath).split(path.sep).join('/')
+                return !relative.startsWith('onnx/') || relative === ANALYSIS_MODEL.onnxPath
+              },
             },
-          },
-          // ONNX Runtime's WASM binaries, copied from the version
-          // @huggingface/transformers resolved. Not an independent dependency:
-          // two ORT versions would be worse than a path that breaks loudly.
-          //
-          // Which variants ORT selects is its own decision, made from the
-          // features it detects — an earlier attempt inferred the set from the
-          // file names, packaged only `jsep` and the plain build, and failed at
-          // runtime asking for `asyncify`. `ORT_VARIANTS` exists so the set can
-          // be narrowed by measurement against a working build instead.
-          {
-            from: path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
-            to: 'ort',
-            globOptions: { ignore: ['**/*.map'] },
-            filter: (resourcePath) => {
-              const name = path.basename(resourcePath)
-              // Only what ORT fetches at runtime. `wasmPaths` resolves
-              // `ort-wasm-simd-threaded[.variant].{wasm,mjs}` and nothing else;
-              // the package's own `ort.*.mjs` entry points are build-time
-              // imports webpack has already inlined into `analysisWorker.js`,
-              // so copying them shipped ~16 MB no URL could ever reach.
-              if (!/^ort-wasm-simd-threaded[.a-z]*\.(wasm|mjs)$/.test(name)) return false
-              const allow = process.env.ORT_VARIANTS
-              if (!allow) return true
-              return allow.split(',').some((v) => name === `ort-wasm-simd-threaded.${v}`.replace(/\.$/, '')
-                || name.startsWith(`ort-wasm-simd-threaded.${v}.`)
-                || (v === 'base' && /^ort-wasm-simd-threaded\.(wasm|mjs)$/.test(name)))
+            // ONNX Runtime's WASM binaries, copied from the version
+            // @huggingface/transformers resolved. Not an independent dependency:
+            // two ORT versions would be worse than a path that breaks loudly.
+            //
+            // Which variants ORT selects is its own decision, made from the
+            // features it detects — an earlier attempt inferred the set from the
+            // file names, packaged only `jsep` and the plain build, and failed at
+            // runtime asking for `asyncify`. `ORT_VARIANTS` exists so the set can
+            // be narrowed by measurement against a working build instead.
+            {
+              from: path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
+              to: 'ort',
+              globOptions: { ignore: ['**/*.map'] },
+              filter: (resourcePath) => {
+                const name = path.basename(resourcePath)
+                // Only what ORT fetches at runtime. `wasmPaths` resolves
+                // `ort-wasm-simd-threaded[.variant].{wasm,mjs}` and nothing else;
+                // the package's own `ort.*.mjs` entry points are build-time
+                // imports webpack has already inlined into `analysisWorker.js`,
+                // so copying them shipped ~16 MB no URL could ever reach.
+                if (!/^ort-wasm-simd-threaded[.a-z]*\.(wasm|mjs)$/.test(name)) return false
+                const allow = process.env.ORT_VARIANTS
+                if (!allow) return true
+                return allow.split(',').some((v) => name === `ort-wasm-simd-threaded.${v}`.replace(/\.$/, '')
+                  || name.startsWith(`ort-wasm-simd-threaded.${v}.`)
+                  || (v === 'base' && /^ort-wasm-simd-threaded\.(wasm|mjs)$/.test(name)))
+              },
             },
-          },
+          ] : []),
         ]
       })
     ]

@@ -43,7 +43,7 @@
         "release:version": "node scripts/print-release-version.mjs",
         "check:version": "node scripts/check-version-monotonic.mjs",
         "release:build": "npm run check:version && npm run build && npm run test:production-guards",
-        "build:e2e:mock": "npm run analysis:model && webpack --mode=development --env e2eMockCapture=1 --env e2eMockDrive=1 --env e2eMockAnalysis=1 --env outputPath=dist-e2e",
+        "build:e2e:mock": "webpack --mode=development --env e2eMockCapture=1 --env e2eMockDrive=1 --env e2eMockAnalysis=1 --env outputPath=dist-e2e",
         "watch": "webpack --mode=development --watch",
         "popup:gallery": "webpack --mode=development && node scripts/serve-popup-gallery.mjs",
         "test": "npm run test:unit",
