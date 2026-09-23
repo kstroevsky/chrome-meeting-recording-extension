@@ -180,6 +180,47 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
     }
   });
 
+  test('keeps idle offscreen sharing alive across a >60 second upload response', async ({}, testInfo) => {
+    test.setTimeout(150_000);
+    let harness: ExtensionHarness | null = null;
+    let worker: SharingWorkerHarness | null = null;
+    try {
+      harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), { ignoreHTTPSErrors: true });
+      worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-soak-state'));
+
+      const meet = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: 'opfs',
+        micMode: 'separate',
+        recordSelfVideo: false,
+      });
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'separate', recordSelfVideo: false,
+      });
+      await meet.waitForTimeout(2_000);
+      await stopRecording(harness.controlPage);
+
+      const before = await worker.state();
+      await worker.faults({ delayNextChunkMs: 65_000 });
+      const recordings = await openRecordings(harness);
+      await queueFirstRecording(recordings, false);
+      await expect.poll(async () => (await worker!.state()).counters.chunkCommits, { timeout: 20_000 })
+        .toBeGreaterThan(before.counters.chunkCommits);
+      await recordings.close();
+
+      await harness.controlPage.waitForTimeout(40_000);
+      expect(await hasOffscreenContext(harness.controlPage)).toBe(true);
+
+      await expect.poll(async () => (await worker!.state()).shares[0]?.status, { timeout: 60_000 })
+        .toBe('active');
+      expect(await hasOffscreenContext(harness.controlPage)).toBe(true);
+    } finally {
+      await worker?.stop().catch(() => {});
+      if (harness) await closeHarness(harness).catch(() => {});
+    }
+  });
+
   test('publishes a Drive-only recording through authenticated range reads', async ({}, testInfo) => {
     test.setTimeout(90_000);
     let harness: ExtensionHarness | null = null;
@@ -283,6 +324,16 @@ async function listShares(page: Page): Promise<any> {
   const response = await sendRuntimeMessage<any>(page, { type: 'LIST_SHARES' });
   if (!response.ok) throw new Error(response.error || 'Could not list shares');
   return response.snapshot;
+}
+
+async function hasOffscreenContext(page: Page): Promise<boolean> {
+  return await page.evaluate(async () => {
+    const getContexts = (chrome.runtime as any).getContexts as
+      | ((query: { contextTypes: string[] }) => Promise<unknown[]>)
+      | undefined;
+    if (!getContexts) throw new Error('chrome.runtime.getContexts is unavailable');
+    return (await getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] })).length > 0;
+  });
 }
 
 async function rewriteFirstRecordingAsDrive(
