@@ -107,13 +107,35 @@ describe('sharing worker vertical slice', () => {
     expect(media.headers.get('content-range')).toBe('bytes 2-4/6');
     expect(Array.from(new Uint8Array(await media.arrayBuffer()))).toEqual([30, 40, 50]);
 
-    expect((await ownerFetch('/api/shares/share-owner-id', { method: 'DELETE' })).status).toBe(204);
+    expect((await ownerFetch('/api/shares/share-owner-id/revoke', { method: 'POST' })).status).toBe(204);
     const denied = await worker.fetch(new Request(
       `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
       { headers: { cookie: cookie!, range: 'bytes=0-1' } },
     ), env);
     expect(denied.status).toBe(410);
     expect(await denied.json()).toEqual({ code: 'SHARE_REVOKED' });
+  });
+
+  it('permanently deletes published media and metadata after revoking access', async () => {
+    await putManifest();
+    const upload = await beginTrack();
+    await uploadBytes(upload.uploadId, new Uint8Array([1, 2, 3, 4, 5, 6]));
+    await completeTrack(upload.uploadId);
+    await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
+
+    const track = await env.SHARING_DB.prepare(
+      'SELECT object_key FROM share_tracks WHERE share_id = ?',
+    ).bind('share-owner-id').first<{ object_key: string }>();
+    expect(track).not.toBeNull();
+    expect(await env.SHARING_MEDIA.head(track!.object_key)).not.toBeNull();
+
+    const deleted = await ownerFetch('/api/shares/share-owner-id', { method: 'DELETE' });
+    expect(deleted.status).toBe(204);
+    expect(await env.SHARING_MEDIA.head(track!.object_key)).toBeNull();
+    expect(await env.SHARING_DB.prepare('SELECT id FROM shares WHERE id = ?')
+      .bind('share-owner-id').first()).toBeNull();
+    expect(await env.SHARING_DB.prepare('SELECT id FROM share_uploads WHERE share_id = ?')
+      .bind('share-owner-id').first()).toBeNull();
   });
 
   it('serves a real session-protected synchronized web player', async () => {
@@ -288,8 +310,8 @@ describe('sharing worker vertical slice', () => {
     });
     expect(ownerBPut.status).toBe(404);
 
-    const ownerBRevoke = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-id', {
-      method: 'DELETE',
+    const ownerBRevoke = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-id/revoke', {
+      method: 'POST',
     });
     expect(ownerBRevoke.status).toBe(404);
 

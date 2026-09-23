@@ -2,6 +2,7 @@ import { capabilityUrl, deriveCapability, shareUrl } from '../auth/capability';
 import { sha256Base64Url } from '../auth/crypto';
 import { json, readJson } from '../http/responses';
 import { canonicalizeManifest, canonicalizeStoredManifest } from './manifestSchema';
+import { deletePublishedShare } from './deleteShare';
 import { getOwnedShare, getShare, mediaObjectKey, type ShareRow } from './ShareRepository';
 
 export async function routeShareOwnerRequest(
@@ -19,7 +20,12 @@ export async function routeShareOwnerRequest(
     const shareId = decodeURIComponent(shareMatch[1]);
     if (request.method === 'PUT') return putShare(shareId, request, env, ownerId);
     if (request.method === 'GET') return getShareResponse(shareId, request, env, ownerId);
-    if (request.method === 'DELETE') return revokeShare(shareId, env, ownerId);
+    if (request.method === 'DELETE') return deleteShare(shareId, env, ownerId);
+  }
+
+  const revokeMatch = /^\/api\/shares\/([^/]+)\/revoke$/.exec(url.pathname);
+  if (revokeMatch && request.method === 'POST') {
+    return revokeShare(decodeURIComponent(revokeMatch[1]), env, ownerId);
   }
 
   const finalizeMatch = /^\/api\/shares\/([^/]+)\/finalize$/.exec(url.pathname);
@@ -123,6 +129,18 @@ async function revokeShare(shareId: string, env: Env, ownerId: string): Promise<
        WHERE share_id = ? AND status = 'uploading'`,
     ).bind(now, shareId),
   ]);
+  return new Response(null, { status: 204 });
+}
+
+async function deleteShare(shareId: string, env: Env, ownerId: string): Promise<Response> {
+  let share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
+  if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
+  if (share.status !== 'revoked') {
+    await revokeShare(shareId, env, ownerId);
+    share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
+    if (!share) return new Response(null, { status: 204 });
+  }
+  await deletePublishedShare(env, share);
   return new Response(null, { status: 204 });
 }
 

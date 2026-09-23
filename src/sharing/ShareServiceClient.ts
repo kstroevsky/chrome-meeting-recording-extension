@@ -12,6 +12,7 @@
  *   PUT    /api/share-uploads/:uploadId/chunks/:offset
  *   POST   /api/share-uploads/:uploadId/complete
  *   POST   /api/shares/:shareId/finalize
+ *   POST   /api/shares/:shareId/revoke
  *   DELETE /api/shares/:shareId
  *
  * A chunk's offset is part of its URL and Content-Range, so replaying a request
@@ -140,6 +141,13 @@ export class ShareServiceClient implements SharePublicationApi, ShareUploadTrans
 
   /** Revokes the public capability; retained owner recordings are untouched. */
   async revokeShare(shareId: string): Promise<void> {
+    await this.request(`/api/shares/${segment(shareId)}/revoke`, {
+      method: 'POST',
+      statuses: [200, 204],
+    });
+  }
+
+  async deleteShare(shareId: string): Promise<void> {
     await this.request(`/api/shares/${segment(shareId)}`, {
       method: 'DELETE',
       statuses: [200, 204],

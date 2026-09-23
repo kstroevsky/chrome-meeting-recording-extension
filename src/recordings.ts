@@ -1,5 +1,6 @@
 import { RecordingsController } from './recordings/RecordingsController';
 import { RecordingsView } from './recordings/RecordingsView';
+import { SharedView } from './recordings/SharedView';
 import { initializeExtensionTheme } from './shared/theme';
 import { sendToBackground } from './shared/messages';
 import type { RecordingNotation } from './shared/notations';
@@ -24,6 +25,7 @@ const error = get('recordings-error');
 const loadMore = get('recordings-load-more');
 if (list && empty && error && loadMore instanceof HTMLButtonElement) {
   let controller: RecordingsController;
+  let sharedView: SharedView | undefined;
   const serviceOrigin = sharingServiceOrigin();
   const sharingEnabled = Boolean(serviceOrigin);
   const view = new RecordingsView(list, empty, error, loadMore, {
@@ -39,6 +41,7 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
       share: (recordingIds, options, report) => controller.share(recordingIds, options, report),
       shareSnapshot: () => controller.shareSnapshot(),
       revokeShare: (shareId) => controller.revokeShare(shareId),
+      sharesChanged: () => { void sharedView?.refresh(); },
     } : {}),
     notes: {
       load: (recordingId) => readNotations({ type: 'LIST_RECORDING_NOTATIONS', recordingId }),
@@ -64,5 +67,33 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
     },
   });
   controller = new RecordingsController(view, sharingEnabled ? { enabled: true } : undefined);
+
+  const recordingsSurface = get('recordings-surface');
+  const sharedSurface = get('shared-surface');
+  const recordingsTab = get('recordings-tab');
+  const sharedTab = get('shared-tab');
+  const sharedList = get('shared-list');
+  const sharedEmpty = get('shared-empty');
+  const sharedError = get('shared-error');
+  if (sharingEnabled && recordingsSurface && sharedSurface
+    && recordingsTab instanceof HTMLButtonElement && sharedTab instanceof HTMLButtonElement
+    && sharedList && sharedEmpty && sharedError) {
+    sharedView = new SharedView(sharedList, sharedEmpty, sharedError, {
+      load: () => controller.shareSnapshot(),
+      revoke: (shareId) => controller.revokeShare(shareId),
+      delete: (shareId) => controller.deleteShare(shareId),
+    });
+    sharedTab.hidden = false;
+    const selectSurface = (shared: boolean) => {
+      recordingsSurface.hidden = shared;
+      sharedSurface.hidden = !shared;
+      recordingsTab.classList.toggle('recordings-header__tab--active', !shared);
+      sharedTab.classList.toggle('recordings-header__tab--active', shared);
+      if (shared) void sharedView?.refresh();
+    };
+    recordingsTab.addEventListener('click', () => selectSurface(false));
+    sharedTab.addEventListener('click', () => selectSurface(true));
+    void sharedView.refresh();
+  }
   void controller.init().catch((cause) => view.showError(cause instanceof Error ? cause.message : String(cause)));
 }
