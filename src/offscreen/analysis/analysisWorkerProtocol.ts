@@ -24,6 +24,8 @@ export type AnalysisWorkerOpen = {
   wasmBaseUrl: string;
   modelId: string;
   device: EmbeddingDevice;
+  /** Production sets false so the parent can retry each backend in a fresh worker. */
+  allowFallback?: boolean;
   dtype: EmbeddingDtype;
 };
 
@@ -38,7 +40,7 @@ export type AnalysisWorkerRequest = AnalysisWorkerOpen | AnalysisWorkerEmbed;
 export type AnalysisWorkerOpened = {
   type: 'OPENED';
   seq: number;
-  /** The backend that actually loaded, which may not be the one requested. */
+  /** The backend that actually loaded; may differ when `allowFallback` is enabled. */
   device: EmbeddingDevice;
   dimensions: number;
   /** The quantization that loaded, for `AnalysisProvenance`. */

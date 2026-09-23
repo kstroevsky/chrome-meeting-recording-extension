@@ -101,21 +101,29 @@ describe('EmbeddingWorkerClient', () => {
       wasmBaseUrl: CONFIG.wasmBaseUrl,
       modelId: CONFIG.modelId,
       device: 'webgpu',
+      allowFallback: false,
       dtype: 'q8',
     });
   });
 
-  it('reports the backend that actually loaded rather than the one requested', async () => {
-    const worker = new FakeWorker();
+  it('falls back in a fresh worker and reports the backend that actually loaded', async () => {
+    const webgpuWorker = new FakeWorker();
+    const wasmWorker = new FakeWorker();
+    const workers = [webgpuWorker, wasmWorker];
+    let spawnIndex = 0;
     const warnings: string[] = [];
     const promise = EmbeddingWorkerClient.create(CONFIG, {
-      spawn: () => worker as unknown as Worker,
+      spawn: () => workers[spawnIndex++] as unknown as Worker,
       reportWarning: (m) => warnings.push(m),
     });
     await Promise.resolve();
-    worker.reply(opened({ device: 'wasm' }));
+    webgpuWorker.reply({ type: 'ERROR', seq: 0, error: 'webgpu unavailable' });
+    await Promise.resolve();
+    wasmWorker.reply(opened({ device: 'wasm' }));
     const client = await promise;
 
+    expect(webgpuWorker.terminated).toBe(true);
+    expect(wasmWorker.sent[0]).toMatchObject({ device: 'wasm', allowFallback: false });
     expect(client.info.device).toBe('wasm');
     // RES-06: which rung ran is surfaced, never inferred.
     expect(warnings).toHaveLength(1);
@@ -214,13 +222,21 @@ describe('EmbeddingWorkerClient', () => {
   });
 
   it('latches unsupported when neither backend opens, so later attempts fail fast', async () => {
-    const worker = new FakeWorker();
-    const promise = EmbeddingWorkerClient.create(CONFIG, { spawn: () => worker as unknown as Worker });
+    const webgpuWorker = new FakeWorker();
+    const wasmWorker = new FakeWorker();
+    const workers = [webgpuWorker, wasmWorker];
+    let spawnIndex = 0;
+    const promise = EmbeddingWorkerClient.create(CONFIG, {
+      spawn: () => workers[spawnIndex++] as unknown as Worker,
+    });
     await Promise.resolve();
-    worker.reply({ type: 'ERROR', seq: 0, error: 'no available backend found' });
+    webgpuWorker.reply({ type: 'ERROR', seq: 0, error: 'webgpu unavailable' });
+    await Promise.resolve();
+    wasmWorker.reply({ type: 'ERROR', seq: 0, error: 'wasm unavailable' });
 
-    await expect(promise).rejects.toThrow('no available backend found');
-    expect(worker.terminated).toBe(true);
+    await expect(promise).rejects.toThrow('wasm unavailable');
+    expect(webgpuWorker.terminated).toBe(true);
+    expect(wasmWorker.terminated).toBe(true);
     expect(EmbeddingWorkerClient.unsupported).toBe(true);
 
     let spawned = false;
@@ -255,17 +271,44 @@ describe('EmbeddingWorkerClient', () => {
     await expect(client.embed(['a'])).rejects.toThrow('disposed');
   });
 
-  it('rejects rather than hangs when the worker never answers', async () => {
+  it('times out a hung WebGPU worker and falls back to WASM in a fresh worker', async () => {
     jest.useFakeTimers();
     try {
-      const worker = new FakeWorker();
+      const webgpuWorker = new FakeWorker();
+      const wasmWorker = new FakeWorker();
+      const workers = [webgpuWorker, wasmWorker];
+      let spawnIndex = 0;
       const promise = EmbeddingWorkerClient.create(CONFIG, {
-        spawn: () => worker as unknown as Worker,
+        spawn: () => workers[spawnIndex++] as unknown as Worker,
         openTimeoutMs: 1_000,
       });
-      const assertion = expect(promise).rejects.toThrow('did not open within 1000 ms');
-      jest.advanceTimersByTime(1_000);
+      jest.advanceTimersByTime(500);
+      await Promise.resolve();
+      expect(webgpuWorker.terminated).toBe(true);
+      expect(wasmWorker.sent[0]).toMatchObject({ device: 'wasm', allowFallback: false });
+      wasmWorker.reply(opened({ device: 'wasm' }));
+      await expect(promise).resolves.toMatchObject({ info: { device: 'wasm' } });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('rejects when the whole backend ladder exhausts the global open budget', async () => {
+    jest.useFakeTimers();
+    try {
+      const workers = [new FakeWorker(), new FakeWorker()];
+      let spawnIndex = 0;
+      const promise = EmbeddingWorkerClient.create(CONFIG, {
+        spawn: () => workers[spawnIndex++] as unknown as Worker,
+        openTimeoutMs: 1_000,
+      });
+      const assertion = expect(promise).rejects.toThrow('did not open within 500 ms');
+      jest.advanceTimersByTime(500);
+      await Promise.resolve();
+      jest.advanceTimersByTime(500);
       await assertion;
+      expect(workers.every((worker) => worker.terminated)).toBe(true);
+      expect(EmbeddingWorkerClient.unsupported).toBe(true);
     } finally {
       jest.useRealTimers();
     }

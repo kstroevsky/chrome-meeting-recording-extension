@@ -112,21 +112,38 @@ jobs:
           npx playwright test --config=playwright.config.ts
           --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
 
-      - name: Ensure full git history for production versioning
-        if: env.FULL_VALIDATION == 'true'
-        shell: bash
-        run: |
-          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
-            git fetch --unshallow --tags origin
-          fi
-          test "$(git rev-parse --is-shallow-repository)" = "false"
+      - name: Upload Playwright diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/playwright/html-report/
+            output/playwright/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
-      - name: Build production extension for integration E2E
-        if: env.FULL_VALIDATION == 'true'
-        run: npm run build
-
+  production-e2e:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TELEMETRY_ENDPOINT: https://recording-extension-telemetry.kstroevsky.workers.dev/api/telemetry/batches
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Verify full git history for production versioning
+        run: test "$(git rev-parse --is-shallow-repository)" = "false"
+      - run: npm run build
       - name: Run production integration E2E
-        if: env.FULL_VALIDATION == 'true'
         env:
           EXTENSION_PATH: dist
         run: npx playwright test --config=playwright.config.ts --grep "@production-build"
@@ -135,7 +152,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
+          name: production-playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             output/playwright/html-report/
             output/playwright/test-results/

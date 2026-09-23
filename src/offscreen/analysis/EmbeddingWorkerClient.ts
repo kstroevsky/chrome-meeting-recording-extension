@@ -12,11 +12,10 @@
  * failing every in-flight request when the worker dies rather than leaving
  * promises hanging.
  *
- * **The device ladder is reported, never inferred** (RES-06, RES-08). The
- * worker walks `webgpu → wasm` internally and answers with what actually
- * loaded; when that is below what was asked for, this client calls
- * `reportWarning` — the house rule established by `WorkerStorageTarget`, where
- * a downgrade is surfaced rather than taken silently.
+ * **The device ladder is reported, never inferred** (RES-06, RES-08). This
+ * client owns `webgpu → wasm`: each rung gets a bounded open budget and a fresh
+ * worker, so a hung WebGPU/driver initialization cannot prevent WASM fallback.
+ * When a lower rung loads, `reportWarning` surfaces the downgrade.
  */
 
 import type { Embedding } from '../../shared/analysis/types';
@@ -42,7 +41,7 @@ export type EmbeddingWorkerDeps = {
   spawn: () => Worker;
   /** Surfaced downgrades and faults; mirrors `WorkerStorageTarget`'s rule. */
   reportWarning?: (message: string) => void;
-  /** Bounds the model load, which is the one step that can wedge silently. */
+  /** Total model-open budget, split across the requested backend ladder. */
   openTimeoutMs?: number;
   /** Bounds a single batch. Generous: a WASM batch on a cold machine is slow. */
   embedTimeoutMs?: number;
@@ -109,43 +108,68 @@ export class EmbeddingWorkerClient {
   ): Promise<EmbeddingWorkerClient> {
     if (embeddingWorkerUnsupported) throw new Error('The embedding engine is unavailable on this machine');
 
-    let worker: Worker;
-    try {
-      worker = deps.spawn();
-    } catch (error) {
-      embeddingWorkerUnsupported = true;
-      throw error instanceof Error ? error : new Error(String(error));
+    const requested = config.preferredDevice ?? 'webgpu';
+    const attempts: EmbeddingDevice[] = requested === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm'];
+    const totalTimeoutMs = deps.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
+    // Reserve at least half of the global budget for the floor backend. If
+    // WebGPU rejects quickly, WASM may use the otherwise-unused remainder.
+    const webgpuTimeoutMs = Math.max(1, Math.floor(totalTimeoutMs / 2));
+    const startedAt = Date.now();
+    let lastError: Error | null = null;
+
+    for (const device of attempts) {
+      const remainingMs = totalTimeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) break;
+
+      let worker: Worker;
+      try {
+        worker = deps.spawn();
+      } catch (error) {
+        embeddingWorkerUnsupported = true;
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+
+      try {
+        const opened = await openHandshake(
+          worker,
+          config,
+          device,
+          device === 'webgpu' && attempts.length > 1
+            ? Math.min(webgpuTimeoutMs, remainingMs)
+            : remainingMs,
+        );
+        if (opened.device !== device) {
+          throw new Error(`The embedding worker opened ${opened.device} while ${device} was required`);
+        }
+        if (opened.device !== requested) {
+          // Reported because a caller must be able to tell which rung ran
+          // (RES-06), *not* as a performance warning. The 2026-09-15 benchmark
+          // measured WebGPU and WASM within each other's variance on Apple
+          // Metal-3 — 5.37 against 5.23 windows/sec — with WebGPU the slower of
+          // the two to load. Promising "it will be slower" would be wrong there,
+          // and we have no measurement for the user's actual machine.
+          // Says which backend ran and nothing more. "The same topics" would be
+          // an unverified claim: the two backends agree on vectors to within
+          // floating-point noise, but the calibrated 0.93 assignment and 0.95
+          // merge thresholds are decision boundaries, and a pair sitting within
+          // noise of one can in principle land on either side and change the
+          // partition. Making that promise needs a WebGPU-vs-WASM agreement run
+          // over the calibration corpus, which has not been done.
+          deps.reportWarning?.(
+            `Topic analysis is running on ${opened.device} rather than ${requested}.`,
+          );
+        }
+        return new EmbeddingWorkerClient(worker, deps, opened);
+      } catch (error) {
+        worker.terminate();
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
     }
 
-    const requested = config.preferredDevice ?? 'webgpu';
-    try {
-      const opened = await openHandshake(worker, config, requested, deps.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS);
-      if (opened.device !== requested) {
-        // Reported because a caller must be able to tell which rung ran
-        // (RES-06), *not* as a performance warning. The 2026-09-15 benchmark
-        // measured WebGPU and WASM within each other's variance on Apple
-        // Metal-3 — 5.37 against 5.23 windows/sec — with WebGPU the slower of
-        // the two to load. Promising "it will be slower" would be wrong there,
-        // and we have no measurement for the user's actual machine.
-        // Says which backend ran and nothing more. "The same topics" would be
-        // an unverified claim: the two backends agree on vectors to within
-        // floating-point noise, but the calibrated 0.93 assignment and 0.95
-        // merge thresholds are decision boundaries, and a pair sitting within
-        // noise of one can in principle land on either side and change the
-        // partition. Making that promise needs a WebGPU-vs-WASM agreement run
-        // over the calibration corpus, which has not been done.
-        deps.reportWarning?.(
-          `Topic analysis is running on ${opened.device} rather than ${requested}.`,
-        );
-      }
-      return new EmbeddingWorkerClient(worker, deps, opened);
-    } catch (error) {
-      worker.terminate();
-      // Neither rung loaded: this machine cannot embed at all, so stop paying
-      // the attempt for the rest of the session.
-      embeddingWorkerUnsupported = true;
-      throw error instanceof Error ? error : new Error(String(error));
-    }
+    // Neither rung loaded within the global budget: stop paying the attempt for
+    // the rest of this extension session.
+    embeddingWorkerUnsupported = true;
+    throw lastError ?? new Error(`The embedding worker did not open within ${totalTimeoutMs} ms`);
   }
 
   /**
@@ -289,6 +313,7 @@ function openHandshake(
       wasmBaseUrl: config.wasmBaseUrl,
       modelId: config.modelId,
       device,
+      allowFallback: false,
       dtype: config.dtype,
     } satisfies AnalysisWorkerRequest);
   });

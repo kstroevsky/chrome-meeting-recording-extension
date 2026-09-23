@@ -70,7 +70,9 @@ async function load(request: AnalysisWorkerOpen): Promise<void> {
   const started = performance.now();
   configure(request);
 
-  const attempts: EmbeddingDevice[] = request.device === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm'];
+  const attempts: EmbeddingDevice[] = request.allowFallback !== false && request.device === 'webgpu'
+    ? ['webgpu', 'wasm']
+    : [request.device];
   let lastError: unknown;
 
   for (const device of attempts) {

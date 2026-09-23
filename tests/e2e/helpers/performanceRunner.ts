@@ -355,12 +355,6 @@ export async function runPerformanceCase(
     await meetPage.evaluate((workload) => {
       (window as any).mockMeet.startWorkload(workload);
     }, testCase.workload);
-    if (testCase.hardwareMarkerDelayMs != null) {
-      await meetPage.evaluate((delayMs) => {
-        (window as any).mockMeet.scheduleHardwareMarker(delayMs);
-      }, testCase.hardwareMarkerDelayMs);
-    }
-
     const browserBefore = await collectBrowserMetrics(harness, meetPage);
     await startRecording(harness.controlPage, meetTabId, {
       storageMode: testCase.storageMode,
@@ -373,6 +367,11 @@ export async function runPerformanceCase(
         .every((stream) => (snapshot.summary.recorder.startCountByStream[stream] ?? 0) > 0),
       30_000
     );
+    if (testCase.hardwareMarkerDelayMs != null) {
+      await meetPage.evaluate((delayMs) => {
+        (window as any).mockMeet.scheduleHardwareMarker(delayMs);
+      }, testCase.hardwareMarkerDelayMs);
+    }
 
     await meetPage.waitForTimeout(testCase.durationMs);
     const workloadStats = await meetPage.evaluate(() => (window as any).mockMeet.getStats());

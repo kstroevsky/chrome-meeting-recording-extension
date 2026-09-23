@@ -7,7 +7,7 @@
  * sentinel `__E2E_MOCK_TAB_CAPTURE__`. Kept out of `RecorderCapture.ts` so the
  * production capture path carries no test scaffolding.
  *
- * The stream is a `<canvas>` animation (a moving frame counter + a periodic
+ * The stream is a `<canvas>` animation (a moving frame counter + a single
  * black/white marker) plus a matching audio tone, so an e2e assertion can verify the
  * recorded artifact actually contains changing video and synchronized audio.
  */
@@ -43,13 +43,13 @@ export function createE2EMockTabStream(
   const ctx = canvas.getContext('2d');
   let frame = 0;
   const captureFrameRate = Math.max(1, Math.min(tabOutput.maxFrameRate, 30));
-  // A 250 ms pulse is long enough to survive frame drops while leaving >500 ms
-  // of silence for ffmpeg's audio marker detector. The marker itself is large
-  // and the analyzer samples only its interior: the old 64x64 block shared
-  // codec macroblocks with the animated background, which could turn one
-  // intended black interval into several false transitions at 1080p.
-  const markerPeriodFrames = captureFrameRate;
-  const markerActiveFrames = Math.max(2, Math.round(captureFrameRate * 0.25));
+  // One delayed marker is deliberately non-periodic. A periodic pulse let the
+  // video detector lock onto pulse N while the audio detector locked onto N+1,
+  // producing an apparent ~1 s A/V drift on loaded CI runners. Two seconds of
+  // black/silence gives MediaRecorder ample startup time, then a 500 ms pulse
+  // is long enough to survive frame drops and codec block noise at 1080p.
+  const markerStartFrame = captureFrameRate * 2;
+  const markerActiveFrames = Math.max(2, Math.round(captureFrameRate * 0.5));
   const markerSize = 256;
   const markerLeft = canvas.width - 320;
   const markerTop = 32;
@@ -66,7 +66,8 @@ export function createE2EMockTabStream(
     ctx.fillText('E2E mock tab capture', 32, 72);
     ctx.font = '24px sans-serif';
     ctx.fillText(`Frame ${frame}`, 32, 116);
-    const markerActive = frame % markerPeriodFrames < markerActiveFrames;
+    const markerActive = frame >= markerStartFrame
+      && frame < markerStartFrame + markerActiveFrames;
     ctx.fillStyle = markerActive ? '#ffffff' : '#000000';
     ctx.fillRect(markerLeft, markerTop, markerSize, markerSize);
     if (markerGain && markerOscillator) {
