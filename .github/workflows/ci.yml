@@ -101,7 +101,7 @@ jobs:
           npx playwright test --config=playwright.config.ts
           --only-changed="origin/${GITHUB_BASE_REF}"
           --pass-with-no-tests
-          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench|@sharing-e2e"
 
       - name: Run mandatory mock E2E smoke tests
         run: npx playwright test --config=playwright.config.ts --grep "@smoke"
@@ -110,13 +110,93 @@ jobs:
         if: env.FULL_VALIDATION == 'true'
         run: >-
           npx playwright test --config=playwright.config.ts
-          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench|@sharing-e2e"
 
       - name: Upload Playwright diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/playwright/html-report/
+            output/playwright/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  sharing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      FULL_VALIDATION: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+      SHARING_SERVICE_ORIGIN: https://127.0.0.1:8791
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select sharing validation scope
+        id: sharing-scope
+        shell: bash
+        run: |
+          if [[ "$FULL_VALIDATION" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" > "$RUNNER_TEMP/sharing-changed-files.txt"
+          if grep -Eq '^(sharing-worker/|src/sharing/|src/shared/sharing|src/background/sharing/|src/offscreen/|src/recordings(\.ts|/)|static/(recordings\.html|styles/recordings\.css)|tests/e2e/sharing-lifecycle\.spec\.ts|tests/e2e/helpers/(sharingWorker|extensionHarness|driveSimulator)\.ts|package(-lock)?\.json|webpack\.config\.js|tsconfig[^/]*\.json)' "$RUNNER_TEMP/sharing-changed-files.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.sharing-scope.outputs.run == 'true'
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install extension dependencies
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npm ci
+
+      - name: Install sharing Worker dependencies
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npm ci --prefix sharing-worker
+
+      - name: Typecheck sharing Worker and viewer
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npm --prefix sharing-worker run typecheck
+
+      - name: Run sharing Worker tests
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npm --prefix sharing-worker test
+
+      - name: Verify generated viewer is committed
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: git diff --exit-code -- sharing-worker/src/viewer/app.generated.ts
+
+      - name: Dry-run sharing Worker deployment
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npm --prefix sharing-worker run dry-run
+
+      - name: Install Chromium
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Build sharing E2E extension
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npm run build:e2e:mock
+
+      - name: Run sharing lifecycle E2E
+        if: steps.sharing-scope.outputs.run == 'true'
+        run: npx playwright test tests/e2e/sharing-lifecycle.spec.ts --config=playwright.config.ts
+
+      - name: Upload sharing Playwright diagnostics
+        if: ${{ !cancelled() && steps.sharing-scope.outputs.run == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sharing-playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             output/playwright/html-report/
             output/playwright/test-results/

@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "recording-extension-sharing",
+  "name": "recording-extension-sharing-dev",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-21",
   "compatibility_flags": ["nodejs_compat"],
@@ -29,7 +29,7 @@
   "d1_databases": [
     {
       "binding": "SHARING_DB",
-      "database_name": "recording-extension-sharing",
+      "database_name": "recording-extension-sharing-dev",
       "database_id": "00000000-0000-0000-0000-000000000001",
       "migrations_dir": "migrations"
     }
@@ -37,7 +37,79 @@
   "r2_buckets": [
     {
       "binding": "SHARING_MEDIA",
-      "bucket_name": "recording-extension-sharing-media"
+      "bucket_name": "recording-extension-sharing-media-dev"
     }
-  ]
+  ],
+  "env": {
+    "staging": {
+      "name": "recording-extension-sharing-staging",
+      "vars": {
+        "ALLOWED_EXTENSION_ORIGINS": "chrome-extension://replace-with-staging-extension-id",
+        "VIEWER_SESSION_TTL_SECONDS": "43200",
+        "OWNER_SESSION_TTL_SECONDS": "3600",
+        "GOOGLE_OAUTH_CLIENT_ID": "replace-with-staging-oauth-client-id.apps.googleusercontent.com",
+        "CAPABILITY_KEY_ID": "v1",
+        "OWNER_MUTATION_RATE_PER_MINUTE": "120",
+        "MAX_SHARES_PER_OWNER": "200",
+        "MAX_OWNER_STORED_BYTES": "536870912000",
+        "STALE_DRAFT_TTL_SECONDS": "604800",
+        "REVOKED_RETENTION_SECONDS": "2592000"
+      },
+      "secrets": {
+        "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY"]
+      },
+      "triggers": {
+        "crons": ["17 */6 * * *"]
+      },
+      "d1_databases": [
+        {
+          "binding": "SHARING_DB",
+          "database_name": "recording-extension-sharing-staging",
+          "database_id": "00000000-0000-0000-0000-000000000002",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "SHARING_MEDIA",
+          "bucket_name": "recording-extension-sharing-media-staging"
+        }
+      ]
+    },
+    "production": {
+      "name": "recording-extension-sharing",
+      "vars": {
+        "ALLOWED_EXTENSION_ORIGINS": "chrome-extension://replace-with-store-extension-id",
+        "VIEWER_SESSION_TTL_SECONDS": "43200",
+        "OWNER_SESSION_TTL_SECONDS": "3600",
+        "GOOGLE_OAUTH_CLIENT_ID": "replace-with-production-oauth-client-id.apps.googleusercontent.com",
+        "CAPABILITY_KEY_ID": "v1",
+        "OWNER_MUTATION_RATE_PER_MINUTE": "120",
+        "MAX_SHARES_PER_OWNER": "200",
+        "MAX_OWNER_STORED_BYTES": "536870912000",
+        "STALE_DRAFT_TTL_SECONDS": "604800",
+        "REVOKED_RETENTION_SECONDS": "2592000"
+      },
+      "secrets": {
+        "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY"]
+      },
+      "triggers": {
+        "crons": ["17 */6 * * *"]
+      },
+      "d1_databases": [
+        {
+          "binding": "SHARING_DB",
+          "database_name": "recording-extension-sharing",
+          "database_id": "00000000-0000-0000-0000-000000000003",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "SHARING_MEDIA",
+          "bucket_name": "recording-extension-sharing-media"
+        }
+      ]
+    }
+  }
 }

@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.viewer.json --noEmit",
     "types": "wrangler types",
     "predry-run": "npm run viewer:build",
-    "dry-run": "wrangler deploy --dry-run"
+    "dry-run": "wrangler deploy --dry-run --env="
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.2.1",
