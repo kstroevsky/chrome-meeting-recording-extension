@@ -1,6 +1,6 @@
 import { capabilityUrl, deriveCapability, shareUrl } from '../auth/capability';
 import { activeCapabilityKey } from '../auth/capabilityKeys';
-import { sha256Base64Url } from '../auth/crypto';
+import { base64UrlDecode, base64UrlEncode, sha256Base64Url } from '../auth/crypto';
 import { json, readJson } from '../http/responses';
 import { ensureNewShareQuota } from '../security/limits';
 import { SHARING_CONTRACT_LIMITS } from '../../../src/shared/sharingContract';
@@ -16,6 +16,10 @@ import {
 
 const DEFAULT_SHARE_LIST_LIMIT = 50;
 const MAX_SHARE_LIST_LIMIT = 100;
+const shareListCursorEncoder = new TextEncoder();
+const shareListCursorDecoder = new TextDecoder();
+
+type ShareListCursor = Pick<ShareSummaryRow, 'created_at' | 'id'>;
 
 export async function routeShareOwnerRequest(
   request: Request,
@@ -126,21 +130,33 @@ async function putShare(shareId: string, request: Request, env: Env, ownerId: st
 async function listShares(request: Request, env: Env, ownerId: string): Promise<Response> {
   const url = new URL(request.url);
   const limit = boundedPositiveInteger(url.searchParams.get('limit'), DEFAULT_SHARE_LIST_LIMIT, MAX_SHARE_LIST_LIMIT);
-  const offset = boundedNonNegativeInteger(url.searchParams.get('cursor'));
-  const result = await env.SHARING_DB.prepare(
-    `SELECT id, status, capability_version, capability_key_id,
-            recording_titles_json, recording_count, track_count, total_bytes,
-            created_at, updated_at, finalized_at, revoked_at
-       FROM shares
-      WHERE owner_id = ?
-      ORDER BY created_at DESC, id DESC
-      LIMIT ? OFFSET ?`,
-  ).bind(ownerId, limit, offset).all<ShareSummaryRow>();
+  const encodedCursor = url.searchParams.get('cursor');
+  const cursor = encodedCursor == null ? null : decodeShareListCursor(encodedCursor);
+  if (encodedCursor != null && cursor == null) return json({ code: 'INVALID_CURSOR' }, 400);
+
+  const baseQuery = `SELECT id, status, capability_version, capability_key_id,
+                            recording_titles_json, recording_count, track_count, total_bytes,
+                            created_at, updated_at, finalized_at, revoked_at
+                       FROM shares
+                      WHERE owner_id = ?`;
+  const result = cursor == null
+    ? await env.SHARING_DB.prepare(
+      `${baseQuery}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    ).bind(ownerId, limit).all<ShareSummaryRow>()
+    : await env.SHARING_DB.prepare(
+      `${baseQuery}
+         AND (created_at < ? OR (created_at = ? AND id < ?))
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    ).bind(ownerId, cursor.created_at, cursor.created_at, cursor.id, limit).all<ShareSummaryRow>();
 
   const shares = await Promise.all(result.results.map((share) => ownerShareSummary(share, request, env)));
+  const lastShare = result.results.at(-1);
   return json({
     shares,
-    ...(result.results.length === limit ? { nextCursor: String(offset + result.results.length) } : {}),
+    ...(result.results.length === limit && lastShare ? { nextCursor: encodeShareListCursor(lastShare) } : {}),
   });
 }
 
@@ -248,10 +264,20 @@ function boundedPositiveInteger(value: string | null, fallback: number, maximum:
   return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
 }
 
-function boundedNonNegativeInteger(value: string | null): number {
-  if (value == null) return 0;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+function encodeShareListCursor(share: ShareListCursor): string {
+  return base64UrlEncode(shareListCursorEncoder.encode(JSON.stringify([share.created_at, share.id])));
+}
+
+function decodeShareListCursor(value: string): ShareListCursor | null {
+  try {
+    const parsed = JSON.parse(shareListCursorDecoder.decode(base64UrlDecode(value))) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 2) return null;
+    const [createdAt, id] = parsed;
+    if (!Number.isSafeInteger(createdAt) || typeof id !== 'string' || !id) return null;
+    return { created_at: createdAt, id };
+  } catch {
+    return null;
+  }
 }
 
 async function finalizeShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
