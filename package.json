@@ -64,6 +64,7 @@
         "test:e2e:real": "node scripts/run-real-meet-e2e.mjs",
         "test:e2e:live": "node scripts/run-real-meet-e2e.mjs",
         "test:real-meet": "node scripts/run-real-meet-e2e.mjs",
+        "check:ci-domains": "node scripts/ci/plan-validation.mjs check-ownership",
     "typecheck": "tsc --noEmit",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "check:background-architecture": "node scripts/check-background-architecture.mjs",
