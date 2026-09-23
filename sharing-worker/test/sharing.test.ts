@@ -37,18 +37,26 @@ beforeEach(async () => {
   googleIdentityRequests = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url !== 'https://openidconnect.googleapis.com/v1/userinfo') {
+    const parsed = new URL(url);
+    if (`${parsed.origin}${parsed.pathname}` !== 'https://oauth2.googleapis.com/tokeninfo') {
       throw new Error(`Unexpected owner identity request: ${url}`);
     }
     googleIdentityRequests += 1;
-    const authorization = new Headers(init?.headers).get('authorization');
-    const subject = authorization === 'Bearer owner-a-token'
+    const identityToken = parsed.searchParams.get('access_token');
+    const subject = identityToken === 'owner-a-token'
       ? 'subject-owner-a'
-      : authorization === 'Bearer owner-b-token'
+      : identityToken === 'owner-b-token'
         ? 'subject-owner-b'
+        : identityToken === 'wrong-audience-token'
+          ? 'subject-wrong-audience'
         : null;
     if (!subject) return new Response('{}', { status: 401 });
-    return new Response(JSON.stringify({ sub: subject }), {
+    return new Response(JSON.stringify({
+      sub: subject,
+      aud: identityToken === 'wrong-audience-token'
+        ? 'another-client.apps.googleusercontent.com'
+        : 'test-client.apps.googleusercontent.com',
+    }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
@@ -71,6 +79,10 @@ describe('sharing worker vertical slice', () => {
     const first = await firstFinalize.json<{ shareUrl: string }>();
     expect(first.shareUrl).toMatch(/^https:\/\/sharing\.test\/s\/[A-Za-z0-9_-]{40,}$/);
     expect(first.shareUrl).not.toContain('share-owner-id');
+    const storedKey = await env.SHARING_DB.prepare(
+      'SELECT capability_key_id FROM shares WHERE id = ?',
+    ).bind('share-owner-id').first<{ capability_key_id: string }>();
+    expect(storedKey?.capability_key_id).toBe('v1');
 
     const retryFinalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
     expect((await retryFinalize.json<{ shareUrl: string }>()).shareUrl).toBe(first.shareUrl);
@@ -150,6 +162,8 @@ describe('sharing worker vertical slice', () => {
 
     const page = await worker.fetch(new Request(`${origin}/viewer`, { headers: { cookie: cookie! } }), env);
     expect(page.status).toBe(200);
+    expect(page.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
     const html = await page.text();
     expect(html).toContain('id="recording-title"');
     expect(html).toContain('id="mixers"');
@@ -287,6 +301,18 @@ describe('sharing worker vertical slice', () => {
       headers: { authorization: 'Bearer wrong', origin: 'chrome-extension://test-extension' },
     }), env);
     expect(badToken.status).toBe(401);
+  });
+
+  it('rejects Google access tokens issued for another OAuth client', async () => {
+    const response = await worker.fetch(new Request(`${origin}/api/auth/session`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer wrong-audience-token',
+        origin: extensionOrigin,
+      },
+    }), env);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: 'OWNER_IDENTITY_INVALID' });
   });
 
   it('isolates shares and upload sessions by authenticated owner identity', async () => {

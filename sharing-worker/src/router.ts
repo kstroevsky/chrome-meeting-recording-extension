@@ -1,6 +1,7 @@
 import { authorizeOwner, createOwnerSession } from './auth/ownerAuth';
 import { ownerCorsPreflight, withOwnerCors } from './http/cors';
 import { json } from './http/responses';
+import { enforceOwnerMutationRate } from './security/limits';
 import { routeShareOwnerRequest } from './shares/routes';
 import { routeUploadOwnerRequest } from './uploads/routes';
 import { routeViewerRequest } from './viewer/routes';
@@ -20,6 +21,10 @@ export async function route(request: Request, env: Env): Promise<Response> {
   if (ownerRoute) {
     const owner = await authorizeOwner(request, env);
     if (owner instanceof Response) return withOwnerCors(owner, request, env);
+    if (shouldRateLimitOwnerMutation(request, url)) {
+      const limited = await enforceOwnerMutationRate(env, owner.id);
+      if (limited) return withOwnerCors(limited, request, env);
+    }
     const response = await routeOwner(request, env, url, owner.id);
     return withOwnerCors(response, request, env);
   }
@@ -42,4 +47,12 @@ function isOwnerRoute(pathname: string): boolean {
     || pathname === '/api/shares'
     || pathname.startsWith('/api/shares/')
     || pathname.startsWith('/api/share-uploads/');
+}
+
+function shouldRateLimitOwnerMutation(request: Request, url: URL): boolean {
+  if (request.method === 'GET' || request.method === 'HEAD') return false;
+  // Chunk transport is already bounded by an authenticated upload session,
+  // fixed chunk size, durable offset and storage quotas. Counting each 8 MiB
+  // part here would throttle healthy high-throughput multi-gigabyte uploads.
+  return !/^\/api\/share-uploads\/[^/]+\/chunks\/\d+$/.test(url.pathname);
 }

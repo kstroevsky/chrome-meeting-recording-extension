@@ -1,5 +1,6 @@
 import type { ShareRow } from '../shares/ShareRepository';
 import { base64UrlDecode, base64UrlEncode, hmacBase64Url, secureEqual } from './crypto';
+import { capabilitySecret } from './capabilityKeys';
 
 const encoder = new TextEncoder();
 
@@ -14,7 +15,11 @@ export async function deriveCapability(shareId: string, version: number, secret:
 }
 
 export async function shareUrl(share: ShareRow, request: Request, env: Env): Promise<string> {
-  const capability = await deriveCapability(share.id, share.capability_version, env.CAPABILITY_KEY);
+  const capability = await deriveCapability(
+    share.id,
+    share.capability_version,
+    capabilitySecret(env, share.capability_key_id),
+  );
   return capabilityUrl(request, capability);
 }
 
