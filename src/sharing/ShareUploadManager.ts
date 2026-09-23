@@ -11,6 +11,7 @@ import type { PublishedRecordingPlan, PublishedTrackPlan } from './PublishedMani
 import { ShareUploadStore, type ShareUploadJob } from './ShareUploadStore';
 
 const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
+const MAX_CHUNK_SIZE = 64 * 1024 * 1024;
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_RETRY_BASE_DELAY_MS = 1_000;
 const DEFAULT_RETRY_MAX_DELAY_MS = 8_000;
@@ -111,6 +112,8 @@ export class ShareUploadManager {
         // An interrupted process leaves `uploading`; at startup it is simply
         // eligible to continue from its last durably acknowledged offset.
         if (next.status === 'uploading') next.status = 'queued';
+        next.activity = undefined;
+        next.attempt = undefined;
         next.error = undefined;
         next.updatedAt = this.now();
         await this.deps.store.put(next);
@@ -169,6 +172,8 @@ export class ShareUploadManager {
       }
       job.bytes = source.size;
       job.status = 'uploading';
+      job.activity = job.uploadId || job.offset > 0 ? 'resuming' : 'uploading';
+      job.attempt = 1;
       job.updatedAt = this.now();
       await this.persist(job);
 
@@ -181,12 +186,14 @@ export class ShareUploadManager {
             trackId: job.trackId,
             mimeType: job.mimeType,
             bytes: source.size,
-          }, controller.signal), controller.signal);
+          }, controller.signal), controller.signal, (attempt) => this.markRetrying(job, attempt));
           job.uploadId = session.uploadId;
           job.chunkSize = normalizeChunkSize(session.chunkSize);
           // A newly-created backend session owns its own committed offset. A
           // stale local offset is never applied to a new upload id.
           job.offset = clampOffset(session.offset ?? 0, source.size);
+          job.activity = job.offset > 0 ? 'resuming' : 'uploading';
+          job.attempt = 1;
           job.updatedAt = this.now();
           await this.persist(job);
         }
@@ -205,8 +212,10 @@ export class ShareUploadManager {
               offset: job.offset,
               totalBytes: source.size,
               chunk,
-            }, controller.signal), controller.signal);
+            }, controller.signal), controller.signal, (attempt) => this.markRetrying(job, attempt));
             job.offset = end;
+            job.activity = 'uploading';
+            job.attempt = 1;
             job.updatedAt = this.now();
             await this.persist(job);
           }
@@ -214,13 +223,15 @@ export class ShareUploadManager {
           await this.withRetry(() => this.deps.transport.completeTrackUpload({
             uploadId: job.uploadId!,
             totalBytes: source.size,
-          }, controller.signal), controller.signal);
+          }, controller.signal), controller.signal, (attempt) => this.markRetrying(job, attempt));
           break;
         } catch (error) {
           if (!isUploadSessionGone(error)) throw error;
           job.uploadId = undefined;
           job.chunkSize = undefined;
           job.offset = 0;
+          job.activity = 'resuming';
+          job.attempt = 1;
           job.updatedAt = this.now();
           await this.persist(job);
           sessionRestarts += 1;
@@ -229,11 +240,15 @@ export class ShareUploadManager {
       }
 
       job.status = 'completed';
+      job.activity = undefined;
+      job.attempt = undefined;
       job.error = undefined;
       job.updatedAt = this.now();
       await this.persist(job);
     } catch (error) {
       job.status = 'failed';
+      job.activity = undefined;
+      job.attempt = undefined;
       job.error = describeError(error);
       job.updatedAt = this.now();
       await this.persist(job);
@@ -248,7 +263,18 @@ export class ShareUploadManager {
     await this.deps.report?.(structuredClone(job));
   }
 
-  private async withRetry<T>(request: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  private async markRetrying(job: ShareUploadJob, attempt: number): Promise<void> {
+    job.activity = 'retrying';
+    job.attempt = attempt;
+    job.updatedAt = this.now();
+    await this.persist(job);
+  }
+
+  private async withRetry<T>(
+    request: () => Promise<T>,
+    signal: AbortSignal,
+    onRetry?: (attempt: number) => Promise<void>,
+  ): Promise<T> {
     let attempt = 1;
     while (true) {
       if (signal.aborted) throw abortError();
@@ -256,8 +282,9 @@ export class ShareUploadManager {
         return await request();
       } catch (error) {
         if (signal.aborted || !isRetryableUploadError(error) || attempt >= this.maxAttempts) throw error;
-        await this.sleep(backoffMs(attempt, this.retryBaseDelayMs, this.retryMaxDelayMs), signal);
         attempt += 1;
+        await onRetry?.(attempt);
+        await this.sleep(backoffMs(attempt - 1, this.retryBaseDelayMs, this.retryMaxDelayMs), signal);
       }
     }
   }
@@ -268,7 +295,9 @@ function jobId(shareId: string, recordingId: string, trackId: string): string {
 }
 
 function normalizeChunkSize(value?: number): number {
-  return Number.isFinite(value) && value! > 0 ? Math.floor(value!) : DEFAULT_CHUNK_SIZE;
+  return Number.isInteger(value) && value! > 0 && value! <= MAX_CHUNK_SIZE
+    ? value!
+    : DEFAULT_CHUNK_SIZE;
 }
 
 function clampOffset(value: number, size: number): number {

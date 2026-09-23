@@ -7,14 +7,12 @@ import type { PlayerStatus } from './player/PlayerView';
 import type { PlaybackTrack } from '../shared/playback';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
 import type { PublishRecordingOptions, PublishedRecordingInput } from '../sharing/PublishedManifestBuilder';
-import type { SharePublicationCoordinator } from '../sharing/SharePublicationCoordinator';
-import type { SharePublisher } from '../sharing/SharePublisher';
+import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
 import { RecordingsView } from './RecordingsView';
-import type { CreatedShareLink, ShareProgressReporter } from './ShareDialog';
+import type { QueuedShare, ShareProgressReporter } from './ShareDialog';
 
 export type RecordingsSharing = {
-  publisher: Pick<SharePublisher, 'publish'>;
-  publications: Pick<SharePublicationCoordinator, 'resumePending' | 'revoke'>;
+  enabled: true;
 };
 
 export class RecordingsController {
@@ -29,14 +27,13 @@ export class RecordingsController {
 
   async init() {
     await Promise.all([this.refresh(), this.loadDestinations()]);
-    if (this.sharing) void this.sharing.publications.resumePending().catch(() => {});
   }
 
   async share(
     recordingIds: readonly string[],
     options: PublishRecordingOptions,
     report: ShareProgressReporter = () => {},
-  ): Promise<CreatedShareLink> {
+  ): Promise<QueuedShare> {
     if (!this.sharing) throw new Error('Sharing is not configured for this build');
     const ids = [...new Set(recordingIds)].filter((id) => this.entries.some((entry) => entry.id === id));
     if (!ids.length) throw new Error('Select at least one recording to share');
@@ -52,15 +49,30 @@ export class RecordingsController {
       return transcript ? { manifest, transcript } : { manifest };
     }));
 
-    report('Uploading media and creating the share link…');
-    const result = await this.sharing.publisher.publish(recordings, options);
-    report('Share link ready.');
-    return { shareId: result.manifest.id, shareUrl: result.shareUrl };
+    report('Starting publication…');
+    const response = await sendToBackground({ type: 'PUBLISH_SHARE', recordings, options });
+    if (!response.ok) throw new Error(response.error || 'Could not start sharing');
+    report('Publication continues in the background.');
+    return { shareId: response.shareId };
   }
 
   async revokeShare(shareId: string): Promise<void> {
     if (!this.sharing) throw new Error('Sharing is not configured for this build');
-    await this.sharing.publications.revoke(shareId);
+    const response = await sendToBackground({ type: 'REVOKE_SHARE', shareId });
+    if (!response.ok) throw new Error(response.error || 'Could not revoke share');
+  }
+
+  async deleteShare(shareId: string): Promise<void> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    const response = await sendToBackground({ type: 'DELETE_SHARE', shareId });
+    if (!response.ok) throw new Error(response.error || 'Could not delete published data');
+  }
+
+  async shareSnapshot(): Promise<ShareRuntimeSnapshot> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    const response = await sendToBackground({ type: 'LIST_SHARES' });
+    if (!response.ok) throw new Error(response.error || 'Could not load shared recordings');
+    return response.snapshot;
   }
 
   async rename(id: string, name: string) {

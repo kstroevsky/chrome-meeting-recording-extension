@@ -1,13 +1,13 @@
 /**
- * @file background/shareService.ts
+ * @file background/sharing/shareService.ts
  *
  * Background composition seam for authenticated publishing. Google proves the
  * account identity once; subsequent owner requests use a short-lived sharing
  * service session rather than a Drive-capable OAuth token.
  */
 
-import { ShareServiceClient } from '../sharing/ShareServiceClient';
-import { ShareOwnerSession } from '../sharing/ShareOwnerSession';
+import { ShareServiceClient } from '../../sharing/ShareServiceClient';
+import { ShareOwnerSession } from '../../sharing/ShareOwnerSession';
 import {
   fetchShareIdentityTokenWithFallback,
   type ShareIdentityTokenOptions,

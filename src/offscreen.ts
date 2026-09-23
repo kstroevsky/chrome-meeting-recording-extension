@@ -50,6 +50,8 @@ import { wirePortHandlers, wireRuntimeListener } from './offscreen/rpcHandlers';
 import { configurePerfRuntime, debugPerf, isPerfDebugMode, nowMs, roundMs, PERF_FLAGS, type PerfEventEntry } from './shared/perf';
 import { loadExtensionSettingsFromStorage, normalizeExtensionSettings } from './shared/settings';
 import { TelemetryAccumulator, type TelemetrySink } from './shared/telemetry';
+import { sharingServiceOrigin } from './sharing/config';
+import { createShareRuntime } from './sharing/ShareRuntime';
 
 const L = makeLogger('offscreen');
 const RUNTIME_SAMPLE_INTERVAL_MS = 2_000;
@@ -61,6 +63,24 @@ let lastProductionRuntimeSampleAt = 0;
 const telemetryRuns = new Map<string, TelemetryAccumulator>();
 const telemetryDriveRuns = new Set<string>();
 const telemetryUploadJobsStarted = new Set<string>();
+
+const sharingOrigin = sharingServiceOrigin();
+const sharingRuntime = sharingOrigin ? createShareRuntime(sharingOrigin, {
+  getDriveToken: (options) => getDriveToken(options),
+  getIdentityToken: async (options) => {
+    const response = await sendToBackground({
+      type: 'GET_SHARE_IDENTITY_TOKEN',
+      refresh: options?.refresh === true,
+    });
+    if (!response.ok) throw new Error(response.error);
+    return response.token;
+  },
+}) : undefined;
+
+if (sharingRuntime) {
+  void sharingRuntime.publications.resumePending()
+    .catch((error) => L.warn('Could not resume pending share publications', describeRuntimeError(error)));
+}
 
 const telemetryProxy: TelemetrySink = {
   increment: (...args) => activeTelemetryRunId && telemetryRuns.get(activeTelemetryRunId)?.increment(...args),
@@ -231,6 +251,16 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     // holding the result would defeat the degraded path's whole purpose.
     acknowledgeAnalysisState: (jobId) => analysisSeals.acknowledge(jobId).then(() => {}),
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
+    publishShare: sharingRuntime ? async (recordings, options) => {
+      const queued = await sharingRuntime.publisher.queue(recordings, options);
+      void sharingRuntime.publications.resume(queued.publication)
+        .catch((error) => L.warn('Share publication failed', queued.manifest.id, describeRuntimeError(error)));
+      return queued.manifest.id;
+    } : undefined,
+    shareSnapshot: sharingRuntime ? () => sharingRuntime.snapshot() : undefined,
+    revokeShare: sharingRuntime ? async (shareId) => {
+      await sharingRuntime.publications.revoke(shareId);
+    } : undefined,
     pushState: controller.pushState,
     log: L.log,
     error: L.error,

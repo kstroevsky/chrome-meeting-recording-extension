@@ -44,9 +44,9 @@ export class SharePublicationCoordinator {
   }
 
   /** Persists the complete snapshot before the first network request. */
-  async publishNew(input: NewSharePublication): Promise<SharePublication> {
+  async queueNew(input: NewSharePublication): Promise<SharePublication> {
     const existing = await this.deps.store.get(input.manifest.id);
-    if (existing) return await this.resume(existing);
+    if (existing) return existing;
 
     const now = this.now();
     const publication: SharePublication = {
@@ -59,7 +59,12 @@ export class SharePublicationCoordinator {
       updatedAt: now,
     };
     await this.deps.store.put(publication);
-    return await this.resume(publication);
+    return publication;
+  }
+
+  /** Persists then drives the publication to its terminal state. */
+  async publishNew(input: NewSharePublication): Promise<SharePublication> {
+    return await this.resume(await this.queueNew(input));
   }
 
   /** Persists revoking before the DELETE so a crash can safely replay it. */

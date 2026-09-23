@@ -1,6 +1,6 @@
-import type { AuthProvider } from '../platform/capabilities/AuthProvider';
-import { createAuthProvider } from '../platform/capabilities/auth/createAuthProvider';
-import { isE2EMockDriveBuild } from '../shared/build';
+import type { AuthProvider } from '../../platform/capabilities/AuthProvider';
+import { createAuthProvider } from '../../platform/capabilities/auth/createAuthProvider';
+import { isE2EMockDriveBuild } from '../../shared/build';
 
 export type ShareIdentityTokenOptions = { refresh?: boolean };
 export type ShareIdentityTokenResponse = { ok: true; token: string } | { ok: false; error: string };
