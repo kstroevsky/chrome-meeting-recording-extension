@@ -73,6 +73,47 @@ export const RELEVANCE_RULES = [
     ],
   },
   {
+    name: 'integration-runtime-composition-dependency',
+    domains: VERIFY_INTEGRATION_SHARING_MOCK,
+    match: [exact('src/background/runtime/createBackgroundRuntime.ts')],
+  },
+  {
+    name: 'integration-library-and-routing-dependencies',
+    domains: VERIFY_INTEGRATION_MOCK,
+    match: [
+      exact(
+        'src/background/library/createLibraryRuntime.ts',
+        'src/background/library/RecordingLibraryDatabase.ts',
+        'src/background/messaging/MessageRouter.ts',
+      ),
+    ],
+  },
+  {
+    name: 'integration-recording-context-producers',
+    domains: VERIFY_INTEGRATION_MOCK,
+    match: [
+      exact(
+        'src/background/recording/DiscardDerivedDataCleanup.ts',
+        'src/background/recording/RecordingContextFinalizer.ts',
+        'src/background/recording/RecordingController.ts',
+        'src/background/recording/RecordingLifecycleCommands.ts',
+        'src/background/recording/RecordingStartCommands.ts',
+        'src/background/recording/RecordingTargetResolver.ts',
+      ),
+    ],
+  },
+  {
+    name: 'integration-shared-recording-contracts',
+    domains: VERIFY_INTEGRATION_MOCK,
+    match: [
+      exact(
+        'src/shared/notations.ts',
+        'src/shared/recordingHistory.ts',
+        'src/shared/transcript.ts',
+      ),
+    ],
+  },
+  {
     name: 'integration-shared-protocol-boundaries',
     domains: VERIFY_INTEGRATION_SHARING_MOCK,
     match: [
@@ -411,6 +452,10 @@ export function fingerprintIncludesPath(domain, path) {
 
   if (domain === 'verify') {
     return classification.domains.includes('verify');
+  }
+
+  if (domain === 'integration') {
+    return classification.domains.includes('integration');
   }
 
   if (domain === 'mock-e2e') {
