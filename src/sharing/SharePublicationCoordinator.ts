@@ -7,13 +7,13 @@
  */
 
 import type { PublishedPlaybackManifest } from '../shared/sharing';
+import type { DriveOriginPreparer } from './DriveOriginPreparer';
 import type { PublishedRecordingPlan } from './PublishedManifestBuilder';
 import {
   SharePublicationStore,
   type SharePublication,
   type SharePublicationPhase,
 } from './SharePublicationStore';
-import type { ShareUploadManager } from './ShareUploadManager';
 
 export interface SharePublicationApi {
   /** Idempotent PUT of the caller-owned share id and immutable snapshot. */
@@ -26,7 +26,7 @@ export interface SharePublicationApi {
 
 export type SharePublicationCoordinatorDeps = {
   api: SharePublicationApi;
-  uploads: Pick<ShareUploadManager, 'upload' | 'clearShare'>;
+  origins: Pick<DriveOriginPreparer, 'prepare' | 'clearShare' | 'cleanupPermissions'>;
   store: SharePublicationStore;
   now?: () => number;
 };
@@ -71,7 +71,7 @@ export class SharePublicationCoordinator {
   async revoke(shareId: string): Promise<SharePublication> {
     const publication = await this.deps.store.get(shareId);
     if (!publication) throw new Error(`Share ${shareId} is not published locally`);
-    if (publication.status === 'revoked') return publication;
+    if (publication.status === 'revoked') return await this.retryAclCleanup(publication);
     if (publication.status === 'revoking'
       || (publication.status === 'failed' && publication.resumeFrom === 'revoking')) {
       return await this.resume(publication);
@@ -88,11 +88,14 @@ export class SharePublicationCoordinator {
     const publications = await this.deps.store.list();
     const outcomes: SharePublication[] = [];
     for (const publication of publications) {
-      if (publication.status === 'revoked') continue;
+      if (publication.status === 'revoked') {
+        outcomes.push(await this.retryAclCleanup(publication));
+        continue;
+      }
       if (publication.status === 'active') {
         // A crash can occur after active was persisted but before temporary
-        // upload jobs were cleared. Cleanup is safe and idempotent.
-        await this.deps.uploads.clearShare(publication.id).catch(() => {});
+        // origin jobs were cleared. Cleanup is safe and idempotent.
+        await this.deps.origins.clearShare(publication.id).catch(() => {});
         outcomes.push(publication);
         continue;
       }
@@ -117,13 +120,13 @@ export class SharePublicationCoordinator {
         // The exact persisted public manifest is replayed. No private source
         // locator can reach this API boundary.
         await this.deps.api.createShare(structuredClone(current.manifest));
-        current = await this.transition(current, 'uploading');
-        phase = 'uploading';
+        current = await this.transition(current, 'preparing-origin');
+        phase = 'preparing-origin';
       }
 
-      if (phase === 'uploading') {
-        await this.deps.uploads.upload(current.id, structuredClone(current.plans));
-        current = await this.transition(current, 'finalizing');
+      if (phase === 'preparing-origin' || phase === 'uploading') {
+        const origins = await this.deps.origins.prepare(current.id, structuredClone(current.plans));
+        current = await this.transition(current, 'finalizing', { origins: structuredClone(origins) });
         phase = 'finalizing';
       }
 
@@ -131,15 +134,17 @@ export class SharePublicationCoordinator {
         const { shareUrl } = await this.deps.api.finalizeShare(current.id);
         current = await this.transition(current, 'active', { shareUrl });
         // Active is persisted first. If cleanup is interrupted, resumePending()
-        // will remove these temporary upload jobs on the next startup.
-        await this.deps.uploads.clearShare(current.id).catch(() => {});
+        // will remove these temporary origin jobs on the next startup.
+        await this.deps.origins.clearShare(current.id).catch(() => {});
       }
 
       if (phase === 'revoking') {
         await this.deps.api.revokeShare(current.id);
         current = await this.transition(current, 'revoked');
-        // Revoked is persisted first. Cleanup is local-only and idempotent.
-        await this.deps.uploads.clearShare(current.id).catch(() => {});
+        // D1 revocation is the public availability boundary. Drive ACL cleanup
+        // is cleanup-only and is retried at startup when it fails.
+        current = await this.retryAclCleanup(current);
+        await this.deps.origins.clearShare(current.id).catch(() => {});
       }
       return current;
     } catch (error) {
@@ -158,7 +163,7 @@ export class SharePublicationCoordinator {
   private async transition(
     publication: SharePublication,
     status: SharePublication['status'],
-    extra: Pick<SharePublication, 'shareUrl'> | Record<string, never> = {},
+    extra: Partial<Pick<SharePublication, 'shareUrl' | 'origins' | 'originAclCleanupPending'>> = {},
   ): Promise<SharePublication> {
     const next: SharePublication = {
       ...publication,
@@ -171,10 +176,44 @@ export class SharePublicationCoordinator {
     await this.deps.store.put(next);
     return next;
   }
+
+  private async retryAclCleanup(publication: SharePublication): Promise<SharePublication> {
+    if (!publication.origins?.length) {
+      if (!publication.originAclCleanupPending) return publication;
+      return await this.persistAclCleanupState(publication, false);
+    }
+    try {
+      await this.deps.origins.cleanupPermissions(structuredClone(publication.origins));
+      return publication.originAclCleanupPending
+        ? await this.persistAclCleanupState(publication, false)
+        : publication;
+    } catch {
+      return publication.originAclCleanupPending
+        ? publication
+        : await this.persistAclCleanupState(publication, true);
+    }
+  }
+
+  private async persistAclCleanupState(
+    publication: SharePublication,
+    pending: boolean,
+  ): Promise<SharePublication> {
+    const next: SharePublication = {
+      ...publication,
+      originAclCleanupPending: pending || undefined,
+      updatedAt: this.now(),
+    };
+    await this.deps.store.put(next);
+    return next;
+  }
 }
 
 function isResumablePhase(status: SharePublication['status']): status is SharePublicationPhase {
-  return status === 'draft' || status === 'uploading' || status === 'finalizing' || status === 'revoking';
+  return status === 'draft'
+    || status === 'preparing-origin'
+    || status === 'uploading'
+    || status === 'finalizing'
+    || status === 'revoking';
 }
 
 function describeError(error: unknown): string {
