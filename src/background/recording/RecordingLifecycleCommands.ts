@@ -4,6 +4,7 @@ import { isStoppablePhase, type RecordingInterruption } from '../../shared/recor
 import type { TelemetrySnapshot } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
 import type { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
@@ -25,6 +26,7 @@ export class RecordingLifecycleCommands {
       offscreen: OffscreenManager;
       session: RecordingSession;
       telemetry?: TelemetryRuntime;
+      recordingContexts?: Pick<RecordingContextService, 'finish' | 'remove'>;
       notations?: RecordingNotationService;
       transcripts?: RecordingTranscriptService;
       transcriptCapture?: RecordingTranscriptCapture;
@@ -74,6 +76,7 @@ export class RecordingLifecycleCommands {
     this.deps.session.markStopping(interruption);
     await this.deps.session.flush();
     snapshot = this.deps.session.getSnapshot();
+    await this.finishRecordingContext(historyId, snapshot);
     this.deps.L.log('Stopping recording:', reason);
     return this.finishKeptStop(
       historyId,
@@ -138,6 +141,18 @@ export class RecordingLifecycleCommands {
       .catch((error) => this.deps.L.warn('Could not close open notations:', error));
     this.deps.session.markBackgroundFinalized(historyId);
     await this.deps.session.flush();
+  }
+
+  private async finishRecordingContext(
+    historyId: string | undefined,
+    snapshot: ReturnType<RecordingSession['getSnapshot']>,
+  ): Promise<void> {
+    if (!historyId) return;
+    const spans = snapshot.recordedSpans ?? [];
+    const endedAt = [...spans].reverse().find((span) => span.wallEndMs != null)?.wallEndMs
+      ?? snapshot.updatedAt;
+    await this.deps.recordingContexts?.finish(historyId, endedAt)
+      .catch((error) => this.deps.L.warn('Could not finish recording context:', error));
   }
 
   private async finishKeptStop(

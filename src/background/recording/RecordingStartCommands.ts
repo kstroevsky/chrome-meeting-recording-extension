@@ -9,12 +9,15 @@ import { isE2ERealCaptureTabBuild } from '../../shared/build';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
 import type { CommandResult } from '../../shared/protocol';
 import { parseRunConfig } from '../../shared/recording';
+import type { RecordingSourceContext } from '../../shared/recordingContext';
+import type { MeetingProviderInfo } from '../../shared/provider';
 import {
   loadRecorderRuntimeSettingsSnapshot,
   type RecorderRuntimeSettingsSnapshot,
 } from '../../shared/settings';
 import { createTelemetryId } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import { markCaptureStarted } from './unsavedCaptureFlag';
 import type { RecordingSession } from './session/RecordingSession';
@@ -40,6 +43,7 @@ export class RecordingStartCommands {
       };
       offscreen: OffscreenManager;
       session: RecordingSession;
+      recordingContexts?: Pick<RecordingContextService, 'begin' | 'remove'>;
       telemetry?: TelemetryRuntime;
       result: ResultFactory;
     },
@@ -82,12 +86,20 @@ export class RecordingStartCommands {
       recorderSettings.tab.output.contentType = runConfig.tabContentType;
     }
 
-    const meetingSlug = await this.resolveMeetingSlug(msg.tabId);
+    const target = await this.resolveRecordingTarget(msg.tabId);
+    const meetingSlug = target.meetingSlug;
     const started = this.deps.session.start(runConfig, {
       targetTabId: msg.tabId,
       meetingSlug: meetingSlug || undefined,
     });
     await this.deps.session.flush();
+    if (started.historyId) {
+      await this.deps.recordingContexts?.begin(
+        started.historyId,
+        started.runningSince ?? started.updatedAt,
+        target.source,
+      ).catch((error) => this.deps.L.warn('Could not persist recording context:', error));
+    }
     this.deps.telemetry?.configureRun(
       telemetryRunId,
       runConfig,
@@ -165,12 +177,17 @@ export class RecordingStartCommands {
     }
   }
 
-  private failStart(
+  private async failStart(
     message: string,
     stage: 'runtime_ready' | 'offscreen_start' | 'offscreen_rpc',
     error: unknown,
-  ): CommandResult {
+  ): Promise<CommandResult> {
     this.deps.telemetry?.incident({ kind: 'recording_start_failed', stage, error });
+    const historyId = this.deps.session.getSnapshot().historyId;
+    if (historyId) {
+      await this.deps.recordingContexts?.remove(historyId)
+        .catch((cause) => this.deps.L.warn('Could not remove failed recording context:', cause));
+    }
     this.deps.session.fail(message);
     return this.deps.result.fail(message);
   }
@@ -206,19 +223,45 @@ export class RecordingStartCommands {
     }
   }
 
-  private async resolveMeetingSlug(tabId: number): Promise<string> {
+  private async resolveRecordingTarget(tabId: number): Promise<{
+    meetingSlug: string;
+    source: RecordingSourceContext;
+  }> {
     try {
       const tab = await getTab(tabId);
-      if (!tab?.url) return '';
+      if (!tab?.url) return { meetingSlug: '', source: { kind: 'tab' } };
       const url = new URL(tab.url);
+      const source = await this.resolveSource(tabId, tab.url);
       if (url.hostname === 'meet.google.com') {
         const code = url.pathname.split('/').filter(Boolean).pop() ?? '';
-        return code ? `meet-${code}` : '';
+        return { meetingSlug: code ? `meet-${code}` : '', source };
       }
       const titleSlug = tab.title ? sanitizeAsSlug(tab.title) : '';
-      return titleSlug || sanitizeAsSlug(`${url.hostname}${url.pathname}`);
+      return {
+        meetingSlug: titleSlug || sanitizeAsSlug(`${url.hostname}${url.pathname}`),
+        source,
+      };
     } catch {
-      return '';
+      return { meetingSlug: '', source: { kind: 'tab' } };
+    }
+  }
+
+  private async resolveSource(tabId: number, meetingUrl: string): Promise<RecordingSourceContext> {
+    try {
+      const response = await sendTabMessage<{ provider?: MeetingProviderInfo }>(
+        tabId,
+        { type: 'GET_MEETING_PROVIDER' },
+      );
+      const provider = response?.provider;
+      if (!provider || provider.providerId === 'unknown') return { kind: 'tab' };
+      return {
+        kind: 'meeting',
+        provider: provider.providerId,
+        ...(provider.meetingId ? { meetingId: provider.meetingId } : {}),
+        meetingUrl,
+      };
+    } catch {
+      return { kind: 'tab' };
     }
   }
 }
