@@ -9,6 +9,10 @@ import { DriveOriginPreparer } from './DriveOriginPreparer';
 import { SharePublicationCoordinator } from './SharePublicationCoordinator';
 import { createSharePublicationStore } from './SharePublicationStore';
 import { ShareOwnerSession } from './ShareOwnerSession';
+import {
+  createShareOriginCleanupStore,
+  ShareOriginCleanupCoordinator,
+} from './ShareOriginCleanupQueue';
 import { SharePublisher } from './SharePublisher';
 import { ShareRegistry } from './ShareRegistry';
 import { ShareServiceClient } from './ShareServiceClient';
@@ -41,6 +45,7 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
   });
   const publicationStore = createSharePublicationStore();
   const uploadStore = createShareUploadStore();
+  const cleanupStore = createShareOriginCleanupStore();
   const origins = new DriveOriginPreparer({
     store: uploadStore,
     source: createShareUploadSourceResolver({ getDriveToken: auth.getDriveToken }),
@@ -52,6 +57,11 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
     origins,
     store: publicationStore,
   });
+  const cleanup = new ShareOriginCleanupCoordinator({
+    api: service,
+    origins,
+    store: cleanupStore,
+  });
   const registry = new ShareRegistry(service, publicationStore);
 
   return {
@@ -59,18 +69,20 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
     publications,
     publisher: new SharePublisher({ publications }),
     registry,
+    async resumePending(): Promise<void> {
+      await publications.resumePending();
+      await cleanup.resumePending();
+    },
     async revoke(shareId: string): Promise<void> {
       const local = await publicationStore.get(shareId);
       if (local) await publications.revoke(shareId);
-      else await service.revokeShare(shareId);
+      else await cleanup.run(shareId, 'revoke');
     },
     async delete(shareId: string): Promise<void> {
       const local = await publicationStore.get(shareId);
-      // Server deletion is the public/control-plane boundary and is idempotent.
-      await service.deleteShare(shareId);
-      // The user's actual Drive file is never deleted here. Only the explicit
-      // relay permission and the publication pin are released.
-      if (local?.origins?.length) await origins.cleanupPublishedData(local.origins);
+      // The durable cleanup job performs the server deletion first, then removes
+      // only the relay permission/publication pin. It never deletes the Drive file.
+      await cleanup.run(shareId, 'delete', local?.origins);
       await origins.clearShare(shareId).catch(() => {});
       await publicationStore.remove(shareId);
     },

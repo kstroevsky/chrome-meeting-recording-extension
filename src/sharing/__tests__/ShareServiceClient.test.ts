@@ -95,6 +95,30 @@ describe('ShareServiceClient', () => {
     });
   });
 
+  it('reads owner-only Drive cleanup descriptors and treats an already-deleted share as empty', async () => {
+    const fetcher = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        origins: [{
+          fileId: 'private-drive-file',
+          revisionId: 'private-revision',
+          permissionId: 'private-permission',
+        }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ code: 'SHARE_NOT_FOUND' }, 404));
+    const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
+
+    await expect(client.getShareDriveOrigins('share/one')).resolves.toEqual([{
+      fileId: 'private-drive-file',
+      revisionId: 'private-revision',
+      permissionId: 'private-permission',
+    }]);
+    await expect(client.getShareDriveOrigins('gone')).resolves.toEqual([]);
+    expect(fetcher.mock.calls.map((call) => [call[0], call[1].method])).toEqual([
+      ['https://share.example/api/shares/share%2Fone/origins', 'GET'],
+      ['https://share.example/api/shares/gone/origins', 'GET'],
+    ]);
+  });
+
   it('finalizes, revokes, and permanently deletes a share through distinct operations', async () => {
     const fetcher = jest.fn()
       .mockResolvedValueOnce(jsonResponse({ shareUrl: 'https://share.example/s/q4fB9-independent-capability' }))

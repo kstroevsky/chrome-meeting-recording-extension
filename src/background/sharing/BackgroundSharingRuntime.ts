@@ -1,4 +1,5 @@
 import type { PublishedRecordingInput, PublishRecordingOptions } from '../../sharing/PublishedManifestBuilder';
+import { createShareOriginCleanupStore } from '../../sharing/ShareOriginCleanupQueue';
 import { createSharePublicationStore } from '../../sharing/SharePublicationStore';
 import type { ShareRuntimeSnapshot } from '../../sharing/ShareRuntime';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
@@ -8,13 +9,16 @@ type RpcFailure = { ok: false; error: string };
 /** Command-plane bridge for the offscreen sharing runtime. */
 export class BackgroundSharingRuntime {
   private readonly publications = createSharePublicationStore();
+  private readonly cleanups = createShareOriginCleanupStore();
 
   constructor(private readonly offscreen: OffscreenManager) {}
 
   async resumeIfPending(): Promise<void> {
     const pending = (await this.publications.list()).some((publication) =>
-      publication.status !== 'active' && publication.status !== 'revoked');
-    if (pending) await this.offscreen.ensureReady();
+      (publication.status !== 'active' && publication.status !== 'revoked')
+      || publication.originAclCleanupPending === true);
+    const pendingCleanup = (await this.cleanups.list()).length > 0;
+    if (pending || pendingCleanup) await this.offscreen.ensureReady();
   }
 
   async publish(

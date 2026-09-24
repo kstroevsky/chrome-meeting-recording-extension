@@ -41,6 +41,12 @@ export type DriveMediaOrigin = {
   createdDriveCopy: boolean;
 };
 
+/** Minimal owner-only descriptor needed to remove relay access/publication pins. */
+export type DriveOriginCleanupDescriptor = Pick<
+  DriveMediaOrigin,
+  'fileId' | 'revisionId' | 'permissionId'
+>;
+
 export type RegisterDriveOriginInput = {
   shareId: string;
   recordingId: string;
@@ -131,7 +137,7 @@ export class DriveOriginPreparer {
    * Removes the relay's explicit file permission. Public revocation has already
    * happened in D1 before this is called, so failure here is cleanup-only.
    */
-  async cleanupPermissions(origins: readonly DriveMediaOrigin[]): Promise<void> {
+  async cleanupPermissions(origins: readonly DriveOriginCleanupDescriptor[]): Promise<void> {
     const errors: unknown[] = [];
     for (const origin of origins) {
       if (!origin.permissionId) continue;
@@ -153,7 +159,7 @@ export class DriveOriginPreparer {
    * If the published revision is no longer the head, the obsolete pinned
    * revision can be deleted. If it is still head, only Keep Forever is cleared.
    */
-  async cleanupPublishedData(origins: readonly DriveMediaOrigin[]): Promise<void> {
+  async cleanupPublishedData(origins: readonly DriveOriginCleanupDescriptor[]): Promise<void> {
     await this.cleanupPermissions(origins);
     const errors: unknown[] = [];
     for (const origin of origins) {
@@ -177,6 +183,9 @@ export class DriveOriginPreparer {
           );
         }
       } catch (error) {
+        // If the owner already deleted the Drive file, both the explicit
+        // permission and any pinned revision disappeared with it.
+        if (errorStatus(error) === 404) continue;
         errors.push(error);
       }
     }
@@ -624,6 +633,12 @@ function backoffMs(attempt: number): number {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errorStatus(error: unknown): number | undefined {
+  return error && typeof error === 'object' && typeof (error as { status?: unknown }).status === 'number'
+    ? (error as { status: number }).status
+    : undefined;
 }
 
 async function runBounded<T>(
