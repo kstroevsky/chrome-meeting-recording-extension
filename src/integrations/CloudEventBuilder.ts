@@ -21,10 +21,7 @@ export type RecordingCloudEventInput = {
 export function buildRecordingCloudEvent(
   input: RecordingCloudEventInput,
 ): StructuredCloudEvent<RecordingSnapshotEventData> {
-  if (!input.eventTypePrefix.trim()) throw new Error('Integration event type prefix is required');
-  if (input.eventTypePrefix === 'com.example' || input.eventTypePrefix.startsWith('com.example.')) {
-    throw new Error('Integration event type prefix must use a project-controlled domain');
-  }
+  assertIntegrationEventTypePrefix(input.eventTypePrefix);
   if (!Number.isInteger(input.revision) || input.revision < 1) {
     throw new Error('Integration revision must be a positive integer');
   }
@@ -47,4 +44,11 @@ export function buildRecordingCloudEvent(
       recording: input.recording,
     },
   };
+}
+
+export function assertIntegrationEventTypePrefix(prefix: string): void {
+  if (!prefix.trim()) throw new Error('Integration event type prefix is required');
+  if (prefix === 'com.example' || prefix.startsWith('com.example.')) {
+    throw new Error('Integration event type prefix must use a project-controlled domain');
+  }
 }
