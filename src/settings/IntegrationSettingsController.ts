@@ -4,7 +4,11 @@ import type { IntegrationDestination } from '../integrations/persistence';
 import type { IntegrationRequestAuthDraft } from '../integrations/management';
 import { canonicalizeIntegrationDataPolicy } from '../integrations/policy';
 import { normalizeWebhookApiKeyHeader } from '../integrations/webhook/WebhookAuth';
-import { requestHostPermission } from '../platform/chrome/permissions';
+import {
+  containsHostPermission,
+  removeHostPermission,
+  requestHostPermission,
+} from '../platform/chrome/permissions';
 import { sendToBackground } from '../shared/messages';
 import { formatBytes } from '../shared/format';
 
@@ -74,9 +78,14 @@ export class IntegrationSettingsController {
       return;
     }
     this.setBusy(true);
+    let grantedByThisCreate = false;
     try {
-      const granted = await requestHostPermission(endpoint.hostPermission);
-      if (!granted) throw new Error(`Host permission was not granted for ${endpoint.hostPermission}`);
+      const alreadyGranted = await containsHostPermission(endpoint.hostPermission);
+      if (!alreadyGranted) {
+        const granted = await requestHostPermission(endpoint.hostPermission);
+        if (!granted) throw new Error(`Host permission was not granted for ${endpoint.hostPermission}`);
+        grantedByThisCreate = true;
+      }
       const response = await sendToBackground({
         type: 'CREATE_INTEGRATION',
         input: {
@@ -94,6 +103,9 @@ export class IntegrationSettingsController {
       this.setStatus(`Added ${response.created.destination.name}. Save the signing secret now; later it can only be rotated.`);
       await this.refresh();
     } catch (error) {
+      if (grantedByThisCreate) {
+        await this.rollbackUnusedHostPermission(endpoint.hostPermission);
+      }
       this.setStatus(String(error), true);
     } finally {
       this.setBusy(false);
@@ -157,7 +169,11 @@ export class IntegrationSettingsController {
     send.textContent = 'Send recording';
     send.disabled = !this.el.recording?.value;
     send.addEventListener('click', () => void this.send(destination, send));
-    actions.append(test, send);
+    const remove = this.el.document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Delete';
+    remove.addEventListener('click', () => void this.remove(destination, remove));
+    actions.append(test, send, remove);
     row.append(copy, actions);
     return row;
   }
@@ -218,6 +234,37 @@ export class IntegrationSettingsController {
       this.setStatus(`Send failed: ${String(error)}`, true);
     } finally {
       button.disabled = false;
+    }
+  }
+
+  private async remove(destination: IntegrationDestination, button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    this.setStatus(`Deleting ${destination.name}…`);
+    try {
+      const response = await sendToBackground({
+        type: 'DELETE_INTEGRATION',
+        destinationId: destination.id,
+      });
+      if (!response.ok) throw new Error(response.error);
+      this.setStatus(`Deleted ${destination.name} and its stored credentials.`);
+      await this.refresh();
+    } catch (error) {
+      this.setStatus(`Delete failed: ${String(error)}`, true);
+      button.disabled = false;
+    }
+  }
+
+  private async rollbackUnusedHostPermission(pattern: string): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'LIST_INTEGRATIONS' });
+      if (!response.ok) return;
+      const stillUsed = response.destinations.some((destination) => (
+        normalizeWebhookEndpoint(destination.endpoint).hostPermission === pattern
+      ));
+      if (!stillUsed) await removeHostPermission(pattern);
+    } catch {
+      // Retaining an optional permission is safer than revoking one whose
+      // remaining use could not be established.
     }
   }
 

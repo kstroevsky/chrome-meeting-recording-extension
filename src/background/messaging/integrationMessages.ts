@@ -19,6 +19,9 @@ export async function handleIntegrationMessage(
     case 'CREATE_INTEGRATION':
       sendResponse({ ok: true, created: await integrations.createDestination(msg.input) });
       return true;
+    case 'DELETE_INTEGRATION':
+      sendResponse({ ok: true, ...(await integrations.deleteDestination(msg.destinationId)) });
+      return true;
     case 'TEST_INTEGRATION':
       sendResponse({ ok: true, result: await integrations.testDestination(msg.destinationId) });
       return true;

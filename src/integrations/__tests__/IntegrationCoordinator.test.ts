@@ -60,6 +60,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     snapshots,
     transport,
     containsHostPermission: jest.fn(async () => options.permission ?? true),
+    removeHostPermission: jest.fn(async () => true),
     eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
     now: () => ++now,
   });
@@ -207,5 +208,26 @@ describe('IntegrationCoordinator', () => {
     expect(ctx.transport.send).not.toHaveBeenCalled();
     await expect(ctx.deliveries.list()).resolves.toEqual([]);
     await expect(ctx.streams.get(destination.id, 'recording:large')).resolves.toBeUndefined();
+  });
+
+  it('deletes credentials and cancels unresolved work before removing an unused host permission', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'bearer', value: 'private-bearer' },
+    });
+    const signingSecretId = destination.signingSecretId;
+    const requestSecretId = destination.requestAuth.type === 'none'
+      ? ''
+      : destination.requestAuth.secretId;
+
+    await ctx.coordinator.deleteDestination(destination.id);
+
+    await expect(ctx.destinations.get(destination.id)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(signingSecretId)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(requestSecretId)).resolves.toBeUndefined();
   });
 });

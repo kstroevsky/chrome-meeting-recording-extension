@@ -1,8 +1,14 @@
 import { IntegrationSettingsController } from '../IntegrationSettingsController';
-import { requestHostPermission } from '../../platform/chrome/permissions';
+import {
+  containsHostPermission,
+  removeHostPermission,
+  requestHostPermission,
+} from '../../platform/chrome/permissions';
 import { sendToBackground } from '../../shared/messages';
 
 jest.mock('../../platform/chrome/permissions', () => ({
+  containsHostPermission: jest.fn(),
+  removeHostPermission: jest.fn(),
   requestHostPermission: jest.fn(),
 }));
 
@@ -11,6 +17,8 @@ jest.mock('../../shared/messages', () => ({
 }));
 
 const permission = requestHostPermission as jest.MockedFunction<typeof requestHostPermission>;
+const containsPermission = containsHostPermission as jest.MockedFunction<typeof containsHostPermission>;
+const removePermission = removeHostPermission as jest.MockedFunction<typeof removeHostPermission>;
 const send = sendToBackground as jest.MockedFunction<typeof sendToBackground>;
 
 function mount(): IntegrationSettingsController {
@@ -66,6 +74,8 @@ function destination() {
 
 describe('IntegrationSettingsController', () => {
   beforeEach(() => {
+    containsPermission.mockReset().mockResolvedValue(false);
+    removePermission.mockReset().mockResolvedValue(true);
     permission.mockReset().mockResolvedValue(true);
     send.mockReset().mockImplementation(async (message: any) => {
       switch (message.type) {
@@ -84,7 +94,9 @@ describe('IntegrationSettingsController', () => {
   it('loads recordings before rendering destination send actions', async () => {
     await mount().init();
     expect((document.getElementById('integration-send-recording') as HTMLSelectElement).value).toBe('recording_1');
-    expect((document.querySelector('.integration-destination__actions button:last-child') as HTMLButtonElement).disabled)
+    const sendButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Send recording')!;
+    expect(sendButton.disabled)
       .toBe(false);
   });
 
@@ -131,5 +143,24 @@ describe('IntegrationSettingsController', () => {
     }));
     expect((document.getElementById('integration-signing-secret') as HTMLInputElement).value).toBe('whsec_generated');
     expect((document.getElementById('integration-secret-panel') as HTMLElement).hidden).toBe(false);
+  });
+
+  it('rolls back a newly granted host permission when destination creation fails', async () => {
+    const controller = mount();
+    await controller.init();
+    (document.getElementById('integration-name') as HTMLInputElement).value = 'CRM';
+    (document.getElementById('integration-endpoint') as HTMLInputElement).value = 'https://new.example.test/hooks';
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'CREATE_INTEGRATION') return { ok: false, error: 'storage failed' } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_RECORDING_HISTORY') return { ok: true, entries: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+
+    (document.getElementById('integration-add') as HTMLButtonElement).click();
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+
+    expect(removePermission).toHaveBeenCalledWith('https://new.example.test/*');
   });
 });
