@@ -1,5 +1,4 @@
 import { containsHostPermission, removeHostPermission } from '../../platform/chrome/permissions';
-import type { StoredAnalysis } from '../../shared/analysis/storedAnalysis';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingContext } from '../../shared/recordingContext';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
@@ -15,13 +14,14 @@ import type { CreateIntegrationDestinationInput } from '../../integrations/manag
 import type { IntegrationDataPolicy } from '../../integrations/contracts';
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
 import { IntegrationPreviewService } from './IntegrationPreviewService';
+import type { AnalysisExportState } from '../library/analysis/RecordingAnalysisService';
 
 type CanonicalRecordingReaders = {
   getHistory(recordingId: string): Promise<RecordingHistoryEntry | undefined>;
   getContext(recordingId: string): Promise<RecordingContext | undefined>;
   listNotations(recordingId: string): Promise<RecordingNotation[]>;
   getTranscript(recordingId: string): Promise<Transcript | undefined>;
-  getAnalysis(recordingId: string): Promise<StoredAnalysis | undefined>;
+  getAnalysisState(recordingId: string): Promise<AnalysisExportState>;
 };
 
 /** Background composition boundary for all external-integration operations. */

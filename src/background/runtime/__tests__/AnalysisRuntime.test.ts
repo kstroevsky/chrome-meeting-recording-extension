@@ -13,7 +13,7 @@ describe('wireAnalysisRuntime', () => {
   it('keeps cross-feature analysis wiring in runtime and resynchronizes critical work', async () => {
     const offscreen: any = {};
     const analysisCoordinator = {
-      handleJobState: jest.fn(),
+      handleJobState: jest.fn().mockResolvedValue(undefined),
       handleResult: jest.fn().mockResolvedValue(undefined),
     };
     const criticalWork = {
@@ -30,6 +30,8 @@ describe('wireAnalysisRuntime', () => {
     });
 
     offscreen.onAnalysisJobChanged(JOB);
+    await Promise.resolve();
+    await Promise.resolve();
     expect(criticalWork.markAnalysisWorkKnown).toHaveBeenCalledTimes(1);
     expect(analysisCoordinator.handleJobState).toHaveBeenCalledWith(JOB);
     expect(criticalWork.sync).toHaveBeenCalledTimes(1);
@@ -49,7 +51,7 @@ describe('wireAnalysisRuntime', () => {
     const offscreen: any = {};
     const failure = new Error('storage failed');
     const analysisCoordinator = {
-      handleJobState: jest.fn(),
+      handleJobState: jest.fn().mockResolvedValue(undefined),
       handleResult: jest.fn().mockRejectedValue(failure),
     };
     const criticalWork = { markAnalysisWorkKnown: jest.fn(), sync: jest.fn() };

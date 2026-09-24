@@ -1,4 +1,3 @@
-import type { StoredAnalysis } from '../../shared/analysis/storedAnalysis';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingContext } from '../../shared/recordingContext';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
@@ -14,6 +13,8 @@ import { createIntegrationId } from '../../integrations/ids';
 import type { IntegrationPayloadMeasurement } from '../../integrations/payload';
 import type { IntegrationPayloadPreview } from '../../integrations/preview';
 import { normalizeIntegrationDataPolicy } from '../../integrations/policy';
+import type { IntegrationAnalysisProjectionSource } from '../../integrations/IntegrationProjector';
+import type { AnalysisExportState } from '../library/analysis/RecordingAnalysisService';
 
 export const INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX = 'dev.meeting-recorder.preview';
 
@@ -22,7 +23,7 @@ type IntegrationPreviewDeps = {
   getContext: (recordingId: string) => Promise<RecordingContext | undefined>;
   listNotations: (recordingId: string) => Promise<RecordingNotation[]>;
   getTranscript: (recordingId: string) => Promise<Transcript | undefined>;
-  getAnalysis: (recordingId: string) => Promise<StoredAnalysis | undefined>;
+  getAnalysisState: (recordingId: string) => Promise<AnalysisExportState>;
   now?: () => number;
 };
 
@@ -82,17 +83,18 @@ export class IntegrationPreviewService {
     envelope: IntegrationSnapshotEnvelope,
   ): Promise<BuiltIntegrationSnapshot> {
     const normalizedPolicy = requirePreviewPolicy(policy);
-    const [history, context, notations, transcript, analysis] = await Promise.all([
+    const [history, context, notations, transcript, analysisState] = await Promise.all([
       this.deps.getHistory(recordingId),
       this.deps.getContext(recordingId),
       normalizedPolicy.notations ? this.deps.listNotations(recordingId) : Promise.resolve(undefined),
       normalizedPolicy.transcript ? this.deps.getTranscript(recordingId) : Promise.resolve(undefined),
-      normalizedPolicy.analysis ? this.deps.getAnalysis(recordingId) : Promise.resolve(undefined),
+      normalizedPolicy.analysis ? this.deps.getAnalysisState(recordingId) : Promise.resolve(undefined),
     ]);
     if (!history || history.deletedAt) throw new Error('Recording is unavailable');
     if (!context) throw new Error('Recording context is unavailable for this recording');
 
-    const readiness = previewReadiness(normalizedPolicy, history, transcript, analysis);
+    const readiness = previewReadiness(normalizedPolicy, history, transcript, analysisState);
+    const analysis = analysisProjection(analysisState);
     const measurement = buildIntegrationSnapshotPayload({
       ...envelope,
       readiness,
@@ -104,7 +106,7 @@ export class IntegrationPreviewService {
           context,
           ...(notations ? { notations } : {}),
           ...(transcript ? { transcript } : {}),
-          ...(analysis ? { analysis: { status: 'completed', result: analysis } } : {}),
+          ...(analysis ? { analysis } : {}),
         },
       },
     });
@@ -116,11 +118,13 @@ function previewReadiness(
   policy: IntegrationDataPolicy,
   history: RecordingHistoryEntry,
   transcript: Transcript | undefined,
-  analysis: StoredAnalysis | undefined,
+  analysis: AnalysisExportState | undefined,
 ) {
   const pending: IntegrationReadinessPending[] = [];
   if (policy.transcript && !transcript) pending.push('transcript');
-  if (policy.analysis && !analysis) pending.push('analysis');
+  if (policy.analysis && (!analysis || analysis.status === 'none' || analysis.status === 'analyzing')) {
+    pending.push('analysis');
+  }
   if (policy.artifactMetadata && policy.artifactLinks && history.files.some((file) => (
     file.delivery.status === 'pending'
     && !file.locations.some((location) => location.kind === 'drive' && location.webViewLink)
@@ -131,6 +135,18 @@ function previewReadiness(
     complete: pending.length === 0,
     release: pending.length ? 'manual' as const : 'complete' as const,
     pending,
+  };
+}
+
+function analysisProjection(
+  state: AnalysisExportState | undefined,
+): IntegrationAnalysisProjectionSource | undefined {
+  if (!state || state.status === 'none') return undefined;
+  if (state.status === 'stale') return { status: 'unsupported', error: state.error };
+  if (state.status === 'completed') return { status: 'completed', result: state.result };
+  return {
+    status: state.status,
+    ...(state.error ? { error: state.error } : {}),
   };
 }
 
