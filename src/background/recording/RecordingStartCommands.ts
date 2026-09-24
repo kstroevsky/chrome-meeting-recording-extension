@@ -2,15 +2,12 @@ import {
   activateTab,
   getCapturedTabs,
   getMediaStreamIdForTab,
-  getTab,
   sendTabMessage,
 } from '../../platform/chrome/tabs';
 import { isE2ERealCaptureTabBuild } from '../../shared/build';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
 import type { CommandResult } from '../../shared/protocol';
 import { parseRunConfig } from '../../shared/recording';
-import type { RecordingSourceContext } from '../../shared/recordingContext';
-import type { MeetingProviderInfo } from '../../shared/provider';
 import {
   loadRecorderRuntimeSettingsSnapshot,
   type RecorderRuntimeSettingsSnapshot,
@@ -21,6 +18,7 @@ import type { RecordingContextService } from '../library/context/RecordingContex
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import { markCaptureStarted } from './unsavedCaptureFlag';
 import type { RecordingSession } from './session/RecordingSession';
+import { resolveRecordingTarget } from './RecordingTargetResolver';
 
 export type StartRecordingMessage = {
   type: 'START_RECORDING';
@@ -86,7 +84,7 @@ export class RecordingStartCommands {
       recorderSettings.tab.output.contentType = runConfig.tabContentType;
     }
 
-    const target = await this.resolveRecordingTarget(msg.tabId);
+    const target = await resolveRecordingTarget(msg.tabId);
     const meetingSlug = target.meetingSlug;
     const started = this.deps.session.start(runConfig, {
       targetTabId: msg.tabId,
@@ -223,54 +221,4 @@ export class RecordingStartCommands {
     }
   }
 
-  private async resolveRecordingTarget(tabId: number): Promise<{
-    meetingSlug: string;
-    source: RecordingSourceContext;
-  }> {
-    try {
-      const tab = await getTab(tabId);
-      if (!tab?.url) return { meetingSlug: '', source: { kind: 'tab' } };
-      const url = new URL(tab.url);
-      const source = await this.resolveSource(tabId, tab.url);
-      if (url.hostname === 'meet.google.com') {
-        const code = url.pathname.split('/').filter(Boolean).pop() ?? '';
-        return { meetingSlug: code ? `meet-${code}` : '', source };
-      }
-      const titleSlug = tab.title ? sanitizeAsSlug(tab.title) : '';
-      return {
-        meetingSlug: titleSlug || sanitizeAsSlug(`${url.hostname}${url.pathname}`),
-        source,
-      };
-    } catch {
-      return { meetingSlug: '', source: { kind: 'tab' } };
-    }
-  }
-
-  private async resolveSource(tabId: number, meetingUrl: string): Promise<RecordingSourceContext> {
-    try {
-      const response = await sendTabMessage<{ provider?: MeetingProviderInfo }>(
-        tabId,
-        { type: 'GET_MEETING_PROVIDER' },
-      );
-      const provider = response?.provider;
-      if (!provider || provider.providerId === 'unknown') return { kind: 'tab' };
-      return {
-        kind: 'meeting',
-        provider: provider.providerId,
-        ...(provider.meetingId ? { meetingId: provider.meetingId } : {}),
-        meetingUrl,
-      };
-    } catch {
-      return { kind: 'tab' };
-    }
-  }
-}
-
-function sanitizeAsSlug(text: string, maxLength = 48): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, maxLength)
-    .replace(/-+$/, '');
 }

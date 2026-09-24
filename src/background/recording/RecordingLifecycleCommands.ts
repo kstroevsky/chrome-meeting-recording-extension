@@ -11,6 +11,7 @@ import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRunti
 import type { RecordingSession } from './session/RecordingSession';
 import type { RecordingSidecars } from './RecordingSidecars';
 import { DiscardDerivedDataCleanup } from './DiscardDerivedDataCleanup';
+import { finishRecordingContext } from './RecordingContextFinalizer';
 
 type ResultFactory = {
   ok: () => CommandResult;
@@ -19,7 +20,6 @@ type ResultFactory = {
 
 export class RecordingLifecycleCommands {
   private readonly discardData: DiscardDerivedDataCleanup;
-
   constructor(
     private readonly deps: {
       L: { log: (...a: any[]) => void; warn: (...a: any[]) => void };
@@ -76,7 +76,12 @@ export class RecordingLifecycleCommands {
     this.deps.session.markStopping(interruption);
     await this.deps.session.flush();
     snapshot = this.deps.session.getSnapshot();
-    await this.finishRecordingContext(historyId, snapshot);
+    await finishRecordingContext(
+      this.deps.recordingContexts,
+      historyId,
+      snapshot,
+      this.deps.L.warn,
+    );
     this.deps.L.log('Stopping recording:', reason);
     return this.finishKeptStop(
       historyId,
@@ -141,18 +146,6 @@ export class RecordingLifecycleCommands {
       .catch((error) => this.deps.L.warn('Could not close open notations:', error));
     this.deps.session.markBackgroundFinalized(historyId);
     await this.deps.session.flush();
-  }
-
-  private async finishRecordingContext(
-    historyId: string | undefined,
-    snapshot: ReturnType<RecordingSession['getSnapshot']>,
-  ): Promise<void> {
-    if (!historyId) return;
-    const spans = snapshot.recordedSpans ?? [];
-    const endedAt = [...spans].reverse().find((span) => span.wallEndMs != null)?.wallEndMs
-      ?? snapshot.updatedAt;
-    await this.deps.recordingContexts?.finish(historyId, endedAt)
-      .catch((error) => this.deps.L.warn('Could not finish recording context:', error));
   }
 
   private async finishKeptStop(
