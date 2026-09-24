@@ -162,7 +162,10 @@ export const RELEVANCE_RULES = [
   {
     name: 'integration-e2e',
     domains: VERIFY_INTEGRATION,
-    match: [regex(/^tests\/e2e\/integration-.*\.(ts|tsx|js|mjs|cjs)$/)],
+    match: [
+      regex(/^tests\/e2e\/integration-.*\.(ts|tsx|js|mjs|cjs)$/),
+      exact('tests/e2e/helpers/integrationReceiver.ts'),
+    ],
   },
   {
     name: 'integration-contract-schemas',
