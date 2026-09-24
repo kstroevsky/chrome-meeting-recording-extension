@@ -1,4 +1,5 @@
 import { isMultipartSessionGone } from '../uploads/UploadRepository';
+import { deleteAssetCache } from '../cache/mediaCache';
 import type { ShareRow } from './ShareRepository';
 
 type CleanupUploadRow = {
@@ -8,7 +9,8 @@ type CleanupUploadRow = {
   status: 'uploading' | 'completed' | 'abandoned';
 };
 
-type CleanupTrackRow = { object_key: string };
+type CleanupTrackRow = { object_key: string; media_asset_id: string | null };
+type CleanupAssetRow = { id: string };
 
 /**
  * Permanently removes one already-authorized share. Active shares must be
@@ -16,6 +18,11 @@ type CleanupTrackRow = { object_key: string };
  * removed directly by scheduled cleanup.
  */
 export async function deletePublishedShare(env: Env, share: ShareRow): Promise<void> {
+  const assets = await env.SHARING_DB.prepare(
+    'SELECT id FROM media_assets WHERE share_id = ?',
+  ).bind(share.id).all<CleanupAssetRow>();
+  await deleteAssetCache(env, assets.results.map((asset) => asset.id));
+
   const uploads = await env.SHARING_DB.prepare(
     `SELECT id, r2_upload_id, object_key, status
        FROM share_uploads WHERE share_id = ?`,
@@ -32,9 +39,13 @@ export async function deletePublishedShare(env: Env, share: ShareRow): Promise<v
   }
 
   const tracks = await env.SHARING_DB.prepare(
-    `SELECT object_key FROM share_tracks WHERE share_id = ?`,
+    `SELECT object_key, media_asset_id FROM share_tracks WHERE share_id = ?`,
   ).bind(share.id).all<CleanupTrackRow>();
-  const objectKeys = [...new Set(tracks.results.map((track) => track.object_key))];
+  // Permanent R2 objects exist only for publications created by the legacy
+  // multipart path. New Drive-origin tracks have no object at object_key.
+  const objectKeys = [...new Set(
+    tracks.results.filter((track) => !track.media_asset_id).map((track) => track.object_key),
+  )];
   if (objectKeys.length) await env.SHARING_MEDIA.delete(objectKeys);
 
   await env.SHARING_DB.batch([
@@ -43,6 +54,7 @@ export async function deletePublishedShare(env: Env, share: ShareRow): Promise<v
         WHERE upload_id IN (SELECT id FROM share_uploads WHERE share_id = ?)`,
     ).bind(share.id),
     env.SHARING_DB.prepare('DELETE FROM share_uploads WHERE share_id = ?').bind(share.id),
+    env.SHARING_DB.prepare('DELETE FROM media_assets WHERE share_id = ?').bind(share.id),
     env.SHARING_DB.prepare('DELETE FROM share_tracks WHERE share_id = ?').bind(share.id),
     env.SHARING_DB.prepare('DELETE FROM shares WHERE id = ?').bind(share.id),
   ]);

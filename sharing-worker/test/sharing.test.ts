@@ -1,5 +1,11 @@
 import { env } from 'cloudflare:workers';
-import { applyD1Migrations, reset, type D1Migration } from 'cloudflare:test';
+import {
+  applyD1Migrations,
+  createExecutionContext,
+  reset,
+  waitOnExecutionContext,
+  type D1Migration,
+} from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SHARING_CONTRACT_LIMITS } from '../../src/shared/sharingContract';
 import worker from '../src/index';
@@ -8,6 +14,8 @@ const origin = 'https://sharing.test';
 const extensionOrigin = 'chrome-extension://test-extension';
 const ownerSessions = new Map<string, string>();
 let googleIdentityRequests = 0;
+let driveMediaRequests = 0;
+const driveBytes = new Uint8Array([10, 20, 30, 40, 50, 60]);
 
 const manifest = {
   id: 'share-owner-id',
@@ -36,11 +44,40 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   ownerSessions.clear();
   googleIdentityRequests = 0;
+  driveMediaRequests = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     const parsed = new URL(url);
-    if (`${parsed.origin}${parsed.pathname}` !== 'https://oauth2.googleapis.com/tokeninfo') {
-      throw new Error(`Unexpected owner identity request: ${url}`);
+    const endpoint = `${parsed.origin}${parsed.pathname}`;
+    if (endpoint === 'https://oauth2.googleapis.com/token') {
+      return Response.json({ access_token: 'sharing-reader-token', expires_in: 3600 });
+    }
+    if (endpoint === 'https://www.googleapis.com/drive/v3/files/drive-file-1/revisions/revision-1') {
+      if (parsed.searchParams.get('alt') === 'media') {
+        driveMediaRequests += 1;
+        const range = new Headers(init?.headers).get('range');
+        const match = /^bytes=(\d+)-(\d+)$/.exec(range ?? '');
+        if (!match) return new Response('range required', { status: 400 });
+        const start = Number(match[1]);
+        const end = Math.min(Number(match[2]), driveBytes.byteLength - 1);
+        return new Response(driveBytes.slice(start, end + 1), {
+          status: 206,
+          headers: {
+            'content-type': 'video/webm',
+            'content-range': `bytes ${start}-${end}/${driveBytes.byteLength}`,
+            'content-length': String(end - start + 1),
+          },
+        });
+      }
+      return Response.json({
+        id: 'revision-1',
+        size: String(driveBytes.byteLength),
+        mimeType: 'video/webm',
+        keepForever: true,
+      });
+    }
+    if (endpoint !== 'https://oauth2.googleapis.com/tokeninfo') {
+      throw new Error(`Unexpected Google request: ${url}`);
     }
     googleIdentityRequests += 1;
     const identityToken = parsed.searchParams.get('access_token');
@@ -70,10 +107,7 @@ beforeEach(async () => {
 describe('sharing worker vertical slice', () => {
   it('keeps owner id separate from the viewer capability and exposes an owner registry', async () => {
     expect((await putManifest()).status).toBe(201);
-    const upload = await beginTrack();
-    expect(upload.chunkSize).toBe(8 * 1024 * 1024);
-    await uploadBytes(upload.uploadId, new Uint8Array([1, 2, 3, 4, 5, 6]));
-    expect((await completeTrack(upload.uploadId)).status).toBe(204);
+    expect((await registerOrigin()).status).toBe(201);
 
     const firstFinalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
     expect(firstFinalize.status).toBe(200);
@@ -183,14 +217,9 @@ describe('sharing worker vertical slice', () => {
     expect(await response.json()).toEqual({ code: 'MANIFEST_TOO_LARGE' });
   });
 
-  it('treats a committed chunk retry as idempotent and supports ranged media before revocation', async () => {
+  it('streams a bounded Drive revision range before revocation', async () => {
     await putManifest();
-    const upload = await beginTrack();
-    const bytes = new Uint8Array([10, 20, 30, 40, 50, 60]);
-
-    expect((await uploadBytes(upload.uploadId, bytes)).status).toBe(204);
-    expect((await uploadBytes(upload.uploadId, bytes)).status).toBe(204);
-    await completeTrack(upload.uploadId);
+    expect((await registerOrigin()).status).toBe(201);
 
     const finalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
     const { shareUrl } = await finalize.json<{ shareUrl: string }>();
@@ -206,6 +235,7 @@ describe('sharing worker vertical slice', () => {
     expect(media.status).toBe(206);
     expect(media.headers.get('content-range')).toBe('bytes 2-4/6');
     expect(Array.from(new Uint8Array(await media.arrayBuffer()))).toEqual([30, 40, 50]);
+    expect(driveMediaRequests).toBe(1);
 
     expect((await ownerFetch('/api/shares/share-owner-id/revoke', { method: 'POST' })).status).toBe(204);
     const denied = await worker.fetch(new Request(
@@ -214,27 +244,72 @@ describe('sharing worker vertical slice', () => {
     ), env);
     expect(denied.status).toBe(410);
     expect(await denied.json()).toEqual({ code: 'SHARE_REVOKED' });
+    expect(driveMediaRequests).toBe(1);
   });
 
-  it('permanently deletes published media and metadata after revoking access', async () => {
+  it('uses a fixed 30-hour read-through cache without extending TTL on hits', async () => {
     await putManifest();
-    const upload = await beginTrack();
-    await uploadBytes(upload.uploadId, new Uint8Array([1, 2, 3, 4, 5, 6]));
-    await completeTrack(upload.uploadId);
+    await registerOrigin();
+    const finalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
+    const { shareUrl } = await finalize.json<{ shareUrl: string }>();
+    const open = await worker.fetch(new Request(shareUrl), env);
+    const cookie = open.headers.get('set-cookie')!;
+    const mediaRequest = () => new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { headers: { cookie, range: 'bytes=0-5' } },
+    );
+
+    const ctx = createExecutionContext();
+    const first = await worker.fetch(mediaRequest(), env, ctx);
+    expect(Array.from(new Uint8Array(await first.arrayBuffer()))).toEqual([10, 20, 30, 40, 50, 60]);
+    await waitOnExecutionContext(ctx);
+    expect(driveMediaRequests).toBe(1);
+
+    const cachedBefore = await env.SHARING_DB.prepare(
+      'SELECT cache_key, cached_at, expires_at FROM media_cache_entries LIMIT 1',
+    ).first<{ cache_key: string; cached_at: number; expires_at: number }>();
+    expect(cachedBefore).not.toBeNull();
+    expect(cachedBefore!.expires_at - cachedBefore!.cached_at).toBe(30 * 60 * 60 * 1000);
+
+    const second = await worker.fetch(mediaRequest(), env);
+    expect(Array.from(new Uint8Array(await second.arrayBuffer()))).toEqual([10, 20, 30, 40, 50, 60]);
+    expect(driveMediaRequests).toBe(1);
+    const cachedAfter = await env.SHARING_DB.prepare(
+      'SELECT cached_at, expires_at FROM media_cache_entries WHERE cache_key = ?',
+    ).bind(cachedBefore!.cache_key).first<{ cached_at: number; expires_at: number }>();
+    expect(cachedAfter).toEqual({
+      cached_at: cachedBefore!.cached_at,
+      expires_at: cachedBefore!.expires_at,
+    });
+  });
+
+  it('deletes publication metadata and exact cache objects without deleting Drive media', async () => {
+    await putManifest();
+    await registerOrigin();
     await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
 
-    const track = await env.SHARING_DB.prepare(
-      'SELECT object_key FROM share_tracks WHERE share_id = ?',
-    ).bind('share-owner-id').first<{ object_key: string }>();
-    expect(track).not.toBeNull();
-    expect(await env.SHARING_MEDIA.head(track!.object_key)).not.toBeNull();
+    const asset = await env.SHARING_DB.prepare(
+      'SELECT id FROM media_assets WHERE share_id = ?',
+    ).bind('share-owner-id').first<{ id: string }>();
+    expect(asset).not.toBeNull();
+    const cacheKey = `cache/v1/${asset!.id}/revision-1/0-5`;
+    await env.SHARING_MEDIA.put(cacheKey, driveBytes);
+    await env.SHARING_DB.batch([
+      env.SHARING_DB.prepare(
+        'INSERT INTO media_cache_entries (cache_key, asset_id, bytes, cached_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+      ).bind(cacheKey, asset!.id, 6, Date.now(), Date.now() + 60_000),
+      env.SHARING_DB.prepare(
+        'UPDATE media_cache_budget SET live_bytes = live_bytes + 6 WHERE singleton = 1',
+      ),
+    ]);
+    expect(await env.SHARING_MEDIA.head(cacheKey)).not.toBeNull();
 
     const deleted = await ownerFetch('/api/shares/share-owner-id', { method: 'DELETE' });
     expect(deleted.status).toBe(204);
-    expect(await env.SHARING_MEDIA.head(track!.object_key)).toBeNull();
+    expect(await env.SHARING_MEDIA.head(cacheKey)).toBeNull();
     expect(await env.SHARING_DB.prepare('SELECT id FROM shares WHERE id = ?')
       .bind('share-owner-id').first()).toBeNull();
-    expect(await env.SHARING_DB.prepare('SELECT id FROM share_uploads WHERE share_id = ?')
+    expect(await env.SHARING_DB.prepare('SELECT id FROM media_assets WHERE share_id = ?')
       .bind('share-owner-id').first()).toBeNull();
 
     expect((await ownerFetch('/api/shares/share-owner-id', { method: 'DELETE' })).status).toBe(204);
@@ -243,9 +318,7 @@ describe('sharing worker vertical slice', () => {
 
   it('serves a real session-protected synchronized web player', async () => {
     await putManifest();
-    const upload = await beginTrack();
-    await uploadBytes(upload.uploadId, new Uint8Array([1, 2, 3, 4, 5, 6]));
-    await completeTrack(upload.uploadId);
+    await registerOrigin();
     const finalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
     const { shareUrl } = await finalize.json<{ shareUrl: string }>();
     const open = await worker.fetch(new Request(shareUrl), env);
@@ -363,22 +436,13 @@ describe('sharing worker vertical slice', () => {
     expect(response.status).toBe(200);
   });
 
-  it('returns UPLOAD_SESSION_GONE and permits a fresh multipart session', async () => {
+  it('does not expose the legacy direct-to-R2 multipart publication API', async () => {
     await putManifest();
-    const first = await beginTrack();
-    const backend = await env.SHARING_DB.prepare(
-      'SELECT object_key, r2_upload_id FROM share_uploads WHERE id = ?',
-    ).bind(first.uploadId).first<{ object_key: string; r2_upload_id: string }>();
-    expect(backend).not.toBeNull();
-
-    await env.SHARING_MEDIA.resumeMultipartUpload(backend!.object_key, backend!.r2_upload_id).abort();
-    const gone = await uploadBytes(first.uploadId, new Uint8Array([1, 2, 3, 4, 5, 6]));
-    expect(gone.status).toBe(410);
-    expect(await gone.json()).toEqual(expect.objectContaining({ code: 'UPLOAD_SESSION_GONE' }));
-
-    const replacement = await beginTrack();
-    expect(replacement.uploadId).not.toBe(first.uploadId);
-    expect(replacement.offset).toBe(0);
+    const response = await ownerFetch(
+      '/api/shares/share-owner-id/recordings/public-recording-id/tracks/tab-track/uploads',
+      { method: 'POST' },
+    );
+    expect(response.status).toBe(404);
   });
 
   it('requires both the configured extension origin and owner bearer token', async () => {
@@ -406,7 +470,7 @@ describe('sharing worker vertical slice', () => {
     expect(await response.json()).toEqual({ code: 'OWNER_IDENTITY_INVALID' });
   });
 
-  it('isolates shares and upload sessions by authenticated owner identity', async () => {
+  it('isolates shares and Drive-origin registration by authenticated owner identity', async () => {
     expect((await putManifest()).status).toBe(201);
     const ownedShare = await env.SHARING_DB.prepare(
       'SELECT owner_id FROM shares WHERE id = ?',
@@ -432,20 +496,21 @@ describe('sharing worker vertical slice', () => {
     });
     expect(ownerBRevoke.status).toBe(404);
 
-    const upload = await beginTrack();
-    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
-    const ownerBChunk = await ownerFetchAs('owner-b-token', `/api/share-uploads/${encodeURIComponent(upload.uploadId)}/chunks/0`, {
+    const ownerBOrigin = await ownerFetchAs(
+      'owner-b-token',
+      '/api/shares/share-owner-id/recordings/public-recording-id/tracks/tab-track/origin',
+      {
       method: 'PUT',
       headers: {
-        'content-type': 'video/webm',
-        'content-range': 'bytes 0-5/6',
+        'content-type': 'application/json',
       },
-      body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-    });
-    expect(ownerBChunk.status).toBe(410);
-    expect(await ownerBChunk.json()).toEqual(expect.objectContaining({ code: 'UPLOAD_SESSION_GONE' }));
+      body: JSON.stringify(driveOriginBody()),
+      },
+    );
+    expect(ownerBOrigin.status).toBe(404);
+    expect(await ownerBOrigin.json()).toEqual({ code: 'SHARE_NOT_FOUND' });
 
-    expect((await uploadBytes(upload.uploadId, bytes)).status).toBe(204);
+    expect((await registerOrigin()).status).toBe(201);
   });
 });
 
@@ -457,36 +522,25 @@ async function putManifest(): Promise<Response> {
   });
 }
 
-async function beginTrack(): Promise<{ uploadId: string; chunkSize: number; offset: number }> {
-  const response = await ownerFetch(
-    '/api/shares/share-owner-id/recordings/public-recording-id/tracks/tab-track/uploads',
+function driveOriginBody() {
+  return {
+    fileId: 'drive-file-1',
+    revisionId: 'revision-1',
+    bytes: 6,
+    mimeType: 'video/webm',
+    permissionId: 'permission-1',
+  };
+}
+
+async function registerOrigin(): Promise<Response> {
+  return ownerFetch(
+    '/api/shares/share-owner-id/recordings/public-recording-id/tracks/tab-track/origin',
     {
-      method: 'POST',
+      method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mimeType: 'video/webm', bytes: 6 }),
+      body: JSON.stringify(driveOriginBody()),
     },
   );
-  expect(response.status).toBe(201);
-  return response.json();
-}
-
-async function uploadBytes(uploadId: string, bytes: Uint8Array): Promise<Response> {
-  return ownerFetch(`/api/share-uploads/${encodeURIComponent(uploadId)}/chunks/0`, {
-    method: 'PUT',
-    headers: {
-      'content-type': 'video/webm',
-      'content-range': `bytes 0-${bytes.byteLength - 1}/${bytes.byteLength}`,
-    },
-    body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-  });
-}
-
-async function completeTrack(uploadId: string): Promise<Response> {
-  return ownerFetch(`/api/share-uploads/${encodeURIComponent(uploadId)}/complete`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ totalBytes: 6 }),
-  });
 }
 
 async function ownerFetch(path: string, init: RequestInit = {}): Promise<Response> {

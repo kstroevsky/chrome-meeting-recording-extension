@@ -4,10 +4,9 @@ import { json } from './http/responses';
 import { observeSharingResponse } from './observability';
 import { enforceOwnerMutationRate } from './security/limits';
 import { routeShareOwnerRequest } from './shares/routes';
-import { routeUploadOwnerRequest } from './uploads/routes';
 import { routeViewerRequest } from './viewer/routes';
 
-export async function route(request: Request, env: Env): Promise<Response> {
+export async function route(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const ownerRoute = isOwnerRoute(url.pathname);
 
@@ -31,7 +30,7 @@ export async function route(request: Request, env: Env): Promise<Response> {
     return withOwnerCors(response, request, env);
   }
 
-  const viewerResponse = await routeViewerRequest(request, env, url);
+  const viewerResponse = await routeViewerRequest(request, env, url, ctx);
   if (viewerResponse) {
     observeSharingResponse(url, viewerResponse);
     return viewerResponse;
@@ -43,23 +42,17 @@ async function routeOwner(request: Request, env: Env, url: URL, ownerId: string)
   const shareResponse = await routeShareOwnerRequest(request, env, url, ownerId);
   if (shareResponse) return shareResponse;
 
-  const uploadResponse = await routeUploadOwnerRequest(request, env, url, ownerId);
-  if (uploadResponse) return uploadResponse;
-
   return json({ code: 'NOT_FOUND' }, 404);
 }
 
 function isOwnerRoute(pathname: string): boolean {
   return pathname === '/api/auth/session'
+    || pathname === '/api/sharing-reader'
     || pathname === '/api/shares'
-    || pathname.startsWith('/api/shares/')
-    || pathname.startsWith('/api/share-uploads/');
+    || pathname.startsWith('/api/shares/');
 }
 
 function shouldRateLimitOwnerMutation(request: Request, url: URL): boolean {
   if (request.method === 'GET' || request.method === 'HEAD') return false;
-  // Chunk transport is already bounded by an authenticated upload session,
-  // fixed chunk size, durable offset and storage quotas. Counting each 8 MiB
-  // part here would throttle healthy high-throughput multi-gigabyte uploads.
-  return !/^\/api\/share-uploads\/[^/]+\/chunks\/\d+$/.test(url.pathname);
+  return true;
 }
