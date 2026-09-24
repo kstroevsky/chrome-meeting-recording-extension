@@ -8,6 +8,10 @@ import {
 } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SHARING_CONTRACT_LIMITS } from '../../src/shared/sharingContract';
+import {
+  MEDIA_CACHE_MAX_BYTES,
+  MEDIA_CACHE_MAX_PUTS_PER_DAY,
+} from '../src/cache/mediaCache';
 import worker from '../src/index';
 
 const origin = 'https://sharing.test';
@@ -15,6 +19,9 @@ const extensionOrigin = 'chrome-extension://test-extension';
 const ownerSessions = new Map<string, string>();
 let googleIdentityRequests = 0;
 let driveMediaRequests = 0;
+let driveMediaStatus = 206;
+let driveRevisionMetadataStatus = 200;
+let driveRevisionKeepForever = true;
 const driveBytes = new Uint8Array([10, 20, 30, 40, 50, 60]);
 
 const manifest = {
@@ -45,6 +52,9 @@ beforeEach(async () => {
   ownerSessions.clear();
   googleIdentityRequests = 0;
   driveMediaRequests = 0;
+  driveMediaStatus = 206;
+  driveRevisionMetadataStatus = 200;
+  driveRevisionKeepForever = true;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     const parsed = new URL(url);
@@ -55,6 +65,12 @@ beforeEach(async () => {
     if (endpoint === 'https://www.googleapis.com/drive/v3/files/drive-file-1/revisions/revision-1') {
       if (parsed.searchParams.get('alt') === 'media') {
         driveMediaRequests += 1;
+        if (driveMediaStatus !== 206) {
+          return new Response(JSON.stringify({ error: 'simulated Drive media failure' }), {
+            status: driveMediaStatus,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
         const range = new Headers(init?.headers).get('range');
         const match = /^bytes=(\d+)-(\d+)$/.exec(range ?? '');
         if (!match) return new Response('range required', { status: 400 });
@@ -69,11 +85,17 @@ beforeEach(async () => {
           },
         });
       }
+      if (driveRevisionMetadataStatus !== 200) {
+        return new Response(JSON.stringify({ error: 'simulated Drive metadata failure' }), {
+          status: driveRevisionMetadataStatus,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       return Response.json({
         id: 'revision-1',
         size: String(driveBytes.byteLength),
         mimeType: 'video/webm',
-        keepForever: true,
+        keepForever: driveRevisionKeepForever,
       });
     }
     if (endpoint !== 'https://oauth2.googleapis.com/tokeninfo') {
@@ -337,6 +359,74 @@ describe('sharing worker vertical slice', () => {
     expect(denied.status).toBe(410);
     expect(await denied.json()).toEqual({ code: 'SHARE_REVOKED' });
     expect(driveMediaRequests).toBe(1);
+  });
+
+  it.each([
+    ['byte budget', MEDIA_CACHE_MAX_BYTES, 0],
+    ['PUT budget', 0, MEDIA_CACHE_MAX_PUTS_PER_DAY],
+  ] as const)(
+    'keeps Drive playback available when the R2 %s is exhausted',
+    async (_label, liveBytes, putsToday) => {
+      await putManifest();
+      await registerOrigin();
+      const finalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
+      const { shareUrl } = await finalize.json<{ shareUrl: string }>();
+      const open = await worker.fetch(new Request(shareUrl), env);
+      const day = Math.floor(Date.now() / 86_400_000);
+      await env.SHARING_DB.prepare(
+        'UPDATE media_cache_budget SET live_bytes = ?, day = ?, puts_today = ? WHERE singleton = 1',
+      ).bind(liveBytes, day, putsToday).run();
+
+      const ctx = createExecutionContext();
+      const media = await worker.fetch(new Request(
+        `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+        { headers: { cookie: open.headers.get('set-cookie')!, range: 'bytes=0-5' } },
+      ), env, ctx);
+      expect(media.status).toBe(206);
+      expect(Array.from(new Uint8Array(await media.arrayBuffer()))).toEqual([10, 20, 30, 40, 50, 60]);
+      await waitOnExecutionContext(ctx);
+      expect(driveMediaRequests).toBe(1);
+      const cached = await env.SHARING_DB.prepare(
+        'SELECT COUNT(*) AS count FROM media_cache_entries',
+      ).first<{ count: number }>();
+      expect(cached?.count).toBe(0);
+    },
+  );
+
+  it.each([403, 404])('maps a Drive media %i to an unavailable origin without retrying', async (status) => {
+    const { cookie } = await createActiveViewer();
+    driveMediaStatus = status;
+
+    const media = await worker.fetch(new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { headers: { cookie, range: 'bytes=0-1' } },
+    ), env);
+    expect(media.status).toBe(503);
+    expect(await media.json()).toEqual({ code: 'MEDIA_ORIGIN_UNAVAILABLE' });
+    expect(driveMediaRequests).toBe(1);
+  });
+
+  it('maps a Drive media 429 to temporary unavailability with one Drive fetch', async () => {
+    const { cookie } = await createActiveViewer();
+    driveMediaStatus = 429;
+
+    const media = await worker.fetch(new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { headers: { cookie, range: 'bytes=0-1' } },
+    ), env);
+    expect(media.status).toBe(503);
+    expect(media.headers.get('retry-after')).toBe('5');
+    expect(await media.json()).toEqual({ code: 'MEDIA_ORIGIN_TEMPORARILY_UNAVAILABLE' });
+    expect(driveMediaRequests).toBe(1);
+  });
+
+  it('rejects an origin when the service-account verification sees an unpinned revision', async () => {
+    await putManifest();
+    driveRevisionKeepForever = false;
+    const response = await registerOrigin();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ code: 'DRIVE_ORIGIN_VERIFICATION_FAILED' });
+    expect(await env.SHARING_DB.prepare('SELECT id FROM media_assets LIMIT 1').first()).toBeNull();
   });
 
   it('uses a fixed 30-hour read-through cache without extending TTL on hits', async () => {
@@ -716,6 +806,15 @@ async function completeCleanup(claim: CleanupClaim): Promise<void> {
     body: JSON.stringify({ leaseId: claim.leaseId, leaseToken: claim.leaseToken }),
   });
   expect(response.status).toBe(204);
+}
+
+async function createActiveViewer(): Promise<{ cookie: string }> {
+  await putManifest();
+  await registerOrigin();
+  const finalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
+  const { shareUrl } = await finalize.json<{ shareUrl: string }>();
+  const open = await worker.fetch(new Request(shareUrl), env);
+  return { cookie: open.headers.get('set-cookie')! };
 }
 
 async function ownerFetch(path: string, init: RequestInit = {}): Promise<Response> {
