@@ -28,7 +28,7 @@ export function intersectIntegrationPolicy(
   allowed: IntegrationDataPolicy,
   current: IntegrationDataPolicy,
 ): IntegrationDataPolicy {
-  return {
+  return canonicalizeIntegrationDataPolicy({
     metadata: allowed.metadata && current.metadata,
     meetingIdentity: allowed.meetingIdentity && current.meetingIdentity,
     userNote: allowed.userNote && current.userNote,
@@ -41,7 +41,7 @@ export function intersectIntegrationPolicy(
       allowed.transcriptSpeakers,
       current.transcriptSpeakers,
     ),
-  };
+  });
 }
 
 export async function integrationPolicyHash(policy: IntegrationDataPolicy): Promise<string> {
@@ -67,7 +67,7 @@ export function normalizeIntegrationDataPolicy(value: unknown): IntegrationDataP
     && candidate.transcriptSpeakers !== 'pseudonyms'
     && candidate.transcriptSpeakers !== 'omit'
   ) return undefined;
-  return {
+  return canonicalizeIntegrationDataPolicy({
     metadata: candidate.metadata as boolean,
     meetingIdentity: candidate.meetingIdentity as boolean,
     userNote: candidate.userNote as boolean,
@@ -77,6 +77,16 @@ export function normalizeIntegrationDataPolicy(value: unknown): IntegrationDataP
     artifactMetadata: candidate.artifactMetadata as boolean,
     artifactLinks: candidate.artifactLinks as boolean,
     transcriptSpeakers: candidate.transcriptSpeakers,
+  });
+}
+
+/** Relationships between policy fields live here so every ingress gets them. */
+export function canonicalizeIntegrationDataPolicy(
+  policy: IntegrationDataPolicy,
+): IntegrationDataPolicy {
+  return {
+    ...policy,
+    artifactMetadata: policy.artifactMetadata || policy.artifactLinks,
   };
 }
 

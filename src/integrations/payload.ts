@@ -1,6 +1,9 @@
 import type { RecordingSnapshotEventData, StructuredCloudEvent } from './contracts';
 import { stableJsonSerialize, utf8ByteLength } from './serialization';
 
+/** Initial V1 guardrail. Revisit with receiver evidence; never bypass the guard. */
+export const INTEGRATION_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+
 export type IntegrationPayloadMeasurement = {
   body: string;
   totalBytes: number;
