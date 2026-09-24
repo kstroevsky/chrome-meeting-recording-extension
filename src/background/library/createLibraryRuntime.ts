@@ -8,6 +8,8 @@ import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
 import { RecordingAnalysisCoordinator } from './analysis/RecordingAnalysisCoordinator';
 import { RecordingAnalysisRepository } from './analysis/RecordingAnalysisRepository';
 import { RecordingAnalysisService } from './analysis/RecordingAnalysisService';
+import { RecordingContextRepository } from './context/RecordingContextRepository';
+import { RecordingContextService } from './context/RecordingContextService';
 import { RecordingHistoryRepository } from './history/RecordingHistoryRepository';
 import { RecordingHistoryService } from './history/RecordingHistoryService';
 import { RecordingNotationRepository } from './notations/RecordingNotationRepository';
@@ -35,6 +37,7 @@ export function createLibraryRuntime({
   onAnalysisSettled,
 }: LibraryRuntimeDeps) {
   const historyRepository = new RecordingHistoryRepository();
+  const recordingContexts = new RecordingContextService(new RecordingContextRepository());
   const notations = new RecordingNotationService(new RecordingNotationRepository());
   const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository());
   const analyses = new RecordingAnalysisService(new RecordingAnalysisRepository(), () => {
@@ -71,11 +74,12 @@ export function createLibraryRuntime({
     },
     async (id) => {
       const cleanup = await Promise.allSettled([
+        recordingContexts.remove(id),
         notations.removeAll(id),
         transcripts.removeAll(id),
         analysisCoordinator.purge(id),
       ]);
-      const labels = ['notations', 'transcript', 'analysis'];
+      const labels = ['recording context', 'notations', 'transcript', 'analysis'];
       let failed = false;
       cleanup.forEach((result, index) => {
         if (result.status === 'fulfilled') return;
@@ -100,6 +104,7 @@ export function createLibraryRuntime({
   return {
     historyRepository,
     history,
+    recordingContexts,
     notations,
     transcripts,
     analyses,

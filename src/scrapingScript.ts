@@ -333,6 +333,10 @@ class TranscriptCollector {
         sendResponse({ transcript: this.getTranscriptText(), provider: this.provider.getProviderInfo(window.location, document) });
         return true;
       }
+      if (msg.type === 'GET_MEETING_PROVIDER') {
+        sendResponse({ provider: this.provider.getProviderInfo(window.location, document) });
+        return true;
+      }
       if (msg.type === 'RESET_TRANSCRIPT') {
         this.reset();
         sendResponse({ ok: true });

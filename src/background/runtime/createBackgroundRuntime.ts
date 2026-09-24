@@ -135,6 +135,7 @@ export function createBackgroundRuntime() {
     offscreen,
     session,
     telemetry,
+    recordingContexts: library.recordingContexts,
     notations: library.notations,
     transcripts: library.transcripts,
     transcriptCapture,

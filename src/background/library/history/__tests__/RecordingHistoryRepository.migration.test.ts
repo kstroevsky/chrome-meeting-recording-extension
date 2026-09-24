@@ -63,7 +63,8 @@ describe('recording-history v2 migration', () => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    expect(database.version).toBe(6);
+    expect(database.version).toBe(7);
+    expect(database.objectStoreNames.contains('recordingContexts')).toBe(true);
     expect(database.objectStoreNames.contains('notations')).toBe(true);
     expect(database.objectStoreNames.contains('transcripts')).toBe(true);
     expect(database.objectStoreNames.contains('analyses')).toBe(true);
