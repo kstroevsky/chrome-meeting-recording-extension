@@ -189,8 +189,16 @@ export class RecordingAnalysisCoordinator {
    * here, because nothing else is coming for them and the outbox drains only
    * on acknowledgement.
    */
-  handleJobState(job: AnalysisJob): void {
+  async handleJobState(job: AnalysisJob): Promise<void> {
     const lost = job.status === 'failed' && job.lostResult === true;
+    const durableStatus = job.status === 'completed' || lost ? 'analyzing' : job.status;
+    await this.deps.analyses.recordJobOutcome(
+      job,
+      durableStatus,
+      durableStatus === 'analyzing' ? undefined : job.error,
+      this.deps.now?.(),
+    );
+
     if (job.status === 'analyzing' || job.status === 'completed') {
       this.running.set(job.historyId, job.id);
     } else if (lost) {
@@ -202,7 +210,7 @@ export class RecordingAnalysisCoordinator {
     }
     this.deps.onJobChanged?.(job);
 
-    if (lost) void this.recoverLostResult(job);
+    if (lost) await this.recoverLostResult(job);
   }
 
   /**
@@ -240,6 +248,14 @@ export class RecordingAnalysisCoordinator {
           + 'keeping its durable state so a later reconnect can retry',
         );
         return;
+      }
+      if (outcome.reason === 'no-transcript') {
+        await this.deps.analyses.recordJobOutcome(
+          job,
+          'unsupported',
+          'Analysis cannot be recovered because the recording has no transcript.',
+          this.deps.now?.(),
+        );
       }
     }
     this.settle(job);

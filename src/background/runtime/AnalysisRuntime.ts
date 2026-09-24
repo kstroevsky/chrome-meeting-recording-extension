@@ -20,8 +20,9 @@ export function wireAnalysisRuntime({
 }): void {
   offscreen.onAnalysisJobChanged = (job) => {
     criticalWork.markAnalysisWorkKnown();
-    analysisCoordinator.handleJobState(job);
-    criticalWork.sync();
+    void analysisCoordinator.handleJobState(job)
+      .catch((error) => logger.warn('Could not persist analysis job state', job.historyId, error))
+      .finally(() => criticalWork.sync());
   };
   offscreen.onAnalysisResult = (job, analysis, provenance) => {
     void analysisCoordinator.handleResult(job, analysis, provenance)
