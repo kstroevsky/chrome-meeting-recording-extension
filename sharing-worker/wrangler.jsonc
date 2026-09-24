@@ -13,6 +13,7 @@
     "VIEWER_SESSION_TTL_SECONDS": "43200",
     "OWNER_SESSION_TTL_SECONDS": "3600",
     "GOOGLE_OAUTH_CLIENT_ID": "replace-with-extension-oauth-client-id.apps.googleusercontent.com",
+    "GOOGLE_DRIVE_READER_EMAIL": "recording-share-reader@replace-with-sharing-relay-project.iam.gserviceaccount.com",
     "CAPABILITY_KEY_ID": "v1",
     "OWNER_MUTATION_RATE_PER_MINUTE": "120",
     "MAX_SHARES_PER_OWNER": "200",
@@ -21,10 +22,10 @@
     "REVOKED_RETENTION_SECONDS": "2592000"
   },
   "secrets": {
-    "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY"]
+    "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY", "GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY"]
   },
   "triggers": {
-    "crons": ["17 */6 * * *"]
+    "crons": ["17 * * * *"]
   },
   "d1_databases": [
     {
@@ -48,6 +49,7 @@
         "VIEWER_SESSION_TTL_SECONDS": "43200",
         "OWNER_SESSION_TTL_SECONDS": "3600",
         "GOOGLE_OAUTH_CLIENT_ID": "908748525392-0mjfkrpc11tvssqjg7mlsbf621f51eq4.apps.googleusercontent.com",
+        "GOOGLE_DRIVE_READER_EMAIL": "recording-share-reader@replace-with-sharing-relay-project.iam.gserviceaccount.com",
         "CAPABILITY_KEY_ID": "v1",
         "OWNER_MUTATION_RATE_PER_MINUTE": "120",
         "MAX_SHARES_PER_OWNER": "200",
@@ -56,10 +58,10 @@
         "REVOKED_RETENTION_SECONDS": "2592000"
       },
       "secrets": {
-        "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY"]
+        "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY", "GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY"]
       },
       "triggers": {
-        "crons": ["17 */6 * * *"]
+        "crons": ["17 * * * *"]
       },
       "d1_databases": [
         {
@@ -83,6 +85,7 @@
         "VIEWER_SESSION_TTL_SECONDS": "43200",
         "OWNER_SESSION_TTL_SECONDS": "3600",
         "GOOGLE_OAUTH_CLIENT_ID": "replace-with-production-oauth-client-id.apps.googleusercontent.com",
+        "GOOGLE_DRIVE_READER_EMAIL": "recording-share-reader@replace-with-sharing-relay-project.iam.gserviceaccount.com",
         "CAPABILITY_KEY_ID": "v1",
         "OWNER_MUTATION_RATE_PER_MINUTE": "120",
         "MAX_SHARES_PER_OWNER": "200",
@@ -91,10 +94,10 @@
         "REVOKED_RETENTION_SECONDS": "2592000"
       },
       "secrets": {
-        "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY"]
+        "required": ["CAPABILITY_KEY", "CAPABILITY_KEYS_JSON", "SESSION_KEY", "GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY"]
       },
       "triggers": {
-        "crons": ["17 */6 * * *"]
+        "crons": ["17 * * * *"]
       },
       "d1_databases": [
         {

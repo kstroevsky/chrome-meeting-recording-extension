@@ -1,6 +1,7 @@
 import { capabilityUrl, deriveCapability, shareUrl } from '../auth/capability';
 import { activeCapabilityKey } from '../auth/capabilityKeys';
 import { base64UrlDecode, base64UrlEncode, sha256Base64Url } from '../auth/crypto';
+import { driveReaderEmail, getDriveRevisionMetadata } from '../drive/DriveClient';
 import { json, readJson } from '../http/responses';
 import { ensureNewShareQuota } from '../security/limits';
 import { SHARING_CONTRACT_LIMITS } from '../../../src/shared/sharingContract';
@@ -12,6 +13,8 @@ import {
   mediaObjectKey,
   type ShareRow,
   type ShareSummaryRow,
+  type TrackRow,
+  type MediaAssetRow,
 } from './ShareRepository';
 
 const DEFAULT_SHARE_LIST_LIMIT = 50;
@@ -27,6 +30,10 @@ export async function routeShareOwnerRequest(
   url: URL,
   ownerId: string,
 ): Promise<Response | null> {
+  if (url.pathname === '/api/sharing-reader' && request.method === 'GET') {
+    return json({ email: driveReaderEmail(env) }, 200, { 'cache-control': 'no-store' });
+  }
+
   if (url.pathname === '/api/shares' && request.method === 'GET') {
     return listShares(request, env, ownerId);
   }
@@ -44,12 +51,161 @@ export async function routeShareOwnerRequest(
     return revokeShare(decodeURIComponent(revokeMatch[1]), env, ownerId);
   }
 
+  const originMatch = /^\/api\/shares\/([^/]+)\/recordings\/([^/]+)\/tracks\/([^/]+)\/origin$/.exec(url.pathname);
+  if (originMatch && request.method === 'PUT') {
+    return putDriveOrigin(
+      decodeURIComponent(originMatch[1]),
+      decodeURIComponent(originMatch[2]),
+      decodeURIComponent(originMatch[3]),
+      request,
+      env,
+      ownerId,
+    );
+  }
+
   const finalizeMatch = /^\/api\/shares\/([^/]+)\/finalize$/.exec(url.pathname);
   if (finalizeMatch && request.method === 'POST') {
     return finalizeShare(decodeURIComponent(finalizeMatch[1]), request, env, ownerId);
   }
 
   return null;
+}
+
+type DriveOriginBody = {
+  fileId: string;
+  revisionId: string;
+  bytes: number;
+  mimeType: string;
+  md5Checksum?: string;
+  permissionId?: string;
+};
+
+async function putDriveOrigin(
+  shareId: string,
+  recordingId: string,
+  trackId: string,
+  request: Request,
+  env: Env,
+  ownerId: string,
+): Promise<Response> {
+  const share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
+  if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
+  if (share.status === 'revoked') return json({ code: 'SHARE_REVOKED' }, 410);
+
+  const body = parseDriveOriginBody(await readJson(request, 8 * 1024));
+  if (!body) return json({ code: 'INVALID_DRIVE_ORIGIN' }, 400);
+
+  const track = await env.SHARING_DB.prepare(
+    `SELECT share_id, recording_id, track_id, mime_type, bytes, object_key, media_asset_id, status
+       FROM share_tracks
+      WHERE share_id = ? AND recording_id = ? AND track_id = ?`,
+  ).bind(shareId, recordingId, trackId).first<TrackRow>();
+  if (!track) return json({ code: 'TRACK_NOT_FOUND' }, 404);
+  if (track.mime_type !== body.mimeType || (track.bytes != null && track.bytes !== body.bytes)) {
+    return json({ code: 'DRIVE_ORIGIN_TRACK_MISMATCH' }, 409);
+  }
+
+  const existing = await env.SHARING_DB.prepare(
+    `SELECT id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
+            md5_checksum, permission_id, created_at, updated_at
+       FROM media_assets
+      WHERE share_id = ? AND recording_id = ? AND track_id = ?`,
+  ).bind(shareId, recordingId, trackId).first<MediaAssetRow>();
+  if (existing) {
+    return sameDriveOrigin(existing, body)
+      ? new Response(null, { status: 200 })
+      : json({ code: 'DRIVE_ORIGIN_CONFLICT' }, 409);
+  }
+  if (share.status === 'active') return json({ code: 'SHARE_ALREADY_ACTIVE' }, 409);
+
+  let revision;
+  try {
+    revision = await getDriveRevisionMetadata(env, body.fileId, body.revisionId);
+  } catch (error) {
+    const status = errorStatus(error);
+    if (status === 403 || status === 404) {
+      return json({ code: 'DRIVE_ORIGIN_UNREADABLE' }, 409);
+    }
+    throw error;
+  }
+  if (!revision.keepForever
+    || revision.size !== body.bytes
+    || revision.mimeType !== body.mimeType
+    || (body.md5Checksum != null && revision.md5Checksum !== body.md5Checksum)) {
+    return json({ code: 'DRIVE_ORIGIN_VERIFICATION_FAILED' }, 409);
+  }
+
+  const assetId = crypto.randomUUID();
+  const now = Date.now();
+  await env.SHARING_DB.batch([
+    env.SHARING_DB.prepare(
+      `INSERT INTO media_assets
+         (id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
+          md5_checksum, permission_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      assetId,
+      shareId,
+      recordingId,
+      trackId,
+      body.fileId,
+      body.revisionId,
+      body.bytes,
+      body.mimeType,
+      body.md5Checksum ?? null,
+      body.permissionId ?? null,
+      now,
+      now,
+    ),
+    env.SHARING_DB.prepare(
+      `UPDATE share_tracks
+          SET media_asset_id = ?, bytes = ?, status = 'complete'
+        WHERE share_id = ? AND recording_id = ? AND track_id = ?`,
+    ).bind(assetId, body.bytes, shareId, recordingId, trackId),
+    env.SHARING_DB.prepare(
+      `UPDATE shares
+          SET status = CASE WHEN status = 'draft' THEN 'uploading' ELSE status END,
+              updated_at = ?
+        WHERE id = ?`,
+    ).bind(now, shareId),
+  ]);
+  return new Response(null, { status: 201 });
+}
+
+function parseDriveOriginBody(value: unknown): DriveOriginBody | null {
+  if (!value || typeof value !== 'object') return null;
+  const body = value as Record<string, unknown>;
+  if (typeof body.fileId !== 'string' || !body.fileId || body.fileId.length > 1024
+    || typeof body.revisionId !== 'string' || !body.revisionId || body.revisionId.length > 1024
+    || !Number.isSafeInteger(body.bytes) || Number(body.bytes) < 0
+    || typeof body.mimeType !== 'string' || !body.mimeType || body.mimeType.length > 255
+    || (body.md5Checksum != null && (typeof body.md5Checksum !== 'string' || body.md5Checksum.length > 128))
+    || (body.permissionId != null && (typeof body.permissionId !== 'string' || body.permissionId.length > 1024))) {
+    return null;
+  }
+  return {
+    fileId: body.fileId,
+    revisionId: body.revisionId,
+    bytes: Number(body.bytes),
+    mimeType: body.mimeType,
+    ...(typeof body.md5Checksum === 'string' ? { md5Checksum: body.md5Checksum } : {}),
+    ...(typeof body.permissionId === 'string' ? { permissionId: body.permissionId } : {}),
+  };
+}
+
+function sameDriveOrigin(existing: MediaAssetRow, body: DriveOriginBody): boolean {
+  return existing.drive_file_id === body.fileId
+    && existing.revision_id === body.revisionId
+    && existing.bytes === body.bytes
+    && existing.mime_type === body.mimeType
+    && (existing.md5_checksum ?? undefined) === body.md5Checksum
+    && (existing.permission_id ?? undefined) === body.permissionId;
+}
+
+function errorStatus(error: unknown): number | undefined {
+  return error && typeof error === 'object' && typeof (error as { status?: unknown }).status === 'number'
+    ? (error as { status: number }).status
+    : undefined;
 }
 
 async function putShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
