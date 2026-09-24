@@ -26,7 +26,7 @@ export interface SharePublicationApi {
 
 export type SharePublicationCoordinatorDeps = {
   api: SharePublicationApi;
-  origins: Pick<DriveOriginPreparer, 'prepare' | 'clearShare' | 'cleanupPermissions'>;
+  origins: Pick<DriveOriginPreparer, 'prepare' | 'clearShare'>;
   store: SharePublicationStore;
   now?: () => number;
 };
@@ -71,7 +71,7 @@ export class SharePublicationCoordinator {
   async revoke(shareId: string): Promise<SharePublication> {
     const publication = await this.deps.store.get(shareId);
     if (!publication) throw new Error(`Share ${shareId} is not published locally`);
-    if (publication.status === 'revoked') return await this.retryAclCleanup(publication);
+    if (publication.status === 'revoked') return publication;
     if (publication.status === 'revoking'
       || (publication.status === 'failed' && publication.resumeFrom === 'revoking')) {
       return await this.resume(publication);
@@ -89,7 +89,7 @@ export class SharePublicationCoordinator {
     const outcomes: SharePublication[] = [];
     for (const publication of publications) {
       if (publication.status === 'revoked') {
-        outcomes.push(await this.retryAclCleanup(publication));
+        outcomes.push(publication);
         continue;
       }
       if (publication.status === 'active') {
@@ -141,9 +141,6 @@ export class SharePublicationCoordinator {
       if (phase === 'revoking') {
         await this.deps.api.revokeShare(current.id);
         current = await this.transition(current, 'revoked');
-        // D1 revocation is the public availability boundary. Drive ACL cleanup
-        // is cleanup-only and is retried at startup when it fails.
-        current = await this.retryAclCleanup(current);
         await this.deps.origins.clearShare(current.id).catch(() => {});
       }
       return current;
@@ -163,7 +160,7 @@ export class SharePublicationCoordinator {
   private async transition(
     publication: SharePublication,
     status: SharePublication['status'],
-    extra: Partial<Pick<SharePublication, 'shareUrl' | 'origins' | 'originAclCleanupPending'>> = {},
+    extra: Partial<Pick<SharePublication, 'shareUrl' | 'origins'>> = {},
   ): Promise<SharePublication> {
     const next: SharePublication = {
       ...publication,
@@ -177,35 +174,6 @@ export class SharePublicationCoordinator {
     return next;
   }
 
-  private async retryAclCleanup(publication: SharePublication): Promise<SharePublication> {
-    if (!publication.origins?.length) {
-      if (!publication.originAclCleanupPending) return publication;
-      return await this.persistAclCleanupState(publication, false);
-    }
-    try {
-      await this.deps.origins.cleanupPermissions(structuredClone(publication.origins));
-      return publication.originAclCleanupPending
-        ? await this.persistAclCleanupState(publication, false)
-        : publication;
-    } catch {
-      return publication.originAclCleanupPending
-        ? publication
-        : await this.persistAclCleanupState(publication, true);
-    }
-  }
-
-  private async persistAclCleanupState(
-    publication: SharePublication,
-    pending: boolean,
-  ): Promise<SharePublication> {
-    const next: SharePublication = {
-      ...publication,
-      originAclCleanupPending: pending || undefined,
-      updatedAt: this.now(),
-    };
-    await this.deps.store.put(next);
-    return next;
-  }
 }
 
 function isResumablePhase(status: SharePublication['status']): status is SharePublicationPhase {

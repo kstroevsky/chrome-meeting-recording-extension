@@ -47,6 +47,13 @@ export type DriveOriginCleanupDescriptor = Pick<
   'fileId' | 'revisionId' | 'permissionId'
 >;
 
+export type DriveOriginCleanupClaim = DriveOriginCleanupDescriptor & {
+  candidateId: string;
+  leaseId: string;
+  leaseToken: string;
+  kind: 'permission' | 'revision';
+};
+
 export type RegisterDriveOriginInput = {
   shareId: string;
   recordingId: string;
@@ -133,63 +140,41 @@ export class DriveOriginPreparer {
     await Promise.all(jobs.map((job) => this.deps.store.remove(job.id)));
   }
 
-  /**
-   * Removes the relay's explicit file permission. Public revocation has already
-   * happened in D1 before this is called, so failure here is cleanup-only.
-   */
-  async cleanupPermissions(origins: readonly DriveOriginCleanupDescriptor[]): Promise<void> {
-    const errors: unknown[] = [];
-    for (const origin of origins) {
-      if (!origin.permissionId) continue;
-      try {
+  /** Executes one Worker-authorized cleanup lease. */
+  async cleanupClaim(claim: DriveOriginCleanupClaim): Promise<void> {
+    if (claim.kind === 'permission') {
+      if (!claim.permissionId) return;
+      await this.driveRequest(
+        `/drive/v3/files/${segment(claim.fileId)}/permissions/${segment(claim.permissionId)}`,
+        { method: 'DELETE' },
+        [200, 204, 404],
+      );
+      return;
+    }
+
+    try {
+      const metadata = await this.getFileMetadata(claim.fileId);
+      if (metadata.headRevisionId === claim.revisionId) {
         await this.driveRequest(
-          `/drive/v3/files/${segment(origin.fileId)}/permissions/${segment(origin.permissionId)}`,
+          `/drive/v3/files/${segment(claim.fileId)}/revisions/${segment(claim.revisionId)}?fields=id%2CkeepForever`,
+          {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ keepForever: false }),
+          },
+          [200],
+        );
+      } else {
+        await this.driveRequest(
+          `/drive/v3/files/${segment(claim.fileId)}/revisions/${segment(claim.revisionId)}`,
           { method: 'DELETE' },
           [200, 204, 404],
         );
-      } catch (error) {
-        errors.push(error);
       }
+    } catch (error) {
+      if (errorStatus(error) === 404) return;
+      throw error;
     }
-    if (errors.length) throw new Error(`Could not remove ${errors.length} sharing Drive permission(s)`);
-  }
-
-  /**
-   * Delete-published-data cleanup. It never deletes the user's recording file.
-   * If the published revision is no longer the head, the obsolete pinned
-   * revision can be deleted. If it is still head, only Keep Forever is cleared.
-   */
-  async cleanupPublishedData(origins: readonly DriveOriginCleanupDescriptor[]): Promise<void> {
-    await this.cleanupPermissions(origins);
-    const errors: unknown[] = [];
-    for (const origin of origins) {
-      try {
-        const metadata = await this.getFileMetadata(origin.fileId);
-        if (metadata.headRevisionId === origin.revisionId) {
-          await this.driveRequest(
-            `/drive/v3/files/${segment(origin.fileId)}/revisions/${segment(origin.revisionId)}?fields=id%2CkeepForever`,
-            {
-              method: 'PATCH',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ keepForever: false }),
-            },
-            [200],
-          );
-        } else {
-          await this.driveRequest(
-            `/drive/v3/files/${segment(origin.fileId)}/revisions/${segment(origin.revisionId)}`,
-            { method: 'DELETE' },
-            [200, 204, 404],
-          );
-        }
-      } catch (error) {
-        // If the owner already deleted the Drive file, both the explicit
-        // permission and any pinned revision disappeared with it.
-        if (errorStatus(error) === 404) continue;
-        errors.push(error);
-      }
-    }
-    if (errors.length) throw new Error(`Could not release ${errors.length} pinned Drive revision(s)`);
   }
 
   private newJob(
@@ -253,9 +238,10 @@ export class DriveOriginPreparer {
       job.bytes = metadata.size;
       job.md5Checksum = metadata.md5Checksum;
 
-      if (!job.permissionId) {
-        job.permissionId = await this.ensureReaderPermission(job.driveFileId);
-      }
+      // Re-check the permission on every retry. A previous publication may
+      // have removed the shared reader permission while this job was waiting
+      // for a cleanup lease to expire.
+      job.permissionId = await this.ensureReaderPermission(job.driveFileId);
       job.updatedAt = this.now();
       await this.deps.store.put(job);
 
