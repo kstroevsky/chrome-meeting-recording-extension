@@ -78,8 +78,8 @@ const sharingRuntime = sharingOrigin ? createShareRuntime(sharingOrigin, {
 }) : undefined;
 
 if (sharingRuntime) {
-  void sharingRuntime.publications.resumePending()
-    .catch((error) => L.warn('Could not resume pending share publications', describeRuntimeError(error)));
+  void sharingRuntime.resumePending()
+    .catch((error) => L.warn('Could not resume pending share work', describeRuntimeError(error)));
 }
 
 const telemetryProxy: TelemetrySink = {

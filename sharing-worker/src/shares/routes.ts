@@ -51,6 +51,11 @@ export async function routeShareOwnerRequest(
     return revokeShare(decodeURIComponent(revokeMatch[1]), env, ownerId);
   }
 
+  const originsMatch = /^\/api\/shares\/([^/]+)\/origins$/.exec(url.pathname);
+  if (originsMatch && request.method === 'GET') {
+    return getDriveOrigins(decodeURIComponent(originsMatch[1]), env, ownerId);
+  }
+
   const originMatch = /^\/api\/shares\/([^/]+)\/recordings\/([^/]+)\/tracks\/([^/]+)\/origin$/.exec(url.pathname);
   if (originMatch && request.method === 'PUT') {
     return putDriveOrigin(
@@ -206,6 +211,25 @@ function errorStatus(error: unknown): number | undefined {
   return error && typeof error === 'object' && typeof (error as { status?: unknown }).status === 'number'
     ? (error as { status: number }).status
     : undefined;
+}
+
+async function getDriveOrigins(shareId: string, env: Env, ownerId: string): Promise<Response> {
+  const share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
+  if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
+  const assets = await env.SHARING_DB.prepare(
+    `SELECT id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
+            md5_checksum, permission_id, created_at, updated_at
+       FROM media_assets
+      WHERE share_id = ?
+      ORDER BY recording_id ASC, track_id ASC`,
+  ).bind(shareId).all<MediaAssetRow>();
+  return json({
+    origins: assets.results.map((asset) => ({
+      fileId: asset.drive_file_id,
+      revisionId: asset.revision_id,
+      ...(asset.permission_id ? { permissionId: asset.permission_id } : {}),
+    })),
+  }, 200, { 'cache-control': 'no-store' });
 }
 
 async function putShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {

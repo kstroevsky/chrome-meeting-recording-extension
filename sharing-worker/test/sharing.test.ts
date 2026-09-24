@@ -130,6 +130,31 @@ describe('sharing worker vertical slice', () => {
     expect(googleIdentityRequests).toBe(1);
   });
 
+  it('returns private Drive cleanup descriptors only to the owning extension session', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+
+    const owner = await ownerFetch('/api/shares/share-owner-id/origins');
+    expect(owner.status).toBe(200);
+    expect(owner.headers.get('cache-control')).toBe('no-store');
+    expect(await owner.json()).toEqual({
+      origins: [{
+        fileId: 'drive-file-1',
+        revisionId: 'revision-1',
+        permissionId: 'permission-1',
+      }],
+    });
+
+    const otherOwner = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-id/origins');
+    expect(otherOwner.status).toBe(404);
+
+    const publicDetail = await ownerFetch('/api/shares/share-owner-id');
+    const detailText = await publicDetail.text();
+    expect(detailText).not.toContain('drive-file-1');
+    expect(detailText).not.toContain('revision-1');
+    expect(detailText).not.toContain('permission-1');
+  });
+
   it('returns paginated registry summaries without embedding full manifests', async () => {
     expect((await putManifest()).status).toBe(201);
     const second = structuredClone(manifest);

@@ -18,8 +18,13 @@
  */
 
 import type { PublishedPlaybackManifest } from '../shared/sharing';
-import type { DriveOriginApi, RegisterDriveOriginInput } from './DriveOriginPreparer';
+import type {
+  DriveOriginApi,
+  DriveOriginCleanupDescriptor,
+  RegisterDriveOriginInput,
+} from './DriveOriginPreparer';
 import type { SharePublicationApi } from './SharePublicationCoordinator';
+import type { ShareOriginCleanupApi } from './ShareOriginCleanupQueue';
 
 export type RemoteShareStatus = 'draft' | 'uploading' | 'active' | 'revoked';
 
@@ -63,7 +68,7 @@ export class ShareServiceRequestError extends Error {
   }
 }
 
-export class ShareServiceClient implements SharePublicationApi, DriveOriginApi, ShareRegistryApi {
+export class ShareServiceClient implements SharePublicationApi, DriveOriginApi, ShareRegistryApi, ShareOriginCleanupApi {
   private readonly origin: string;
   private readonly fetcher: typeof fetch;
 
@@ -106,6 +111,21 @@ export class ShareServiceClient implements SharePublicationApi, DriveOriginApi, 
         statuses: [200, 201, 204],
       },
     );
+  }
+
+  async getShareDriveOrigins(shareId: string): Promise<DriveOriginCleanupDescriptor[]> {
+    const response = await this.request(`/api/shares/${segment(shareId)}/origins`, {
+      method: 'GET',
+      statuses: [200, 404],
+    });
+    if (response.status === 404) return [];
+    const body = await response.json().catch(() => {
+      throw new Error('Sharing service returned invalid Drive cleanup metadata');
+    });
+    if (!isRecord(body) || !Array.isArray(body.origins)) {
+      throw new Error('Sharing service returned invalid Drive cleanup metadata');
+    }
+    return body.origins.map(parseDriveCleanupDescriptor);
   }
 
   async finalizeShare(shareId: string): Promise<{ shareUrl: string }> {
@@ -243,6 +263,15 @@ function stringField(value: unknown, field: string): string | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const candidate = (value as Record<string, unknown>)[field];
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
+}
+
+function parseDriveCleanupDescriptor(value: unknown): DriveOriginCleanupDescriptor {
+  if (!isRecord(value)) throw new Error('Sharing service returned invalid Drive cleanup metadata');
+  const fileId = stringField(value, 'fileId');
+  const revisionId = stringField(value, 'revisionId');
+  const permissionId = optionalStringField(value, 'permissionId');
+  if (!fileId || !revisionId) throw new Error('Sharing service returned invalid Drive cleanup metadata');
+  return { fileId, revisionId, ...(permissionId ? { permissionId } : {}) };
 }
 
 function numberField(value: unknown, field: string): number | undefined {
