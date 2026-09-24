@@ -26,6 +26,9 @@
     "https://meet.google.com/*",
     "https://www.googleapis.com/*"
   ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "action": {
     "default_popup": "popup.html"
   },
