@@ -18,7 +18,7 @@ test('classifies representative repository paths conservatively', () => {
     ['src/sharing/README.md', []],
     ['sharing-worker/src/router.ts', ['sharing']],
     ['sharing-worker/migrations/0005_x.sql', ['sharing']],
-    ['src/sharing/ShareUploadManager.ts', ['verify', 'sharing']],
+    ['src/sharing/ShareMediaSourceResolver.ts', ['verify', 'sharing']],
     [
       'src/background/sharing/BackgroundSharingRuntime.ts',
       ['verify', 'sharing'],
