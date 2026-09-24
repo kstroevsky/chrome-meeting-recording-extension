@@ -32,6 +32,12 @@ export type ShareUploadJob = {
   attempt?: number;
   uploadId?: string;
   chunkSize?: number;
+  /** User-owned Drive file backing the immutable published origin. */
+  driveFileId?: string;
+  revisionId?: string;
+  md5Checksum?: string;
+  permissionId?: string;
+  createdDriveCopy?: boolean;
   error?: string;
   updatedAt: number;
 };
@@ -78,6 +84,11 @@ function isShareUploadJob(value: unknown): value is ShareUploadJob {
     && (typeof job.attempt === 'undefined' || (Number.isInteger(job.attempt) && job.attempt > 0))
     && (typeof job.uploadId === 'undefined' || typeof job.uploadId === 'string')
     && (typeof job.chunkSize === 'undefined' || typeof job.chunkSize === 'number')
+    && (typeof job.driveFileId === 'undefined' || typeof job.driveFileId === 'string')
+    && (typeof job.revisionId === 'undefined' || typeof job.revisionId === 'string')
+    && (typeof job.md5Checksum === 'undefined' || typeof job.md5Checksum === 'string')
+    && (typeof job.permissionId === 'undefined' || typeof job.permissionId === 'string')
+    && (typeof job.createdDriveCopy === 'undefined' || typeof job.createdDriveCopy === 'boolean')
     && (typeof job.error === 'undefined' || typeof job.error === 'string')
     && typeof job.updatedAt === 'number';
 }

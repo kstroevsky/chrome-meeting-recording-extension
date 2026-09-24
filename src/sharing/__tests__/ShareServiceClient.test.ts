@@ -58,23 +58,41 @@ describe('ShareServiceClient', () => {
     expect(new Headers(fetcher.mock.calls[1][1].headers).get('authorization')).toBe('Bearer refreshed-token');
   });
 
-  it('creates an upload session, sends an idempotent ranged chunk, then completes it', async () => {
+  it('reads the relay identity and registers an immutable private Drive origin', async () => {
     const fetcher = jest.fn()
-      .mockResolvedValueOnce(jsonResponse({ uploadId: 'upl/1', chunkSize: 4, offset: 2 }, 201))
-      .mockResolvedValueOnce(mockResponse('', 204))
-      .mockResolvedValueOnce(mockResponse('', 204));
+      .mockResolvedValueOnce(jsonResponse({ email: 'reader@example.iam.gserviceaccount.com' }))
+      .mockResolvedValueOnce(mockResponse('', 201));
     const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
 
-    await expect(client.beginTrackUpload({
-      shareId: 's', recordingId: 'r', trackId: 't', mimeType: 'video/webm', bytes: 10,
-    })).resolves.toEqual({ uploadId: 'upl/1', chunkSize: 4, offset: 2 });
-    await client.uploadTrackChunk({ uploadId: 'upl/1', offset: 4, totalBytes: 10, chunk: new Blob(['1234']) });
-    await client.completeTrackUpload({ uploadId: 'upl/1', totalBytes: 10 });
+    await expect(client.getDriveReaderIdentity()).resolves.toEqual({
+      email: 'reader@example.iam.gserviceaccount.com',
+    });
+    await client.registerDriveOrigin({
+      shareId: 's/1',
+      recordingId: 'r/1',
+      trackId: 't/1',
+      fileId: 'private-drive-file',
+      revisionId: 'private-revision',
+      bytes: 10,
+      mimeType: 'video/webm',
+      md5Checksum: 'checksum',
+      permissionId: 'private-permission',
+    });
 
-    expect(fetcher.mock.calls[1][0]).toBe('https://share.example/api/share-uploads/upl%2F1/chunks/4');
-    const chunkHeaders = new Headers(fetcher.mock.calls[1][1].headers);
-    expect(chunkHeaders.get('content-range')).toBe('bytes 4-7/10');
-    expect(fetcher.mock.calls[2][0]).toBe('https://share.example/api/share-uploads/upl%2F1/complete');
+    expect(fetcher.mock.calls[0][0]).toBe('https://share.example/api/sharing-reader');
+    expect(fetcher.mock.calls[0][1].method).toBe('GET');
+    expect(fetcher.mock.calls[1][0]).toBe(
+      'https://share.example/api/shares/s%2F1/recordings/r%2F1/tracks/t%2F1/origin',
+    );
+    expect(fetcher.mock.calls[1][1].method).toBe('PUT');
+    expect(JSON.parse(String(fetcher.mock.calls[1][1].body))).toEqual({
+      fileId: 'private-drive-file',
+      revisionId: 'private-revision',
+      bytes: 10,
+      mimeType: 'video/webm',
+      md5Checksum: 'checksum',
+      permissionId: 'private-permission',
+    });
   });
 
   it('finalizes, revokes, and permanently deletes a share through distinct operations', async () => {
@@ -168,16 +186,14 @@ describe('ShareServiceClient', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it('fails closed on non-HTTPS or path-bearing service URLs and malformed sessions', async () => {
+  it('fails closed on non-HTTPS or path-bearing service URLs and malformed relay identity', async () => {
     expect(() => new ShareServiceClient('http://share.example')).toThrow('bare HTTPS origin');
     expect(() => new ShareServiceClient('https://share.example/api')).toThrow('bare HTTPS origin');
 
     const client = new ShareServiceClient('https://share.example', {
-      fetch: (async () => jsonResponse({ uploadId: 'u', chunkSize: 0 }, 201)) as typeof fetch,
+      fetch: (async () => jsonResponse({ email: '' })) as typeof fetch,
     });
-    await expect(client.beginTrackUpload({
-      shareId: 's', recordingId: 'r', trackId: 't', mimeType: 'video/webm', bytes: 10,
-    })).rejects.toThrow('invalid chunk size');
+    await expect(client.getDriveReaderIdentity()).rejects.toThrow('no Drive reader identity');
   });
 
   it('includes bounded server error text without accepting an unexpected status', async () => {
@@ -187,19 +203,22 @@ describe('ShareServiceClient', () => {
     await expect(client.createShare(manifest)).rejects.toThrow('failed (401): not authorized');
   });
 
-  it('preserves upload-session-gone status and code for resumable recovery', async () => {
+  it('preserves Drive-origin conflict status and code for deterministic recovery', async () => {
     const client = new ShareServiceClient('https://share.example', {
-      fetch: (async () => mockResponse('{"code":"UPLOAD_SESSION_GONE"}', 410)) as typeof fetch,
+      fetch: (async () => mockResponse('{"code":"DRIVE_ORIGIN_CONFLICT"}', 409)) as typeof fetch,
     });
 
-    const error = await client.uploadTrackChunk({
-      uploadId: 'gone',
-      offset: 0,
-      totalBytes: 4,
-      chunk: new Blob(['1234']),
+    const error = await client.registerDriveOrigin({
+      shareId: 's',
+      recordingId: 'r',
+      trackId: 't',
+      fileId: 'f',
+      revisionId: 'rev',
+      bytes: 4,
+      mimeType: 'video/webm',
     }).then(() => undefined, (caught) => caught);
 
     expect(error).toBeInstanceOf(ShareServiceRequestError);
-    expect(error).toMatchObject({ status: 410, code: 'UPLOAD_SESSION_GONE' });
+    expect(error).toMatchObject({ status: 409, code: 'DRIVE_ORIGIN_CONFLICT' });
   });
 });
