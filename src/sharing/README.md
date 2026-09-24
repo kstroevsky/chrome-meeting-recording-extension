@@ -1,160 +1,227 @@
-# Sharing — durable revocable publication
+# Sharing — Drive-backed revocable publication
 
-> The owner-side sharing deep module. It turns one or more private recordings into an immutable public snapshot, persists enough local state to survive page/service-worker/browser restarts, uploads media from OPFS or Drive through resumable sessions, and exposes owner management state without leaking private source locators into the public manifest. The Cloudflare service implementation lives under [`sharing-worker/src`](../../sharing-worker/src); deployment and operational procedures live in [`docs/sharing-operations.md`](../../docs/sharing-operations.md).
+The sharing module publishes one or more private recordings as an immutable, revocable web snapshot. Google Drive is the durable media origin. Cloudflare owns authorization and lifecycle state in D1, proxies protected Range reads, and may keep a bounded temporary R2 cache. New publications never create permanent R2 media copies.
 
-> **Archetype:** *Durable workflow + boundary adapter*. `SharePublicationCoordinator` owns the publication state machine, `ShareUploadManager` owns resumable byte transfer, and `ShareServiceClient` is the HTTP boundary. Browser runtime plumbing stays outside those domain roles.
+The Worker implementation lives under [`sharing-worker/src`](../../sharing-worker/src). Deployment and operational procedures live in [`docs/sharing-operations.md`](../../docs/sharing-operations.md).
 
-## Purpose & mental model
+## Architecture
 
-A private recording is the owner's source. Sharing creates a new, immutable-at-publication representation with new public recording and track ids. The public snapshot may include transcript, topics, notations, and selected tracks, but it never contains the OPFS filename, Drive file id, Drive authorization, or other private source locator used to obtain the bytes.
-
-The runtime is split across Chrome contexts because MV3 service workers are ephemeral while publication may take minutes:
+A private recording stays owned by the user. Publication creates new public recording/track ids and binds each published track to one exact Drive blob revision.
 
 ```mermaid
 flowchart LR
-    UI["Recordings / Shared UI"] -->|"publish / snapshot / revoke / delete"| BG["BackgroundSharingRuntime"]
-    BG -->|"RPC"| OS["offscreen sharing runtime"]
+    UI["Recordings / Shared UI"] --> BG["BackgroundSharingRuntime"]
+    BG -->|RPC| OS["offscreen sharing runtime"]
     OS --> PUB["SharePublisher"]
     PUB --> COORD["SharePublicationCoordinator"]
-    COORD --> UP["ShareUploadManager"]
-    UP --> SRC["ShareUploadSourceResolver"]
-    SRC --> OPFS["OPFS"]
-    SRC --> DRIVE["Google Drive Range reads"]
+    COORD --> ORIGIN["DriveOriginPreparer"]
+    ORIGIN -->|OPFS only: resumable copy| DRIVE["Owner's Google Drive"]
+    ORIGIN -->|pin revision + reader permission| DRIVE
     COORD --> API["ShareServiceClient"]
-    UP --> API
-    API --> WORKER["Sharing Worker"]
-    WORKER --> D1["D1 control + bounded manifest"]
-    WORKER --> R2["R2 media"]
+    ORIGIN --> API
+    API --> WORKER["Cloudflare Worker"]
+    WORKER --> D1["D1 control + private origin metadata"]
+    WORKER --> CACHE["R2 fixed-TTL cache"]
+    WORKER -->|service-account Range GET| DRIVE
 ```
 
-The background is the command-plane bridge. It ensures an offscreen document exists, forwards commands, and wakes the offscreen runtime at startup when a durable publication is unfinished. The offscreen document hosts the long-running browser data plane: source reads, authentication helpers, resumable uploads, and lifecycle recovery. Local IndexedDB stores remain the recovery authority when either runtime disappears.
+The durable media identity is:
+
+```text
+Drive file id + pinned revision id
+```
+
+The file id, revision id, permission id, OPFS key, and Google credentials are private implementation state. `PublishedPlaybackManifest` contains only public playback ids, metadata, and Worker media endpoints.
 
 ## Publication boundary
 
-`PublishedManifestBuilder` creates two related values in one pass:
+`PublishedManifestBuilder` creates two values together:
 
-- a sanitized `PublishedPlaybackManifest` that can cross the sharing-service boundary;
-- private `PublishedRecordingPlan` entries that map each public track id back to the owner's `PlaybackTrack` source.
+- a sanitized `PublishedPlaybackManifest` that may cross the sharing-service boundary;
+- private `PublishedRecordingPlan` entries that map public tracks back to owner playback sources.
 
-This prevents public ids and upload sources from drifting apart while keeping private locators local. A share can contain several recordings. Each publication receives fresh share, recording, and track ids; the source recording ids are retained only in local workflow state.
+A share can contain multiple recordings and each publication gets fresh public ids. Source recording ids remain local workflow state.
 
-The current sharing options can include/exclude transcript, topics, notations, and self-video and can mark downloads enabled in the published snapshot. Topics are included only when the transcript snapshot is included.
+For every track, `DriveOriginPreparer` then establishes an immutable Drive origin:
+
+1. If the track already has a Drive location, reuse that file. Publication does not download or re-upload its media bytes.
+2. If the track is OPFS-only, read it through `ShareMediaSourceResolver` and create a user-owned Drive file with the resumable Drive uploader.
+3. Read file metadata and verify size, MIME type, checksum when available, and `canDownload`.
+4. Pin `headRevisionId` with Keep Forever.
+5. Grant the configured sharing-reader service account an explicit `reader` permission on that file.
+6. Register the private origin descriptor with the Worker. The Worker independently reads revision metadata with the service account before accepting it.
+
+The service account never receives the user's refresh token and is not granted access to a folder or the rest of Drive.
 
 ## Durable lifecycle
 
-`SharePublicationCoordinator` persists the complete publication before the first network request. It advances only after each corresponding side effect succeeds, so replay after a crash uses the same ids and the same immutable snapshot.
+`SharePublicationCoordinator` persists the complete publication before the first remote mutation. Each phase is replayable with the same ids.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> draft: queueNew persists snapshot
-    draft --> uploading: create share succeeds
-    uploading --> finalizing: every track upload completes
-    finalizing --> active: finalize returns capability URL
+    [*] --> draft: persist snapshot
+    draft --> preparing-origin: create Worker share
+    preparing-origin --> finalizing: every Drive origin is registered
+    finalizing --> active: capability finalized
     active --> revoking: owner revokes
-    revoking --> revoked: server revoke succeeds
+    revoking --> revoked: Worker revoke succeeds
     draft --> failed: error
-    uploading --> failed: error
+    preparing-origin --> failed: error
     finalizing --> failed: error
     revoking --> failed: error
     failed --> draft: resumeFrom=draft
-    failed --> uploading: resumeFrom=uploading
+    failed --> preparing-origin: resumeFrom=preparing-origin
     failed --> finalizing: resumeFrom=finalizing
     failed --> revoking: resumeFrom=revoking
 ```
 
-`failed` is a durable retry marker, not a new workflow branch: `resumeFrom` records which phase should be replayed. `resumePending()` isolates failures between shares, so one unavailable source cannot block recovery of unrelated publications. Active/revoked rows are terminal; temporary upload jobs are then cleaned idempotently.
+`uploading` remains accepted as a legacy persisted local phase and resumes as origin preparation. The Worker also uses `uploading` as its remote pre-finalization state after the first origin is registered.
 
-`BackgroundSharingRuntime.resumeIfPending()` checks the durable publication store during background bootstrap. If anything is neither `active` nor `revoked`, it recreates the offscreen host; offscreen startup then resumes pending publications. The sharing E2E also exercises a no-recording/no-audio upload whose response is delayed for more than 60 seconds, proving the current offscreen reason combination remains alive for that workload in the tested Chromium runtime.
+`failed` is a durable retry marker. Background startup calls `resumeIfPending()`, which recreates the offscreen runtime when local publication or cleanup work remains. Offscreen startup calls `resumePending()` and replays the idempotent phase. This is what makes a lost origin-registration response recover after a full Chrome restart.
 
-## Resumable media upload
+`ShareUploadStore` keeps its historical name and IndexedDB database for compatibility, but its current job is durable Drive-origin preparation state: OPFS→Drive upload session URI, committed offset, Drive file/revision metadata, and per-track progress.
 
-`ShareUploadManager` is transport-independent. For each published track it:
+## Viewer media path
 
-1. resolves the private source through `ShareUploadSourceResolver`;
-2. persists an upload job before/while transfer advances;
-3. asks the service for an upload session and its committed offset;
-4. sends chunks with offset in both the URL and `Content-Range`;
-5. persists per-track committed bytes and activity (`uploading`, `retrying`, `resuming`);
-6. completes the remote upload and marks the local job complete.
+The viewer never talks to Drive directly.
 
-The source resolver supports retained OPFS objects and Drive-backed files. Drive sources are read by authenticated Range requests, so publication does not require first downloading the whole file into memory or flattening the recording into one video.
+```text
+viewer Range request
+        ↓
+Worker viewer-session + active-share check
+        ↓
+D1 media asset lookup
+        ↓
+R2 cache hit ───────────────→ response
+        │ miss
+        ↓
+exact pinned Drive revision
+        ↓
+response + best-effort R2 cache write
+```
 
-Chunk replay is designed for response loss. The server can return the already-committed offset, and replaying a chunk at the same offset is idempotent. Expired multipart sessions are replaced while preserving durable local progress semantics.
+For new Drive-origin tracks the Worker:
 
-## Owner registry & management projection
+- caps one media response at 8 MiB;
+- performs at most one Drive media fetch for a cache miss;
+- requests the exact pinned revision with a byte range;
+- returns only the served `Content-Range`, allowing the browser to request the next range;
+- does not touch Drive for `HEAD` media requests;
+- authorizes the share before reading either R2 or Drive.
 
-`ShareRuntime.snapshot()` combines three pieces of state:
+The R2 cache is disposable and cannot be required for correctness. Its hard-coded envelope is:
 
-- paginated remote summaries from the Worker;
+- `8_000_000_000` live bytes maximum;
+- `15_000` cache PUTs per UTC day;
+- fixed 30-hour TTL from `cachedAt`;
+- no sliding expiration on hits;
+- one D1 cache-row lookup followed by at most one R2 `GetObject` per media request;
+- cache write/storage failures fall through to Drive playback.
+
+The cache key includes media asset id, immutable revision id, and served byte interval. The hourly scheduled cleanup removes expired cache objects and releases their byte budget.
+
+Tracks published before the Drive-origin migration may still use their legacy permanent R2 object as a playback fallback. The legacy multipart publication routes are no longer reachable from the Worker router, so new shares cannot enter that path.
+
+## Owner registry and private origin metadata
+
+`ShareRuntime.snapshot()` combines:
+
+- paginated remote summaries;
 - durable local publications;
-- durable local upload jobs/progress.
+- local Drive-origin preparation jobs.
 
-`ShareRegistry` reconciles remote owner state with the local publication store. `ShareManagementModel` converts that combined snapshot into the rows rendered by the persistent **Shared** UI.
+`ShareRegistry` reconciles remote owner state with local publication state. If the remote registry is temporarily unavailable, local state is still returned with `remoteError`.
 
-The list API intentionally returns summary projections only. `GET /api/shares` is cursor-paginated and carries fields such as titles, lifecycle timestamps, recording/track counts, total bytes, and share URL. `GET /api/shares/:id` is the detail boundary that returns the complete canonical manifest. This keeps the owner registry bounded even when transcripts are large.
+Public/summary APIs never return Drive locators. `GET /api/shares/:shareId/origins` is a separate owner-authenticated cleanup endpoint and returns only the private Drive descriptors needed to revoke the service-account permission and release publication pins. It exists so a remote-only share can still be cleaned up when local publication state is missing.
 
-If the remote registry is temporarily unavailable, `ShareRuntime.snapshot()` still returns local publications/uploads plus `remoteError`; management can therefore show recoverable local state instead of failing the whole surface.
+## Revoke and delete
 
-## Revoke vs. permanent delete
+Public authorization and Drive cleanup are deliberately ordered.
 
-These are different lifecycle operations:
+**Revoke**:
 
-- **Revoke** removes public capability access immediately while retaining published data according to server retention policy. Local state becomes `revoked`.
-- **Delete published data** removes the remote share metadata, multipart state, and media objects, then clears local upload/publication state.
+1. persist a durable cleanup job when needed;
+2. set the Worker share to `revoked` first;
+3. from then on, every viewer manifest/media request is denied before touching R2 or Drive;
+4. remove the service-account file permission with the owner's Drive token;
+5. if Drive cleanup fails, keep durable cleanup state and retry on a later startup.
 
-Permanent DELETE is response-loss safe. The Worker returns success for an already-absent/non-owned share, and the client retries a transient/network/5xx failure once. If the server performed deletion but the 204 response was lost, the retry still succeeds and local publication state can be removed.
+Revocation does not delete the user's recording file and does not need R2/cache deletion for security because viewer authorization is checked first.
 
-## Authentication & public access
+**Delete published data**:
 
-Owner requests use `ShareOwnerSession`: a Google identity token is exchanged for a short-lived sharing-service owner session, and a 401 causes one token/session refresh attempt at the HTTP boundary.
+1. capture private Drive cleanup descriptors before server deletion;
+2. delete Worker publication state and any R2 cache entries for its media assets;
+3. remove the service-account permission;
+4. release the publication revision pin: clear Keep Forever when it is still the head revision, or delete the obsolete pinned revision when appropriate;
+5. remove local publication/preparation state.
 
-The viewer URL is a capability, separate from the owner-visible share id. Opening it establishes a viewer session; each manifest/media request still passes through the Worker, which checks that the share remains active before serving content. Media Range requests are authorized before the Worker streams the requested R2 range, so revocation affects future reads immediately.
+The user's actual Drive recording file is never deleted by sharing cleanup, including when publication originally copied an OPFS recording into Drive.
 
-Capability signing is key-versioned on the service. Rotation can add a new key for future shares while retaining old keys required by existing capability links; operational steps are documented in the runbook.
+The cleanup queue persists before the server action. Therefore a lost successful DELETE response, browser crash between server deletion and Drive cleanup, or missing local publication row can all be resumed safely.
+
+## Authentication boundaries
+
+There are three independent credentials:
+
+- **User Google token** — stays in the extension; uploads OPFS media to the user's Drive, pins revisions, and grants/removes the explicit reader permission.
+- **Sharing-reader service account** — private key stays in a Worker secret; its OAuth token uses `drive.readonly` and can read only files explicitly shared to its service-account email. Domain-wide delegation is not used.
+- **Viewer capability/session** — authorizes one active share through the Worker; it contains no Drive credentials and exposes no Drive id.
+
+Owner API calls use `ShareOwnerSession`: a Google identity token is exchanged for a short-lived service session, with one refresh/retry on a 401. Viewer capabilities are key-versioned so signing keys can rotate without changing existing links while their referenced key remains configured.
 
 ## Contract and storage limits
 
-The cross-runtime limits live in [`shared/sharingContract.ts`](../shared/sharingContract.ts), so the extension and Worker reject the same shapes. Two byte ceilings are deliberately distinct:
+Cross-runtime manifest limits live in [`shared/sharingContract.ts`](../shared/sharingContract.ts). The Worker currently caps request JSON at 2,000,000 bytes and canonical persisted manifest JSON at 1,500,000 UTF-8 bytes.
 
-- request JSON: `2_000_000` bytes;
-- canonical persisted manifest JSON: `1_500_000` UTF-8 bytes.
+D1 stores lifecycle/control state, canonical public manifests, private media-asset descriptors, and cache accounting. Durable media bytes live in the user's Drive. R2 stores only bounded temporary cache objects for Drive-origin shares plus migration-era media objects that already existed before this architecture.
 
-The Worker measures serialized UTF-8 bytes before D1 persistence. The persisted ceiling stays below D1's row/string limit; transcript/topic/notation aggregate limits keep valid manifests within that budget. Media bytes do not live in D1: R2 owns the uploaded track objects, while D1 owns share/upload/control rows and the bounded canonical manifest used by the current MVP.
-
-## Files
+## Main files
 
 | File | Role |
 | :--- | :--- |
-| `PublishedManifestBuilder.ts` | builds the sanitized immutable viewer snapshot and private source→public-track plan |
-| `SharePublisher.ts` | high-level queue/publish entrypoint; builds a manifest then hands it to the durable coordinator |
-| `SharePublicationCoordinator.ts` | publication/revocation state machine, persistence ordering, restart recovery |
-| `SharePublicationStore.ts` | durable local publication records and phase/error/resume state |
-| `ShareUploadManager.ts` | resumable per-track transfer, retry/resume progress, transport abstraction |
-| `ShareUploadSourceResolver.ts` | opens OPFS or Drive-backed sources behind one ranged source interface |
-| `ShareUploadStore.ts` | durable per-track upload state, offsets, byte counts, activity/error state |
-| `ShareServiceClient.ts` | authenticated HTTP adapter for share CRUD, registry, multipart upload, finalize/revoke/delete |
-| `ShareOwnerSession.ts` | Google identity → short-lived owner-session exchange and refresh |
-| `ShareRegistry.ts` | paginated remote registry refresh and reconciliation with local publications |
-| `ShareRuntime.ts` | offscreen composition root for owner-side sharing services |
-| `ShareManagementModel.ts` | pure projection from remote/local/upload state into Shared UI rows |
-| `config.ts` | build-time sharing-service origin resolution |
+| `PublishedManifestBuilder.ts` | builds sanitized viewer snapshots and private source→public-track plans |
+| `SharePublisher.ts` | queues/publishes snapshots through the durable coordinator |
+| `SharePublicationCoordinator.ts` | publication/revocation state machine and restart replay |
+| `SharePublicationStore.ts` | durable local publication phase/error/origin state |
+| `DriveOriginPreparer.ts` | ensures Drive origin, pins revision, manages reader permission, registers origin |
+| `ShareMediaSource.ts` | random-access owner media interface used when a Drive copy must be created |
+| `ShareMediaSourceResolver.ts` | resolves OPFS first and can read Drive ranges when bytes are explicitly needed |
+| `ShareUploadStore.ts` | compatibility-named durable Drive preparation/resumable-upload state |
+| `ShareOriginCleanupQueue.ts` | crash-safe revoke/delete Drive cleanup, including remote-only shares |
+| `ShareServiceClient.ts` | authenticated owner HTTP boundary |
+| `ShareOwnerSession.ts` | Google identity → short-lived owner-session exchange |
+| `ShareRegistry.ts` | paginated remote registry + local reconciliation |
+| `ShareRuntime.ts` | offscreen composition root |
+| `ShareManagementModel.ts` | Shared UI projection |
 
-Runtime adapters live outside this directory: [`background/sharing/BackgroundSharingRuntime.ts`](../background/sharing/BackgroundSharingRuntime.ts) is the background command bridge, and [`offscreen/rpcHandlers.ts`](../offscreen/rpcHandlers.ts) exposes the offscreen sharing commands.
+Runtime adapters remain outside this directory: [`background/sharing/BackgroundSharingRuntime.ts`](../background/sharing/BackgroundSharingRuntime.ts) is the background command bridge and [`offscreen/rpcHandlers.ts`](../offscreen/rpcHandlers.ts) exposes offscreen commands.
 
-The service implementation is under [`sharing-worker/src`](../../sharing-worker/src): `shares/` owns share metadata/finalization/deletion, `uploads/` owns multipart coordination, `auth/` owns owner/capability sessions, `viewer/` owns protected playback, and `maintenance/cleanup.ts` owns stale-draft/revoked cleanup.
+The service implementation is under [`sharing-worker/src`](../../sharing-worker/src): `shares/` owns lifecycle/private media-asset metadata, `drive/` owns service-account Drive access, `cache/` owns the bounded R2 cache, `auth/` owns owner/capability sessions, `viewer/` owns protected playback, and `maintenance/` owns scheduled cleanup. `uploads/` remains only for migration-era cleanup code; its publication routes are not exposed by the router.
 
-## Testing notes
+## Tests
 
-Unit tests in `__tests__/` pin the public/private manifest boundary, durable phase replay, source resolution, resumable offsets, auth refresh, registry reconciliation, management projection, and response-loss-safe deletion.
+Unit tests cover the manifest privacy boundary, durable phase replay, Drive-origin preparation, OPFS resumable Drive upload recovery, source resolution, service-account verification, bounded media caching, authorization, registry reconciliation, and cleanup replay.
 
-`tests/e2e/sharing-lifecycle.spec.ts` is the vertical contract. It exercises real extension + local Worker behavior including OPFS publication, Drive Range publication, Recordings-page closure, Chrome restart/resume, lost upload/finalize/delete responses, expired multipart recovery, viewer playback and Range seeking, revoke, permanent deletion, and the >60-second idle offscreen upload soak. The CI workflow gives sharing its own gate so these lifecycle guarantees are validated together with Worker tests/typechecks and deployment dry-run.
+`tests/e2e/sharing-lifecycle.spec.ts` is the vertical contract. It proves:
+
+- OPFS media is copied to the user's Drive, pinned, granted to the reader, and registered with the Worker;
+- publication continues after the Recordings page closes;
+- a committed-but-lost origin response recovers after a full Chrome restart;
+- an origin response held for more than 60 seconds does not kill offscreen sharing work;
+- an already Drive-backed recording is reused without owner-side media reads or another resumable upload;
+- public manifests do not expose Drive file/revision/permission ids;
+- a clean Chromium viewer decodes real WebM tracks and performs protected Range playback;
+- R2 cache rows are created only after playback;
+- revoke denies the viewer before Drive permission cleanup;
+- delete removes Worker metadata/cache and releases the pin while the owner's Drive file remains.
 
 ## Related
 
 - [`shared/sharing.ts`](../shared/sharing.ts) — published viewer/domain types.
 - [`shared/sharingContract.ts`](../shared/sharingContract.ts) — runtime validation and shared limits.
-- [`shared/player/PlaybackClock.ts`](../shared/player/PlaybackClock.ts) — synchronization used by both extension playback and the public viewer.
+- [`shared/player/PlaybackClock.ts`](../shared/player/PlaybackClock.ts) — synchronization shared by private and public playback.
 - [`background`](../background/README.md) — MV3 control-plane lifecycle and startup recovery.
 - [`offscreen`](../offscreen/README.md) — browser data-plane host.
-- [`recordings`](../recordings/README.md) — owner recording history and Shared surface entrypoint.
-- [`docs/sharing-operations.md`](../../docs/sharing-operations.md) — deployment, keys, quotas, retention, CI, staging acceptance, and rollback.
+- [`recordings`](../recordings/README.md) — owner recording history and Shared UI.
+- [`docs/sharing-operations.md`](../../docs/sharing-operations.md) — deployment, service-account setup, cache guardrails, cleanup, CI, acceptance, and rollback.
