@@ -8,6 +8,13 @@ import { SHARING_CONTRACT_LIMITS } from '../../../src/shared/sharingContract';
 import { canonicalizeManifest, canonicalizeStoredManifest } from './manifestSchema';
 import { deletePublishedShare } from './deleteShare';
 import {
+  claimDriveCleanup,
+  completeDriveCleanupClaim,
+  enqueueDriveCleanupCandidates,
+  originRegistrationLeaseGuardSql,
+  type DriveCleanupAction,
+} from './driveCleanup';
+import {
   getOwnedShare,
   getShare,
   mediaObjectKey,
@@ -54,6 +61,26 @@ export async function routeShareOwnerRequest(
   const originsMatch = /^\/api\/shares\/([^/]+)\/origins$/.exec(url.pathname);
   if (originsMatch && request.method === 'GET') {
     return getDriveOrigins(decodeURIComponent(originsMatch[1]), env, ownerId);
+  }
+
+  const cleanupClaimMatch = /^\/api\/shares\/([^/]+)\/origin-cleanup\/claim$/.exec(url.pathname);
+  if (cleanupClaimMatch && request.method === 'POST') {
+    return claimDriveOriginCleanup(
+      decodeURIComponent(cleanupClaimMatch[1]),
+      request,
+      env,
+      ownerId,
+    );
+  }
+
+  const cleanupCompleteMatch = /^\/api\/origin-cleanup\/([^/]+)\/complete$/.exec(url.pathname);
+  if (cleanupCompleteMatch && request.method === 'POST') {
+    return completeDriveOriginCleanup(
+      decodeURIComponent(cleanupCompleteMatch[1]),
+      request,
+      env,
+      ownerId,
+    );
   }
 
   const originMatch = /^\/api\/shares\/([^/]+)\/recordings\/([^/]+)\/tracks\/([^/]+)\/origin$/.exec(url.pathname);
@@ -142,12 +169,13 @@ async function putDriveOrigin(
 
   const assetId = crypto.randomUUID();
   const now = Date.now();
-  await env.SHARING_DB.batch([
+  const results = await env.SHARING_DB.batch([
     env.SHARING_DB.prepare(
       `INSERT INTO media_assets
          (id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
           md5_checksum, permission_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE ${originRegistrationLeaseGuardSql()}`,
     ).bind(
       assetId,
       shareId,
@@ -161,19 +189,27 @@ async function putDriveOrigin(
       body.permissionId ?? null,
       now,
       now,
+      now,
+      body.fileId,
+      body.revisionId,
     ),
     env.SHARING_DB.prepare(
       `UPDATE share_tracks
           SET media_asset_id = ?, bytes = ?, status = 'complete'
-        WHERE share_id = ? AND recording_id = ? AND track_id = ?`,
-    ).bind(assetId, body.bytes, shareId, recordingId, trackId),
+        WHERE share_id = ? AND recording_id = ? AND track_id = ?
+          AND EXISTS (SELECT 1 FROM media_assets WHERE id = ?)`,
+    ).bind(assetId, body.bytes, shareId, recordingId, trackId, assetId),
     env.SHARING_DB.prepare(
       `UPDATE shares
           SET status = CASE WHEN status = 'draft' THEN 'uploading' ELSE status END,
               updated_at = ?
-        WHERE id = ?`,
-    ).bind(now, shareId),
+        WHERE id = ?
+          AND EXISTS (SELECT 1 FROM media_assets WHERE id = ?)`,
+    ).bind(now, shareId, assetId),
   ]);
+  if (!results[0]?.meta.changes) {
+    return json({ code: 'DRIVE_ORIGIN_CLEANUP_IN_PROGRESS' }, 409);
+  }
   return new Response(null, { status: 201 });
 }
 
@@ -230,6 +266,50 @@ async function getDriveOrigins(shareId: string, env: Env, ownerId: string): Prom
       ...(asset.permission_id ? { permissionId: asset.permission_id } : {}),
     })),
   }, 200, { 'cache-control': 'no-store' });
+}
+
+async function claimDriveOriginCleanup(
+  shareId: string,
+  request: Request,
+  env: Env,
+  ownerId: string,
+): Promise<Response> {
+  const body = await readJson(request, 1024);
+  const action = parseCleanupAction(body);
+  if (!action) return json({ code: 'INVALID_DRIVE_CLEANUP_ACTION' }, 400);
+  const result = await claimDriveCleanup(env, ownerId, shareId, action);
+  return json(result, 200, { 'cache-control': 'no-store' });
+}
+
+async function completeDriveOriginCleanup(
+  candidateId: string,
+  request: Request,
+  env: Env,
+  ownerId: string,
+): Promise<Response> {
+  const body = await readJson(request, 2048);
+  if (!body || typeof body !== 'object') return json({ code: 'INVALID_DRIVE_CLEANUP_CLAIM' }, 400);
+  const values = body as Record<string, unknown>;
+  if (typeof values.leaseId !== 'string' || !values.leaseId
+    || typeof values.leaseToken !== 'string' || !values.leaseToken) {
+    return json({ code: 'INVALID_DRIVE_CLEANUP_CLAIM' }, 400);
+  }
+  const completed = await completeDriveCleanupClaim(
+    env,
+    ownerId,
+    candidateId,
+    values.leaseId,
+    values.leaseToken,
+  );
+  return completed
+    ? new Response(null, { status: 204 })
+    : json({ code: 'DRIVE_CLEANUP_LEASE_LOST' }, 409);
+}
+
+function parseCleanupAction(value: unknown): DriveCleanupAction | null {
+  if (!value || typeof value !== 'object') return null;
+  const action = (value as Record<string, unknown>).action;
+  return action === 'revoke' || action === 'delete' ? action : null;
 }
 
 async function putShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
@@ -402,7 +482,10 @@ async function ownerShareSummaryFromDetail(
 async function revokeShare(shareId: string, env: Env, ownerId: string): Promise<Response> {
   const share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
   if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
-  if (share.status === 'revoked') return new Response(null, { status: 204 });
+  if (share.status === 'revoked') {
+    await enqueueDriveCleanupCandidates(env, ownerId, shareId, 'revoke');
+    return new Response(null, { status: 204 });
+  }
 
   const now = Date.now();
   await env.SHARING_DB.batch([
@@ -414,6 +497,7 @@ async function revokeShare(shareId: string, env: Env, ownerId: string): Promise<
        WHERE share_id = ? AND status = 'uploading'`,
     ).bind(now, shareId),
   ]);
+  await enqueueDriveCleanupCandidates(env, ownerId, shareId, 'revoke');
   return new Response(null, { status: 204 });
 }
 

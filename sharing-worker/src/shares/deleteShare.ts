@@ -1,6 +1,7 @@
 import { isMultipartSessionGone } from '../uploads/UploadRepository';
 import { deleteAssetCache } from '../cache/mediaCache';
 import type { ShareRow } from './ShareRepository';
+import { enqueueDriveCleanupCandidates } from './driveCleanup';
 
 type CleanupUploadRow = {
   id: string;
@@ -18,6 +19,7 @@ type CleanupAssetRow = { id: string };
  * removed directly by scheduled cleanup.
  */
 export async function deletePublishedShare(env: Env, share: ShareRow): Promise<void> {
+  await enqueueDriveCleanupCandidates(env, share.owner_id, share.id, 'delete');
   const assets = await env.SHARING_DB.prepare(
     'SELECT id FROM media_assets WHERE share_id = ?',
   ).bind(share.id).all<CleanupAssetRow>();

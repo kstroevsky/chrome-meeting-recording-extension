@@ -49,7 +49,8 @@ function isOwnerRoute(pathname: string): boolean {
   return pathname === '/api/auth/session'
     || pathname === '/api/sharing-reader'
     || pathname === '/api/shares'
-    || pathname.startsWith('/api/shares/');
+    || pathname.startsWith('/api/shares/')
+    || pathname.startsWith('/api/origin-cleanup/');
 }
 
 function shouldRateLimitOwnerMutation(request: Request, url: URL): boolean {

@@ -20,23 +20,34 @@ const descriptor = {
   permissionId: 'permission-1',
 };
 
+const cleanupClaim = {
+  ...descriptor,
+  candidateId: 'candidate-1',
+  leaseId: 'lease-1',
+  leaseToken: 'token-1',
+  kind: 'permission' as const,
+};
+
 describe('ShareOriginCleanupCoordinator', () => {
   it('keeps Drive cleanup pending without failing a successful public revoke', async () => {
     const store = new ShareOriginCleanupStore(memoryArea());
     const revokeShare = jest.fn(async () => {
       expect((await store.get('share-1'))?.stage).toBe('server-action');
     });
-    const cleanupPermissions = jest.fn()
+    const cleanupDriveClaim = jest.fn()
       .mockRejectedValueOnce(new Error('Drive unavailable'))
       .mockResolvedValueOnce(undefined);
+    const completeDriveOriginCleanup = jest.fn(async () => {});
     const coordinator = new ShareOriginCleanupCoordinator({
       store,
       api: {
         getShareDriveOrigins: async () => [descriptor],
         revokeShare,
         deleteShare: async () => {},
+        claimDriveOriginCleanup: async () => ({ claims: [cleanupClaim], pending: false }),
+        completeDriveOriginCleanup,
       },
-      origins: { cleanupPermissions, cleanupPublishedData: async () => {} },
+      origins: { cleanupClaim: cleanupDriveClaim },
       now: () => 10,
     });
 
@@ -50,7 +61,8 @@ describe('ShareOriginCleanupCoordinator', () => {
     await coordinator.resumePending();
     expect(await store.get('share-1')).toBeUndefined();
     expect(revokeShare).toHaveBeenCalledTimes(1);
-    expect(cleanupPermissions).toHaveBeenCalledTimes(2);
+    expect(cleanupDriveClaim).toHaveBeenCalledTimes(2);
+    expect(completeDriveOriginCleanup).toHaveBeenCalledTimes(1);
   });
 
   it('replays an interrupted server delete before releasing Drive publication data', async () => {
@@ -58,24 +70,35 @@ describe('ShareOriginCleanupCoordinator', () => {
     const deleteShare = jest.fn()
       .mockRejectedValueOnce(new Error('lost response'))
       .mockResolvedValueOnce(undefined);
-    const cleanupPublishedData = jest.fn(async () => {});
+    const cleanupDriveClaim = jest.fn(async () => {});
+    const completeDriveOriginCleanup = jest.fn(async () => {});
     const coordinator = new ShareOriginCleanupCoordinator({
       store,
       api: {
         getShareDriveOrigins: async () => [descriptor],
         revokeShare: async () => {},
         deleteShare,
+        claimDriveOriginCleanup: async () => ({
+          claims: [{ ...cleanupClaim, kind: 'revision' as const }],
+          pending: false,
+        }),
+        completeDriveOriginCleanup,
       },
-      origins: { cleanupPermissions: async () => {}, cleanupPublishedData },
+      origins: { cleanupClaim: cleanupDriveClaim },
     });
 
     await expect(coordinator.run('share-1', 'delete')).rejects.toThrow('lost response');
     expect((await store.get('share-1'))?.stage).toBe('server-action');
-    expect(cleanupPublishedData).not.toHaveBeenCalled();
+    expect(cleanupDriveClaim).not.toHaveBeenCalled();
 
     await coordinator.resumePending();
     expect(deleteShare).toHaveBeenCalledTimes(2);
-    expect(cleanupPublishedData).toHaveBeenCalledWith([descriptor]);
+    expect(cleanupDriveClaim).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'revision',
+      fileId: descriptor.fileId,
+      revisionId: descriptor.revisionId,
+    }));
+    expect(completeDriveOriginCleanup).toHaveBeenCalledTimes(1);
     expect(await store.get('share-1')).toBeUndefined();
   });
 
@@ -89,22 +112,27 @@ describe('ShareOriginCleanupCoordinator', () => {
       updatedAt: 1,
     });
     const deleteShare = jest.fn(async () => {});
-    const cleanupPublishedData = jest.fn(async () => {});
+    const cleanupDriveClaim = jest.fn(async () => {});
     const coordinator = new ShareOriginCleanupCoordinator({
       store,
       api: {
         getShareDriveOrigins: async () => { throw new Error('must reuse persisted descriptors'); },
         revokeShare: async () => {},
         deleteShare,
+        claimDriveOriginCleanup: async (_shareId, action) => ({
+          claims: action === 'delete' ? [{ ...cleanupClaim, kind: 'revision' as const }] : [],
+          pending: false,
+        }),
+        completeDriveOriginCleanup: async () => {},
       },
-      origins: { cleanupPermissions: async () => {}, cleanupPublishedData },
+      origins: { cleanupClaim: cleanupDriveClaim },
       now: () => 20,
     });
 
     await coordinator.run('share-1', 'delete');
 
     expect(deleteShare).toHaveBeenCalledTimes(1);
-    expect(cleanupPublishedData).toHaveBeenCalledWith([descriptor]);
+    expect(cleanupDriveClaim).toHaveBeenCalledWith(expect.objectContaining({ kind: 'revision' }));
     expect(await store.get('share-1')).toBeUndefined();
   });
 });

@@ -1,5 +1,9 @@
 import { createIndexedDbKeyValueArea, type KeyValueArea } from '../offscreen/storage/indexedDbKeyValueArea';
-import type { DriveOriginCleanupDescriptor, DriveOriginPreparer } from './DriveOriginPreparer';
+import type {
+  DriveOriginCleanupClaim,
+  DriveOriginCleanupDescriptor,
+  DriveOriginPreparer,
+} from './DriveOriginPreparer';
 
 const SHARE_ORIGIN_CLEANUP_PREFIX = 'shareOriginCleanup:';
 
@@ -45,11 +49,16 @@ export interface ShareOriginCleanupApi {
   getShareDriveOrigins(shareId: string): Promise<DriveOriginCleanupDescriptor[]>;
   revokeShare(shareId: string): Promise<void>;
   deleteShare(shareId: string): Promise<void>;
+  claimDriveOriginCleanup(
+    shareId: string,
+    action: ShareOriginCleanupAction,
+  ): Promise<{ claims: DriveOriginCleanupClaim[]; pending: boolean }>;
+  completeDriveOriginCleanup(claim: DriveOriginCleanupClaim): Promise<void>;
 }
 
 export type ShareOriginCleanupCoordinatorDeps = {
   api: ShareOriginCleanupApi;
-  origins: Pick<DriveOriginPreparer, 'cleanupPermissions' | 'cleanupPublishedData'>;
+  origins: Pick<DriveOriginPreparer, 'cleanupClaim'>;
   store: ShareOriginCleanupStore;
   now?: () => number;
 };
@@ -128,8 +137,12 @@ export class ShareOriginCleanupCoordinator {
       await this.deps.store.put(job);
     }
 
-    if (job.action === 'delete') await this.deps.origins.cleanupPublishedData(job.origins);
-    else await this.deps.origins.cleanupPermissions(job.origins);
+    const cleanup = await this.deps.api.claimDriveOriginCleanup(job.shareId, job.action);
+    for (const claim of cleanup.claims) {
+      await this.deps.origins.cleanupClaim(claim);
+      await this.deps.api.completeDriveOriginCleanup(claim);
+    }
+    if (cleanup.pending) throw new Error('Drive origin cleanup is already in progress');
     await this.deps.store.remove(job.shareId);
   }
 }

@@ -52,15 +52,22 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
     api: service,
     getDriveToken: auth.getDriveToken,
   });
-  const publications = new SharePublicationCoordinator({
-    api: service,
-    origins,
-    store: publicationStore,
-  });
   const cleanup = new ShareOriginCleanupCoordinator({
     api: service,
     origins,
     store: cleanupStore,
+  });
+  const publications = new SharePublicationCoordinator({
+    api: {
+      createShare: (manifest) => service.createShare(manifest),
+      finalizeShare: (shareId) => service.finalizeShare(shareId),
+      revokeShare: async (shareId) => {
+        const local = await publicationStore.get(shareId);
+        await cleanup.run(shareId, 'revoke', local?.origins);
+      },
+    },
+    origins,
+    store: publicationStore,
   });
   const registry = new ShareRegistry(service, publicationStore);
 

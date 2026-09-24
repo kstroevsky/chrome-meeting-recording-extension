@@ -20,6 +20,7 @@
 import type { PublishedPlaybackManifest } from '../shared/sharing';
 import type {
   DriveOriginApi,
+  DriveOriginCleanupClaim,
   DriveOriginCleanupDescriptor,
   RegisterDriveOriginInput,
 } from './DriveOriginPreparer';
@@ -163,6 +164,41 @@ export class ShareServiceClient implements SharePublicationApi, DriveOriginApi, 
     throw lastError;
   }
 
+  async claimDriveOriginCleanup(
+    shareId: string,
+    action: 'revoke' | 'delete',
+  ): Promise<{ claims: DriveOriginCleanupClaim[]; pending: boolean }> {
+    const body = await this.requestJson(
+      `/api/shares/${segment(shareId)}/origin-cleanup/claim`,
+      {
+        method: 'POST',
+        json: { action },
+        statuses: [200],
+      },
+    );
+    if (!isRecord(body) || !Array.isArray(body.claims) || typeof body.pending !== 'boolean') {
+      throw new Error('Sharing service returned invalid Drive cleanup claims');
+    }
+    return {
+      claims: body.claims.map(parseDriveCleanupClaim),
+      pending: body.pending,
+    };
+  }
+
+  async completeDriveOriginCleanup(claim: DriveOriginCleanupClaim): Promise<void> {
+    await this.request(
+      `/api/origin-cleanup/${segment(claim.candidateId)}/complete`,
+      {
+        method: 'POST',
+        json: {
+          leaseId: claim.leaseId,
+          leaseToken: claim.leaseToken,
+        },
+        statuses: [204],
+      },
+    );
+  }
+
   async listShares(): Promise<RemoteShareSummary[]> {
     const shares: RemoteShareSummary[] = [];
     const seenCursors = new Set<string>();
@@ -272,6 +308,30 @@ function parseDriveCleanupDescriptor(value: unknown): DriveOriginCleanupDescript
   const permissionId = optionalStringField(value, 'permissionId');
   if (!fileId || !revisionId) throw new Error('Sharing service returned invalid Drive cleanup metadata');
   return { fileId, revisionId, ...(permissionId ? { permissionId } : {}) };
+}
+
+function parseDriveCleanupClaim(value: unknown): DriveOriginCleanupClaim {
+  if (!isRecord(value)) throw new Error('Sharing service returned invalid Drive cleanup claim');
+  const candidateId = stringField(value, 'candidateId');
+  const leaseId = stringField(value, 'leaseId');
+  const leaseToken = stringField(value, 'leaseToken');
+  const kind = value.kind;
+  const fileId = stringField(value, 'fileId');
+  const revisionId = stringField(value, 'revisionId');
+  const permissionId = optionalStringField(value, 'permissionId');
+  if (!candidateId || !leaseId || !leaseToken || (kind !== 'permission' && kind !== 'revision')
+    || !fileId || (kind === 'revision' && !revisionId)) {
+    throw new Error('Sharing service returned invalid Drive cleanup claim');
+  }
+  return {
+    candidateId,
+    leaseId,
+    leaseToken,
+    kind,
+    fileId,
+    revisionId: revisionId ?? '',
+    ...(permissionId ? { permissionId } : {}),
+  };
 }
 
 function numberField(value: unknown, field: string): number | undefined {

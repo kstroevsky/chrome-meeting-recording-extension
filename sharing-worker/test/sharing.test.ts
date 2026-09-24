@@ -155,6 +155,73 @@ describe('sharing worker vertical slice', () => {
     expect(detailText).not.toContain('permission-1');
   });
 
+  it('keeps a shared Drive file and revision referenced until the last live share is gone', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+    expect((await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' })).status).toBe(200);
+
+    expect((await putManifestFor('share-owner-id-2')).status).toBe(201);
+    expect((await registerOriginFor('share-owner-id-2')).status).toBe(201);
+    const secondFinalize = await ownerFetch('/api/shares/share-owner-id-2/finalize', { method: 'POST' });
+    const secondUrl = (await secondFinalize.json<{ shareUrl: string }>()).shareUrl;
+
+    expect((await ownerFetch('/api/shares/share-owner-id/revoke', { method: 'POST' })).status).toBe(204);
+    const revokeCleanup = await claimCleanup('share-owner-id', 'revoke');
+    expect(revokeCleanup).toEqual({ claims: [], pending: false });
+
+    expect((await ownerFetch('/api/shares/share-owner-id', { method: 'DELETE' })).status).toBe(204);
+    const deleteCleanup = await claimCleanup('share-owner-id', 'delete');
+    expect(deleteCleanup).toEqual({ claims: [], pending: false });
+
+    const open = await worker.fetch(new Request(secondUrl), env);
+    const media = await worker.fetch(new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { headers: { cookie: open.headers.get('set-cookie')!, range: 'bytes=0-1' } },
+    ), env);
+    expect(media.status).toBe(206);
+    expect(Array.from(new Uint8Array(await media.arrayBuffer()))).toEqual([10, 20]);
+
+    expect((await ownerFetch('/api/shares/share-owner-id-2/revoke', { method: 'POST' })).status).toBe(204);
+    const lastRevokeCleanup = await claimCleanup('share-owner-id-2', 'revoke');
+    expect(lastRevokeCleanup.pending).toBe(false);
+    expect(lastRevokeCleanup.claims).toEqual([
+      expect.objectContaining({
+        kind: 'permission',
+        fileId: 'drive-file-1',
+        permissionId: 'permission-1',
+      }),
+    ]);
+    await completeCleanup(lastRevokeCleanup.claims[0]);
+
+    expect((await ownerFetch('/api/shares/share-owner-id-2', { method: 'DELETE' })).status).toBe(204);
+    const lastDeleteCleanup = await claimCleanup('share-owner-id-2', 'delete');
+    expect(lastDeleteCleanup.pending).toBe(false);
+    expect(lastDeleteCleanup.claims).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'permission', fileId: 'drive-file-1' }),
+      expect.objectContaining({
+        kind: 'revision',
+        fileId: 'drive-file-1',
+        revisionId: 'revision-1',
+      }),
+    ]));
+  });
+
+  it('blocks a new origin registration while last-reference cleanup holds a lease', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+    expect((await ownerFetch('/api/shares/share-owner-id/revoke', { method: 'POST' })).status).toBe(204);
+    const cleanup = await claimCleanup('share-owner-id', 'revoke');
+    expect(cleanup.claims).toHaveLength(1);
+
+    expect((await putManifestFor('share-owner-id-2')).status).toBe(201);
+    const blocked = await registerOriginFor('share-owner-id-2');
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toEqual({ code: 'DRIVE_ORIGIN_CLEANUP_IN_PROGRESS' });
+
+    await completeCleanup(cleanup.claims[0]);
+    expect((await registerOriginFor('share-owner-id-2')).status).toBe(201);
+  });
+
   it('returns paginated registry summaries without embedding full manifests', async () => {
     expect((await putManifest()).status).toBe(201);
     const second = structuredClone(manifest);
@@ -581,10 +648,16 @@ describe('sharing worker vertical slice', () => {
 });
 
 async function putManifest(): Promise<Response> {
-  return ownerFetch('/api/shares/share-owner-id', {
+  return putManifestFor('share-owner-id');
+}
+
+async function putManifestFor(shareId: string): Promise<Response> {
+  const body = structuredClone(manifest);
+  body.id = shareId;
+  return ownerFetch(`/api/shares/${shareId}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(manifest),
+    body: JSON.stringify(body),
   });
 }
 
@@ -599,14 +672,50 @@ function driveOriginBody() {
 }
 
 async function registerOrigin(): Promise<Response> {
+  return registerOriginFor('share-owner-id');
+}
+
+async function registerOriginFor(shareId: string): Promise<Response> {
   return ownerFetch(
-    '/api/shares/share-owner-id/recordings/public-recording-id/tracks/tab-track/origin',
+    `/api/shares/${shareId}/recordings/public-recording-id/tracks/tab-track/origin`,
     {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(driveOriginBody()),
     },
   );
+}
+
+type CleanupClaim = {
+  candidateId: string;
+  leaseId: string;
+  leaseToken: string;
+  kind: 'permission' | 'revision';
+  fileId: string;
+  revisionId: string;
+  permissionId?: string;
+};
+
+async function claimCleanup(
+  shareId: string,
+  action: 'revoke' | 'delete',
+): Promise<{ claims: CleanupClaim[]; pending: boolean }> {
+  const response = await ownerFetch(`/api/shares/${shareId}/origin-cleanup/claim`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+  expect(response.status).toBe(200);
+  return response.json();
+}
+
+async function completeCleanup(claim: CleanupClaim): Promise<void> {
+  const response = await ownerFetch(`/api/origin-cleanup/${claim.candidateId}/complete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ leaseId: claim.leaseId, leaseToken: claim.leaseToken }),
+  });
+  expect(response.status).toBe(204);
 }
 
 async function ownerFetch(path: string, init: RequestInit = {}): Promise<Response> {
