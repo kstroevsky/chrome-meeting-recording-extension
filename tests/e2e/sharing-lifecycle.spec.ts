@@ -11,7 +11,12 @@ import {
   stopRecording,
   type ExtensionHarness,
 } from './helpers/extensionHarness';
-import { installDriveSimulator, setDriveMediaContent } from './helpers/driveSimulator';
+import {
+  getDriveSimulatorRelayFile,
+  installDriveSimulator,
+  resetDriveSimulatorSharingState,
+  setDriveMediaContent,
+} from './helpers/driveSimulator';
 import { sharingE2EOrigin, startSharingWorker, type SharingWorkerHarness } from './helpers/sharingWorker';
 
 test.describe('sharing vertical slice @sharing-e2e', () => {
@@ -23,7 +28,9 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
     let cleanBrowser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
     try {
       expect(process.env.SHARING_SERVICE_ORIGIN).toBe(sharingE2EOrigin);
+      resetDriveSimulatorSharingState();
       harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), { ignoreHTTPSErrors: true });
+      const driveStats = await installDriveSimulator(harness.context, 'fast');
       worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-state'));
 
       const meet = await openMockMeetPage(harness.context);
@@ -43,9 +50,8 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       await forceTrackOffsets(recordings, { tab: 0, mic: 3_800 });
       await recordings.reload({ waitUntil: 'domcontentloaded' });
 
-      // The Worker commits the chunk and then loses the response. Closing the
-      // owner page at the same time proves publication belongs to offscreen.
-      await worker.faults({ dropNextChunkResponse: true });
+      // Closing the owner page while Drive origins are still being prepared
+      // proves publication belongs to the offscreen runtime.
       await queueFirstRecording(recordings, true);
       await expect(recordings.locator('.share-dialog__progress')).toContainText('resumable');
       await expect.poll(async () => {
@@ -55,17 +61,25 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
           throw new Error(`Initial sharing publication failed: ${local.error || 'unknown error'}${snapshot.remoteError ? `; registry: ${snapshot.remoteError}` : ''}`);
         }
         return local?.status;
-      }, { timeout: 20_000 }).toMatch(/uploading|finalizing|active/);
+      }, { timeout: 20_000 }).toMatch(/preparing-origin|uploading|finalizing|active/);
       await recordings.close();
 
       await expect.poll(async () => (await worker!.state()).shares[0]?.status, { timeout: 60_000 }).toBe('active');
       const firstState = await worker.state();
-      expect(firstState.counters.droppedChunkResponses).toBe(1);
-      expect(firstState.objects.length).toBeGreaterThanOrEqual(3);
+      expect(firstState.counters.droppedOriginResponses).toBe(0);
+      expect(firstState.mediaAssets.length).toBeGreaterThanOrEqual(3);
+      expect(driveStats.revisionUpdates).toBeGreaterThanOrEqual(3);
+      expect(driveStats.permissionCreates).toBeGreaterThanOrEqual(3);
       const firstManifest = firstState.shares[0].manifest;
       const firstStreams = firstManifest.recordings[0].tracks.map((track: any) => track.stream);
       expect(firstStreams).toEqual(expect.arrayContaining(['tab', 'mic', 'self-video']));
       expect(firstManifest.recordings[0].tracks.find((track: any) => track.stream === 'mic')?.captureStartOffsetMs).toBe(3_800);
+      const firstManifestJson = JSON.stringify(firstManifest);
+      for (const asset of firstState.mediaAssets.filter((asset) => asset.share_id === firstState.shares[0].id)) {
+        expect(firstManifestJson).not.toContain(asset.drive_file_id);
+        expect(firstManifestJson).not.toContain(asset.revision_id);
+        if (asset.permission_id) expect(firstManifestJson).not.toContain(asset.permission_id);
+      }
 
       const snapshot = await listShares(harness.controlPage);
       const firstRemote = snapshot.remote.find((share: any) => share.id === firstState.shares[0].id);
@@ -117,17 +131,26 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       expect(await mic.evaluate((node: HTMLMediaElement) => node.volume)).toBeCloseTo(0.4, 2);
       const rangeStatus = await viewer.evaluate(async (endpoint) => (await fetch(endpoint, { headers: { Range: 'bytes=0-15' } })).status, tracks[0].mediaEndpoint);
       expect(rangeStatus).toBe(206);
+      await expect.poll(async () => (await worker!.state()).cacheEntries.length, { timeout: 20_000 }).toBeGreaterThan(0);
 
-      // A committed chunk with its response held open leaves the local durable
-      // offset behind the server. Killing Chrome here exercises replay from the
-      // same IndexedDB/OPFS profile after a full browser restart.
+      // Lose the response after the Worker has committed one immutable Drive
+      // origin. The local publication becomes resumable; a full Chrome restart
+      // must replay that same origin idempotently and finish the share.
       const beforeRestart = await worker.state();
-      await worker.faults({ delayNextChunkMs: 10_000 });
+      await worker.faults({ dropNextOriginResponse: true });
       const restartPage = await openRecordings(harness);
       await queueFirstRecording(restartPage, false);
-      await expect.poll(async () => (await worker!.state()).counters.chunkCommits, { timeout: 30_000 })
-        .toBeGreaterThan(beforeRestart.counters.chunkCommits);
-      harness = await restartExtensionHarness(harness, { ignoreHTTPSErrors: true });
+      await expect.poll(async () => (await worker!.state()).counters.droppedOriginResponses, { timeout: 30_000 })
+        .toBeGreaterThan(beforeRestart.counters.droppedOriginResponses);
+      await expect.poll(async () => {
+        const snapshot = await listShares(restartPage);
+        const newest = [...snapshot.local].sort((a: any, b: any) => b.createdAt - a.createdAt)[0];
+        return newest?.status;
+      }, { timeout: 30_000 }).toBe('failed');
+      harness = await restartExtensionHarness(harness, {
+        ignoreHTTPSErrors: true,
+        configureContext: async (context) => { await installDriveSimulator(context, 'fast'); },
+      });
       await expect.poll(async () => (await worker!.state()).shares.filter((share) => share.status === 'active').length, { timeout: 60_000 })
         .toBeGreaterThanOrEqual(2);
 
@@ -140,32 +163,24 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       await expect.poll(async () => (await worker!.state()).counters.authSessions, { timeout: 20_000 })
         .toBeGreaterThan(sessionsBefore);
 
-      // Expire the R2 multipart after begin. The uploader must abandon that
-      // durable session, create a fresh one, and still finalize the share.
-      const beforeExpired = await worker.state();
-      await worker.faults({ expireNextUpload: true });
-      await afterRestartPage.click('#recordings-tab');
-      await queueFirstRecording(afterRestartPage, false);
-      await expect.poll(async () => (await worker!.state()).counters.expiredUploads, { timeout: 30_000 })
-        .toBeGreaterThan(beforeExpired.counters.expiredUploads);
-      await expect.poll(async () => (await worker!.state()).shares.filter((share) => share.status === 'active').length, { timeout: 60_000 })
-        .toBeGreaterThanOrEqual(3);
-      expect((await worker.state()).counters.uploadBegins).toBeGreaterThan(beforeExpired.counters.uploadBegins + 1);
-      await afterRestartPage.getByRole('button', { name: 'Close sharing dialog' }).click();
-
-      // Revoke closes future viewer authorization without destroying the media.
-      await afterRestartPage.click('#shared-tab');
+      // Revoke closes viewer authorization first, then removes the relay's
+      // explicit Drive permission without deleting the owner's source files.
       const managedFirst = afterRestartPage.locator(`[data-share-id="${firstState.shares[0].id}"]`);
+      const firstAssets = firstState.mediaAssets.filter((asset) => asset.share_id === firstState.shares[0].id);
       await managedFirst.getByRole('button', { name: 'Revoke' }).click();
       await expect.poll(async () => (await worker!.state()).shares.find((share) => share.id === firstState.shares[0].id)?.status)
         .toBe('revoked');
       const denied = await viewer.evaluate(async () => (await fetch('/viewer/manifest', { cache: 'no-store' })).status);
       expect(denied).toBe(410);
-      expect((await worker.state()).objects.length).toBeGreaterThan(0);
+      await expect.poll(() => firstAssets.every((asset) =>
+        getDriveSimulatorRelayFile(asset.drive_file_id)?.permissions.length === 0), { timeout: 20_000 }).toBe(true);
+      for (const asset of firstAssets) {
+        expect(getDriveSimulatorRelayFile(asset.drive_file_id)).toBeDefined();
+      }
 
-      // Permanent delete is a distinct destructive operation and removes both
-      // server registry metadata and R2 objects belonging to this share. Lose
-      // the first successful response to prove the retry is idempotent end to end.
+      // Delete removes publication metadata/cache and releases the pinned
+      // revision, while the owner's Drive file remains. Lose the first successful
+      // server response to prove cleanup is idempotent end to end.
       await worker.faults({ dropNextDeleteResponse: true });
       afterRestartPage.once('dialog', (dialog) => void dialog.accept());
       await managedFirst.getByRole('button', { name: 'Delete published data' }).click();
@@ -173,6 +188,13 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
         .toBe(false);
       await expect(afterRestartPage.locator(`[data-share-id="${firstState.shares[0].id}"]`)).toHaveCount(0);
       expect((await worker.state()).counters.droppedDeleteResponses).toBe(1);
+      await expect.poll(() => firstAssets.every((asset) => getDriveSimulatorRelayFile(asset.drive_file_id)?.keepForever === false), {
+        timeout: 20_000,
+      }).toBe(true);
+      const afterDelete = await worker.state();
+      expect(afterDelete.mediaAssets.some((asset) => asset.share_id === firstState.shares[0].id)).toBe(false);
+      expect(afterDelete.cacheEntries.some((entry) => firstAssets.some((asset) => asset.id === entry.asset_id))).toBe(false);
+      for (const asset of firstAssets) expect(getDriveSimulatorRelayFile(asset.drive_file_id)).toBeDefined();
     } finally {
       await cleanBrowser?.close().catch(() => {});
       await worker?.stop().catch(() => {});
@@ -180,12 +202,14 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
     }
   });
 
-  test('keeps idle offscreen sharing alive across a >60 second upload response', async ({}, testInfo) => {
+  test('keeps idle offscreen sharing alive across a >60 second origin response', async ({}, testInfo) => {
     test.setTimeout(150_000);
     let harness: ExtensionHarness | null = null;
     let worker: SharingWorkerHarness | null = null;
     try {
+      resetDriveSimulatorSharingState();
       harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), { ignoreHTTPSErrors: true });
+      await installDriveSimulator(harness.context, 'fast');
       worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-soak-state'));
 
       const meet = await openMockMeetPage(harness.context);
@@ -202,11 +226,11 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       await stopRecording(harness.controlPage);
 
       const before = await worker.state();
-      await worker.faults({ delayNextChunkMs: 65_000 });
+      await worker.faults({ delayNextOriginMs: 65_000 });
       const recordings = await openRecordings(harness);
       await queueFirstRecording(recordings, false);
-      await expect.poll(async () => (await worker!.state()).counters.chunkCommits, { timeout: 20_000 })
-        .toBeGreaterThan(before.counters.chunkCommits);
+      await expect.poll(async () => (await worker!.state()).counters.originRegistrations, { timeout: 20_000 })
+        .toBeGreaterThan(before.counters.originRegistrations);
       await recordings.close();
 
       await harness.controlPage.waitForTimeout(40_000);
@@ -221,14 +245,15 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
     }
   });
 
-  test('publishes a Drive-only recording through authenticated range reads', async ({}, testInfo) => {
+  test('reuses a Drive-only recording without re-uploading media', async ({}, testInfo) => {
     test.setTimeout(90_000);
     let harness: ExtensionHarness | null = null;
     let worker: SharingWorkerHarness | null = null;
     try {
+      resetDriveSimulatorSharingState();
       harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), { ignoreHTTPSErrors: true });
-      worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-state'));
       const driveStats = await installDriveSimulator(harness.context, 'fast');
+      worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-state'));
       const meet = await openMockMeetPage(harness.context);
       const meetTabId = await findMockMeetTabId(harness.controlPage);
       await saveRecordingSettings(harness.controlPage, { recordingMode: 'opfs', micMode: 'separate', recordSelfVideo: false });
@@ -244,6 +269,8 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
         setDriveMediaContent(source.fileId, Buffer.from(source.base64, 'base64'), `${source.stream}.webm`);
       }
       await page.reload({ waitUntil: 'domcontentloaded' });
+      const sessionsBefore = driveStats.sessionsCreated;
+      const mediaReadsBefore = driveStats.mediaReads.length;
       await queueFirstRecording(page, false);
 
       await expect.poll(async () => {
@@ -253,10 +280,13 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
           throw new Error(`Drive publication failed: ${newest.error || 'unknown error'}; Drive reads=${driveStats.mediaReads.length}`);
         }
         return newest?.status;
-      }, { timeout: 20_000 }).toMatch(/uploading|finalizing|active/);
+      }, { timeout: 20_000 }).toMatch(/preparing-origin|uploading|finalizing|active/);
       await expect.poll(async () => (await worker!.state()).shares[0]?.status, { timeout: 60_000 }).toBe('active');
-      expect(driveStats.mediaReads.length).toBeGreaterThanOrEqual(driveSources.length);
-      expect(driveStats.mediaReads.every((read) => read.range?.startsWith('bytes=') === true)).toBe(true);
+      expect(driveStats.sessionsCreated).toBe(sessionsBefore);
+      expect(driveStats.mediaReads.length).toBe(mediaReadsBefore);
+      expect(driveStats.revisionUpdates).toBeGreaterThanOrEqual(driveSources.length);
+      expect(driveStats.permissionCreates).toBeGreaterThanOrEqual(driveSources.length);
+      expect((await worker.state()).mediaAssets).toHaveLength(driveSources.length);
     } finally {
       await worker?.stop().catch(() => {});
       if (harness) await closeHarness(harness).catch(() => {});
