@@ -77,6 +77,65 @@ describe('IntegrationPreviewService', () => {
     expect(preview.body).not.toContain('secret-meeting');
   });
 
+  it('keeps destination-scoped speaker aliases stable when a later revision backfills a speaker', async () => {
+    let transcript = {
+      source: 'meet-captions' as const,
+      segments: [
+        { tStartMs: 1_000, tEndMs: 2_000, speaker: 'Alice Private', text: 'Hello' },
+        { tStartMs: 2_000, tEndMs: 3_000, speaker: 'Bob Private', text: 'Hi' },
+      ],
+    };
+    const service = new IntegrationPreviewService({
+      getHistory: async () => history(),
+      getContext: async () => ({
+        recordingId: 'recording:internal-secret',
+        startedAt: 10_000,
+        source: { kind: 'meeting' },
+      }),
+      listNotations: async () => [],
+      getTranscript: async () => transcript,
+      getAnalysisState: async () => ({ status: 'none' }),
+    });
+    const first = await service.build('recording:internal-secret', POLICY, {
+      eventTypePrefix: 'dev.example',
+      eventKind: 'recording.ready.v1',
+      eventId: 'event_1',
+      eventTime: 20_000,
+      producerId: 'producer_1',
+      externalRecordingId: 'recording_external_stable',
+      revision: 1,
+    });
+
+    transcript = {
+      ...transcript,
+      segments: [
+        { tStartMs: 0, tEndMs: 900, speaker: 'Carol Private', text: 'Earlier speaker' },
+        ...transcript.segments,
+      ],
+    };
+    const second = await service.build('recording:internal-secret', POLICY, {
+      eventTypePrefix: 'dev.example',
+      eventKind: 'recording.updated.v1',
+      eventId: 'event_2',
+      eventTime: 21_000,
+      producerId: 'producer_1',
+      externalRecordingId: 'recording_external_stable',
+      revision: 2,
+    }, first.speakerAliases);
+
+    expect(JSON.parse(first.body).data.recording.transcript.segments.map(
+      (segment: { speaker?: string }) => segment.speaker,
+    )).toEqual(['Speaker 1', 'Speaker 2']);
+    expect(JSON.parse(second.body).data.recording.transcript.segments.map(
+      (segment: { speaker?: string }) => segment.speaker,
+    )).toEqual(['Speaker 3', 'Speaker 1', 'Speaker 2']);
+    expect(second.speakerAliases).toHaveLength(3);
+    const persistedAliases = JSON.stringify(second.speakerAliases);
+    expect(persistedAliases).not.toContain('Alice Private');
+    expect(persistedAliases).not.toContain('Bob Private');
+    expect(persistedAliases).not.toContain('Carol Private');
+  });
+
   it('marks explicitly selected but unavailable data as a manual partial fixture', async () => {
     const service = new IntegrationPreviewService({
       getHistory: async () => history(),

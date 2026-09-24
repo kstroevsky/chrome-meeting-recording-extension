@@ -14,6 +14,8 @@ import type { IntegrationPayloadMeasurement } from '../../integrations/payload';
 import type { IntegrationPayloadPreview } from '../../integrations/preview';
 import { normalizeIntegrationDataPolicy } from '../../integrations/policy';
 import type { IntegrationAnalysisProjectionSource } from '../../integrations/IntegrationProjector';
+import { extendSpeakerPseudonyms } from '../../integrations/SpeakerPseudonyms';
+import type { IntegrationSpeakerAlias } from '../../integrations/persistence';
 import type { AnalysisExportState } from '../library/analysis/RecordingAnalysisService';
 
 export const INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX = 'dev.meeting-recorder.preview';
@@ -39,6 +41,7 @@ export type IntegrationSnapshotEnvelope = {
 
 export type BuiltIntegrationSnapshot = IntegrationPayloadMeasurement & {
   readiness: IntegrationReadiness;
+  speakerAliases?: IntegrationSpeakerAlias[];
 };
 
 /** Reads canonical library aggregates and produces a real serialized fixture without networking. */
@@ -81,6 +84,7 @@ export class IntegrationPreviewService {
     recordingId: string,
     policy: IntegrationDataPolicy,
     envelope: IntegrationSnapshotEnvelope,
+    currentSpeakerAliases: readonly IntegrationSpeakerAlias[] = [],
   ): Promise<BuiltIntegrationSnapshot> {
     const normalizedPolicy = requirePreviewPolicy(policy);
     const [history, context, notations, transcript, analysisState] = await Promise.all([
@@ -95,12 +99,18 @@ export class IntegrationPreviewService {
 
     const readiness = previewReadiness(normalizedPolicy, history, transcript, analysisState);
     const analysis = analysisProjection(analysisState);
+    const pseudonyms = normalizedPolicy.transcript
+      && normalizedPolicy.transcriptSpeakers === 'pseudonyms'
+      && transcript
+      ? await extendSpeakerPseudonyms(transcript, envelope.externalRecordingId, currentSpeakerAliases)
+      : undefined;
     const measurement = buildIntegrationSnapshotPayload({
       ...envelope,
       readiness,
       projection: {
         externalRecordingId: envelope.externalRecordingId,
         policy: normalizedPolicy,
+        ...(pseudonyms ? { speakerPseudonyms: pseudonyms.bySpeaker } : {}),
         source: {
           history,
           context,
@@ -110,7 +120,13 @@ export class IntegrationPreviewService {
         },
       },
     });
-    return { ...measurement, readiness };
+    return {
+      ...measurement,
+      readiness,
+      ...((pseudonyms?.durable.length || currentSpeakerAliases.length)
+        ? { speakerAliases: pseudonyms?.durable ?? [...currentSpeakerAliases] }
+        : {}),
+    };
   }
 }
 

@@ -203,6 +203,21 @@ describe('projectIntegrationRecording', () => {
     ]);
   });
 
+  it('never reuses an existing stable pseudonym when a provided mapping is partial', () => {
+    const projected = projectIntegrationRecording({
+      externalRecordingId: 'recording_external_123',
+      policy: POLICY,
+      source: source(),
+      speakerPseudonyms: new Map([
+        ['Alice', 'Speaker 4'],
+      ]),
+    });
+
+    expect(projected.transcript?.segments.map((segment) => segment.speaker)).toEqual([
+      'Speaker 4', 'Speaker 5', 'Speaker 4',
+    ]);
+  });
+
   it('requires metadata before a recording snapshot can leave the browser', () => {
     expect(() => projectIntegrationRecording({
       externalRecordingId: 'recording_external_123',
