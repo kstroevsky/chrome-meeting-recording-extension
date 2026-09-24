@@ -20,6 +20,33 @@ test('classifies representative repository paths conservatively', () => {
     ['src/integrations/IntegrationCoordinator.ts', ['verify', 'integration']],
     ['src/background/integrations/BackgroundIntegrationRuntime.ts', ['verify', 'integration']],
     [
+      'src/background/runtime/createBackgroundRuntime.ts',
+      ['verify', 'integration', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/background/library/createLibraryRuntime.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/library/RecordingLibraryDatabase.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/messaging/MessageRouter.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/recording/RecordingStartCommands.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/recording/RecordingLifecycleCommands.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    ['src/shared/recordingHistory.ts', ['verify', 'integration', 'mock-e2e']],
+    ['src/shared/transcript.ts', ['verify', 'integration', 'mock-e2e']],
+    ['src/shared/notations.ts', ['verify', 'integration', 'mock-e2e']],
+    [
       'src/settings/IntegrationSettingsController.ts',
       ['verify', 'integration'],
     ],
@@ -202,6 +229,29 @@ test('fingerprints only move for domain-owned inputs', () => {
     computeDomainFingerprint('sharing', sharingEdited),
     before.sharing,
   );
+});
+
+test('integration fingerprint follows integration inputs but ignores sharing-only inputs', () => {
+  const base = [
+    { path: '.github/workflows/ci.yml', blob: 'ci-1' },
+    { path: 'src/integrations/IntegrationCoordinator.ts', blob: 'integration-1' },
+    { path: 'sharing-worker/src/router.ts', blob: 'sharing-1' },
+  ];
+  const before = computeDomainFingerprint('integration', base);
+
+  const integrationEdited = base.map((entry) => (
+    entry.path === 'src/integrations/IntegrationCoordinator.ts'
+      ? { ...entry, blob: 'integration-2' }
+      : entry
+  ));
+  assert.notEqual(computeDomainFingerprint('integration', integrationEdited), before);
+
+  const sharingEdited = base.map((entry) => (
+    entry.path === 'sharing-worker/src/router.ts'
+      ? { ...entry, blob: 'sharing-2' }
+      : entry
+  ));
+  assert.equal(computeDomainFingerprint('integration', sharingEdited), before);
 });
 
 test('shared extension harness invalidates mock, sharing and production', () => {
