@@ -44,10 +44,10 @@
     "staging": {
       "name": "recording-extension-sharing-staging",
       "vars": {
-        "ALLOWED_EXTENSION_ORIGINS": "chrome-extension://replace-with-staging-extension-id",
+        "ALLOWED_EXTENSION_ORIGINS": "chrome-extension://kiineaoggnikfpcicndeocnbmaeediom",
         "VIEWER_SESSION_TTL_SECONDS": "43200",
         "OWNER_SESSION_TTL_SECONDS": "3600",
-        "GOOGLE_OAUTH_CLIENT_ID": "replace-with-staging-oauth-client-id.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_ID": "908748525392-0mjfkrpc11tvssqjg7mlsbf621f51eq4.apps.googleusercontent.com",
         "CAPABILITY_KEY_ID": "v1",
         "OWNER_MUTATION_RATE_PER_MINUTE": "120",
         "MAX_SHARES_PER_OWNER": "200",
@@ -65,7 +65,7 @@
         {
           "binding": "SHARING_DB",
           "database_name": "recording-extension-sharing-staging",
-          "database_id": "00000000-0000-0000-0000-000000000002",
+          "database_id": "1c908b95-04b7-43e4-845f-852695e83909",
           "migrations_dir": "migrations"
         }
       ],
