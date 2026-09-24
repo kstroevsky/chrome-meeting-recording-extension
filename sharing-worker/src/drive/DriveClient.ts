@@ -7,6 +7,10 @@ const CONTROL_MAX_ATTEMPTS = 4;
 type DriveServiceEnv = Env & {
   GOOGLE_DRIVE_READER_EMAIL: string;
   GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY: string;
+  /** Test/local override. Production omits this and uses Google's API origin. */
+  GOOGLE_DRIVE_API_ORIGIN?: string;
+  /** Test/local override. Production omits this and uses Google's OAuth token URL. */
+  GOOGLE_DRIVE_TOKEN_URL?: string;
 };
 
 export type DriveRevisionMetadata = {
@@ -71,7 +75,7 @@ export async function fetchDriveRevisionRange(
 ): Promise<Response> {
   const token = await getServiceAccountAccessToken(env);
   return await fetch(
-    `${DRIVE_API_ORIGIN}/drive/v3/files/${segment(fileId)}/revisions/${segment(revisionId)}?alt=media`,
+    `${driveApiOrigin(env)}/drive/v3/files/${segment(fileId)}/revisions/${segment(revisionId)}?alt=media`,
     {
       method: 'GET',
       headers: {
@@ -89,7 +93,7 @@ async function controlRequest(env: Env, path: string): Promise<Response> {
     const token = await getServiceAccountAccessToken(env, attempt > 1);
     let response: Response;
     try {
-      response = await fetch(DRIVE_API_ORIGIN + path, {
+      response = await fetch(driveApiOrigin(env) + path, {
         method: 'GET',
         headers: { authorization: `Bearer ${token}` },
         cache: 'no-store',
@@ -141,12 +145,13 @@ async function getServiceAccountAccessToken(env: Env, forceRefresh = false): Pro
 
 async function mintToken(env: Env, email: string): Promise<CachedToken> {
   const now = Math.floor(Date.now() / 1000);
-  const assertion = await signJwt(env, email, now);
+  const tokenUrl = driveTokenUrl(env);
+  const assertion = await signJwt(env, email, now, tokenUrl);
   const body = new URLSearchParams({
     grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
     assertion,
   });
-  const response = await fetch(GOOGLE_TOKEN_URL, {
+  const response = await fetch(tokenUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,
@@ -167,12 +172,12 @@ async function mintToken(env: Env, email: string): Promise<CachedToken> {
   };
 }
 
-async function signJwt(env: Env, email: string, now: number): Promise<string> {
+async function signJwt(env: Env, email: string, now: number, audience: string): Promise<string> {
   const header = base64UrlJson({ alg: 'RS256', typ: 'JWT' });
   const payload = base64UrlJson({
     iss: email,
     scope: DRIVE_READONLY_SCOPE,
-    aud: GOOGLE_TOKEN_URL,
+    aud: audience,
     iat: now,
     exp: now + 3600,
   });
@@ -219,6 +224,27 @@ function base64UrlBytes(bytes: Uint8Array): string {
 function invalidateToken(): void {
   cachedToken = null;
   pendingToken = null;
+}
+
+function driveApiOrigin(env: Env): string {
+  const configured = (env as DriveServiceEnv).GOOGLE_DRIVE_API_ORIGIN?.trim();
+  if (!configured) return DRIVE_API_ORIGIN;
+  const url = new URL(configured);
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:')
+    || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('GOOGLE_DRIVE_API_ORIGIN must be a bare HTTP(S) origin');
+  }
+  return url.origin;
+}
+
+function driveTokenUrl(env: Env): string {
+  const configured = (env as DriveServiceEnv).GOOGLE_DRIVE_TOKEN_URL?.trim();
+  if (!configured) return GOOGLE_TOKEN_URL;
+  const url = new URL(configured);
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password || url.hash) {
+    throw new Error('GOOGLE_DRIVE_TOKEN_URL must be an HTTP(S) URL without credentials or fragments');
+  }
+  return url.toString();
 }
 
 function segment(value: string): string {

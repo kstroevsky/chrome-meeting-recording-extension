@@ -1,27 +1,23 @@
 import worker from '../src/index';
 
 type Faults = {
-  delayNextChunkMs: number;
-  dropNextChunkResponse: boolean;
+  delayNextOriginMs: number;
+  dropNextOriginResponse: boolean;
   dropNextDeleteResponse: boolean;
-  expireNextUpload: boolean;
   ownerUnauthorizedOnce: boolean;
 };
 
 const faults: Faults = {
-  delayNextChunkMs: 0,
-  dropNextChunkResponse: false,
+  delayNextOriginMs: 0,
+  dropNextOriginResponse: false,
   dropNextDeleteResponse: false,
-  expireNextUpload: false,
   ownerUnauthorizedOnce: false,
 };
 
 const counters = {
   authSessions: 0,
-  uploadBegins: 0,
-  chunkCommits: 0,
-  expiredUploads: 0,
-  droppedChunkResponses: 0,
+  originRegistrations: 0,
+  droppedOriginResponses: 0,
   droppedDeleteResponses: 0,
 };
 
@@ -39,44 +35,28 @@ export default {
       });
     }
 
-    const response = await worker.fetch(request, env);
+    const response = await worker.fetch(request, env, ctx);
     if (url.pathname === '/api/auth/session' && response.ok) counters.authSessions += 1;
 
-    const begin = /\/uploads$/.test(url.pathname) && request.method === 'POST';
-    if (begin && response.status === 201) {
-      counters.uploadBegins += 1;
-      if (faults.expireNextUpload) {
-        faults.expireNextUpload = false;
-        const body = await response.clone().json() as { uploadId?: string };
-        if (body.uploadId) {
-          const upload = await env.SHARING_DB.prepare(
-            'SELECT object_key, r2_upload_id FROM share_uploads WHERE id = ?',
-          ).bind(body.uploadId).first<{ object_key: string; r2_upload_id: string }>();
-          if (upload) {
-            await env.SHARING_MEDIA.resumeMultipartUpload(upload.object_key, upload.r2_upload_id).abort();
-            counters.expiredUploads += 1;
-          }
-        }
-      }
-    }
-
-    const chunk = /^\/api\/share-uploads\/[^/]+\/chunks\/\d+$/.test(url.pathname) && request.method === 'PUT';
-    if (chunk && response.ok) {
-      counters.chunkCommits += 1;
-      if (faults.dropNextChunkResponse) {
-        faults.dropNextChunkResponse = false;
-        counters.droppedChunkResponses += 1;
+    const origin = /^\/api\/shares\/[^/]+\/recordings\/[^/]+\/tracks\/[^/]+\/origin$/.test(url.pathname)
+      && request.method === 'PUT';
+    if (origin && response.ok) {
+      counters.originRegistrations += 1;
+      if (faults.dropNextOriginResponse) {
+        faults.dropNextOriginResponse = false;
+        counters.droppedOriginResponses += 1;
         return new Response(JSON.stringify({ code: 'E2E_LOST_RESPONSE' }), {
           status: 503,
           headers: { 'content-type': 'application/json' },
         });
       }
-      if (faults.delayNextChunkMs > 0) {
-        const delay = faults.delayNextChunkMs;
-        faults.delayNextChunkMs = 0;
+      if (faults.delayNextOriginMs > 0) {
+        const delay = faults.delayNextOriginMs;
+        faults.delayNextOriginMs = 0;
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
+
     const deleteShare = /^\/api\/shares\/[^/]+$/.test(url.pathname) && request.method === 'DELETE';
     if (deleteShare && response.ok && faults.dropNextDeleteResponse) {
       faults.dropNextDeleteResponse = false;
@@ -96,10 +76,11 @@ export default {
 async function configureFaults(request: Request): Promise<Response> {
   const body = await request.json().catch(() => null) as Partial<Faults> | null;
   if (!body) return new Response('invalid fault config', { status: 400 });
-  if (body.delayNextChunkMs != null) faults.delayNextChunkMs = Math.max(0, Math.min(90_000, Math.floor(body.delayNextChunkMs)));
-  if (body.dropNextChunkResponse != null) faults.dropNextChunkResponse = body.dropNextChunkResponse === true;
+  if (body.delayNextOriginMs != null) {
+    faults.delayNextOriginMs = Math.max(0, Math.min(90_000, Math.floor(body.delayNextOriginMs)));
+  }
+  if (body.dropNextOriginResponse != null) faults.dropNextOriginResponse = body.dropNextOriginResponse === true;
   if (body.dropNextDeleteResponse != null) faults.dropNextDeleteResponse = body.dropNextDeleteResponse === true;
-  if (body.expireNextUpload != null) faults.expireNextUpload = body.expireNextUpload === true;
   if (body.ownerUnauthorizedOnce != null) faults.ownerUnauthorizedOnce = body.ownerUnauthorizedOnce === true;
   return Response.json({ ...faults });
 }
@@ -108,19 +89,38 @@ async function state(env: Env): Promise<Response> {
   const shares = await env.SHARING_DB.prepare(
     'SELECT id, owner_id, status, manifest_json, created_at, updated_at FROM shares ORDER BY created_at',
   ).all<{ id: string; owner_id: string; status: string; manifest_json: string; created_at: number; updated_at: number }>();
-  const uploads = await env.SHARING_DB.prepare(
-    'SELECT id, share_id, status, offset, bytes FROM share_uploads ORDER BY created_at',
-  ).all<{ id: string; share_id: string; status: string; offset: number; bytes: number }>();
-  const objects = await env.SHARING_MEDIA.list({ prefix: 'shares/' });
+  const mediaAssets = await env.SHARING_DB.prepare(
+    `SELECT id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes,
+            mime_type, permission_id
+       FROM media_assets
+      ORDER BY created_at`,
+  ).all<{
+    id: string;
+    share_id: string;
+    recording_id: string;
+    track_id: string;
+    drive_file_id: string;
+    revision_id: string;
+    bytes: number;
+    mime_type: string;
+    permission_id: string | null;
+  }>();
+  const cacheEntries = await env.SHARING_DB.prepare(
+    `SELECT cache_key, asset_id, bytes, cached_at, expires_at
+       FROM media_cache_entries
+      ORDER BY cached_at`,
+  ).all<{ cache_key: string; asset_id: string; bytes: number; cached_at: number; expires_at: number }>();
+  const cacheObjects = await env.SHARING_MEDIA.list({ prefix: 'cache/v1/' });
   return Response.json({
     counters: { ...counters },
     faults: { ...faults },
     shares: shares.results.map((share) => ({ ...share, manifest: JSON.parse(share.manifest_json), manifest_json: undefined })),
-    uploads: uploads.results,
-    objects: objects.objects.map((object) => ({ key: object.key, size: object.size })),
+    mediaAssets: mediaAssets.results,
+    cacheEntries: cacheEntries.results,
+    cacheObjects: cacheObjects.objects.map((object) => ({ key: object.key, size: object.size })),
   });
 }
 
 function isOwnerRequest(pathname: string): boolean {
-  return pathname.startsWith('/api/shares') || pathname.startsWith('/api/share-uploads');
+  return pathname === '/api/sharing-reader' || pathname.startsWith('/api/shares');
 }
