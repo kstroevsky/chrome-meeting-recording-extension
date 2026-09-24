@@ -15,7 +15,18 @@ function domains(path) {
 test('classifies representative repository paths conservatively', () => {
   const cases = new Map([
     ['docs/sharing-operations.md', []],
+    ['docs/schemas/integration-recording-ready-v1.json', ['verify', 'integration']],
     ['src/sharing/README.md', []],
+    ['src/integrations/IntegrationCoordinator.ts', ['verify', 'integration']],
+    ['src/background/integrations/BackgroundIntegrationRuntime.ts', ['verify', 'integration']],
+    [
+      'src/settings/IntegrationSettingsController.ts',
+      ['verify', 'integration'],
+    ],
+    [
+      'src/platform/chrome/permissions.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
     ['sharing-worker/src/router.ts', ['sharing']],
     ['sharing-worker/migrations/0005_x.sql', ['sharing']],
     ['src/sharing/ShareMediaSourceResolver.ts', ['verify', 'sharing']],
@@ -85,7 +96,7 @@ test('classifies representative repository paths conservatively', () => {
     ],
     [
       'src/shared/protocol.ts',
-      ['verify', 'sharing', 'mock-e2e'],
+      ['verify', 'integration', 'sharing', 'mock-e2e'],
     ],
     [
       'src/shared/player/PlaybackClock.ts',
@@ -117,6 +128,7 @@ test('unknown paths force every domain and report missing ownership', () => {
   const result = classifyChangedFiles(['src/exporting/foo.py']);
   assert.deepEqual(result.relevant, {
     verify: true,
+    integration: true,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,
@@ -128,6 +140,7 @@ test('unknown assets also fail closed unless explicitly ignored', () => {
   const result = classifyChangedFiles(['assets/new-image.png']);
   assert.deepEqual(result.relevant, {
     verify: true,
+    integration: true,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,
@@ -139,6 +152,7 @@ test('explicit inert docs stay ignored', () => {
   const result = classifyChangedFiles(['docs/new-note.md']);
   assert.deepEqual(result.relevant, {
     verify: false,
+    integration: false,
     'mock-e2e': false,
     sharing: false,
     'production-e2e': false,
@@ -258,6 +272,7 @@ test('PR relevance stays PR-wide while unchanged fingerprints are reusable', () 
 
   assert.deepEqual(plan.relevant, {
     verify: true,
+    integration: false,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,
@@ -284,6 +299,7 @@ test('push validation forces all domains independent of changed-file classificat
   });
   assert.deepEqual(plan.relevant, {
     verify: true,
+    integration: true,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,

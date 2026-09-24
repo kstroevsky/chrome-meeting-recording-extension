@@ -16,6 +16,9 @@ export function normalizeWebhookEndpoint(value: string): NormalizedWebhookEndpoi
   if (url.hash) throw new Error('Webhook endpoint must not contain a fragment');
   return {
     endpoint: url.toString(),
-    hostPermission: `${url.origin}/*`,
+    // Chrome extension match patterns do not include ports. Keep a custom port
+    // on the fetch endpoint, but request the scheme + host permission Chrome
+    // can actually match. URL.hostname retains IPv6 brackets.
+    hostPermission: `${url.protocol}//${url.hostname}/*`,
   };
 }

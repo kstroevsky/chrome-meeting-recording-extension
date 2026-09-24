@@ -29,6 +29,10 @@ jobs:
       verify_fingerprint: ${{ steps.plan.outputs.verify_fingerprint }}
       verify_cache_key: ${{ steps.plan.outputs.verify_cache_key }}
       verify_cached: ${{ steps.cache-verify.outputs.cache-hit }}
+      integration_relevant: ${{ steps.plan.outputs.integration_relevant }}
+      integration_fingerprint: ${{ steps.plan.outputs.integration_fingerprint }}
+      integration_cache_key: ${{ steps.plan.outputs.integration_cache_key }}
+      integration_cached: ${{ steps.cache-integration.outputs.cache-hit }}
       mock_e2e_relevant: ${{ steps.plan.outputs.mock_e2e_relevant }}
       mock_e2e_fingerprint: ${{ steps.plan.outputs.mock_e2e_fingerprint }}
       mock_e2e_cache_key: ${{ steps.plan.outputs.mock_e2e_cache_key }}
@@ -76,6 +80,16 @@ jobs:
         with:
           path: .ci-validation-cache/mock-e2e.json
           key: ${{ steps.plan.outputs.mock_e2e_cache_key }}
+          lookup-only: true
+
+      - name: Look up integration validation
+        id: cache-integration
+        if: github.event_name == 'pull_request' && steps.plan.outputs.integration_relevant == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/integration.json
+          key: ${{ steps.plan.outputs.integration_cache_key }}
           lookup-only: true
 
       - name: Look up sharing validation
@@ -201,6 +215,39 @@ jobs:
           path: .ci-validation-cache/mock-e2e.json
           key: ${{ needs.plan.outputs.mock_e2e_cache_key }}
 
+  integration:
+    needs: plan
+    if: needs.plan.outputs.integration_relevant == 'true' && needs.plan.outputs.integration_cached != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check:ci-domains
+      - run: npm run typecheck
+      - run: npm run test:integration
+      - run: node --test tests/scripts/validation-plan.test.mjs
+
+      - name: Write integration success marker
+        run: >-
+          node scripts/ci/plan-validation.mjs mark
+          integration
+          "${{ needs.plan.outputs.integration_fingerprint }}"
+          .ci-validation-cache/integration.json
+      - name: Save integration success marker
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/integration.json
+          key: ${{ needs.plan.outputs.integration_cache_key }}
+
   sharing:
     needs: plan
     if: needs.plan.outputs.sharing_relevant == 'true' && needs.plan.outputs.sharing_cached != 'true'
@@ -307,6 +354,7 @@ jobs:
     needs:
       - plan
       - verify
+      - integration
       - mock-e2e
       - sharing
       - production-e2e
@@ -319,6 +367,9 @@ jobs:
           VERIFY_RESULT: ${{ needs.verify.result }}
           VERIFY_RELEVANT: ${{ needs.plan.outputs.verify_relevant }}
           VERIFY_CACHED: ${{ needs.plan.outputs.verify_cached }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          INTEGRATION_RELEVANT: ${{ needs.plan.outputs.integration_relevant }}
+          INTEGRATION_CACHED: ${{ needs.plan.outputs.integration_cached }}
           MOCK_E2E_RESULT: ${{ needs['mock-e2e'].result }}
           MOCK_E2E_RELEVANT: ${{ needs.plan.outputs.mock_e2e_relevant }}
           MOCK_E2E_CACHED: ${{ needs.plan.outputs.mock_e2e_cached }}
@@ -336,6 +387,7 @@ jobs:
 
           const domains = [
             ['verify', 'VERIFY'],
+            ['integration', 'INTEGRATION'],
             ['mock-e2e', 'MOCK_E2E'],
             ['sharing', 'SHARING'],
             ['production-e2e', 'PRODUCTION_E2E'],
