@@ -154,6 +154,20 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       });
       await expect.poll(async () => (await worker!.state()).shares.filter((share) => share.status === 'active').length, { timeout: 60_000 })
         .toBeGreaterThanOrEqual(2);
+      const afterRestartState = await worker.state();
+      const firstShareAssets = firstState.mediaAssets.filter((asset) => asset.share_id === firstState.shares[0].id);
+      const otherActiveShareIds = new Set(afterRestartState.shares
+        .filter((share) => share.id !== firstState.shares[0].id && share.status === 'active')
+        .map((share) => share.id));
+      const otherActiveAssets = afterRestartState.mediaAssets.filter((asset) => otherActiveShareIds.has(asset.share_id));
+      const hasSurvivingFileReference = (asset: (typeof firstShareAssets)[number]) =>
+        otherActiveAssets.some((candidate) => candidate.drive_file_id === asset.drive_file_id);
+      const hasSurvivingRevisionReference = (asset: (typeof firstShareAssets)[number]) =>
+        otherActiveAssets.some((candidate) =>
+          candidate.drive_file_id === asset.drive_file_id
+          && candidate.revision_id === asset.revision_id);
+      expect(firstShareAssets.some(hasSurvivingRevisionReference)).toBe(true);
+      expect(firstShareAssets.some((asset) => !hasSurvivingRevisionReference(asset))).toBe(true);
 
       // Force one owner 401: ShareServiceClient must renew its short-lived owner
       // session and retry, while the Google identity token stays brokered by background.
@@ -164,24 +178,25 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       await expect.poll(async () => (await worker!.state()).counters.authSessions, { timeout: 20_000 })
         .toBeGreaterThan(sessionsBefore);
 
-      // Revoke closes viewer authorization first, then removes the relay's
-      // explicit Drive permission without deleting the owner's source files.
+      // Revoke closes this viewer authorization first. The restarted second
+      // publication reuses these origins, so their relay permission must stay.
       const managedFirst = afterRestartPage.locator(`[data-share-id="${firstState.shares[0].id}"]`);
-      const firstAssets = firstState.mediaAssets.filter((asset) => asset.share_id === firstState.shares[0].id);
+      const firstAssets = firstShareAssets;
       await managedFirst.getByRole('button', { name: 'Revoke' }).click();
       await expect.poll(async () => (await worker!.state()).shares.find((share) => share.id === firstState.shares[0].id)?.status)
         .toBe('revoked');
       const denied = await viewer.evaluate(async () => (await fetch('/viewer/manifest', { cache: 'no-store' })).status);
       expect(denied).toBe(410);
       await expect.poll(() => firstAssets.every((asset) =>
-        getDriveSimulatorRelayFile(asset.drive_file_id)?.permissions.length === 0), { timeout: 20_000 }).toBe(true);
+        getDriveSimulatorRelayFile(asset.drive_file_id)?.permissions.length
+          === (hasSurvivingFileReference(asset) ? 1 : 0)), { timeout: 20_000 }).toBe(true);
       for (const asset of firstAssets) {
         expect(getDriveSimulatorRelayFile(asset.drive_file_id)).toBeDefined();
       }
 
-      // Delete removes publication metadata/cache and releases the pinned
-      // revision, while the owner's Drive file remains. Lose the first successful
-      // server response to prove cleanup is idempotent end to end.
+      // Delete removes this publication's metadata/cache while the shared
+      // revision stays pinned for the surviving publication. Lose the first
+      // successful server response to prove cleanup is idempotent end to end.
       await worker.faults({ dropNextDeleteResponse: true });
       afterRestartPage.once('dialog', (dialog) => void dialog.accept());
       await managedFirst.getByRole('button', { name: 'Delete published data' }).click();
@@ -189,7 +204,8 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
         .toBe(false);
       await expect(afterRestartPage.locator(`[data-share-id="${firstState.shares[0].id}"]`)).toHaveCount(0);
       expect((await worker.state()).counters.droppedDeleteResponses).toBe(1);
-      await expect.poll(() => firstAssets.every((asset) => getDriveSimulatorRelayFile(asset.drive_file_id)?.keepForever === false), {
+      await expect.poll(() => firstAssets.every((asset) =>
+        getDriveSimulatorRelayFile(asset.drive_file_id)?.keepForever === hasSurvivingRevisionReference(asset)), {
         timeout: 20_000,
       }).toBe(true);
       const afterDelete = await worker.state();
@@ -363,6 +379,111 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       expect(driveStats.revisionUpdates).toBeGreaterThanOrEqual(driveSources.length);
       expect(driveStats.permissionCreates).toBeGreaterThanOrEqual(driveSources.length);
       expect((await worker.state()).mediaAssets).toHaveLength(driveSources.length);
+    } finally {
+      await worker?.stop().catch(() => {});
+      if (harness) await closeHarness(harness).catch(() => {});
+    }
+  });
+
+  test('reuses one OPFS Drive origin across shares and cleans it only after the last share', async ({}, testInfo) => {
+    test.setTimeout(120_000);
+    let harness: ExtensionHarness | null = null;
+    let worker: SharingWorkerHarness | null = null;
+    try {
+      resetDriveSimulatorSharingState();
+      harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), { ignoreHTTPSErrors: true });
+      const driveStats = await installDriveSimulator(harness.context, 'fast');
+      worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-shared-origin-state'));
+
+      const meet = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: 'opfs',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      await meet.waitForTimeout(2_000);
+      await stopRecording(harness.controlPage);
+
+      const firstPage = await openRecordings(harness);
+      await queueFirstRecording(firstPage, false);
+      await expect.poll(async () => (await worker!.state()).shares.filter((share) => share.status === 'active').length, {
+        timeout: 60_000,
+      }).toBe(1);
+      const afterFirst = await worker.state();
+      const firstShareId = afterFirst.shares.find((share) => share.status === 'active')!.id;
+      const firstAsset = afterFirst.mediaAssets.find((asset) => asset.share_id === firstShareId)!;
+      expect(firstAsset).toBeDefined();
+      expect(driveStats.sessionsCreated).toBe(1);
+
+      const secondPage = await openRecordings(harness);
+      await queueFirstRecording(secondPage, false);
+      await expect.poll(async () => (await worker!.state()).shares.filter((share) => share.status === 'active').length, {
+        timeout: 60_000,
+      }).toBe(2);
+
+      const afterSecond = await worker.state();
+      const secondShare = afterSecond.shares.find((share) => share.id !== firstShareId && share.status === 'active')!;
+      const secondAsset = afterSecond.mediaAssets.find((asset) => asset.share_id === secondShare.id)!;
+      expect(secondAsset).toBeDefined();
+      expect(secondAsset.drive_file_id).toBe(firstAsset.drive_file_id);
+      expect(secondAsset.revision_id).toBe(firstAsset.revision_id);
+      expect(secondAsset.permission_id).toBe(firstAsset.permission_id);
+      expect(driveStats.sessionsCreated).toBe(1);
+
+      const registry = await listShares(secondPage);
+      const secondRemote = registry.remote.find((share: any) => share.id === secondShare.id);
+      expect(secondRemote?.shareUrl).toBeTruthy();
+      await secondPage.getByRole('button', { name: 'Done', exact: true }).click();
+
+      await secondPage.click('#shared-tab');
+      const firstCard = secondPage.locator(`[data-share-id="${firstShareId}"]`);
+      await firstCard.getByRole('button', { name: 'Revoke' }).click();
+      await expect.poll(async () => (await worker!.state()).shares.find((share) => share.id === firstShareId)?.status, {
+        timeout: 20_000,
+      }).toBe('revoked');
+      await expect.poll(() => getDriveSimulatorRelayFile(firstAsset.drive_file_id)?.permissions.length, {
+        timeout: 20_000,
+      }).toBe(1);
+      expect(getDriveSimulatorRelayFile(firstAsset.drive_file_id)?.keepForever).toBe(true);
+
+      const viewer = await harness.context.newPage();
+      await viewer.goto(secondRemote.shareUrl, { waitUntil: 'domcontentloaded' });
+      const viewerManifest = await viewer.evaluate(async () => await (await fetch('/viewer/manifest')).json());
+      const endpoint = viewerManifest.recordings[0].tracks[0].mediaEndpoint as string;
+      expect(await viewer.evaluate(async (mediaEndpoint) => (
+        await fetch(mediaEndpoint, { headers: { Range: 'bytes=0-0' }, cache: 'no-store' })
+      ).status, endpoint)).toBe(206);
+
+      secondPage.once('dialog', (dialog) => void dialog.accept());
+      await firstCard.getByRole('button', { name: 'Delete published data' }).click();
+      await expect.poll(async () => (await worker!.state()).shares.some((share) => share.id === firstShareId), {
+        timeout: 20_000,
+      }).toBe(false);
+      expect(getDriveSimulatorRelayFile(firstAsset.drive_file_id)?.permissions).toHaveLength(1);
+      expect(getDriveSimulatorRelayFile(firstAsset.drive_file_id)?.keepForever).toBe(true);
+      expect(await viewer.evaluate(async (mediaEndpoint) => (
+        await fetch(mediaEndpoint, { headers: { Range: 'bytes=1-1' }, cache: 'no-store' })
+      ).status, endpoint)).toBe(206);
+
+      const secondCard = secondPage.locator(`[data-share-id="${secondShare.id}"]`);
+      secondPage.once('dialog', (dialog) => void dialog.accept());
+      await secondCard.getByRole('button', { name: 'Delete published data' }).click();
+      await expect.poll(async () => (await worker!.state()).shares.some((share) => share.id === secondShare.id), {
+        timeout: 20_000,
+      }).toBe(false);
+      await expect.poll(() => getDriveSimulatorRelayFile(firstAsset.drive_file_id)?.permissions.length, {
+        timeout: 20_000,
+      }).toBe(0);
+      await expect.poll(() => getDriveSimulatorRelayFile(firstAsset.drive_file_id)?.keepForever, {
+        timeout: 20_000,
+      }).toBe(false);
+      expect(getDriveSimulatorRelayFile(firstAsset.drive_file_id)).toBeDefined();
     } finally {
       await worker?.stop().catch(() => {});
       if (harness) await closeHarness(harness).catch(() => {});
