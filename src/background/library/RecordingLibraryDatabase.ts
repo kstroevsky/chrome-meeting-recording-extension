@@ -2,8 +2,8 @@
  * @file background/library/RecordingLibraryDatabase.ts
  *
  * Owns the `recording-history` IndexedDB connection and schema for every
- * repository that reads it. Four repositories now share this database — history
- * entries, notations, transcripts and analyses — and a database has exactly one version, so the
+ * repository that reads it. Five repositories now share this database — history
+ * entries, recording contexts, notations, transcripts and analyses — and a database has exactly one version, so the
  * version number and the `onupgradeneeded` that satisfies it must live in one
  * place. A repository that declared its own version would downgrade-block the
  * other on open.
@@ -21,10 +21,12 @@ const DATABASE_NAME = 'recording-history';
  * v3 → v4 adds the `notations` store (ADR-0005).
  * v4 → v5 adds the `transcripts` store (ADR-0007).
  * v5 → v6 adds the `analyses` store (ADR-0007).
+ * v6 → v7 adds the `recordingContexts` store (ADR-0008).
  */
-const DATABASE_VERSION = 6;
+const DATABASE_VERSION = 7;
 
 export const RECORDINGS_STORE = 'recordings';
+export const RECORDING_CONTEXTS_STORE = 'recordingContexts';
 export const NOTATIONS_STORE = 'notations';
 export const TRANSCRIPTS_STORE = 'transcripts';
 export const ANALYSES_STORE = 'analyses';
@@ -105,6 +107,12 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
   if (!recordings.indexNames.contains(ACTIVE_CREATED_AT_ID_INDEX)) {
     recordings.createIndex(ACTIVE_CREATED_AT_ID_INDEX, ['activeCreatedAt', 'id'], { unique: true });
     migrateVisibilityKeys(recordings);
+  }
+
+  // Recording occurrence/provider context is available before the history row is
+  // finalized, so it is a separate aggregate keyed by the same recording id.
+  if (!database.objectStoreNames.contains(RECORDING_CONTEXTS_STORE)) {
+    database.createObjectStore(RECORDING_CONTEXTS_STORE, { keyPath: 'recordingId' });
   }
 
   // Notations are keyed by the recording's history id and hold the whole list,

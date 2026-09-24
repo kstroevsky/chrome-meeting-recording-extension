@@ -321,6 +321,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
+/** Reads provider identity without forcing transcript materialization. */
+export type BgGetMeetingProvider = { type: 'GET_MEETING_PROVIDER' };
 export type PopupResetTranscript = { type: 'RESET_TRANSCRIPT' };
 /** Asks the content script whether the Meet captions region is currently present. */
 export type PopupGetCaptionState = { type: 'GET_CAPTION_STATE' };
@@ -343,6 +345,7 @@ export type BgGetTranscriptUtterances = { type: 'GET_TRANSCRIPT_UTTERANCES' };
 
 export type PopupToContent =
   | PopupGetTranscript
+  | BgGetMeetingProvider
   | PopupResetTranscript
   | PopupGetCaptionState
   | BgSetTranscriptCapture
@@ -350,6 +353,7 @@ export type PopupToContent =
 
 export type PopupToContentResponse<T extends PopupToContent> =
   T extends PopupGetTranscript ? { transcript: string; provider: MeetingProviderInfo } :
+  T extends BgGetMeetingProvider ? { provider: MeetingProviderInfo } :
   T extends PopupResetTranscript ? { ok: true } :
   T extends PopupGetCaptionState ? { captionsActive: boolean } :
   T extends BgSetTranscriptCapture ? { ok: true } :
