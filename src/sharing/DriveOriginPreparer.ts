@@ -18,6 +18,7 @@ import {
 } from '../offscreen/drive/request';
 import type { PublishedRecordingPlan, PublishedTrackPlan } from './PublishedManifestBuilder';
 import type { ShareMediaSourceResolver } from './ShareMediaSource';
+import type { ReusableDriveOrigin, ShareDriveOriginRegistry } from './ShareDriveOriginRegistry';
 import { ShareUploadStore, type ShareUploadJob } from './ShareUploadStore';
 
 const DRIVE_API_ORIGIN = 'https://www.googleapis.com';
@@ -37,7 +38,7 @@ export type DriveMediaOrigin = {
   mimeType: string;
   md5Checksum?: string;
   permissionId?: string;
-  /** True only when publication created a Drive copy from an OPFS-only source. */
+  /** True when sharing created this Drive file from an OPFS-only source. */
   createdDriveCopy: boolean;
 };
 
@@ -75,6 +76,7 @@ export type DriveOriginPreparerDeps = {
   store: ShareUploadStore;
   source: ShareMediaSourceResolver;
   api: DriveOriginApi;
+  registry?: Pick<ShareDriveOriginRegistry, 'get' | 'put' | 'remove'>;
   getDriveToken: TokenProvider;
   fetch?: typeof fetch;
   concurrency?: number;
@@ -212,25 +214,81 @@ export class DriveOriginPreparer {
       await this.deps.store.put(job);
 
       const existingDrive = driveFileId(track.source);
+      let reusableRegistryOrigin: ReusableDriveOrigin | undefined;
       if (!job.driveFileId) {
         if (existingDrive) {
           job.driveFileId = existingDrive;
           job.createdDriveCopy = false;
         } else {
-          job.createdDriveCopy = true;
-          job.driveFileId = await this.ensureDriveCopy(job);
+          const reusable = await this.deps.registry?.get(plan.sourceRecordingId, track.source.fileId);
+          if (reusable
+            && reusable.bytes === (track.published.bytes ?? reusable.bytes)
+            && reusable.mimeType === track.published.mimeType) {
+            job.driveFileId = reusable.driveFileId;
+            job.createdDriveCopy = true;
+            reusableRegistryOrigin = reusable;
+          } else {
+            if (reusable) {
+              await this.deps.registry?.remove(plan.sourceRecordingId, track.source.fileId);
+            }
+            job.createdDriveCopy = true;
+            job.driveFileId = await this.ensureDriveCopy(job);
+          }
         }
         job.updatedAt = this.now();
         await this.deps.store.put(job);
       }
 
-      const metadata = await this.getFileMetadata(job.driveFileId);
+      let metadata: DriveFileMetadata;
+      try {
+        metadata = await this.getFileMetadata(job.driveFileId);
+      } catch (error) {
+        if (!existingDrive && errorStatus(error) === 404) {
+          await this.deps.registry?.remove(plan.sourceRecordingId, track.source.fileId);
+          job.driveFileId = undefined;
+          job.revisionId = undefined;
+          job.permissionId = undefined;
+          job.uploadId = undefined;
+          job.offset = 0;
+          job.createdDriveCopy = true;
+          job.driveFileId = await this.ensureDriveCopy(job);
+          metadata = await this.getFileMetadata(job.driveFileId);
+          reusableRegistryOrigin = undefined;
+        } else {
+          throw error;
+        }
+      }
+      if (reusableRegistryOrigin && !reusableDriveOriginMatchesMetadata(reusableRegistryOrigin, metadata)) {
+        await this.deps.registry?.remove(plan.sourceRecordingId, track.source.fileId);
+        job.driveFileId = undefined;
+        job.revisionId = undefined;
+        job.permissionId = undefined;
+        job.uploadId = undefined;
+        job.offset = 0;
+        job.createdDriveCopy = true;
+        job.driveFileId = await this.ensureDriveCopy(job);
+        metadata = await this.getFileMetadata(job.driveFileId);
+        reusableRegistryOrigin = undefined;
+      }
       if (!metadata.canDownload) throw new Error('Drive file cannot be downloaded by the sharing reader');
       if (job.bytes != null && job.bytes !== metadata.size) {
         throw new Error(`Share source size changed: expected ${job.bytes}, got ${metadata.size}`);
       }
       if (metadata.mimeType !== track.published.mimeType) {
         throw new Error(`Share source MIME type changed: expected ${track.published.mimeType}, got ${metadata.mimeType}`);
+      }
+
+      if (!existingDrive && job.createdDriveCopy) {
+        await this.deps.registry?.put({
+          sourceRecordingId: plan.sourceRecordingId,
+          sourceFileId: track.source.fileId,
+          driveFileId: job.driveFileId,
+          revisionId: metadata.headRevisionId,
+          bytes: metadata.size,
+          mimeType: metadata.mimeType,
+          ...(metadata.md5Checksum ? { md5Checksum: metadata.md5Checksum } : {}),
+          updatedAt: this.now(),
+        });
       }
 
       await this.pinRevision(job.driveFileId, metadata.headRevisionId);
@@ -589,6 +647,17 @@ async function isDriveRateLimitResponse(response: Response): Promise<boolean> {
 function driveFileId(track: PlaybackTrack): string | undefined {
   return track.sources.find((source): source is Extract<PlaybackTrack['sources'][number], { kind: 'drive' }> =>
     source.kind === 'drive')?.fileId;
+}
+
+function reusableDriveOriginMatchesMetadata(
+  origin: ReusableDriveOrigin,
+  metadata: DriveFileMetadata,
+): boolean {
+  return metadata.canDownload
+    && metadata.headRevisionId === origin.revisionId
+    && metadata.size === origin.bytes
+    && metadata.mimeType === origin.mimeType
+    && (origin.md5Checksum == null || metadata.md5Checksum === origin.md5Checksum);
 }
 
 function headersRecord(headers: HeadersInit | undefined): Record<string, string> {

@@ -17,6 +17,7 @@ import { SharePublisher } from './SharePublisher';
 import { ShareRegistry } from './ShareRegistry';
 import { ShareServiceClient } from './ShareServiceClient';
 import { createShareMediaSourceResolver } from './ShareMediaSourceResolver';
+import { createShareDriveOriginRegistry } from './ShareDriveOriginRegistry';
 import { createShareUploadStore } from './ShareUploadStore';
 import type { RemoteShareSummary } from './ShareServiceClient';
 import type { SharePublication } from './SharePublicationStore';
@@ -45,11 +46,13 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
   });
   const publicationStore = createSharePublicationStore();
   const uploadStore = createShareUploadStore();
+  const driveOriginRegistry = createShareDriveOriginRegistry();
   const cleanupStore = createShareOriginCleanupStore();
   const origins = new DriveOriginPreparer({
     store: uploadStore,
     source: createShareMediaSourceResolver({ getDriveToken: auth.getDriveToken }),
     api: service,
+    registry: driveOriginRegistry,
     getDriveToken: auth.getDriveToken,
   });
   const cleanup = new ShareOriginCleanupCoordinator({
