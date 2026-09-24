@@ -40,13 +40,39 @@ function normalizeSource(value: unknown): RecordingSourceContext | undefined {
 
   const provider = normalizeString(candidate.provider, MAX_PROVIDER_LENGTH);
   const meetingId = normalizeString(candidate.meetingId, MAX_MEETING_ID_LENGTH);
-  const meetingUrl = normalizeString(candidate.meetingUrl, MAX_MEETING_URL_LENGTH);
+  const meetingUrl = normalizeMeetingUrl(
+    normalizeString(candidate.meetingUrl, MAX_MEETING_URL_LENGTH),
+    provider,
+  );
   return {
     kind: candidate.kind,
     ...(provider ? { provider } : {}),
     ...(meetingId ? { meetingId } : {}),
     ...(meetingUrl ? { meetingUrl } : {}),
   };
+}
+
+/**
+ * Keeps only provider identity-bearing URL material in durable recording context.
+ * Google Meet identity is entirely in the path; account/auth routing query
+ * parameters and fragments are unnecessary for later external projection.
+ */
+export function normalizeMeetingUrl(
+  value: string | undefined,
+  provider: string | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+    if (provider === 'google-meet' && url.hostname === 'meet.google.com') {
+      url.search = '';
+      url.hash = '';
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeTimestamp(value: unknown): number | undefined {

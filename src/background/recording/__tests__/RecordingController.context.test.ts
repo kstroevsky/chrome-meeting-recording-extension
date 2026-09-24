@@ -7,7 +7,7 @@ jest.mock('../../../platform/chrome/tabs', () => ({
   getCapturedTabs: jest.fn().mockResolvedValue([]),
   getMediaStreamIdForTab: jest.fn().mockResolvedValue('stream-xyz'),
   getTab: jest.fn().mockResolvedValue({
-    url: 'https://meet.google.com/abc-defg-hij',
+    url: 'https://meet.google.com/abc-defg-hij?authuser=2#private-state',
     title: 'Meet',
   }),
   sendTabMessage: jest.fn().mockResolvedValue(undefined),

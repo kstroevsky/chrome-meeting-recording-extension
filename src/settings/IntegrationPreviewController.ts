@@ -46,17 +46,27 @@ export class IntegrationPreviewController {
   private async loadRecordings(): Promise<void> {
     if (!this.el.recording) return;
     try {
-      const response = await sendToBackground({ type: 'LIST_RECORDING_HISTORY' });
+      const response = await sendToBackground({ type: 'LIST_INTEGRATION_RECORDINGS' });
       if (!response.ok) throw new Error(response.error);
-      this.el.recording.replaceChildren(...response.entries.map((entry) => {
+      this.el.recording.replaceChildren(...response.recordings.map((entry) => {
         const option = document.createElement('option');
         option.value = entry.id;
-        option.textContent = entry.name;
+        option.disabled = !entry.available;
+        option.textContent = entry.available
+          ? entry.name
+          : `${entry.name} — unavailable: missing recording context`;
         return option;
       }));
-      const hasRecordings = response.entries.length > 0;
+      const firstAvailable = response.recordings.find((entry) => entry.available);
+      if (firstAvailable) this.el.recording.value = firstAvailable.id;
+      else this.el.recording.selectedIndex = -1;
+      const hasRecordings = Boolean(firstAvailable);
       if (this.el.preview) this.el.preview.disabled = !hasRecordings;
-      this.setStatus(hasRecordings ? 'Ready to build a local fixture.' : 'No finished recordings available.');
+      this.setStatus(hasRecordings
+        ? 'Ready to build a local fixture.'
+        : response.recordings.length
+          ? 'Finished recordings are unavailable for integrations because they predate recording context.'
+          : 'No finished recordings available.');
     } catch (error) {
       if (this.el.preview) this.el.preview.disabled = true;
       this.setStatus(`Preview unavailable: ${String(error)}`, true);
