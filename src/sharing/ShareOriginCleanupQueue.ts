@@ -6,6 +6,7 @@ import type {
 } from './DriveOriginPreparer';
 
 const SHARE_ORIGIN_CLEANUP_PREFIX = 'shareOriginCleanup:';
+const SERVER_PENDING_DRAIN_BATCHES = 4;
 
 export type ShareOriginCleanupAction = 'revoke' | 'delete';
 export type ShareOriginCleanupStage = 'server-action' | 'drive-cleanup';
@@ -53,6 +54,7 @@ export interface ShareOriginCleanupApi {
     shareId: string,
     action: ShareOriginCleanupAction,
   ): Promise<{ claims: DriveOriginCleanupClaim[]; pending: boolean }>;
+  claimPendingDriveOriginCleanup(): Promise<{ claims: DriveOriginCleanupClaim[]; pending: boolean }>;
   completeDriveOriginCleanup(claim: DriveOriginCleanupClaim): Promise<void>;
 }
 
@@ -113,6 +115,17 @@ export class ShareOriginCleanupCoordinator {
   async resumePending(): Promise<void> {
     for (const job of await this.deps.store.list()) {
       await this.resume(job).catch(() => {});
+    }
+  }
+
+  async drainServerPending(): Promise<void> {
+    for (let batch = 0; batch < SERVER_PENDING_DRAIN_BATCHES; batch += 1) {
+      const cleanup = await this.deps.api.claimPendingDriveOriginCleanup();
+      for (const claim of cleanup.claims) {
+        await this.deps.origins.cleanupClaim(claim);
+        await this.deps.api.completeDriveOriginCleanup(claim);
+      }
+      if (!cleanup.pending || cleanup.claims.length === 0) return;
     }
   }
 

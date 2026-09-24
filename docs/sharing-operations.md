@@ -166,7 +166,7 @@ R2 cache objects do not need to be synchronously deleted for revocation security
 
 The owner cleanup job is persisted before the server action. If the successful server response is lost, or Chrome exits after server deletion but before Drive cleanup, the next run can continue from the durable cleanup stage.
 
-The Worker cannot use its reader credential to modify the owner's Drive. Scheduled server retention cleanup therefore removes only Worker/D1/R2 state; Drive permission/pin cleanup is owner-side work. Normal explicit revoke/delete paths attempt it immediately and persist retries locally.
+The Worker cannot use its reader credential to modify the owner's Drive. Scheduled server retention cleanup therefore persists owner-scoped Drive cleanup candidates before removing the share/media rows. The next extension startup claims those candidates through `POST /api/origin-cleanup/claim-pending`, performs the permission/revision cleanup with the owner's Drive token, and completes the Worker lease. Normal explicit revoke/delete paths still attempt the same cleanup immediately and persist retries locally.
 
 ## Scheduled retention cleanup
 
@@ -176,7 +176,7 @@ The hourly scheduled handler also processes lifecycle retention:
 - revoked shares older than `REVOKED_RETENTION_SECONDS` (default 30 days);
 - old owner rate-limit rows.
 
-For Drive-origin shares, this cleanup removes D1 media assets and their R2 cache entries. Legacy tracks without `media_asset_id` may still have permanent R2 objects; those are deleted by the migration-compatible cleanup path. Unfinished legacy multipart rows are also abortable during cleanup.
+For Drive-origin shares, this cleanup removes D1 media assets and their R2 cache entries while retaining any generated `drive_cleanup_candidates` until owner-side Drive cleanup completes. Legacy tracks without `media_asset_id` may still have permanent R2 objects; those are deleted by the migration-compatible cleanup path. Unfinished legacy multipart rows are also abortable during cleanup.
 
 Changing retention values is an operational policy change. Update Wrangler configuration and this runbook together.
 
@@ -192,6 +192,7 @@ Expected Drive-origin failure behavior:
 - **Chrome exits during OPFS→Drive upload:** durable session URI/offset allows resumable recovery;
 - **origin registration commits but its response is lost:** the local publication remains resumable and startup replay re-registers the same descriptor idempotently;
 - **Drive ACL cleanup fails after revoke/delete:** public server action remains effective and local cleanup state retries later.
+- **scheduled retention deletes a share while the extension is offline:** the Worker keeps owner-scoped Drive cleanup candidates; startup drains them even when no local share/cleanup job survives.
 
 ## Observability
 

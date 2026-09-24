@@ -9,6 +9,7 @@ import { canonicalizeManifest, canonicalizeStoredManifest } from './manifestSche
 import { deletePublishedShare } from './deleteShare';
 import {
   claimDriveCleanup,
+  claimPendingDriveCleanup,
   completeDriveCleanupClaim,
   enqueueDriveCleanupCandidates,
   originRegistrationLeaseGuardSql,
@@ -71,6 +72,10 @@ export async function routeShareOwnerRequest(
       env,
       ownerId,
     );
+  }
+
+  if (url.pathname === '/api/origin-cleanup/claim-pending' && request.method === 'POST') {
+    return claimPendingDriveOriginCleanup(env, ownerId);
   }
 
   const cleanupCompleteMatch = /^\/api\/origin-cleanup\/([^/]+)\/complete$/.exec(url.pathname);
@@ -278,6 +283,11 @@ async function claimDriveOriginCleanup(
   const action = parseCleanupAction(body);
   if (!action) return json({ code: 'INVALID_DRIVE_CLEANUP_ACTION' }, 400);
   const result = await claimDriveCleanup(env, ownerId, shareId, action);
+  return json(result, 200, { 'cache-control': 'no-store' });
+}
+
+async function claimPendingDriveOriginCleanup(env: Env, ownerId: string): Promise<Response> {
+  const result = await claimPendingDriveCleanup(env, ownerId);
   return json(result, 200, { 'cache-control': 'no-store' });
 }
 

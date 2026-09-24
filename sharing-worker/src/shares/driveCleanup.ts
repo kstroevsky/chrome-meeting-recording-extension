@@ -1,4 +1,6 @@
 const DRIVE_CLEANUP_LEASE_MS = 10 * 60 * 1000;
+const OWNER_PENDING_CLEANUP_HOLDER_ID = 'owner-pending';
+const OWNER_PENDING_CLEANUP_BATCH = 20;
 
 export type DriveCleanupAction = 'revoke' | 'delete';
 export type DriveCleanupKind = 'permission' | 'revision';
@@ -115,16 +117,58 @@ export async function claimDriveCleanup(
       ORDER BY kind ASC, drive_file_id ASC, revision_id ASC`,
   ).bind(ownerId, shareId, action).all<CleanupCandidateRow>();
 
+  return claimCleanupCandidates(env, ownerId, `${shareId}:${action}`, candidates.results, now);
+}
+
+export async function claimPendingDriveCleanup(
+  env: Env,
+  ownerId: string,
+  now = Date.now(),
+): Promise<{ claims: DriveCleanupClaim[]; pending: boolean }> {
+  const candidates = await env.SHARING_DB.prepare(
+    `SELECT id, owner_id, share_id, action, kind, drive_file_id, revision_id, permission_id
+       FROM drive_cleanup_candidates
+      WHERE owner_id = ?
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?`,
+  ).bind(ownerId, OWNER_PENDING_CLEANUP_BATCH + 1).all<CleanupCandidateRow>();
+
+  return claimCleanupCandidates(
+    env,
+    ownerId,
+    OWNER_PENDING_CLEANUP_HOLDER_ID,
+    candidates.results.slice(0, OWNER_PENDING_CLEANUP_BATCH),
+    now,
+    candidates.results.length > OWNER_PENDING_CLEANUP_BATCH,
+  );
+}
+
+async function claimCleanupCandidates(
+  env: Env,
+  ownerId: string,
+  holderId: string,
+  candidates: CleanupCandidateRow[],
+  now: number,
+  initialPending = false,
+): Promise<{ claims: DriveCleanupClaim[]; pending: boolean }> {
+
   const claims: DriveCleanupClaim[] = [];
-  let pending = false;
-  for (const candidate of candidates.results) {
+  const claimedResources = new Set<string>();
+  let pending = initialPending;
+  for (const candidate of candidates) {
     if (await hasLiveReference(env.SHARING_DB, candidate)) {
       await env.SHARING_DB.prepare('DELETE FROM drive_cleanup_candidates WHERE id = ?')
         .bind(candidate.id).run();
       continue;
     }
 
-    const holderId = `${shareId}:${action}`;
+    const resourceKey = `${candidate.kind}\u0000${candidate.drive_file_id}\u0000${candidate.revision_id}`;
+    if (claimedResources.has(resourceKey)) {
+      pending = true;
+      continue;
+    }
+    claimedResources.add(resourceKey);
+
     const proposedLeaseId = crypto.randomUUID();
     const proposedToken = crypto.randomUUID();
     const expiresAt = now + DRIVE_CLEANUP_LEASE_MS;
@@ -215,7 +259,7 @@ export async function claimDriveCleanup(
       kind: candidate.kind,
       fileId: candidate.drive_file_id,
       revisionId: candidate.revision_id,
-      ...(candidate.permission_id ? { permissionId: candidate.permission_id } : {}),
+      ...(lease.permission_id ? { permissionId: lease.permission_id } : {}),
     });
   }
   return { claims, pending };

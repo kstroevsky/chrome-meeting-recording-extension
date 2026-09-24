@@ -45,6 +45,7 @@ describe('ShareOriginCleanupCoordinator', () => {
         revokeShare,
         deleteShare: async () => {},
         claimDriveOriginCleanup: async () => ({ claims: [cleanupClaim], pending: false }),
+        claimPendingDriveOriginCleanup: async () => ({ claims: [], pending: false }),
         completeDriveOriginCleanup,
       },
       origins: { cleanupClaim: cleanupDriveClaim },
@@ -82,6 +83,7 @@ describe('ShareOriginCleanupCoordinator', () => {
           claims: [{ ...cleanupClaim, kind: 'revision' as const }],
           pending: false,
         }),
+        claimPendingDriveOriginCleanup: async () => ({ claims: [], pending: false }),
         completeDriveOriginCleanup,
       },
       origins: { cleanupClaim: cleanupDriveClaim },
@@ -123,6 +125,7 @@ describe('ShareOriginCleanupCoordinator', () => {
           claims: action === 'delete' ? [{ ...cleanupClaim, kind: 'revision' as const }] : [],
           pending: false,
         }),
+        claimPendingDriveOriginCleanup: async () => ({ claims: [], pending: false }),
         completeDriveOriginCleanup: async () => {},
       },
       origins: { cleanupClaim: cleanupDriveClaim },
@@ -134,5 +137,54 @@ describe('ShareOriginCleanupCoordinator', () => {
     expect(deleteShare).toHaveBeenCalledTimes(1);
     expect(cleanupDriveClaim).toHaveBeenCalledWith(expect.objectContaining({ kind: 'revision' }));
     expect(await store.get('share-1')).toBeUndefined();
+  });
+
+  it('drains server-only cleanup claims that have no local cleanup job', async () => {
+    const store = new ShareOriginCleanupStore(memoryArea());
+    const claimPendingDriveOriginCleanup = jest.fn()
+      .mockResolvedValueOnce({ claims: [cleanupClaim], pending: true })
+      .mockResolvedValueOnce({ claims: [], pending: false });
+    const cleanupDriveClaim = jest.fn(async () => {});
+    const completeDriveOriginCleanup = jest.fn(async () => {});
+    const coordinator = new ShareOriginCleanupCoordinator({
+      store,
+      api: {
+        getShareDriveOrigins: async () => [],
+        revokeShare: async () => {},
+        deleteShare: async () => {},
+        claimDriveOriginCleanup: async () => ({ claims: [], pending: false }),
+        claimPendingDriveOriginCleanup,
+        completeDriveOriginCleanup,
+      },
+      origins: { cleanupClaim: cleanupDriveClaim },
+    });
+
+    await coordinator.drainServerPending();
+
+    expect(await store.list()).toEqual([]);
+    expect(cleanupDriveClaim).toHaveBeenCalledWith(cleanupClaim);
+    expect(completeDriveOriginCleanup).toHaveBeenCalledWith(cleanupClaim);
+    expect(claimPendingDriveOriginCleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not spin when pending server cleanup is leased elsewhere', async () => {
+    const store = new ShareOriginCleanupStore(memoryArea());
+    const claimPendingDriveOriginCleanup = jest.fn(async () => ({ claims: [], pending: true }));
+    const coordinator = new ShareOriginCleanupCoordinator({
+      store,
+      api: {
+        getShareDriveOrigins: async () => [],
+        revokeShare: async () => {},
+        deleteShare: async () => {},
+        claimDriveOriginCleanup: async () => ({ claims: [], pending: false }),
+        claimPendingDriveOriginCleanup,
+        completeDriveOriginCleanup: async () => {},
+      },
+      origins: { cleanupClaim: async () => {} },
+    });
+
+    await coordinator.drainServerPending();
+
+    expect(claimPendingDriveOriginCleanup).toHaveBeenCalledTimes(1);
   });
 });
