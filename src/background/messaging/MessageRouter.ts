@@ -78,6 +78,7 @@ export const POPUP_ROUTE_OWNERS = {
   GET_RECORDING_TRANSCRIPT: 'library',
   LIST_RECORDING_TOPIC_SUMMARIES: 'library',
   PREVIEW_INTEGRATION_PAYLOAD: 'integrations',
+  LIST_INTEGRATION_RECORDINGS: 'integrations',
   LIST_INTEGRATIONS: 'integrations',
   CREATE_INTEGRATION: 'integrations',
   DELETE_INTEGRATION: 'integrations',

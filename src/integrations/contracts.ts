@@ -3,6 +3,13 @@ import type { TranscriptSource } from '../shared/transcript';
 
 export type TranscriptSpeakerPolicy = 'names' | 'pseudonyms' | 'omit';
 
+export type IntegrationRecordingOption = {
+  id: string;
+  name: string;
+  available: boolean;
+  unavailableReason?: 'missing-recording-context';
+};
+
 export type IntegrationDataPolicy = {
   metadata: boolean;
   meetingIdentity: boolean;

@@ -79,8 +79,8 @@ describe('IntegrationSettingsController', () => {
     permission.mockReset().mockResolvedValue(true);
     send.mockReset().mockImplementation(async (message: any) => {
       switch (message.type) {
-        case 'LIST_RECORDING_HISTORY':
-          return { ok: true, entries: [{ id: 'recording_1', name: 'Weekly sync' }] } as any;
+        case 'LIST_INTEGRATION_RECORDINGS':
+          return { ok: true, recordings: [{ id: 'recording_1', name: 'Weekly sync', available: true }] } as any;
         case 'LIST_INTEGRATIONS':
           return { ok: true, destinations: [destination()] } as any;
         case 'LIST_INTEGRATION_DELIVERIES':
@@ -127,8 +127,8 @@ describe('IntegrationSettingsController', () => {
       }
       if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
       if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
-      if (message.type === 'LIST_RECORDING_HISTORY') {
-        return { ok: true, entries: [{ id: 'recording_1', name: 'Weekly sync' }] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') {
+        return { ok: true, recordings: [{ id: 'recording_1', name: 'Weekly sync', available: true }] } as any;
       }
       throw new Error(`Unexpected message ${message.type}`);
     });
@@ -154,7 +154,7 @@ describe('IntegrationSettingsController', () => {
       if (message.type === 'CREATE_INTEGRATION') return { ok: false, error: 'storage failed' } as any;
       if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [] } as any;
       if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
-      if (message.type === 'LIST_RECORDING_HISTORY') return { ok: true, entries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
       throw new Error(`Unexpected message ${message.type}`);
     });
 
@@ -162,5 +162,36 @@ describe('IntegrationSettingsController', () => {
     for (let i = 0; i < 8; i += 1) await Promise.resolve();
 
     expect(removePermission).toHaveBeenCalledWith('https://new.example.test/*');
+  });
+
+  it('disables legacy recordings that have no durable recording context', async () => {
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') {
+        return {
+          ok: true,
+          recordings: [
+            {
+              id: 'legacy_1',
+              name: 'Old recording',
+              available: false,
+              unavailableReason: 'missing-recording-context',
+            },
+          ],
+        } as any;
+      }
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+
+    await mount().init();
+
+    const select = document.getElementById('integration-send-recording') as HTMLSelectElement;
+    expect(select.options[0].disabled).toBe(true);
+    expect(select.options[0].textContent).toContain('missing recording context');
+    expect(select.value).toBe('');
+    const sendButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Send recording')!;
+    expect(sendButton.disabled).toBe(true);
   });
 });

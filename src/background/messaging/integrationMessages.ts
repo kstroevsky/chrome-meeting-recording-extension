@@ -13,6 +13,9 @@ export async function handleIntegrationMessage(
     case 'PREVIEW_INTEGRATION_PAYLOAD':
       sendResponse({ ok: true, preview: await integrations.preview(msg.recordingId, msg.policy) });
       return true;
+    case 'LIST_INTEGRATION_RECORDINGS':
+      sendResponse({ ok: true, recordings: await integrations.listRecordings() });
+      return true;
     case 'LIST_INTEGRATIONS':
       sendResponse({ ok: true, destinations: await integrations.listDestinations() });
       return true;

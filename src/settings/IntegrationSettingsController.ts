@@ -271,14 +271,20 @@ export class IntegrationSettingsController {
   private async loadRecordings(): Promise<void> {
     if (!this.el.recording) return;
     try {
-      const response = await sendToBackground({ type: 'LIST_RECORDING_HISTORY' });
+      const response = await sendToBackground({ type: 'LIST_INTEGRATION_RECORDINGS' });
       if (!response.ok) throw new Error(response.error);
-      this.el.recording.replaceChildren(...response.entries.map((entry) => {
+      this.el.recording.replaceChildren(...response.recordings.map((entry) => {
         const option = this.el.document.createElement('option');
         option.value = entry.id;
-        option.textContent = entry.name;
+        option.disabled = !entry.available;
+        option.textContent = entry.available
+          ? entry.name
+          : `${entry.name} — unavailable: missing recording context`;
         return option;
       }));
+      const firstAvailable = response.recordings.find((entry) => entry.available);
+      if (firstAvailable) this.el.recording.value = firstAvailable.id;
+      else this.el.recording.selectedIndex = -1;
     } catch (error) {
       this.setStatus(`Could not load recordings: ${String(error)}`, true);
     }

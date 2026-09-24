@@ -11,12 +11,13 @@ import { IntegrationSecretRepository } from '../../integrations/IntegrationSecre
 import { IntegrationStreamRepository } from '../../integrations/IntegrationStreamRepository';
 import { IntegrationUnitOfWork } from '../../integrations/IntegrationUnitOfWork';
 import type { CreateIntegrationDestinationInput } from '../../integrations/management';
-import type { IntegrationDataPolicy } from '../../integrations/contracts';
+import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../../integrations/contracts';
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
 import { IntegrationPreviewService } from './IntegrationPreviewService';
 import type { AnalysisExportState } from '../library/analysis/RecordingAnalysisService';
 
 type CanonicalRecordingReaders = {
+  listHistory(): Promise<RecordingHistoryEntry[]>;
   getHistory(recordingId: string): Promise<RecordingHistoryEntry | undefined>;
   getContext(recordingId: string): Promise<RecordingContext | undefined>;
   listNotations(recordingId: string): Promise<RecordingNotation[]>;
@@ -29,7 +30,7 @@ export class BackgroundIntegrationRuntime {
   private readonly previewService: IntegrationPreviewService;
   private readonly coordinator: IntegrationCoordinator;
 
-  constructor(readers: CanonicalRecordingReaders, factory?: IDBFactory) {
+  constructor(private readonly readers: CanonicalRecordingReaders, factory?: IDBFactory) {
     this.previewService = new IntegrationPreviewService(readers);
     this.coordinator = new IntegrationCoordinator({
       destinations: new IntegrationDestinationRepository(factory),
@@ -47,6 +48,21 @@ export class BackgroundIntegrationRuntime {
 
   preview(recordingId: string, policy: IntegrationDataPolicy) {
     return this.previewService.preview(recordingId, policy);
+  }
+
+  async listRecordings(): Promise<IntegrationRecordingOption[]> {
+    const entries = await this.readers.listHistory();
+    return await Promise.all(entries.map(async (entry) => {
+      const context = await this.readers.getContext(entry.id);
+      return context
+        ? { id: entry.id, name: entry.name, available: true }
+        : {
+            id: entry.id,
+            name: entry.name,
+            available: false,
+            unavailableReason: 'missing-recording-context' as const,
+          };
+    }));
   }
 
   listDestinations() {

@@ -31,7 +31,7 @@ import {
 } from './protocolMessageTypes';
 import { getMessageType, hasKnownMessageType, isRecord } from './typeGuards';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from './recordingHistory';
-import type { IntegrationDataPolicy } from '../integrations/contracts';
+import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../integrations/contracts';
 import type { IntegrationPayloadPreview } from '../integrations/preview';
 import {
   normalizeCreateIntegrationDestinationInput,
@@ -223,6 +223,7 @@ export type PopupPreviewIntegrationPayload = {
   recordingId: string;
   policy: IntegrationDataPolicy;
 };
+export type PopupListIntegrationRecordings = { type: 'LIST_INTEGRATION_RECORDINGS' };
 export type PopupListIntegrations = { type: 'LIST_INTEGRATIONS' };
 export type PopupCreateIntegration = { type: 'CREATE_INTEGRATION'; input: CreateIntegrationDestinationInput };
 export type PopupDeleteIntegration = { type: 'DELETE_INTEGRATION'; destinationId: string };
@@ -284,6 +285,7 @@ export type PopupToBg =
   | PopupRemoveRecordingNotation
   | PopupGetRecordingTranscript
   | PopupPreviewIntegrationPayload
+  | PopupListIntegrationRecordings
   | PopupListIntegrations
   | PopupCreateIntegration
   | PopupDeleteIntegration
@@ -353,6 +355,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupGetRecordingTranscript ? TranscriptResult :
   T extends PopupPreviewIntegrationPayload
     ? { ok: true; preview: IntegrationPayloadPreview } | { ok: false; error: string } :
+  T extends PopupListIntegrationRecordings
+    ? { ok: true; recordings: IntegrationRecordingOption[] } | { ok: false; error: string } :
   T extends PopupListIntegrations
     ? { ok: true; destinations: IntegrationDestination[] } | { ok: false; error: string } :
   T extends PopupCreateIntegration
@@ -664,6 +668,7 @@ function isIntegrationPopupMessage(value: unknown): boolean {
   switch (value.type) {
     case 'PREVIEW_INTEGRATION_PAYLOAD':
       return nonEmptyText(value.recordingId) && normalizeIntegrationDataPolicy(value.policy)?.metadata === true;
+    case 'LIST_INTEGRATION_RECORDINGS':
     case 'LIST_INTEGRATIONS':
     case 'LIST_INTEGRATION_DELIVERIES':
       return true;

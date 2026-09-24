@@ -1,6 +1,6 @@
 import { getTab, sendTabMessage } from '../../platform/chrome/tabs';
 import type { MeetingProviderInfo } from '../../shared/provider';
-import type { RecordingSourceContext } from '../../shared/recordingContext';
+import { normalizeMeetingUrl, type RecordingSourceContext } from '../../shared/recordingContext';
 
 export type RecordingTarget = {
   meetingSlug: string;
@@ -35,11 +35,12 @@ async function resolveSource(tabId: number, meetingUrl: string): Promise<Recordi
     );
     const provider = response?.provider;
     if (!provider || provider.providerId === 'unknown') return { kind: 'tab' };
+    const canonicalMeetingUrl = normalizeMeetingUrl(meetingUrl, provider.providerId);
     return {
       kind: 'meeting',
       provider: provider.providerId,
       ...(provider.meetingId ? { meetingId: provider.meetingId } : {}),
-      meetingUrl,
+      ...(canonicalMeetingUrl ? { meetingUrl: canonicalMeetingUrl } : {}),
     };
   } catch {
     return { kind: 'tab' };
