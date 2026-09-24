@@ -61,6 +61,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'TEST_INTEGRATION',
   'SEND_RECORDING_TO_INTEGRATION',
   'LIST_INTEGRATION_DELIVERIES',
+  'RETRY_INTEGRATION_DELIVERY',
 ] as const;
 
 /** The subset of popup commands validated by `isRecordingHistoryMessage`. */
@@ -117,6 +118,7 @@ export const INTEGRATION_MESSAGE_TYPES = [
   'TEST_INTEGRATION',
   'SEND_RECORDING_TO_INTEGRATION',
   'LIST_INTEGRATION_DELIVERIES',
+  'RETRY_INTEGRATION_DELIVERY',
 ] as const;
 
 /**

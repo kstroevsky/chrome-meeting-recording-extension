@@ -52,7 +52,7 @@ export class IntegrationUnitOfWork {
   async planDelivery(delivery: IntegrationDelivery, stream: IntegrationStream): Promise<void> {
     const normalizedDelivery = normalizeIntegrationDelivery(delivery);
     const normalizedStream = normalizeIntegrationStream(stream);
-    if (!normalizedDelivery || !normalizedStream) {
+    if (!normalizedDelivery || !normalizedDelivery.allowedPolicy || !normalizedStream) {
       throw new Error('Invalid integration delivery transaction');
     }
 
@@ -61,10 +61,41 @@ export class IntegrationUnitOfWork {
       database,
       [INTEGRATION_DELIVERIES_STORE, INTEGRATION_STREAMS_STORE],
       (transaction) => {
-        transaction.objectStore(INTEGRATION_DELIVERIES_STORE).put(normalizedDelivery);
+        const deliveries = transaction.objectStore(INTEGRATION_DELIVERIES_STORE);
+        supersedeOlderStreamDeliveries(deliveries, normalizedDelivery);
+        deliveries.put(normalizedDelivery);
         transaction.objectStore(INTEGRATION_STREAMS_STORE).put(normalizedStream);
       },
       'Could not atomically plan integration delivery',
+    );
+  }
+
+  async supersedeDelivery(
+    previous: IntegrationDelivery,
+    replacement: IntegrationDelivery,
+    stream: IntegrationStream,
+  ): Promise<void> {
+    const normalizedPrevious = normalizeIntegrationDelivery(previous);
+    const normalizedReplacement = normalizeIntegrationDelivery(replacement);
+    const normalizedStream = normalizeIntegrationStream(stream);
+    if (!normalizedPrevious || !normalizedReplacement || !normalizedStream) {
+      throw new Error('Invalid integration delivery supersession transaction');
+    }
+    if (normalizedPrevious.state !== 'superseded' || normalizedReplacement.state !== 'pending') {
+      throw new Error('Invalid integration delivery supersession states');
+    }
+
+    const database = await openIntegrationDatabase(this.factory);
+    await runTransaction(
+      database,
+      [INTEGRATION_DELIVERIES_STORE, INTEGRATION_STREAMS_STORE],
+      (transaction) => {
+        const deliveries = transaction.objectStore(INTEGRATION_DELIVERIES_STORE);
+        deliveries.put(normalizedPrevious);
+        deliveries.put(normalizedReplacement);
+        transaction.objectStore(INTEGRATION_STREAMS_STORE).put(normalizedStream);
+      },
+      'Could not atomically supersede integration delivery',
     );
   }
 
@@ -99,6 +130,35 @@ export class IntegrationUnitOfWork {
       'Could not delete integration destination',
     );
   }
+}
+
+function supersedeOlderStreamDeliveries(
+  deliveries: IDBObjectStore,
+  replacement: IntegrationDelivery,
+): void {
+  const request = deliveries.openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const row = normalizeIntegrationDelivery(cursor.value);
+    const stale = row
+      && row.id !== replacement.id
+      && row.destinationId === replacement.destinationId
+      && row.recordingId === replacement.recordingId
+      && row.revision < replacement.revision
+      && (row.state === 'pending' || row.state === 'delivering' || row.state === 'retrying');
+    if (stale) {
+      const superseded: IntegrationDelivery = {
+        ...row,
+        state: 'superseded',
+        lastErrorCode: 'newer-revision-planned',
+        updatedAt: replacement.createdAt,
+      };
+      delete superseded.nextAttemptAt;
+      cursor.update(superseded);
+    }
+    cursor.continue();
+  };
 }
 
 function deleteMatchingStreams(transaction: IDBTransaction, destinationId: string): void {

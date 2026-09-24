@@ -1,15 +1,18 @@
 import { containsHostPermission, removeHostPermission } from '../../platform/chrome/permissions';
+import { clearAlarm, createAlarm, getAlarm } from '../../platform/chrome/alarms';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingContext } from '../../shared/recordingContext';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 import type { Transcript } from '../../shared/transcript';
 import { integrationEventTypePrefix } from '../../integrations/config';
 import { IntegrationCoordinator } from '../../integrations/IntegrationCoordinator';
+import { IntegrationDispatcher } from '../../integrations/IntegrationDispatcher';
 import { IntegrationDeliveryRepository } from '../../integrations/IntegrationDeliveryRepository';
 import { IntegrationDestinationRepository } from '../../integrations/IntegrationDestinationRepository';
 import { IntegrationSecretRepository } from '../../integrations/IntegrationSecretRepository';
 import { IntegrationStreamRepository } from '../../integrations/IntegrationStreamRepository';
 import { IntegrationUnitOfWork } from '../../integrations/IntegrationUnitOfWork';
+import { IntegrationScheduler } from '../../integrations/IntegrationScheduler';
 import type { CreateIntegrationDestinationInput } from '../../integrations/management';
 import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../../integrations/contracts';
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
@@ -29,17 +32,48 @@ type CanonicalRecordingReaders = {
 export class BackgroundIntegrationRuntime {
   private readonly previewService: IntegrationPreviewService;
   private readonly coordinator: IntegrationCoordinator;
+  private readonly dispatcher: IntegrationDispatcher;
+  private readonly scheduler: IntegrationScheduler;
 
   constructor(private readonly readers: CanonicalRecordingReaders, factory?: IDBFactory) {
     this.previewService = new IntegrationPreviewService(readers);
-    this.coordinator = new IntegrationCoordinator({
-      destinations: new IntegrationDestinationRepository(factory),
-      secrets: new IntegrationSecretRepository(factory),
-      streams: new IntegrationStreamRepository(factory),
-      deliveries: new IntegrationDeliveryRepository(factory),
-      unitOfWork: new IntegrationUnitOfWork(factory),
+    const destinations = new IntegrationDestinationRepository(factory);
+    const secrets = new IntegrationSecretRepository(factory);
+    const streams = new IntegrationStreamRepository(factory);
+    const deliveries = new IntegrationDeliveryRepository(factory);
+    const unitOfWork = new IntegrationUnitOfWork(factory);
+    const transport = new WebhookTransport();
+    let scheduler!: IntegrationScheduler;
+    this.dispatcher = new IntegrationDispatcher({
+      destinations,
+      secrets,
+      streams,
+      deliveries,
+      unitOfWork,
       snapshots: this.previewService,
-      transport: new WebhookTransport(),
+      transport,
+      containsHostPermission,
+      eventTypePrefix: integrationEventTypePrefix(),
+      onStateChanged: () => scheduler.ensureAlarm(),
+    });
+    scheduler = new IntegrationScheduler({
+      deliveries,
+      dispatcher: this.dispatcher,
+      createAlarm,
+      getAlarm,
+      clearAlarm,
+      warn: (...args) => console.warn('[integrations]', ...args),
+    });
+    this.scheduler = scheduler;
+    this.coordinator = new IntegrationCoordinator({
+      destinations,
+      secrets,
+      streams,
+      deliveries,
+      unitOfWork,
+      dispatcher: this.dispatcher,
+      snapshots: this.previewService,
+      transport,
       containsHostPermission,
       removeHostPermission,
       eventTypePrefix: integrationEventTypePrefix(),
@@ -87,5 +121,17 @@ export class BackgroundIntegrationRuntime {
 
   listDeliveries() {
     return this.coordinator.listDeliveries();
+  }
+
+  retryDelivery(deliveryId: string) {
+    return this.dispatcher.retry(deliveryId);
+  }
+
+  reconcile() {
+    return this.scheduler.reconcile();
+  }
+
+  handleAlarm(alarm: { name: string }): void {
+    this.scheduler.handleAlarm(alarm);
   }
 }
