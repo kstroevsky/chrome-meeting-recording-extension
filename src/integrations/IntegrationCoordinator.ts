@@ -61,6 +61,7 @@ type CoordinatorDeps = {
   unitOfWork: {
     createDestination(destination: IntegrationDestination, secrets: IntegrationSecret[]): Promise<void>;
     planDelivery(delivery: IntegrationDelivery, stream: IntegrationStream): Promise<void>;
+    deleteDestination(destination: IntegrationDestination, updatedAt: number): Promise<void>;
   };
   transport: {
     send(input: {
@@ -72,6 +73,7 @@ type CoordinatorDeps = {
     }): Promise<WebhookTransportResult>;
   };
   containsHostPermission(pattern: string): Promise<boolean>;
+  removeHostPermission(pattern: string): Promise<boolean>;
   eventTypePrefix: string;
   now?: () => number;
 };
@@ -143,6 +145,20 @@ export class IntegrationCoordinator {
       requestAuth: await this.resolveRequestAuth(destination.requestAuth),
     });
     return { ...result, eventId };
+  }
+
+  async deleteDestination(destinationId: string): Promise<{ removed: true; hostPermissionRemoved: boolean }> {
+    const destination = await this.requireDestination(destinationId);
+    const hostPermission = normalizeWebhookEndpoint(destination.endpoint).hostPermission;
+    await this.deps.unitOfWork.deleteDestination(destination, this.now());
+    const remaining = await this.deps.destinations.list();
+    const hostStillUsed = remaining.some((candidate) => (
+      normalizeWebhookEndpoint(candidate.endpoint).hostPermission === hostPermission
+    ));
+    const hostPermissionRemoved = hostStillUsed
+      ? false
+      : await this.deps.removeHostPermission(hostPermission);
+    return { removed: true, hostPermissionRemoved };
   }
 
   async sendRecording(destinationId: string, recordingId: string): Promise<IntegrationDelivery> {
@@ -238,6 +254,9 @@ export class IntegrationCoordinator {
     destination: IntegrationDestination,
     body: string,
   ): Promise<IntegrationDelivery> {
+    if (!await this.deps.destinations.get(destination.id)) {
+      return await this.cancelDeletedDestinationDelivery(delivery);
+    }
     const delivering: IntegrationDelivery = {
       ...delivery,
       state: 'delivering',
@@ -253,6 +272,9 @@ export class IntegrationCoordinator {
         signingSecret: await this.requireSecretValue(destination.signingSecretId),
         requestAuth: await this.resolveRequestAuth(destination.requestAuth),
       });
+      if (!await this.deps.destinations.get(destination.id)) {
+        return await this.cancelDeletedDestinationDelivery(delivering);
+      }
       const final: IntegrationDelivery = {
         ...delivering,
         state: result.ok ? 'delivered' : classifyHttpFailure(result.status),
@@ -272,6 +294,20 @@ export class IntegrationCoordinator {
       await this.deps.deliveries.put(final);
       return final;
     }
+  }
+
+  private async cancelDeletedDestinationDelivery(
+    delivery: IntegrationDelivery,
+  ): Promise<IntegrationDelivery> {
+    const canceled: IntegrationDelivery = {
+      ...delivery,
+      state: 'canceled',
+      lastErrorCode: 'destination-deleted',
+      updatedAt: this.now(),
+    };
+    delete canceled.nextAttemptAt;
+    await this.deps.deliveries.put(canceled);
+    return canceled;
   }
 
   private prepareRequestAuth(
