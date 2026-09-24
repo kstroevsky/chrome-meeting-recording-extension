@@ -80,6 +80,8 @@ export type IntegrationDelivery = {
   attemptCount: number;
   nextAttemptAt?: number;
   bodyHash?: string;
+  totalBytes?: number;
+  transcriptBytes?: number;
   lastStatus?: number;
   lastErrorCode?: string;
   createdAt: number;
@@ -182,10 +184,15 @@ export function normalizeIntegrationDelivery(value: unknown): IntegrationDeliver
   const nextAttemptAt = optionalTimestamp(value.nextAttemptAt);
   const lastStatus = optionalHttpStatus(value.lastStatus);
   const bodyHash = optionalText(value.bodyHash);
+  const totalBytes = optionalNonNegativeInteger(value.totalBytes);
+  const transcriptBytes = optionalNonNegativeInteger(value.transcriptBytes);
   const lastErrorCode = optionalText(value.lastErrorCode);
   if (value.nextAttemptAt != null && nextAttemptAt == null) return undefined;
   if (value.lastStatus != null && lastStatus == null) return undefined;
   if (bodyHash && !/^[a-f0-9]{64}$/i.test(bodyHash)) return undefined;
+  if (value.totalBytes != null && totalBytes == null) return undefined;
+  if (value.transcriptBytes != null && transcriptBytes == null) return undefined;
+  if (totalBytes != null && transcriptBytes != null && transcriptBytes > totalBytes) return undefined;
   return {
     id,
     destinationId,
@@ -200,6 +207,8 @@ export function normalizeIntegrationDelivery(value: unknown): IntegrationDeliver
     attemptCount,
     ...(nextAttemptAt != null ? { nextAttemptAt } : {}),
     ...(bodyHash ? { bodyHash: bodyHash.toLowerCase() } : {}),
+    ...(totalBytes != null ? { totalBytes } : {}),
+    ...(transcriptBytes != null ? { transcriptBytes } : {}),
     ...(lastStatus != null ? { lastStatus } : {}),
     ...(lastErrorCode ? { lastErrorCode } : {}),
     createdAt,
@@ -264,6 +273,10 @@ function positiveInteger(value: unknown): number | undefined {
 
 function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  return value == null ? undefined : nonNegativeInteger(value);
 }
 
 function optionalHttpStatus(value: unknown): number | undefined {

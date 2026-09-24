@@ -4,6 +4,7 @@ import {
   CONSERVATIVE_INTEGRATION_POLICY,
   integrationPolicyHash,
   intersectIntegrationPolicy,
+  normalizeIntegrationDataPolicy,
 } from '../policy';
 import {
   assertIntegrationPayloadWithinLimit,
@@ -13,6 +14,18 @@ import {
 import { sha256Hex, stableJsonSerialize, utf8ByteLength } from '../serialization';
 
 describe('integration external contract', () => {
+  it('makes artifact links imply artifact metadata at the shared policy boundary', () => {
+    expect(normalizeIntegrationDataPolicy({
+      ...CONSERVATIVE_INTEGRATION_POLICY,
+      metadata: true,
+      artifactMetadata: false,
+      artifactLinks: true,
+    })).toEqual(expect.objectContaining({
+      artifactMetadata: true,
+      artifactLinks: true,
+    }));
+  });
+
   it('keeps policy intersection privacy-monotonic', () => {
     const allowed: IntegrationDataPolicy = {
       metadata: true,

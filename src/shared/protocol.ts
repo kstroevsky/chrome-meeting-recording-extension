@@ -23,16 +23,23 @@ import type {
 import {
   BG_TO_OFFSCREEN_RUNTIME_CONNECT,
   CONTENT_TO_BG_MESSAGE_TYPES,
+  INTEGRATION_MESSAGE_TYPES,
   OFFSCREEN_TO_BG_MESSAGE_TYPES,
   PERF_EVENT_MESSAGE_TYPE,
   POPUP_TO_BG_MESSAGE_TYPES,
   POPUP_TO_CONTENT_MESSAGE_TYPES,
 } from './protocolMessageTypes';
-import { getMessageType, hasKnownMessageType } from './typeGuards';
+import { getMessageType, hasKnownMessageType, isRecord } from './typeGuards';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from './recordingHistory';
 import type { IntegrationDataPolicy } from '../integrations/contracts';
 import type { IntegrationPayloadPreview } from '../integrations/preview';
-import type { CreateIntegrationDestinationInput, CreatedIntegrationDestination, IntegrationConnectionTestResult } from '../integrations/management';
+import {
+  normalizeCreateIntegrationDestinationInput,
+  type CreateIntegrationDestinationInput,
+  type CreatedIntegrationDestination,
+  type IntegrationConnectionTestResult,
+} from '../integrations/management';
+import { normalizeIntegrationDataPolicy } from '../integrations/policy';
 import type { IntegrationDelivery, IntegrationDestination } from '../integrations/persistence';
 
 export type RpcId = string;
@@ -351,7 +358,12 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupTestIntegration
     ? { ok: true; result: IntegrationConnectionTestResult } | { ok: false; error: string } :
   T extends PopupSendRecordingToIntegration
-    ? { ok: true; delivery: IntegrationDelivery } | { ok: false; error: string } :
+    ? { ok: true; delivery: IntegrationDelivery }
+      | {
+          ok: false;
+          error: string;
+          payloadTooLarge?: { totalBytes: number; transcriptBytes: number; maxBytes: number };
+        } :
   T extends PopupListIntegrationDeliveries
     ? { ok: true; deliveries: IntegrationDelivery[] } | { ok: false; error: string } :
   never;
@@ -635,7 +647,35 @@ export type E2EDriveFetchMessage = {
 
 /** Checks whether a runtime message belongs to the popup -> background command set. */
 export function isPopupToBgMessage(value: unknown): value is PopupToBg {
-  return hasKnownMessageType(value, POPUP_TO_BG_MESSAGE_TYPES);
+  if (!hasKnownMessageType(value, POPUP_TO_BG_MESSAGE_TYPES)) return false;
+  const type = getMessageType(value);
+  if (!type || !INTEGRATION_MESSAGE_TYPES.includes(type as (typeof INTEGRATION_MESSAGE_TYPES)[number])) {
+    return true;
+  }
+  return isIntegrationPopupMessage(value);
+}
+
+function isIntegrationPopupMessage(value: unknown): boolean {
+  if (!isRecord(value) || Array.isArray(value)) return false;
+  switch (value.type) {
+    case 'PREVIEW_INTEGRATION_PAYLOAD':
+      return nonEmptyText(value.recordingId) && normalizeIntegrationDataPolicy(value.policy)?.metadata === true;
+    case 'LIST_INTEGRATIONS':
+    case 'LIST_INTEGRATION_DELIVERIES':
+      return true;
+    case 'CREATE_INTEGRATION':
+      return normalizeCreateIntegrationDestinationInput(value.input) != null;
+    case 'TEST_INTEGRATION':
+      return nonEmptyText(value.destinationId);
+    case 'SEND_RECORDING_TO_INTEGRATION':
+      return nonEmptyText(value.destinationId) && nonEmptyText(value.recordingId);
+    default:
+      return false;
+  }
+}
+
+function nonEmptyText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 /** Checks whether a tab message belongs to the popup -> content command set. */

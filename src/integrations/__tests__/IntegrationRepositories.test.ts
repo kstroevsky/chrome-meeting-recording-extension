@@ -5,6 +5,7 @@ import { IntegrationDestinationRepository } from '../IntegrationDestinationRepos
 import { IntegrationRoutingRepository } from '../IntegrationRoutingRepository';
 import { IntegrationSecretRepository } from '../IntegrationSecretRepository';
 import { IntegrationStreamRepository } from '../IntegrationStreamRepository';
+import { IntegrationUnitOfWork } from '../IntegrationUnitOfWork';
 import type { IntegrationDelivery } from '../persistence';
 import { CONSERVATIVE_INTEGRATION_POLICY } from '../policy';
 
@@ -141,5 +142,48 @@ describe('integration persistence repositories', () => {
     } as IntegrationDelivery;
 
     await expect(repository.put(invalid)).rejects.toThrow('Invalid integration delivery');
+  });
+
+  it('rolls back the stream update when delivery planning violates the unique revision index', async () => {
+    const factory = new IDBFactory();
+    const streams = new IntegrationStreamRepository(factory);
+    const deliveries = new IntegrationDeliveryRepository(factory);
+    const unitOfWork = new IntegrationUnitOfWork(factory);
+    const stream = {
+      destinationId: 'destination_crm',
+      recordingId: 'recording:internal',
+      externalRecordingId: 'recording_external_crm',
+      nextRevision: 2,
+      readyCreated: true,
+      everAttempted: true,
+    };
+    await streams.put(stream);
+    const delivery: IntegrationDelivery = {
+      id: 'delivery_1',
+      destinationId: stream.destinationId,
+      recordingId: stream.recordingId,
+      externalRecordingId: stream.externalRecordingId,
+      eventId: 'event_1',
+      eventType: 'recording.ready.v1',
+      revision: 1,
+      eventTime: 20,
+      connectionVersion: 1,
+      state: 'pending',
+      attemptCount: 0,
+      bodyHash: 'a'.repeat(64),
+      totalBytes: 100,
+      transcriptBytes: 40,
+      createdAt: 20,
+      updatedAt: 20,
+    };
+    await deliveries.put(delivery);
+
+    await expect(unitOfWork.planDelivery(
+      { ...delivery, id: 'delivery_2', eventId: 'event_2' },
+      { ...stream, nextRevision: 3 },
+    )).rejects.toBeDefined();
+
+    await expect(streams.get(stream.destinationId, stream.recordingId)).resolves.toEqual(stream);
+    await expect(deliveries.listStream(stream.destinationId, stream.recordingId)).resolves.toEqual([delivery]);
   });
 });

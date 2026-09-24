@@ -1,11 +1,16 @@
 import type { IntegrationDataPolicy } from './contracts';
 import { createIntegrationId } from './ids';
 import { buildIntegrationTestPayload } from './IntegrationTestEvent';
-import type {
-  CreateIntegrationDestinationInput,
-  CreatedIntegrationDestination,
-  IntegrationConnectionTestResult,
+import {
+  parseCreateIntegrationDestinationInput,
+  type CreateIntegrationDestinationInput,
+  type CreatedIntegrationDestination,
+  type IntegrationConnectionTestResult,
 } from './management';
+import {
+  assertIntegrationPayloadWithinLimit,
+  INTEGRATION_MAX_PAYLOAD_BYTES,
+} from './payload';
 import type {
   IntegrationDelivery,
   IntegrationDestination,
@@ -33,16 +38,12 @@ type CoordinatorDeps = {
   destinations: {
     get(id: string): Promise<IntegrationDestination | undefined>;
     list(): Promise<IntegrationDestination[]>;
-    put(destination: IntegrationDestination): Promise<void>;
   };
   secrets: {
     get(id: string): Promise<IntegrationSecret | undefined>;
-    put(secret: IntegrationSecret): Promise<void>;
-    remove(id: string): Promise<void>;
   };
   streams: {
     get(destinationId: string, recordingId: string): Promise<IntegrationStream | undefined>;
-    put(stream: IntegrationStream): Promise<void>;
   };
   deliveries: {
     put(delivery: IntegrationDelivery): Promise<void>;
@@ -51,8 +52,15 @@ type CoordinatorDeps = {
   snapshots: {
     build(recordingId: string, policy: IntegrationDataPolicy, envelope: SnapshotEnvelope): Promise<{
       body: string;
+      totalBytes: number;
+      transcriptBytes: number;
+      otherBytes: number;
       readiness: { complete: boolean; release: 'complete' | 'timeout' | 'manual'; pending: string[] };
     }>;
+  };
+  unitOfWork: {
+    createDestination(destination: IntegrationDestination, secrets: IntegrationSecret[]): Promise<void>;
+    planDelivery(delivery: IntegrationDelivery, stream: IntegrationStream): Promise<void>;
   };
   transport: {
     send(input: {
@@ -80,47 +88,40 @@ export class IntegrationCoordinator {
   }
 
   async createDestination(input: CreateIntegrationDestinationInput): Promise<CreatedIntegrationDestination> {
-    const name = input.name.trim();
-    if (!name) throw new Error('Integration name is required');
-    if (!input.dataPolicy.metadata) throw new Error('Integration metadata export is required for recording snapshots');
-    const { endpoint, hostPermission } = normalizeWebhookEndpoint(input.endpoint);
+    const normalized = parseCreateIntegrationDestinationInput(input);
+    const { endpoint, hostPermission } = normalizeWebhookEndpoint(normalized.endpoint);
     await this.assertPermission(hostPermission);
 
     const now = this.now();
     const signingSecretId = createIntegrationId('secret');
     const signingSecret = createStandardWebhookSecret();
-    const requestAuth = await this.persistRequestAuth(input.requestAuth, now);
+    const requestAuth = this.prepareRequestAuth(normalized.requestAuth, now);
     const destination: IntegrationDestination = {
       id: createIntegrationId('destination'),
       producerId: createIntegrationId('producer'),
-      name,
+      name: normalized.name,
       type: 'webhook',
       enabled: true,
       endpoint,
-      routingDefault: input.routingDefault,
-      dataPolicy: { ...input.dataPolicy },
+      routingDefault: normalized.routingDefault,
+      dataPolicy: { ...normalized.dataPolicy },
       requestAuth: requestAuth.reference,
       signingSecretId,
       connectionVersion: 1,
       createdAt: now,
       updatedAt: now,
     };
-    await this.deps.secrets.put({
+    const signingSecretRow: IntegrationSecret = {
       id: signingSecretId,
       kind: 'signing',
       value: signingSecret,
       createdAt: now,
       updatedAt: now,
-    });
-    try {
-      await this.deps.destinations.put(destination);
-    } catch (error) {
-      await Promise.allSettled([
-        this.deps.secrets.remove(signingSecretId),
-        ...(requestAuth.secretId ? [this.deps.secrets.remove(requestAuth.secretId)] : []),
-      ]);
-      throw error;
-    }
+    };
+    await this.deps.unitOfWork.createDestination(
+      destination,
+      [signingSecretRow, ...(requestAuth.secret ? [requestAuth.secret] : [])],
+    );
     return { destination, signingSecret };
   }
 
@@ -163,6 +164,7 @@ export class IntegrationCoordinator {
       externalRecordingId,
       revision,
     });
+    assertIntegrationPayloadWithinLimit(snapshot, INTEGRATION_MAX_PAYLOAD_BYTES);
     const delivery = await this.planDelivery({
       destination,
       current,
@@ -173,6 +175,8 @@ export class IntegrationCoordinator {
       eventKind,
       eventTime,
       body: snapshot.body,
+      totalBytes: snapshot.totalBytes,
+      transcriptBytes: snapshot.transcriptBytes,
     });
     return await this.attempt(delivery, destination, snapshot.body);
   }
@@ -192,6 +196,8 @@ export class IntegrationCoordinator {
     eventKind: 'recording.ready.v1' | 'recording.updated.v1';
     eventTime: number;
     body: string;
+    totalBytes: number;
+    transcriptBytes: number;
   }): Promise<IntegrationDelivery> {
     const createdAt = this.now();
     const delivery: IntegrationDelivery = {
@@ -207,11 +213,12 @@ export class IntegrationCoordinator {
       state: 'pending',
       attemptCount: 0,
       bodyHash: await sha256Hex(input.body),
+      totalBytes: input.totalBytes,
+      transcriptBytes: input.transcriptBytes,
       createdAt,
       updatedAt: createdAt,
     };
-    await this.deps.deliveries.put(delivery);
-    await this.deps.streams.put({
+    const stream: IntegrationStream = {
       destinationId: input.destination.id,
       recordingId: input.recordingId,
       externalRecordingId: input.externalRecordingId,
@@ -221,7 +228,8 @@ export class IntegrationCoordinator {
       ...(input.current?.lastPlannedProjectionHash
         ? { lastPlannedProjectionHash: input.current.lastPlannedProjectionHash }
         : {}),
-    });
+    };
+    await this.deps.unitOfWork.planDelivery(delivery, stream);
     return delivery;
   }
 
@@ -266,25 +274,25 @@ export class IntegrationCoordinator {
     }
   }
 
-  private async persistRequestAuth(
+  private prepareRequestAuth(
     auth: CreateIntegrationDestinationInput['requestAuth'],
     now: number,
-  ): Promise<{ reference: IntegrationRequestAuth; secretId?: string }> {
+  ): { reference: IntegrationRequestAuth; secret?: IntegrationSecret } {
     if (auth.type === 'none') return { reference: { type: 'none' } };
     if (!auth.value) throw new Error('Integration request credential is required');
     const apiKeyHeader = auth.type === 'api-key'
       ? normalizeWebhookApiKeyHeader(auth.header)
       : undefined;
     const secretId = createIntegrationId('secret');
-    await this.deps.secrets.put({
+    const secret: IntegrationSecret = {
       id: secretId,
       kind: 'request-auth',
       value: auth.value,
       createdAt: now,
       updatedAt: now,
-    });
+    };
     return {
-      secretId,
+      secret,
       reference: auth.type === 'bearer'
         ? { type: 'bearer', secretId }
         : { type: 'api-key', header: apiKeyHeader!, secretId },

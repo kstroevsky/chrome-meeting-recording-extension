@@ -1,4 +1,5 @@
 import type { PopupToBg } from '../../shared/protocol';
+import { IntegrationPayloadTooLargeError } from '../../integrations/payload';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 export async function handleIntegrationMessage(
@@ -22,10 +23,23 @@ export async function handleIntegrationMessage(
       sendResponse({ ok: true, result: await integrations.testDestination(msg.destinationId) });
       return true;
     case 'SEND_RECORDING_TO_INTEGRATION':
-      sendResponse({
-        ok: true,
-        delivery: await integrations.sendRecording(msg.destinationId, msg.recordingId),
-      });
+      try {
+        sendResponse({
+          ok: true,
+          delivery: await integrations.sendRecording(msg.destinationId, msg.recordingId),
+        });
+      } catch (error) {
+        if (!(error instanceof IntegrationPayloadTooLargeError)) throw error;
+        sendResponse({
+          ok: false,
+          error: error.message,
+          payloadTooLarge: {
+            totalBytes: error.measurement.totalBytes,
+            transcriptBytes: error.measurement.transcriptBytes,
+            maxBytes: error.maxBytes,
+          },
+        });
+      }
       return true;
     case 'LIST_INTEGRATION_DELIVERIES':
       sendResponse({ ok: true, deliveries: await integrations.listDeliveries() });
