@@ -54,7 +54,7 @@ export class BackgroundIntegrationRuntime {
       transport,
       containsHostPermission,
       eventTypePrefix: integrationEventTypePrefix(),
-      onStateChanged: () => scheduler.ensureAlarm(),
+      onStateChanged: () => scheduler.stateChanged(),
     });
     scheduler = new IntegrationScheduler({
       deliveries,

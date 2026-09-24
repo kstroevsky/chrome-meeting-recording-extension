@@ -23,6 +23,7 @@ type SchedulerDeps = {
 export class IntegrationScheduler {
   private readonly now: () => number;
   private readonly warn: (...args: unknown[]) => void;
+  private dueRunQueued = false;
 
   constructor(private readonly deps: SchedulerDeps) {
     this.now = deps.now ?? Date.now;
@@ -31,6 +32,21 @@ export class IntegrationScheduler {
 
   async ensureAlarm(): Promise<void> {
     const nextAttemptAt = await this.deps.deliveries.earliestNextAttemptAt();
+    await this.ensureAlarmAt(nextAttemptAt);
+  }
+
+  async stateChanged(): Promise<void> {
+    const nextAttemptAt = await this.deps.deliveries.earliestNextAttemptAt();
+    if (nextAttemptAt != null && nextAttemptAt <= this.now()) {
+      const alarm = await this.deps.getAlarm(INTEGRATION_DELIVERY_ALARM);
+      if (alarm) await this.deps.clearAlarm(INTEGRATION_DELIVERY_ALARM);
+      this.queueDueRun();
+      return;
+    }
+    await this.ensureAlarmAt(nextAttemptAt);
+  }
+
+  private async ensureAlarmAt(nextAttemptAt: number | undefined): Promise<void> {
     const alarm = await this.deps.getAlarm(INTEGRATION_DELIVERY_ALARM);
     if (nextAttemptAt == null) {
       if (alarm) await this.deps.clearAlarm(INTEGRATION_DELIVERY_ALARM);
@@ -76,5 +92,15 @@ export class IntegrationScheduler {
       if (result.status === 'rejected') this.warn('Integration delivery dispatch failed:', result.reason);
     }
   }
-}
 
+  private queueDueRun(): void {
+    if (this.dueRunQueued) return;
+    this.dueRunQueued = true;
+    queueMicrotask(() => {
+      this.dueRunQueued = false;
+      void this.runDue().catch((error) => {
+        this.warn('Integration due delivery dispatch failed:', error);
+      });
+    });
+  }
+}
