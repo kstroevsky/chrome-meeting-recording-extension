@@ -53,6 +53,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'REMOVE_RECORDING_NOTATION',
   'GET_RECORDING_TRANSCRIPT',
   'LIST_RECORDING_TOPIC_SUMMARIES',
+  'PREVIEW_INTEGRATION_PAYLOAD',
 ] as const;
 
 /** The subset of popup commands validated by `isRecordingHistoryMessage`. */
@@ -100,6 +101,10 @@ export const SHARING_MESSAGE_TYPES = [
   'DELETE_SHARE',
 ] as const;
 
+export const INTEGRATION_MESSAGE_TYPES = [
+  'PREVIEW_INTEGRATION_PAYLOAD',
+] as const;
+
 /**
  * Library aggregate commands whose failures answer `{ ok: false, error }`.
  * Recording-session failure policy is deliberately owned by MessageRouter;
@@ -112,6 +117,7 @@ export const NON_SESSION_RESPONSE_MESSAGE_TYPES = [
   ...RECORDING_TRANSCRIPT_MESSAGE_TYPES,
   ...RECORDING_ANALYSIS_MESSAGE_TYPES,
   ...SHARING_MESSAGE_TYPES,
+  ...INTEGRATION_MESSAGE_TYPES,
 ] as const;
 
 /**
