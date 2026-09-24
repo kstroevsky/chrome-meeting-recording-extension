@@ -1,9 +1,7 @@
-import { listLibraryFiles, removeByKey } from '../../offscreen/storage/opfsLayout';
+import { listLibraryFiles } from '../../offscreen/storage/opfsLayout';
 import { reloadRuntime } from '../../platform/chrome/runtime';
-import { getSessionStorageValues, setSessionStorageValues } from '../../platform/chrome/storage';
 import { makeLogger } from '../../shared/logger';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
-import { fetchDriveTokenWithFallback } from '../drive/driveAuth';
 import { DriveLibraryCoordinator } from '../drive/DriveLibraryCoordinator';
 import { createLibraryRuntime } from '../library/createLibraryRuntime';
 import { LocalDeliveryOrchestrator } from '../delivery/LocalDeliveryOrchestrator';
@@ -12,8 +10,6 @@ import { createChromeCpuSampler } from '../observability/perf/CpuSampler';
 import { PerfDebugStore } from '../observability/perf/PerfDebugStore';
 import { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import { OffscreenManager } from '../offscreen/OffscreenManager';
-import { DrivePlaybackAuthLeaseManager } from '../playback/DrivePlaybackAuthLeaseManager';
-import { PlaybackLeaseManager, type PlaybackLeaseState } from '../playback/PlaybackLeaseManager';
 import { RecordingController } from '../recording/RecordingController';
 import { RecordingSession } from '../recording/session/RecordingSession';
 import { UnsavedRecordingRecovery } from '../recording/UnsavedRecordingRecovery';
@@ -30,8 +26,9 @@ import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
+import { IntegrationPreviewService } from '../integrations/IntegrationPreviewService';
+import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
 
-const PLAYBACK_LEASE_STORAGE_KEY = 'playbackLeases';
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
   const logger = makeLogger('background');
@@ -49,33 +46,20 @@ export function createBackgroundRuntime() {
     reload: reloadRuntime,
     logger,
   });
-  const playbackLeases = new PlaybackLeaseManager({
-    read: async () => (
-      await getSessionStorageValues(PLAYBACK_LEASE_STORAGE_KEY)
-    )?.[PLAYBACK_LEASE_STORAGE_KEY] as PlaybackLeaseState | undefined,
-    write: async (state) => {
-      await setSessionStorageValues({ [PLAYBACK_LEASE_STORAGE_KEY]: state });
-    },
-    deleteRetained: async (keys) => {
-      const root = await navigator.storage.getDirectory();
-      for (const key of keys) await removeByKey(root, key);
-    },
-    warn: logger.warn,
-  });
-  const driveAuthLease = new DrivePlaybackAuthLeaseManager({
-    getToken: async (options) => {
-      const result = await fetchDriveTokenWithFallback({ refresh: options?.refresh === true });
-      if (!result.ok) throw new Error(result.error);
-      return result.token;
-    },
-    warn: logger.warn,
-  });
+  const { playbackLeases, driveAuthLease } = createPlaybackSupportRuntime(logger);
 
   const library = createLibraryRuntime({
     offscreen,
     playbackLeases,
     logger,
     onAnalysisSettled: () => criticalWork.sync(),
+  });
+  const integrationPreview = new IntegrationPreviewService({
+    getHistory: (recordingId) => library.historyRepository.get(recordingId),
+    getContext: (recordingId) => library.recordingContexts.get(recordingId),
+    listNotations: (recordingId) => library.notations.list(recordingId),
+    getTranscript: (recordingId) => library.transcripts.get(recordingId),
+    getAnalysis: (recordingId) => library.analyses.get(recordingId),
   });
   wireAnalysisRuntime({
     offscreen,
@@ -169,6 +153,7 @@ export function createBackgroundRuntime() {
     driveAuthLease,
     telemetry,
     sharing,
+    integrationPreview,
     e2eAnalysisWork: () => offscreen.refreshAnalysisWork(),
     waitUntilReady: () => readiness.wait(),
   });

@@ -30,6 +30,8 @@ import {
 } from './protocolMessageTypes';
 import { getMessageType, hasKnownMessageType } from './typeGuards';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from './recordingHistory';
+import type { IntegrationDataPolicy } from '../integrations/contracts';
+import type { IntegrationPayloadPreview } from '../integrations/preview';
 
 export type RpcId = string;
 
@@ -207,6 +209,11 @@ export type PopupUpdateRecordingNotation = {
   text?: string;
 };
 export type PopupRemoveRecordingNotation = { type: 'REMOVE_RECORDING_NOTATION'; recordingId: string; id: string };
+export type PopupPreviewIntegrationPayload = {
+  type: 'PREVIEW_INTEGRATION_PAYLOAD';
+  recordingId: string;
+  policy: IntegrationDataPolicy;
+};
 
 export type PopupToBg =
   | PopupStartRecording
@@ -256,7 +263,8 @@ export type PopupToBg =
   | PopupAddRecordingNotation
   | PopupUpdateRecordingNotation
   | PopupRemoveRecordingNotation
-  | PopupGetRecordingTranscript;
+  | PopupGetRecordingTranscript
+  | PopupPreviewIntegrationPayload;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -318,6 +326,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupUpdateRecordingNotation ? NotationListResult :
   T extends PopupRemoveRecordingNotation ? NotationListResult :
   T extends PopupGetRecordingTranscript ? TranscriptResult :
+  T extends PopupPreviewIntegrationPayload
+    ? { ok: true; preview: IntegrationPayloadPreview } | { ok: false; error: string } :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
