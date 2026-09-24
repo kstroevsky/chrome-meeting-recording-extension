@@ -2,6 +2,10 @@ export const MEDIA_CACHE_MAX_BYTES = 8_000_000_000;
 export const MEDIA_CACHE_TTL_MS = 30 * 60 * 60 * 1000;
 export const MEDIA_CACHE_MAX_PUTS_PER_DAY = 15_000;
 export const MAX_MEDIA_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MEDIA_CACHE_CLEANUP_LIMIT = 1_000;
+// D1 allows at most 100 bound parameters. One parameter is reserved for the
+// expiration guard so a concurrent cache refresh cannot be deleted.
+const MEDIA_CACHE_D1_DELETE_CHUNK = 99;
 
 export type MediaCacheEntry = {
   cache_key: string;
@@ -167,24 +171,60 @@ async function refreshExpiredEntry(
 export async function cleanupExpiredMediaCache(
   env: Env,
   now = Date.now(),
-  limit = 500,
+  limit = MEDIA_CACHE_CLEANUP_LIMIT,
 ): Promise<{ deleted: number; bytes: number }> {
+  const boundedLimit = Math.max(1, Math.min(MEDIA_CACHE_CLEANUP_LIMIT, Math.floor(limit)));
   const entries = await env.SHARING_DB.prepare(
     `SELECT cache_key, asset_id, bytes, cached_at, expires_at
        FROM media_cache_entries
       WHERE expires_at <= ?
       ORDER BY expires_at ASC
       LIMIT ?`,
-  ).bind(now, limit).all<MediaCacheEntry>();
+  ).bind(now, boundedLimit).all<MediaCacheEntry>();
   if (!entries.results.length) return { deleted: 0, bytes: 0 };
   const keys = entries.results.map((entry) => entry.cache_key);
-  const bytes = entries.results.reduce((total, entry) => total + entry.bytes, 0);
   await env.SHARING_MEDIA.delete(keys);
-  const placeholders = keys.map(() => '?').join(',');
-  await env.SHARING_DB.prepare(`DELETE FROM media_cache_entries WHERE cache_key IN (${placeholders})`)
-    .bind(...keys).run();
-  await releaseBudget(env, bytes);
-  return { deleted: keys.length, bytes };
+
+  let deleted = 0;
+  let bytes = 0;
+  for (let offset = 0; offset < entries.results.length; offset += MEDIA_CACHE_D1_DELETE_CHUNK) {
+    const chunk = entries.results.slice(offset, offset + MEDIA_CACHE_D1_DELETE_CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    const result = await env.SHARING_DB.batch([
+      env.SHARING_DB.prepare(
+        `DELETE FROM media_cache_entries
+          WHERE expires_at <= ?
+            AND cache_key IN (${placeholders})`,
+      ).bind(now, ...chunk.map((entry) => entry.cache_key)),
+      // Recompute from tracked rows in the same D1 batch. If this batch fails,
+      // neither the row deletion nor budget release commits, which can only
+      // over-account cache usage until the next cleanup attempt.
+      env.SHARING_DB.prepare(
+        `UPDATE media_cache_budget
+            SET live_bytes = COALESCE((SELECT SUM(bytes) FROM media_cache_entries), 0)
+          WHERE singleton = 1`,
+      ),
+    ]);
+    const changes = Number(result[0]?.meta.changes ?? 0);
+    deleted += changes;
+    if (changes === chunk.length) {
+      bytes += chunk.reduce((total, entry) => total + entry.bytes, 0);
+    } else if (changes > 0) {
+      // This branch is only relevant when a concurrent request refreshed part
+      // of the selected chunk. Querying the survivors keeps cleanup metrics
+      // accurate without risking deletion of the refreshed entry.
+      const remaining = await env.SHARING_DB.prepare(
+        `SELECT cache_key
+           FROM media_cache_entries
+          WHERE cache_key IN (${placeholders})`,
+      ).bind(...chunk.map((entry) => entry.cache_key)).all<{ cache_key: string }>();
+      const surviving = new Set(remaining.results.map((entry) => entry.cache_key));
+      bytes += chunk
+        .filter((entry) => !surviving.has(entry.cache_key))
+        .reduce((total, entry) => total + entry.bytes, 0);
+    }
+  }
+  return { deleted, bytes };
 }
 
 export async function deleteAssetCache(env: Env, assetIds: readonly string[]): Promise<void> {
