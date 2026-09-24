@@ -48,6 +48,38 @@ export async function integrationPolicyHash(policy: IntegrationDataPolicy): Prom
   return sha256Hex(stableJsonSerialize(policy));
 }
 
+export function normalizeIntegrationDataPolicy(value: unknown): IntegrationDataPolicy | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  const booleanKeys = [
+    'metadata',
+    'meetingIdentity',
+    'userNote',
+    'notations',
+    'transcript',
+    'analysis',
+    'artifactMetadata',
+    'artifactLinks',
+  ] as const;
+  if (booleanKeys.some((key) => typeof candidate[key] !== 'boolean')) return undefined;
+  if (
+    candidate.transcriptSpeakers !== 'names'
+    && candidate.transcriptSpeakers !== 'pseudonyms'
+    && candidate.transcriptSpeakers !== 'omit'
+  ) return undefined;
+  return {
+    metadata: candidate.metadata as boolean,
+    meetingIdentity: candidate.meetingIdentity as boolean,
+    userNote: candidate.userNote as boolean,
+    notations: candidate.notations as boolean,
+    transcript: candidate.transcript as boolean,
+    analysis: candidate.analysis as boolean,
+    artifactMetadata: candidate.artifactMetadata as boolean,
+    artifactLinks: candidate.artifactLinks as boolean,
+    transcriptSpeakers: candidate.transcriptSpeakers,
+  };
+}
+
 function morePrivateSpeakerPolicy(
   left: TranscriptSpeakerPolicy,
   right: TranscriptSpeakerPolicy,

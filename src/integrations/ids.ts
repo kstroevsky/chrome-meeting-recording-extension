@@ -3,7 +3,8 @@ export type IntegrationIdPrefix =
   | 'producer'
   | 'recording'
   | 'event'
-  | 'delivery';
+  | 'delivery'
+  | 'secret';
 
 export function createIntegrationId(prefix: IntegrationIdPrefix): string {
   return `${prefix}_${crypto.randomUUID()}`;
