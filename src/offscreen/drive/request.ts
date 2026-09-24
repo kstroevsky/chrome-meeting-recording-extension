@@ -38,6 +38,42 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
   return normalized;
 }
 
+async function encodeE2EBody(body: BodyInit | null | undefined): Promise<{
+  body?: string;
+  bodyBase64?: string;
+}> {
+  if (body == null) return {};
+  if (typeof body === 'string') return { body };
+  if (body instanceof URLSearchParams) return { body: body.toString() };
+
+  let bytes: Uint8Array | null = null;
+  if (body instanceof Blob) bytes = await blobBytes(body);
+  else if (body instanceof ArrayBuffer) bytes = new Uint8Array(body);
+  else if (ArrayBuffer.isView(body)) {
+    bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  }
+  if (!bytes) throw new TypeError('E2E Drive bridge cannot serialize this request body');
+
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return { bodyBase64: btoa(binary) };
+}
+
+async function blobBytes(blob: Blob): Promise<Uint8Array> {
+  const modern = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> };
+  if (typeof modern.arrayBuffer === 'function') {
+    return new Uint8Array(await modern.arrayBuffer());
+  }
+  return await new Promise<Uint8Array>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new TypeError('Could not read Drive request body'));
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
 export async function driveFetch(
   input: string | URL | Request,
   init: RequestInit = {}
@@ -53,13 +89,13 @@ export async function driveFetch(
   const headers = normalizeHeaders(
     init.headers ?? (isRequest ? input.headers : undefined)
   );
-  const body = typeof init.body === 'string' ? init.body : undefined;
+  const encodedBody = await encodeE2EBody(init.body);
   const response = await sendRuntimeMessage<E2EDriveFetchResponse>({
     type: 'E2E_DRIVE_FETCH',
     url,
     method,
     headers,
-    body,
+    ...encodedBody,
   });
   if (!response?.ok || response.status == null) {
     throw new TypeError(response?.error ?? 'E2E Drive fetch bridge failed');
