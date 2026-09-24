@@ -143,6 +143,30 @@ describe('RecordingAnalysisService', () => {
     });
   });
 
+  it('persists terminal outcomes that happen before an analysis job exists', async () => {
+    const repository = fakeRepository();
+    const service = new RecordingAnalysisService(repository, () => provenance());
+
+    await service.recordTerminalOutcome(
+      'rec:1',
+      'unsupported',
+      'Analysis is unavailable because the recording has no transcript.',
+      10,
+      20,
+    );
+
+    expect(repository.outcomes.get('rec:1')).toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+      startedAt: 10,
+      updatedAt: 20,
+    });
+    await expect(service.exportState('rec:1')).resolves.toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+    });
+  });
+
   it('reports stale analysis as terminal-unavailable for export', async () => {
     const repository = fakeRepository();
     let current = provenance();
