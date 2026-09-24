@@ -154,18 +154,39 @@ export class IntegrationCoordinator {
     return { ...result, eventId };
   }
 
-  async deleteDestination(destinationId: string): Promise<{ removed: true; hostPermissionRemoved: boolean }> {
+  async deleteDestination(destinationId: string): Promise<{
+    removed: true;
+    hostPermissionRemoved: boolean;
+    hostPermissionCleanup: 'removed' | 'retained-in-use' | 'failed';
+  }> {
     const destination = await this.requireDestination(destinationId);
     const hostPermission = normalizeWebhookEndpoint(destination.endpoint).hostPermission;
     await this.deps.unitOfWork.deleteDestination(destination, this.now());
-    const remaining = await this.deps.destinations.list();
-    const hostStillUsed = remaining.some((candidate) => (
-      normalizeWebhookEndpoint(candidate.endpoint).hostPermission === hostPermission
-    ));
-    const hostPermissionRemoved = hostStillUsed
-      ? false
-      : await this.deps.removeHostPermission(hostPermission);
-    return { removed: true, hostPermissionRemoved };
+    try {
+      const remaining = await this.deps.destinations.list();
+      const hostStillUsed = remaining.some((candidate) => (
+        normalizeWebhookEndpoint(candidate.endpoint).hostPermission === hostPermission
+      ));
+      if (hostStillUsed) {
+        return {
+          removed: true,
+          hostPermissionRemoved: false,
+          hostPermissionCleanup: 'retained-in-use',
+        };
+      }
+      const hostPermissionRemoved = await this.deps.removeHostPermission(hostPermission);
+      return {
+        removed: true,
+        hostPermissionRemoved,
+        hostPermissionCleanup: hostPermissionRemoved ? 'removed' : 'failed',
+      };
+    } catch {
+      return {
+        removed: true,
+        hostPermissionRemoved: false,
+        hostPermissionCleanup: 'failed',
+      };
+    }
   }
 
   async sendRecording(destinationId: string, recordingId: string): Promise<IntegrationDelivery> {
@@ -302,6 +323,9 @@ export class IntegrationCoordinator {
       await this.deps.deliveries.put(final);
       return final;
     } catch (error) {
+      if (!await this.deps.destinations.get(destination.id)) {
+        return await this.cancelDeletedDestinationDelivery(delivering);
+      }
       const final: IntegrationDelivery = {
         ...delivering,
         state: 'failed',
