@@ -1,4 +1,4 @@
-import { containsHostPermission } from '../../platform/chrome/permissions';
+import { containsHostPermission, removeHostPermission } from '../../platform/chrome/permissions';
 import type { StoredAnalysis } from '../../shared/analysis/storedAnalysis';
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingContext } from '../../shared/recordingContext';
@@ -40,6 +40,7 @@ export class BackgroundIntegrationRuntime {
       snapshots: this.previewService,
       transport: new WebhookTransport(),
       containsHostPermission,
+      removeHostPermission,
       eventTypePrefix: integrationEventTypePrefix(),
     });
   }
@@ -58,6 +59,10 @@ export class BackgroundIntegrationRuntime {
 
   testDestination(destinationId: string) {
     return this.coordinator.testDestination(destinationId);
+  }
+
+  deleteDestination(destinationId: string) {
+    return this.coordinator.deleteDestination(destinationId);
   }
 
   sendRecording(destinationId: string, recordingId: string) {

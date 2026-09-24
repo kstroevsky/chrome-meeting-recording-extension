@@ -80,6 +80,7 @@ export const POPUP_ROUTE_OWNERS = {
   PREVIEW_INTEGRATION_PAYLOAD: 'integrations',
   LIST_INTEGRATIONS: 'integrations',
   CREATE_INTEGRATION: 'integrations',
+  DELETE_INTEGRATION: 'integrations',
   TEST_INTEGRATION: 'integrations',
   SEND_RECORDING_TO_INTEGRATION: 'integrations',
   LIST_INTEGRATION_DELIVERIES: 'integrations',

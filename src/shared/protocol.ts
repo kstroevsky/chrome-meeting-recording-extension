@@ -225,6 +225,7 @@ export type PopupPreviewIntegrationPayload = {
 };
 export type PopupListIntegrations = { type: 'LIST_INTEGRATIONS' };
 export type PopupCreateIntegration = { type: 'CREATE_INTEGRATION'; input: CreateIntegrationDestinationInput };
+export type PopupDeleteIntegration = { type: 'DELETE_INTEGRATION'; destinationId: string };
 export type PopupTestIntegration = { type: 'TEST_INTEGRATION'; destinationId: string };
 export type PopupSendRecordingToIntegration = {
   type: 'SEND_RECORDING_TO_INTEGRATION';
@@ -285,6 +286,7 @@ export type PopupToBg =
   | PopupPreviewIntegrationPayload
   | PopupListIntegrations
   | PopupCreateIntegration
+  | PopupDeleteIntegration
   | PopupTestIntegration
   | PopupSendRecordingToIntegration
   | PopupListIntegrationDeliveries;
@@ -355,6 +357,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ? { ok: true; destinations: IntegrationDestination[] } | { ok: false; error: string } :
   T extends PopupCreateIntegration
     ? { ok: true; created: CreatedIntegrationDestination } | { ok: false; error: string } :
+  T extends PopupDeleteIntegration
+    ? { ok: true; removed: true; hostPermissionRemoved: boolean } | { ok: false; error: string } :
   T extends PopupTestIntegration
     ? { ok: true; result: IntegrationConnectionTestResult } | { ok: false; error: string } :
   T extends PopupSendRecordingToIntegration
@@ -665,6 +669,7 @@ function isIntegrationPopupMessage(value: unknown): boolean {
       return true;
     case 'CREATE_INTEGRATION':
       return normalizeCreateIntegrationDestinationInput(value.input) != null;
+    case 'DELETE_INTEGRATION':
     case 'TEST_INTEGRATION':
       return nonEmptyText(value.destinationId);
     case 'SEND_RECORDING_TO_INTEGRATION':
