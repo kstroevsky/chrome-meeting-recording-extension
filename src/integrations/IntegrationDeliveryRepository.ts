@@ -40,6 +40,14 @@ export class IntegrationDeliveryRepository extends IntegrationRepositorySupport 
     });
   }
 
+  list(): Promise<IntegrationDelivery[]> {
+    return this.readAllRows(
+      INTEGRATION_DELIVERIES_STORE,
+      normalizeIntegrationDelivery,
+      'Could not list integration deliveries',
+    );
+  }
+
   remove(id: string): Promise<void> {
     return this.deleteRow(INTEGRATION_DELIVERIES_STORE, id, 'Could not delete integration delivery');
   }

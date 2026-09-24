@@ -32,6 +32,8 @@ import { getMessageType, hasKnownMessageType } from './typeGuards';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from './recordingHistory';
 import type { IntegrationDataPolicy } from '../integrations/contracts';
 import type { IntegrationPayloadPreview } from '../integrations/preview';
+import type { CreateIntegrationDestinationInput, CreatedIntegrationDestination, IntegrationConnectionTestResult } from '../integrations/management';
+import type { IntegrationDelivery, IntegrationDestination } from '../integrations/persistence';
 
 export type RpcId = string;
 
@@ -214,6 +216,15 @@ export type PopupPreviewIntegrationPayload = {
   recordingId: string;
   policy: IntegrationDataPolicy;
 };
+export type PopupListIntegrations = { type: 'LIST_INTEGRATIONS' };
+export type PopupCreateIntegration = { type: 'CREATE_INTEGRATION'; input: CreateIntegrationDestinationInput };
+export type PopupTestIntegration = { type: 'TEST_INTEGRATION'; destinationId: string };
+export type PopupSendRecordingToIntegration = {
+  type: 'SEND_RECORDING_TO_INTEGRATION';
+  destinationId: string;
+  recordingId: string;
+};
+export type PopupListIntegrationDeliveries = { type: 'LIST_INTEGRATION_DELIVERIES' };
 
 export type PopupToBg =
   | PopupStartRecording
@@ -264,7 +275,12 @@ export type PopupToBg =
   | PopupUpdateRecordingNotation
   | PopupRemoveRecordingNotation
   | PopupGetRecordingTranscript
-  | PopupPreviewIntegrationPayload;
+  | PopupPreviewIntegrationPayload
+  | PopupListIntegrations
+  | PopupCreateIntegration
+  | PopupTestIntegration
+  | PopupSendRecordingToIntegration
+  | PopupListIntegrationDeliveries;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -328,6 +344,16 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupGetRecordingTranscript ? TranscriptResult :
   T extends PopupPreviewIntegrationPayload
     ? { ok: true; preview: IntegrationPayloadPreview } | { ok: false; error: string } :
+  T extends PopupListIntegrations
+    ? { ok: true; destinations: IntegrationDestination[] } | { ok: false; error: string } :
+  T extends PopupCreateIntegration
+    ? { ok: true; created: CreatedIntegrationDestination } | { ok: false; error: string } :
+  T extends PopupTestIntegration
+    ? { ok: true; result: IntegrationConnectionTestResult } | { ok: false; error: string } :
+  T extends PopupSendRecordingToIntegration
+    ? { ok: true; delivery: IntegrationDelivery } | { ok: false; error: string } :
+  T extends PopupListIntegrationDeliveries
+    ? { ok: true; deliveries: IntegrationDelivery[] } | { ok: false; error: string } :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };

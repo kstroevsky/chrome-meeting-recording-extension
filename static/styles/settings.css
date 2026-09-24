@@ -70,6 +70,30 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
 .number-control small { color: var(--subtle); font: 500 10px 'IBM Plex Mono', monospace; }
 
 .integration-preview { border-top: 1px solid var(--divider); padding-top: 24px; }
+.integrations-settings { border-top: 1px solid var(--divider); padding-top: 24px; }
+.integration-list { display: grid; gap: 8px; margin: 12px 0 18px; }
+.integration-destination { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--raised); }
+.integration-destination__copy { min-width: 0; display: grid; gap: 3px; }
+.integration-destination__copy strong { color: var(--ink); }
+.integration-destination__copy span { overflow: hidden; color: var(--body); font: 500 10px 'IBM Plex Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.integration-destination__copy small { color: var(--subtle); font: 500 9px 'IBM Plex Mono', monospace; }
+.integration-destination__actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.integration-destination__actions button, .integration-add { min-height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink); font-weight: 600; }
+.integration-destination__actions button:hover:not(:disabled), .integration-add:hover:not(:disabled) { background: var(--raised); }
+.integration-destination__actions button:disabled, .integration-add:disabled { opacity: .45; cursor: default; }
+.integration-editor { display: grid; gap: 8px; padding: 14px 0; border-top: 1px solid var(--divider); }
+.integration-editor > label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.integration-editor > label > span { color: var(--body); }
+.integration-editor input, .integration-editor select, .integration-secret-panel input { min-height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink); }
+.integration-editor > label > input, .integration-editor > label > select { width: 58%; }
+.integration-auth-fields { display: flex; justify-content: flex-end; gap: 8px; }
+.integration-auth-fields input { width: calc(29% - 4px); }
+.integration-add { justify-self: end; margin-top: 4px; }
+.integration-secret-panel { display: grid; gap: 7px; margin: 4px 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--raised); }
+.integration-secret-panel strong { color: var(--ink); }
+.integration-secret-panel input { width: 100%; font: 500 10px 'IBM Plex Mono', monospace; }
+.integration-secret-panel small { color: var(--subtle); }
+#integration-status[data-error='true'] { color: var(--accent); }
 .integration-preview-field { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 46px; border-top: 1px solid var(--divider); }
 .integration-preview-field > span { color: var(--body); }
 .integration-preview-field select { max-width: 58%; height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink); }

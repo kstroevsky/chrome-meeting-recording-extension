@@ -23,6 +23,8 @@ const TELEMETRY_ENDPOINT_ENV_KEY = 'TELEMETRY_ENDPOINT'
 const SHARING_SERVICE_ORIGIN_ENV_KEY = 'SHARING_SERVICE_ORIGIN'
 const SHARING_READER_EMAIL_ENV_KEY = 'GOOGLE_DRIVE_READER_EMAIL'
 const SHARING_READER_EMAIL_PATTERN = /^[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9.-]*\.iam\.gserviceaccount\.com$/
+const INTEGRATION_EVENT_TYPE_PREFIX_ENV_KEY = 'INTEGRATION_EVENT_TYPE_PREFIX'
+const DEFAULT_INTEGRATION_EVENT_TYPE_PREFIX = 'dev.workers.kstroevsky.meeting-recorder'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
 const STATIC_DIR = 'static'
 const PUBLIC_DIR = 'public'
@@ -179,6 +181,14 @@ module.exports = (_env, argv) => {
       `[build] ${SHARING_READER_EMAIL_ENV_KEY} is not set; the extension will accept any service-account reader the sharing Worker names.`
     )
   }
+  const integrationEventTypePrefix = String(
+    process.env[INTEGRATION_EVENT_TYPE_PREFIX_ENV_KEY]
+      || fileEnv[INTEGRATION_EVENT_TYPE_PREFIX_ENV_KEY]
+      || DEFAULT_INTEGRATION_EVENT_TYPE_PREFIX
+  ).trim()
+  if (!integrationEventTypePrefix || integrationEventTypePrefix === 'com.example' || integrationEventTypePrefix.startsWith('com.example.')) {
+    throw new Error(`${INTEGRATION_EVENT_TYPE_PREFIX_ENV_KEY} must use a project-controlled domain prefix`)
+  }
   if (!isDevBuild && !telemetryEndpoint) {
     throw new Error(`${TELEMETRY_ENDPOINT_ENV_KEY} is required for production builds`)
   }
@@ -270,6 +280,7 @@ module.exports = (_env, argv) => {
         '__TELEMETRY_ENDPOINT__': JSON.stringify(telemetryEndpoint),
         '__SHARING_SERVICE_ORIGIN__': JSON.stringify(sharingServiceOrigin),
         '__SHARING_READER_EMAIL__': JSON.stringify(sharingReaderEmail),
+        '__INTEGRATION_EVENT_TYPE_PREFIX__': JSON.stringify(integrationEventTypePrefix),
         // The model this build actually packaged. Defined rather than written
         // in TypeScript so an analysis can never record provenance for a model
         // or quantization other than the one on disk beside it (ADR-0007).
