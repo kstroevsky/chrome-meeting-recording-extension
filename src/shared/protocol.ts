@@ -580,6 +580,7 @@ export type E2EDriveFetchMessage = {
   method: string;
   headers: Record<string, string>;
   body?: string;
+  bodyBase64?: string;
 };
 
 /** Checks whether a runtime message belongs to the popup -> background command set. */
