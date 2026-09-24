@@ -77,7 +77,7 @@ stateDiagram-v2
 
 `uploading` remains accepted as a legacy persisted local phase and resumes as origin preparation. The Worker also uses `uploading` as its remote pre-finalization state after the first origin is registered.
 
-`failed` is a durable retry marker. Background startup calls `resumeIfPending()`, which recreates the offscreen runtime when local publication or cleanup work remains. Offscreen startup calls `resumePending()` and replays the idempotent phase. This is what makes a lost origin-registration response recover after a full Chrome restart.
+`failed` is a durable retry marker. Background startup calls `resumeIfPending()`, which recreates the offscreen runtime when resumable local work exists or a locally revoked publication may have acquired server-side retention cleanup while Chrome was closed. Offscreen startup calls `resumePending()`, replays local idempotent phases, and drains owner-scoped Worker cleanup candidates. This is what makes both lost origin-registration responses and server-only cleanup work recover after a full Chrome restart.
 
 `ShareUploadStore` keeps its historical name and IndexedDB database for compatibility, but its current job is durable Drive-origin preparation state: OPFS→Drive upload session URI, committed offset, Drive file/revision metadata, and per-track progress.
 
@@ -158,7 +158,7 @@ Revocation does not delete the user's recording file and does not need R2/cache 
 
 The user's actual Drive recording file is never deleted by sharing cleanup, including when publication originally copied an OPFS recording into Drive.
 
-The cleanup queue persists before the server action. Therefore a lost successful DELETE response, browser crash between server deletion and Drive cleanup, or missing local publication row can all be resumed safely.
+The cleanup queue persists before an extension-initiated server action. In addition, scheduled Worker retention persists `drive_cleanup_candidates` independently of the share row. Startup claims those owner-wide candidates through `/api/origin-cleanup/claim-pending`, so a lost successful DELETE response, browser crash between server deletion and Drive cleanup, missing local publication row, or server-only retention deletion can all be resumed safely.
 
 ## Authentication boundaries
 

@@ -82,6 +82,7 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
     async resumePending(): Promise<void> {
       await publications.resumePending();
       await cleanup.resumePending();
+      await cleanup.drainServerPending();
     },
     async revoke(shareId: string): Promise<void> {
       const local = await publicationStore.get(shareId);

@@ -14,6 +14,7 @@
  *   POST   /api/shares/:shareId/finalize
  *   POST   /api/shares/:shareId/revoke
  *   DELETE /api/shares/:shareId
+ *   POST   /api/origin-cleanup/claim-pending
 * A chunk's offset is part of its URL and Content-Range, so replaying a request
  */
 
@@ -176,13 +177,15 @@ export class ShareServiceClient implements SharePublicationApi, DriveOriginApi, 
         statuses: [200],
       },
     );
-    if (!isRecord(body) || !Array.isArray(body.claims) || typeof body.pending !== 'boolean') {
-      throw new Error('Sharing service returned invalid Drive cleanup claims');
-    }
-    return {
-      claims: body.claims.map(parseDriveCleanupClaim),
-      pending: body.pending,
-    };
+    return parseDriveCleanupClaims(body);
+  }
+
+  async claimPendingDriveOriginCleanup(): Promise<{ claims: DriveOriginCleanupClaim[]; pending: boolean }> {
+    const body = await this.requestJson('/api/origin-cleanup/claim-pending', {
+      method: 'POST',
+      statuses: [200],
+    });
+    return parseDriveCleanupClaims(body);
   }
 
   async completeDriveOriginCleanup(claim: DriveOriginCleanupClaim): Promise<void> {
@@ -308,6 +311,19 @@ function parseDriveCleanupDescriptor(value: unknown): DriveOriginCleanupDescript
   const permissionId = optionalStringField(value, 'permissionId');
   if (!fileId || !revisionId) throw new Error('Sharing service returned invalid Drive cleanup metadata');
   return { fileId, revisionId, ...(permissionId ? { permissionId } : {}) };
+}
+
+function parseDriveCleanupClaims(value: unknown): {
+  claims: DriveOriginCleanupClaim[];
+  pending: boolean;
+} {
+  if (!isRecord(value) || !Array.isArray(value.claims) || typeof value.pending !== 'boolean') {
+    throw new Error('Sharing service returned invalid Drive cleanup claims');
+  }
+  return {
+    claims: value.claims.map(parseDriveCleanupClaim),
+    pending: value.pending,
+  };
 }
 
 function parseDriveCleanupClaim(value: unknown): DriveOriginCleanupClaim {

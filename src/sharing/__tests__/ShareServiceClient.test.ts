@@ -210,6 +210,37 @@ describe('ShareServiceClient', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it('claims owner-wide pending Drive cleanup without a local share id', async () => {
+    const fetcher = jest.fn(async () => jsonResponse({
+      claims: [{
+        candidateId: 'candidate-1',
+        leaseId: 'lease-1',
+        leaseToken: 'token-1',
+        kind: 'revision',
+        fileId: 'drive-file-1',
+        revisionId: 'revision-1',
+      }],
+      pending: true,
+    }));
+    const client = new ShareServiceClient('https://share.example', { fetch: fetcher as typeof fetch });
+
+    await expect(client.claimPendingDriveOriginCleanup()).resolves.toEqual({
+      claims: [{
+        candidateId: 'candidate-1',
+        leaseId: 'lease-1',
+        leaseToken: 'token-1',
+        kind: 'revision',
+        fileId: 'drive-file-1',
+        revisionId: 'revision-1',
+      }],
+      pending: true,
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://share.example/api/origin-cleanup/claim-pending',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
   it('fails closed on non-HTTPS or path-bearing service URLs and malformed relay identity', async () => {
     expect(() => new ShareServiceClient('http://share.example')).toThrow('bare HTTPS origin');
     expect(() => new ShareServiceClient('https://share.example/api')).toThrow('bare HTTPS origin');

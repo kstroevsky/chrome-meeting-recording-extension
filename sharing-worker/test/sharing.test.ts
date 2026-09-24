@@ -12,6 +12,7 @@ import {
   MEDIA_CACHE_MAX_BYTES,
   MEDIA_CACHE_MAX_PUTS_PER_DAY,
 } from '../src/cache/mediaCache';
+import { cleanupExpiredShares } from '../src/maintenance/cleanup';
 import worker from '../src/index';
 
 const origin = 'https://sharing.test';
@@ -242,6 +243,60 @@ describe('sharing worker vertical slice', () => {
 
     await completeCleanup(cleanup.claims[0]);
     expect((await registerOriginFor('share-owner-id-2')).status).toBe(201);
+  });
+
+  it('keeps retention-created Drive cleanup candidates claimable after a revoked share is deleted', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+    expect((await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' })).status).toBe(200);
+    expect((await ownerFetch('/api/shares/share-owner-id/revoke', { method: 'POST' })).status).toBe(204);
+
+    const now = 2_000_000_000_000;
+    const expired = now - 31 * 24 * 60 * 60 * 1000;
+    await env.SHARING_DB.prepare(
+      'UPDATE shares SET updated_at = ?, revoked_at = ? WHERE id = ?',
+    ).bind(expired, expired, 'share-owner-id').run();
+
+    expect(await cleanupExpiredShares(env, now)).toEqual({ deleted: 1, failed: 0 });
+    expect(await rowCount('shares')).toBe(0);
+    expect(await rowCount('media_assets')).toBe(0);
+    expect(await rowCount('drive_cleanup_candidates')).toBeGreaterThan(0);
+
+    const claimed = await drainPendingCleanup();
+    expect(claimed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'permission', fileId: 'drive-file-1' }),
+      expect.objectContaining({ kind: 'revision', fileId: 'drive-file-1', revisionId: 'revision-1' }),
+    ]));
+    expect(await rowCount('drive_cleanup_candidates')).toBe(0);
+  });
+
+  it('exposes cleanup created solely by retention of a stale prepared publication', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+
+    const now = 2_000_000_000_000;
+    const stale = now - 8 * 24 * 60 * 60 * 1000;
+    await env.SHARING_DB.prepare(
+      'UPDATE shares SET updated_at = ? WHERE id = ?',
+    ).bind(stale, 'share-owner-id').run();
+
+    expect(await cleanupExpiredShares(env, now)).toEqual({ deleted: 1, failed: 0 });
+    expect(await rowCount('shares')).toBe(0);
+    expect(await rowCount('media_assets')).toBe(0);
+    expect(await rowCount('drive_cleanup_candidates')).toBe(2);
+
+    const otherOwner = await ownerFetchAs('owner-b-token', '/api/origin-cleanup/claim-pending', {
+      method: 'POST',
+    });
+    expect(otherOwner.status).toBe(200);
+    expect(await otherOwner.json()).toEqual({ claims: [], pending: false });
+
+    const claimed = await drainPendingCleanup();
+    expect(claimed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'permission', fileId: 'drive-file-1' }),
+      expect.objectContaining({ kind: 'revision', fileId: 'drive-file-1', revisionId: 'revision-1' }),
+    ]));
+    expect(await rowCount('drive_cleanup_candidates')).toBe(0);
   });
 
   it('returns paginated registry summaries without embedding full manifests', async () => {
@@ -799,6 +854,25 @@ async function claimCleanup(
   return response.json();
 }
 
+async function claimPendingCleanup(): Promise<{ claims: CleanupClaim[]; pending: boolean }> {
+  const response = await ownerFetch('/api/origin-cleanup/claim-pending', { method: 'POST' });
+  expect(response.status).toBe(200);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  return response.json();
+}
+
+async function drainPendingCleanup(): Promise<CleanupClaim[]> {
+  const claimed: CleanupClaim[] = [];
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const cleanup = await claimPendingCleanup();
+    claimed.push(...cleanup.claims);
+    for (const claim of cleanup.claims) await completeCleanup(claim);
+    if (!cleanup.pending) return claimed;
+    if (!cleanup.claims.length) throw new Error('Pending cleanup made no progress');
+  }
+  throw new Error('Pending cleanup did not drain');
+}
+
 async function completeCleanup(claim: CleanupClaim): Promise<void> {
   const response = await ownerFetch(`/api/origin-cleanup/${claim.candidateId}/complete`, {
     method: 'POST',
@@ -806,6 +880,12 @@ async function completeCleanup(claim: CleanupClaim): Promise<void> {
     body: JSON.stringify({ leaseId: claim.leaseId, leaseToken: claim.leaseToken }),
   });
   expect(response.status).toBe(204);
+}
+
+async function rowCount(table: 'shares' | 'media_assets' | 'drive_cleanup_candidates'): Promise<number> {
+  const row = await env.SHARING_DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
 }
 
 async function createActiveViewer(): Promise<{ cookie: string }> {

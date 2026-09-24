@@ -14,11 +14,16 @@ export class BackgroundSharingRuntime {
   constructor(private readonly offscreen: OffscreenManager) {}
 
   async resumeIfPending(): Promise<void> {
-    const pending = (await this.publications.list()).some((publication) =>
+    const publications = await this.publications.list();
+    const pending = publications.some((publication) =>
       (publication.status !== 'active' && publication.status !== 'revoked')
       || publication.originAclCleanupPending === true);
     const pendingCleanup = (await this.cleanups.list()).length > 0;
-    if (pending || pendingCleanup) await this.offscreen.ensureReady();
+    // A revoked share can be removed later by Worker retention while Chrome is
+    // closed. That creates server-only Drive cleanup candidates, so terminal
+    // revoked local state must still wake the offscreen owner-wide drain.
+    const mayHaveServerCleanup = publications.some((publication) => publication.status === 'revoked');
+    if (pending || pendingCleanup || mayHaveServerCleanup) await this.offscreen.ensureReady();
   }
 
   async publish(
