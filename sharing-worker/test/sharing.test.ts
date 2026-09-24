@@ -283,6 +283,47 @@ describe('sharing worker vertical slice', () => {
     });
   });
 
+  it('replaces an expired cache entry immediately after a Drive fallback', async () => {
+    await putManifest();
+    await registerOrigin();
+    const finalize = await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' });
+    const { shareUrl } = await finalize.json<{ shareUrl: string }>();
+    const open = await worker.fetch(new Request(shareUrl), env);
+    const cookie = open.headers.get('set-cookie')!;
+    const mediaRequest = () => new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { headers: { cookie, range: 'bytes=0-5' } },
+    );
+
+    const firstCtx = createExecutionContext();
+    const first = await worker.fetch(mediaRequest(), env, firstCtx);
+    expect(first.status).toBe(206);
+    await first.arrayBuffer();
+    await waitOnExecutionContext(firstCtx);
+
+    const cached = await env.SHARING_DB.prepare(
+      'SELECT cache_key FROM media_cache_entries LIMIT 1',
+    ).first<{ cache_key: string }>();
+    expect(cached).not.toBeNull();
+    await env.SHARING_DB.prepare(
+      'UPDATE media_cache_entries SET cached_at = 1, expires_at = 2 WHERE cache_key = ?',
+    ).bind(cached!.cache_key).run();
+
+    const secondCtx = createExecutionContext();
+    const second = await worker.fetch(mediaRequest(), env, secondCtx);
+    expect(second.status).toBe(206);
+    expect(Array.from(new Uint8Array(await second.arrayBuffer()))).toEqual([10, 20, 30, 40, 50, 60]);
+    await waitOnExecutionContext(secondCtx);
+
+    expect(driveMediaRequests).toBe(2);
+    const refreshed = await env.SHARING_DB.prepare(
+      'SELECT cached_at, expires_at FROM media_cache_entries WHERE cache_key = ?',
+    ).bind(cached!.cache_key).first<{ cached_at: number; expires_at: number }>();
+    expect(refreshed).not.toBeNull();
+    expect(refreshed!.cached_at).toBeGreaterThan(2);
+    expect(refreshed!.expires_at - refreshed!.cached_at).toBe(30 * 60 * 60 * 1000);
+  });
+
   it('deletes publication metadata and exact cache objects without deleting Drive media', async () => {
     await putManifest();
     await registerOrigin();
