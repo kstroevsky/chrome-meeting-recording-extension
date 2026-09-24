@@ -12,6 +12,7 @@ import {
   type ExtensionHarness,
 } from './helpers/extensionHarness';
 import {
+  createDriveSimulatorUploadState,
   getDriveSimulatorRelayFile,
   installDriveSimulator,
   resetDriveSimulatorSharingState,
@@ -245,6 +246,81 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
     }
   });
 
+  test('resumes the same OPFS Drive upload after Chrome dies with server-committed bytes', async ({}, testInfo) => {
+    test.setTimeout(120_000);
+    let harness: ExtensionHarness | null = null;
+    let worker: SharingWorkerHarness | null = null;
+    try {
+      resetDriveSimulatorSharingState();
+      const uploadState = createDriveSimulatorUploadState();
+      harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), { ignoreHTTPSErrors: true });
+      const beforeRestart = await installDriveSimulator(harness.context, 'partial-commit', {
+        throttleMs: 10_000,
+        uploadState,
+      });
+      worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-upload-restart-state'));
+
+      const meet = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: 'opfs',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      await meet.waitForTimeout(2_000);
+      await stopRecording(harness.controlPage);
+
+      const recordings = await openRecordings(harness);
+      await queueFirstRecording(recordings, false);
+      await expect.poll(() => beforeRestart.uploadedBytes, { timeout: 30_000 }).toBeGreaterThan(0);
+      expect(beforeRestart.sessionsCreated).toBe(1);
+      expect(beforeRestart.dataPuts).toBe(1);
+
+      // Drive has committed roughly half of the first request, but the delayed
+      // response has not reached the extension, so its persisted local offset
+      // is still the pre-request value when Chrome exits.
+      const persistedBefore = await sharingUploadJobs(recordings);
+      expect(persistedBefore).toHaveLength(1);
+      expect(persistedBefore[0].uploadId).toContain('/upload/mock-drive-session/1');
+      expect(persistedBefore[0].offset).toBe(0);
+
+      let afterRestartStats: Awaited<ReturnType<typeof installDriveSimulator>> | null = null;
+      harness = await restartExtensionHarness(harness, {
+        ignoreHTTPSErrors: true,
+        configureContext: async (context) => {
+          afterRestartStats = await installDriveSimulator(context, 'fast', { uploadState });
+        },
+      });
+
+      await expect.poll(async () => (await worker!.state()).shares[0]?.status, { timeout: 60_000 }).toBe('active');
+      expect(afterRestartStats).not.toBeNull();
+      expect(afterRestartStats!.sessionsCreated).toBe(0);
+      expect(afterRestartStats!.statusProbes).toBeGreaterThanOrEqual(1);
+      expect(afterRestartStats!.requests.some((request) =>
+        request.method === 'PUT'
+        && request.url.includes('/upload/mock-drive-session/1')
+        && request.contentRange?.startsWith('bytes */'))).toBe(true);
+      expect(afterRestartStats!.requests.some((request) =>
+        request.method === 'PUT'
+        && request.url.includes('/upload/mock-drive-session/1')
+        && /^bytes [1-9]\d*-/.test(request.contentRange ?? ''))).toBe(true);
+
+      const state = await worker.state();
+      expect(state.mediaAssets).toHaveLength(1);
+      const uploaded = getDriveSimulatorRelayFile(state.mediaAssets[0].drive_file_id);
+      expect(uploaded).toBeDefined();
+      expect(uploaded!.bytes.byteLength).toBeGreaterThan(0);
+    } finally {
+      await worker?.stop().catch(() => {});
+      if (harness) await closeHarness(harness).catch(() => {});
+    }
+  });
+
   test('reuses a Drive-only recording without re-uploading media', async ({}, testInfo) => {
     test.setTimeout(90_000);
     let harness: ExtensionHarness | null = null;
@@ -354,6 +430,34 @@ async function listShares(page: Page): Promise<any> {
   const response = await sendRuntimeMessage<any>(page, { type: 'LIST_SHARES' });
   if (!response.ok) throw new Error(response.error || 'Could not list shares');
   return response.snapshot;
+}
+
+async function sharingUploadJobs(page: Page): Promise<any[]> {
+  return await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('published-share-uploads');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    if (!db.objectStoreNames.contains('jobs')) {
+      db.close();
+      return [];
+    }
+    const tx = db.transaction('jobs', 'readonly');
+    const values: unknown[] = await new Promise((resolve, reject) => {
+      const request = tx.objectStore('jobs').getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+    return values.filter((value): value is Record<string, unknown> =>
+      value != null && typeof value === 'object');
+  });
 }
 
 async function hasOffscreenContext(page: Page): Promise<boolean> {

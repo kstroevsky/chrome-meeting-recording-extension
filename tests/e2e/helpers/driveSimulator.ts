@@ -64,6 +64,15 @@ type SessionState = {
   data: Buffer | null;
 };
 
+export type DriveSimulatorUploadState = {
+  sessions: Map<string, SessionState>;
+  nextSessionId: number;
+};
+
+export function createDriveSimulatorUploadState(): DriveSimulatorUploadState {
+  return { sessions: new Map(), nextSessionId: 1 };
+}
+
 type InterceptedRequest = {
   method: string;
   url: string;
@@ -189,12 +198,12 @@ function header(
 function createHandler(
   profile: DriveSimulatorProfile,
   throttleMs: number,
-  stats: DriveSimulatorStats
+  stats: DriveSimulatorStats,
+  uploadState: DriveSimulatorUploadState,
 ) {
-  const sessions = new Map<string, SessionState>();
+  const sessions = uploadState.sessions;
   const resources = new Map<string, string>();
   let folderSequence = 0;
-  let sessionSequence = 0;
   const parents = new Map<string, string[]>();
 
   return async (request: InterceptedRequest): Promise<MockResponse> => {
@@ -426,8 +435,7 @@ function createHandler(
     }
 
     if (url.pathname === '/upload/drive/v3/files' && method === 'POST') {
-      sessionSequence += 1;
-      const id = String(sessionSequence);
+      const id = String(uploadState.nextSessionId++);
       let metadata: { name?: string } = {};
       try {
         metadata = request.postData ? JSON.parse(request.postData) : {};
@@ -546,6 +554,11 @@ function createHandler(
           session.committedEnd = range.start + committedBytes - 1;
           stats.uploadedBytes += committedBytes;
           stats.retryResponses += 1;
+          // Model Drive accepting bytes while the response is lost/delayed.
+          // Sharing restart tests close Chrome during this pause; the durable
+          // upload job still has the pre-request offset and must probe Drive on
+          // the next launch to discover this committed prefix.
+          await pause(throttleMs);
           return record({
             status: 503,
             body: JSON.stringify({ error: { message: 'Mock partial commit' } }),
@@ -595,7 +608,7 @@ export function setDriveMediaContent(fileId: string, bytes: Buffer, name = fileI
 export async function installDriveSimulator(
   context: BrowserContext,
   profile: DriveSimulatorProfile,
-  options: { throttleMs?: number } = {}
+  options: { throttleMs?: number; uploadState?: DriveSimulatorUploadState } = {}
 ): Promise<DriveSimulatorStats> {
   const stats: DriveSimulatorStats = {
     profile,
@@ -620,7 +633,12 @@ export async function installDriveSimulator(
     resources: {},
     requests: [],
   };
-  const handle = createHandler(profile, options.throttleMs ?? 300, stats);
+  const handle = createHandler(
+    profile,
+    options.throttleMs ?? 300,
+    stats,
+    options.uploadState ?? createDriveSimulatorUploadState(),
+  );
 
   await context.route('https://www.googleapis.com/**', async (route) => {
     const request = route.request();
