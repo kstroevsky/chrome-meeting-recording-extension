@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import Ajv2020 from 'ajv/dist/2020';
+import addFormats from 'ajv-formats';
 import { buildRecordingCloudEvent } from '../CloudEventBuilder';
 import type { IntegrationDataPolicy } from '../contracts';
 import {
@@ -12,6 +16,20 @@ import {
   measureIntegrationPayload,
 } from '../payload';
 import { sha256Hex, stableJsonSerialize, utf8ByteLength } from '../serialization';
+
+function loadSchema(name: string): object {
+  return JSON.parse(readFileSync(path.resolve(process.cwd(), 'docs/schemas', name), 'utf8')) as object;
+}
+
+function recordingSnapshotSchemaValidator() {
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  addFormats(ajv);
+  ajv.addSchema(loadSchema('integration-recording-v1.schema.json'));
+  return {
+    ajv,
+    validate: ajv.compile(loadSchema('integration-recording-snapshot-cloudevent-v1.schema.json')),
+  };
+}
 
 describe('integration external contract', () => {
   it('makes artifact links imply artifact metadata at the shared policy boundary', () => {
@@ -122,6 +140,85 @@ describe('integration external contract', () => {
         },
       } as const),
     })).toThrow('project-controlled domain');
+  });
+
+  it('keeps generated ready and updated events conformant with the checked-in V1 JSON Schemas', () => {
+    const { ajv, validate } = recordingSnapshotSchemaValidator();
+    const recording = {
+      id: 'recording_external_a',
+      title: 'Architecture review',
+      startedAt: '2026-09-24T15:00:00.000Z',
+      endedAt: '2026-09-24T15:45:00.000Z',
+      durationMs: 2_700_000,
+      source: {
+        kind: 'meeting' as const,
+        provider: 'google-meet',
+        meetingId: 'abc-defg-hij',
+        meetingUrl: 'https://meet.google.com/abc-defg-hij',
+      },
+      note: 'Follow up on the retry contract.',
+      notations: [{ tStartMs: 1_000, tEndMs: 2_000, text: 'Retry discussion' }],
+      transcript: {
+        source: 'meet-captions' as const,
+        segments: [{
+          tStartMs: 0,
+          tEndMs: 2_000,
+          speaker: 'Speaker 1',
+          text: 'The durable outbox owns retry state.',
+        }],
+      },
+      analysis: {
+        status: 'completed' as const,
+        topics: [{
+          keywords: ['outbox', 'retry'],
+          importance: 0.9,
+          spans: [{ tStartMs: 0, tEndMs: 2_000 }],
+        }],
+      },
+      artifacts: [{
+        type: 'tab-recording' as const,
+        mimeType: 'video/webm',
+        bytes: 1_024,
+        delivery: 'uploaded' as const,
+        viewUrl: 'https://drive.google.com/file/d/example/view',
+      }],
+    };
+
+    for (const [eventKind, revision] of [
+      ['recording.ready.v1', 1],
+      ['recording.updated.v1', 2],
+    ] as const) {
+      const event = buildRecordingCloudEvent({
+        eventTypePrefix: 'dev.project.recorder',
+        eventKind,
+        eventId: `event_${revision}`,
+        eventTime: Date.UTC(2026, 8, 24, 15, 45 + revision),
+        producerId: 'producer_destination_a',
+        externalRecordingId: recording.id,
+        revision,
+        readiness: { complete: true, release: 'complete', pending: [] },
+        recording,
+      });
+      const serialized = stableJsonSerialize(event);
+      const parsed = JSON.parse(serialized);
+      if (!validate(parsed)) {
+        throw new Error(ajv.errorsText(validate.errors, { separator: '\n' }));
+      }
+    }
+
+    const drifted = JSON.parse(stableJsonSerialize(buildRecordingCloudEvent({
+      eventTypePrefix: 'dev.project.recorder',
+      eventKind: 'recording.ready.v1',
+      eventId: 'event_drift',
+      eventTime: Date.UTC(2026, 8, 24, 15, 50),
+      producerId: 'producer_destination_a',
+      externalRecordingId: recording.id,
+      revision: 1,
+      readiness: { complete: true, release: 'complete', pending: [] },
+      recording,
+    }))) as any;
+    drifted.data.recording.unversionedField = true;
+    expect(validate(drifted)).toBe(false);
   });
 
   it('measures the exact UTF-8 body and rejects oversized payloads without retry semantics', () => {
