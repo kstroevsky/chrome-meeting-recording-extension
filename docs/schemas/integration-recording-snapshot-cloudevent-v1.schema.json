@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.invalid/integration-recording-snapshot-cloudevent-v1.schema.json",
+  "title": "Integration recording snapshot CloudEvent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "subject",
+    "time",
+    "datacontenttype",
+    "data"
+  ],
+  "properties": {
+    "specversion": { "const": "1.0" },
+    "id": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "string",
+      "pattern": "^urn:meeting-recorder:destination:"
+    },
+    "type": {
+      "type": "string",
+      "pattern": "\\.recording\\.(ready|updated)\\.v1$"
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^recording/"
+    },
+    "time": { "type": "string", "format": "date-time" },
+    "datacontenttype": { "const": "application/json" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "readiness", "recording"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "readiness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["complete", "release", "pending"],
+          "properties": {
+            "complete": { "type": "boolean" },
+            "release": { "enum": ["complete", "timeout", "manual"] },
+            "pending": {
+              "type": "array",
+              "items": {
+                "enum": ["transcript", "analysis", "artifact-delivery"]
+              }
+            }
+          }
+        },
+        "recording": {
+          "$ref": "integration-recording-v1.schema.json"
+        }
+      }
+    }
+  }
+}

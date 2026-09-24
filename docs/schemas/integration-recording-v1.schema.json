@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.invalid/integration-recording-v1.schema.json",
+  "title": "IntegrationRecordingV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "startedAt", "source"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": "string", "format": "date-time" },
+    "durationMs": { "type": "number", "minimum": 0 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["meeting", "tab"] },
+        "provider": { "type": "string" },
+        "meetingId": { "type": "string" },
+        "meetingUrl": { "type": "string", "format": "uri" }
+      }
+    },
+    "note": { "type": "string" },
+    "notations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tStartMs", "text"],
+        "properties": {
+          "tStartMs": { "type": "number", "minimum": 0 },
+          "tEndMs": { "type": "number", "minimum": 0 },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "segments"],
+      "properties": {
+        "source": { "enum": ["meet-captions", "stt"] },
+        "segments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tStartMs", "tEndMs", "text"],
+            "properties": {
+              "tStartMs": { "type": "number", "minimum": 0 },
+              "tEndMs": { "type": "number", "minimum": 0 },
+              "speaker": { "type": "string" },
+              "text": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "enum": ["analyzing", "completed", "failed", "canceled", "unsupported"]
+        },
+        "error": { "type": "string" },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["keywords", "importance", "spans"],
+            "properties": {
+              "keywords": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "importance": { "type": "number" },
+              "spans": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tStartMs", "tEndMs"],
+                  "properties": {
+                    "tStartMs": { "type": "number", "minimum": 0 },
+                    "tEndMs": { "type": "number", "minimum": 0 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "mimeType", "delivery"],
+        "properties": {
+          "type": {
+            "enum": [
+              "tab-recording",
+              "microphone-recording",
+              "self-video",
+              "notes",
+              "transcript"
+            ]
+          },
+          "mimeType": { "type": "string" },
+          "bytes": { "type": "number", "minimum": 0 },
+          "delivery": {
+            "enum": ["pending", "downloaded", "uploaded", "local-fallback", "failed"]
+          },
+          "viewUrl": { "type": "string", "format": "uri" }
+        }
+      }
+    }
+  }
+}
