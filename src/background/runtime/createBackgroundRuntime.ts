@@ -191,6 +191,7 @@ export function createBackgroundRuntime() {
         logger,
       });
       await sharing.resumeIfPending().catch((error) => logger.warn('Pending sharing recovery deferred:', error));
+      await integrations.reconcile().catch((error) => logger.warn('Integration delivery recovery deferred:', error));
     } catch (error) {
       if (!sessionHydrated) readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);
@@ -206,7 +207,10 @@ export function createBackgroundRuntime() {
     messageListener,
     bootstrap,
     waitUntilReady: () => readiness.wait(),
-    handleAlarm: (alarm: chrome.alarms.Alarm) => localDelivery.handleAlarm(alarm),
+    handleAlarm: (alarm: chrome.alarms.Alarm) => {
+      localDelivery.handleAlarm(alarm);
+      integrations.handleAlarm(alarm);
+    },
     handleConnect: (port: chrome.runtime.Port) => {
       if (port.name === 'offscreen') offscreen.attachPort(port);
     },

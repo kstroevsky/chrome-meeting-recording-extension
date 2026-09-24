@@ -141,7 +141,7 @@ export class IntegrationSettingsController {
 
   private destinationRow(
     destination: IntegrationDestination,
-    latest?: { state: string; revision: number; lastStatus?: number },
+    latest?: { id: string; state: string; revision: number; lastStatus?: number },
   ): HTMLElement {
     const row = this.el.document.createElement('article');
     row.className = 'integration-destination';
@@ -169,13 +169,46 @@ export class IntegrationSettingsController {
     send.textContent = 'Send recording';
     send.disabled = !this.el.recording?.value;
     send.addEventListener('click', () => void this.send(destination, send));
+    const retry = this.el.document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry last delivery';
+    retry.hidden = latest?.state !== 'failed' && latest?.state !== 'action-required';
+    retry.addEventListener('click', () => {
+      if (latest) void this.retry(destination, latest.id, retry);
+    });
     const remove = this.el.document.createElement('button');
     remove.type = 'button';
     remove.textContent = 'Delete';
     remove.addEventListener('click', () => void this.remove(destination, remove));
-    actions.append(test, send, remove);
+    actions.append(test, send, retry, remove);
     row.append(copy, actions);
     return row;
+  }
+
+  private async retry(
+    destination: IntegrationDestination,
+    deliveryId: string,
+    button: HTMLButtonElement,
+  ): Promise<void> {
+    button.disabled = true;
+    this.setStatus(`Retrying the last delivery to ${destination.name}…`);
+    try {
+      const response = await sendToBackground({
+        type: 'RETRY_INTEGRATION_DELIVERY',
+        deliveryId,
+      });
+      if (!response.ok) throw new Error(response.error);
+      const delivery = response.delivery;
+      this.setStatus(
+        `${destination.name}: ${delivery.state} · ${delivery.eventType} · revision ${delivery.revision}`
+        + (delivery.lastStatus ? ` · HTTP ${delivery.lastStatus}` : ''),
+        delivery.state !== 'delivered' && delivery.state !== 'retrying',
+      );
+      await this.refresh();
+    } catch (error) {
+      this.setStatus(`Retry failed: ${String(error)}`, true);
+      button.disabled = false;
+    }
   }
 
   private async test(destination: IntegrationDestination, button: HTMLButtonElement): Promise<void> {

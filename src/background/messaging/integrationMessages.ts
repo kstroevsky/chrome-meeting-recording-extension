@@ -50,6 +50,9 @@ export async function handleIntegrationMessage(
     case 'LIST_INTEGRATION_DELIVERIES':
       sendResponse({ ok: true, deliveries: await integrations.listDeliveries() });
       return true;
+    case 'RETRY_INTEGRATION_DELIVERY':
+      sendResponse({ ok: true, delivery: await integrations.retryDelivery(msg.deliveryId) });
+      return true;
     default:
       return false;
   }

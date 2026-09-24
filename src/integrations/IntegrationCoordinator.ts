@@ -23,7 +23,7 @@ import { sha256Hex } from './serialization';
 import { createStandardWebhookSecret } from './webhook/StandardWebhookSigner';
 import { normalizeWebhookEndpoint } from './webhook/WebhookEndpoint';
 import { normalizeWebhookApiKeyHeader, type ResolvedWebhookRequestAuth } from './webhook/WebhookAuth';
-import { WebhookTransportError, type WebhookTransportResult } from './webhook/WebhookTransport';
+import type { WebhookTransportResult } from './webhook/WebhookTransport';
 
 type SnapshotEnvelope = {
   eventTypePrefix: string;
@@ -69,6 +69,9 @@ type CoordinatorDeps = {
     createDestination(destination: IntegrationDestination, secrets: IntegrationSecret[]): Promise<void>;
     planDelivery(delivery: IntegrationDelivery, stream: IntegrationStream): Promise<void>;
     deleteDestination(destination: IntegrationDestination, updatedAt: number): Promise<void>;
+  };
+  dispatcher: {
+    dispatch(deliveryId: string, preparedBody?: string): Promise<IntegrationDelivery>;
   };
   transport: {
     send(input: {
@@ -228,7 +231,7 @@ export class IntegrationCoordinator {
       transcriptBytes: snapshot.transcriptBytes,
       speakerAliases: snapshot.speakerAliases,
     });
-    return await this.attempt(delivery, destination, snapshot.body);
+    return await this.deps.dispatcher.dispatch(delivery.id, snapshot.body);
   }
 
   async listDeliveries(): Promise<IntegrationDelivery[]> {
@@ -261,8 +264,10 @@ export class IntegrationCoordinator {
       revision: input.revision,
       eventTime: input.eventTime,
       connectionVersion: input.destination.connectionVersion,
+      allowedPolicy: { ...input.destination.dataPolicy },
       state: 'pending',
       attemptCount: 0,
+      nextAttemptAt: createdAt,
       bodyHash: await sha256Hex(input.body),
       totalBytes: input.totalBytes,
       transcriptBytes: input.transcriptBytes,
@@ -285,70 +290,6 @@ export class IntegrationCoordinator {
     };
     await this.deps.unitOfWork.planDelivery(delivery, stream);
     return delivery;
-  }
-
-  private async attempt(
-    delivery: IntegrationDelivery,
-    destination: IntegrationDestination,
-    body: string,
-  ): Promise<IntegrationDelivery> {
-    if (!await this.deps.destinations.get(destination.id)) {
-      return await this.cancelDeletedDestinationDelivery(delivery);
-    }
-    const delivering: IntegrationDelivery = {
-      ...delivery,
-      state: 'delivering',
-      attemptCount: delivery.attemptCount + 1,
-      updatedAt: this.now(),
-    };
-    await this.deps.deliveries.put(delivering);
-    try {
-      const result = await this.deps.transport.send({
-        endpoint: destination.endpoint,
-        eventId: delivery.eventId,
-        body,
-        signingSecret: await this.requireSecretValue(destination.signingSecretId),
-        requestAuth: await this.resolveRequestAuth(destination.requestAuth),
-      });
-      if (!await this.deps.destinations.get(destination.id)) {
-        return await this.cancelDeletedDestinationDelivery(delivering);
-      }
-      const final: IntegrationDelivery = {
-        ...delivering,
-        state: result.ok ? 'delivered' : classifyHttpFailure(result.status),
-        lastStatus: result.status,
-        lastErrorCode: result.ok ? undefined : `http-${result.status}`,
-        updatedAt: this.now(),
-      };
-      await this.deps.deliveries.put(final);
-      return final;
-    } catch (error) {
-      if (!await this.deps.destinations.get(destination.id)) {
-        return await this.cancelDeletedDestinationDelivery(delivering);
-      }
-      const final: IntegrationDelivery = {
-        ...delivering,
-        state: 'failed',
-        lastErrorCode: error instanceof WebhookTransportError ? error.code : 'transport-error',
-        updatedAt: this.now(),
-      };
-      await this.deps.deliveries.put(final);
-      return final;
-    }
-  }
-
-  private async cancelDeletedDestinationDelivery(
-    delivery: IntegrationDelivery,
-  ): Promise<IntegrationDelivery> {
-    const canceled: IntegrationDelivery = {
-      ...delivery,
-      state: 'canceled',
-      lastErrorCode: 'destination-deleted',
-      updatedAt: this.now(),
-    };
-    delete canceled.nextAttemptAt;
-    await this.deps.deliveries.put(canceled);
-    return canceled;
   }
 
   private prepareRequestAuth(
@@ -405,11 +346,4 @@ export class IntegrationCoordinator {
       throw new Error(`Host permission is required for ${pattern}`);
     }
   }
-}
-
-function classifyHttpFailure(status: number): IntegrationDelivery['state'] {
-  if ((status >= 300 && status < 400) || [400, 401, 403, 410, 413].includes(status)) {
-    return 'action-required';
-  }
-  return 'failed';
 }

@@ -234,6 +234,10 @@ export type PopupSendRecordingToIntegration = {
   recordingId: string;
 };
 export type PopupListIntegrationDeliveries = { type: 'LIST_INTEGRATION_DELIVERIES' };
+export type PopupRetryIntegrationDelivery = {
+  type: 'RETRY_INTEGRATION_DELIVERY';
+  deliveryId: string;
+};
 
 export type PopupToBg =
   | PopupStartRecording
@@ -291,7 +295,8 @@ export type PopupToBg =
   | PopupDeleteIntegration
   | PopupTestIntegration
   | PopupSendRecordingToIntegration
-  | PopupListIntegrationDeliveries;
+  | PopupListIntegrationDeliveries
+  | PopupRetryIntegrationDelivery;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -379,6 +384,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
         } :
   T extends PopupListIntegrationDeliveries
     ? { ok: true; deliveries: IntegrationDelivery[] } | { ok: false; error: string } :
+  T extends PopupRetryIntegrationDelivery
+    ? { ok: true; delivery: IntegrationDelivery } | { ok: false; error: string } :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -684,6 +691,8 @@ function isIntegrationPopupMessage(value: unknown): boolean {
       return nonEmptyText(value.destinationId);
     case 'SEND_RECORDING_TO_INTEGRATION':
       return nonEmptyText(value.destinationId) && nonEmptyText(value.recordingId);
+    case 'RETRY_INTEGRATION_DELIVERY':
+      return nonEmptyText(value.deliveryId);
     default:
       return false;
   }
