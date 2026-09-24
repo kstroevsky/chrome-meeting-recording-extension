@@ -17,7 +17,7 @@ import {
   type TokenProvider,
 } from '../offscreen/drive/request';
 import type { PublishedRecordingPlan, PublishedTrackPlan } from './PublishedManifestBuilder';
-import type { ShareUploadSourceResolver } from './ShareUploadManager';
+import type { ShareMediaSourceResolver } from './ShareMediaSource';
 import { ShareUploadStore, type ShareUploadJob } from './ShareUploadStore';
 
 const DRIVE_API_ORIGIN = 'https://www.googleapis.com';
@@ -66,7 +66,7 @@ export interface DriveOriginApi {
 
 export type DriveOriginPreparerDeps = {
   store: ShareUploadStore;
-  source: ShareUploadSourceResolver;
+  source: ShareMediaSourceResolver;
   api: DriveOriginApi;
   getDriveToken: TokenProvider;
   fetch?: typeof fetch;
