@@ -77,6 +77,35 @@ describe('IntegrationScheduler', () => {
     expect(createAlarm).not.toHaveBeenCalled();
   });
 
+  it('dispatches newly due durable work without depending on a zero-delay Chrome alarm', async () => {
+    const due = [delivery('due-now', 'retrying', 1_000)];
+    const dispatch = jest.fn(async () => ({ ...due[0], state: 'delivered' as const }));
+    const clearAlarm = jest.fn(async () => true);
+    let earliest: number | undefined = 1_000;
+    const scheduler = new IntegrationScheduler({
+      deliveries: {
+        list: async () => due,
+        listDue: async () => {
+          earliest = undefined;
+          return due;
+        },
+        earliestNextAttemptAt: async () => earliest,
+      },
+      dispatcher: { dispatch },
+      createAlarm: jest.fn(async () => {}),
+      getAlarm: async () => ({ name: INTEGRATION_DELIVERY_ALARM, scheduledTime: 1_000 }),
+      clearAlarm,
+      now: () => 1_000,
+    });
+
+    await scheduler.stateChanged();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    expect(clearAlarm).toHaveBeenCalledWith(INTEGRATION_DELIVERY_ALARM);
+    expect(dispatch).toHaveBeenCalledWith('due-now');
+  });
+
   it('clears the integration alarm when no durable work remains', async () => {
     const clearAlarm = jest.fn(async () => true);
     const scheduler = new IntegrationScheduler({
@@ -123,4 +152,3 @@ describe('IntegrationScheduler', () => {
     expect(createAlarm).toHaveBeenCalledWith(INTEGRATION_DELIVERY_ALARM, { when: 8_000 });
   });
 });
-
