@@ -55,6 +55,7 @@ export function createBackgroundRuntime() {
     onAnalysisSettled: () => criticalWork.sync(),
   });
   const integrations = new BackgroundIntegrationRuntime({
+    listHistory: () => library.history.list(),
     getHistory: (recordingId) => library.historyRepository.get(recordingId),
     getContext: (recordingId) => library.recordingContexts.get(recordingId),
     listNotations: (recordingId) => library.notations.list(recordingId),
