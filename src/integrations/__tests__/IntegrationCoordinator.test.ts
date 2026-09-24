@@ -26,7 +26,12 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
   const unitOfWork = new IntegrationUnitOfWork(factory);
   const bodies: string[] = [];
   const snapshots = {
-    build: jest.fn(async (_recordingId: string, _policy: typeof POLICY, envelope: any) => {
+    build: jest.fn(async (
+      _recordingId: string,
+      _policy: typeof POLICY,
+      envelope: any,
+      _currentSpeakerAliases?: readonly { speakerHash: string; ordinal: number }[],
+    ) => {
       const body = options.payloadBytes
         ? 'x'.repeat(options.payloadBytes)
         : JSON.stringify({ id: envelope.eventId, revision: envelope.revision, type: envelope.eventKind });
@@ -169,6 +174,37 @@ describe('IntegrationCoordinator', () => {
       externalRecordingId: first.externalRecordingId,
     }));
     await expect(ctx.deliveries.listStream(destination.id, 'recording:internal')).resolves.toHaveLength(2);
+  });
+
+  it('persists speaker aliases with the stream and supplies them to later revisions', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+    const speakerAliases = [{ speakerHash: 'a'.repeat(64), ordinal: 1 }];
+    ctx.snapshots.build.mockImplementationOnce(async (_recordingId, _policy, envelope) => {
+      const body = JSON.stringify({ id: envelope.eventId, revision: envelope.revision });
+      return {
+        body,
+        totalBytes: new TextEncoder().encode(body).byteLength,
+        transcriptBytes: 0,
+        otherBytes: new TextEncoder().encode(body).byteLength,
+        readiness: { complete: true, release: 'complete' as const, pending: [] },
+        speakerAliases,
+      };
+    });
+
+    await ctx.coordinator.sendRecording(destination.id, 'recording:internal');
+    await expect(ctx.streams.get(destination.id, 'recording:internal')).resolves.toEqual(
+      expect.objectContaining({ speakerAliases }),
+    );
+
+    await ctx.coordinator.sendRecording(destination.id, 'recording:internal');
+    expect(ctx.snapshots.build.mock.calls[1]?.[3]).toEqual(speakerAliases);
   });
 
   it('marks protocol/action failures without throwing away the durable delivery row', async () => {

@@ -24,6 +24,7 @@ export type IntegrationProjectionInput = {
   externalRecordingId: string;
   policy: IntegrationDataPolicy;
   source: IntegrationProjectionSource;
+  speakerPseudonyms?: ReadonlyMap<string, string>;
 };
 
 /**
@@ -69,7 +70,11 @@ export function projectIntegrationRecording(
       }));
   }
   if (input.policy.transcript && input.source.transcript) {
-    result.transcript = projectTranscript(input.source.transcript, input.policy);
+    result.transcript = projectTranscript(
+      input.source.transcript,
+      input.policy,
+      input.speakerPseudonyms,
+    );
   }
   if (input.policy.analysis && input.source.analysis) {
     result.analysis = projectAnalysis(input.source.analysis);
@@ -88,9 +93,14 @@ export function projectIntegrationRecording(
 function projectTranscript(
   transcript: Transcript,
   policy: IntegrationDataPolicy,
+  stablePseudonyms?: ReadonlyMap<string, string>,
 ): NonNullable<IntegrationRecordingV1['transcript']> {
-  const pseudonyms = new Map<string, string>();
+  const pseudonyms = new Map(stablePseudonyms);
   let nextPseudonym = 1;
+  for (const pseudonym of pseudonyms.values()) {
+    const match = /^Speaker (\d+)$/.exec(pseudonym);
+    if (match) nextPseudonym = Math.max(nextPseudonym, Number(match[1]) + 1);
+  }
   return {
     source: transcript.source,
     segments: transcript.segments.map((segment) => {

@@ -46,6 +46,11 @@ export type RecordingIntegrationIntent = {
   destinations: RecordingIntegrationIntentDestination[];
 };
 
+export type IntegrationSpeakerAlias = {
+  speakerHash: string;
+  ordinal: number;
+};
+
 export type IntegrationStream = {
   destinationId: string;
   recordingId: string;
@@ -54,6 +59,7 @@ export type IntegrationStream = {
   readyCreated: boolean;
   everAttempted: boolean;
   lastPlannedProjectionHash?: string;
+  speakerAliases?: IntegrationSpeakerAlias[];
 };
 
 export type IntegrationDeliveryState =
@@ -151,8 +157,10 @@ export function normalizeIntegrationStream(value: unknown): IntegrationStream | 
   const externalRecordingId = text(value.externalRecordingId);
   const nextRevision = positiveInteger(value.nextRevision);
   const lastPlannedProjectionHash = optionalText(value.lastPlannedProjectionHash);
+  const speakerAliases = normalizeSpeakerAliases(value.speakerAliases);
   if (!destinationId || !recordingId || !externalRecordingId || nextRevision == null) return undefined;
   if (typeof value.readyCreated !== 'boolean' || typeof value.everAttempted !== 'boolean') return undefined;
+  if (value.speakerAliases != null && !speakerAliases) return undefined;
   return {
     destinationId,
     recordingId,
@@ -161,7 +169,27 @@ export function normalizeIntegrationStream(value: unknown): IntegrationStream | 
     readyCreated: value.readyCreated,
     everAttempted: value.everAttempted,
     ...(lastPlannedProjectionHash ? { lastPlannedProjectionHash } : {}),
+    ...(speakerAliases?.length ? { speakerAliases } : {}),
   };
+}
+
+function normalizeSpeakerAliases(value: unknown): IntegrationSpeakerAlias[] | undefined {
+  if (value == null) return [];
+  if (!Array.isArray(value)) return undefined;
+  const aliases: IntegrationSpeakerAlias[] = [];
+  const hashes = new Set<string>();
+  const ordinals = new Set<number>();
+  for (const item of value) {
+    if (!isRecord(item)) return undefined;
+    const speakerHash = text(item.speakerHash)?.toLowerCase();
+    const ordinal = positiveInteger(item.ordinal);
+    if (!speakerHash || !/^[a-f0-9]{64}$/.test(speakerHash) || ordinal == null) return undefined;
+    if (hashes.has(speakerHash) || ordinals.has(ordinal)) return undefined;
+    hashes.add(speakerHash);
+    ordinals.add(ordinal);
+    aliases.push({ speakerHash, ordinal });
+  }
+  return aliases.sort((left, right) => left.ordinal - right.ordinal || left.speakerHash.localeCompare(right.speakerHash));
 }
 
 export function normalizeIntegrationDelivery(value: unknown): IntegrationDelivery | undefined {
