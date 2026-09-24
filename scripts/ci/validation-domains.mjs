@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto';
 
-export const VALIDATION_SCHEMA = 1;
-export const DOMAIN_NAMES = ['verify', 'mock-e2e', 'sharing', 'production-e2e'];
+export const VALIDATION_SCHEMA = 2;
+export const DOMAIN_NAMES = ['verify', 'integration', 'mock-e2e', 'sharing', 'production-e2e'];
 
 const ALL = DOMAIN_NAMES;
 const VERIFY = ['verify'];
+const VERIFY_INTEGRATION = ['verify', 'integration'];
+const VERIFY_INTEGRATION_MOCK = ['verify', 'integration', 'mock-e2e'];
+const VERIFY_INTEGRATION_SHARING_MOCK = ['verify', 'integration', 'sharing', 'mock-e2e'];
+const VERIFY_INTEGRATION_MOCK_PRODUCTION = ['verify', 'integration', 'mock-e2e', 'production-e2e'];
 const VERIFY_MOCK = ['verify', 'mock-e2e'];
 const VERIFY_SHARING = ['verify', 'sharing'];
 const VERIFY_SHARING_MOCK = ['verify', 'sharing', 'mock-e2e'];
@@ -55,6 +59,74 @@ export const RELEVANCE_RULES = [
     name: 'other-workflows',
     domains: ALL,
     match: [prefix('.github/workflows/')],
+  },
+  {
+    name: 'integration-owned-extension-code',
+    domains: VERIFY_INTEGRATION,
+    match: [
+      prefix('src/integrations/', 'src/background/integrations/'),
+      exact(
+        'src/background/messaging/integrationMessages.ts',
+        'src/settings/IntegrationPreviewController.ts',
+        'src/settings/IntegrationSettingsController.ts',
+      ),
+    ],
+  },
+  {
+    name: 'integration-shared-protocol-boundaries',
+    domains: VERIFY_INTEGRATION_SHARING_MOCK,
+    match: [
+      exact(
+        'src/shared/protocol.ts',
+        'src/shared/protocolMessageTypes.ts',
+      ),
+    ],
+  },
+  {
+    name: 'integration-shared-extension-boundaries',
+    domains: VERIFY_INTEGRATION_MOCK,
+    match: [
+      exact(
+        'src/platform/chrome/permissions.ts',
+        'static/settings.html',
+        'static/styles/settings.css',
+      ),
+    ],
+  },
+  {
+    name: 'integration-extension-manifest',
+    domains: ALL,
+    match: [exact('static/manifest.json')],
+  },
+  {
+    name: 'integration-recording-context-dependency',
+    domains: VERIFY_INTEGRATION_MOCK,
+    match: [
+      prefix('src/background/library/context/'),
+      exact('src/shared/recordingContext.ts'),
+    ],
+  },
+  {
+    name: 'integration-analysis-readiness-dependency',
+    domains: VERIFY_INTEGRATION_MOCK_PRODUCTION,
+    match: [
+      prefix('src/background/library/analysis/'),
+      exact(
+        'src/shared/analysis/job.ts',
+        'src/shared/analysis/storedAnalysis.ts',
+        'src/shared/analysis/provenance.ts',
+      ),
+    ],
+  },
+  {
+    name: 'integration-e2e',
+    domains: VERIFY_INTEGRATION,
+    match: [regex(/^tests\/e2e\/integration-.*\.(ts|tsx|js|mjs|cjs)$/)],
+  },
+  {
+    name: 'integration-contract-schemas',
+    domains: VERIFY_INTEGRATION,
+    match: [regex(/^docs\/schemas\/integration-.*\.json$/)],
   },
   {
     name: 'sharing-worker',
@@ -269,6 +341,9 @@ function matchesAny(path, matchers) {
 }
 
 export function isIgnoredPath(path) {
+  if (/^docs\/schemas\/integration-.*\.json$/.test(path)) {
+    return false;
+  }
   return matchesAny(path, IGNORED_RULES);
 }
 

@@ -12,7 +12,11 @@ describe('webhook transport', () => {
   it('normalizes only HTTPS endpoints and derives exact host permission', () => {
     expect(normalizeWebhookEndpoint('https://hooks.example.test:8443/events?id=1')).toEqual({
       endpoint: 'https://hooks.example.test:8443/events?id=1',
-      hostPermission: 'https://hooks.example.test:8443/*',
+      hostPermission: 'https://hooks.example.test/*',
+    });
+    expect(normalizeWebhookEndpoint('https://[2001:db8::7]:8443/events')).toEqual({
+      endpoint: 'https://[2001:db8::7]:8443/events',
+      hostPermission: 'https://[2001:db8::7]/*',
     });
     expect(() => normalizeWebhookEndpoint('http://localhost:8799/events')).toThrow('must use HTTPS');
     expect(() => normalizeWebhookEndpoint('https://user:pass@example.test/hook')).toThrow('URL credentials');
