@@ -13,6 +13,7 @@ import type {
 import { createIntegrationId } from '../../integrations/ids';
 import type { IntegrationPayloadMeasurement } from '../../integrations/payload';
 import type { IntegrationPayloadPreview } from '../../integrations/preview';
+import { normalizeIntegrationDataPolicy } from '../../integrations/policy';
 
 export const INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX = 'dev.meeting-recorder.preview';
 
@@ -48,7 +49,7 @@ export class IntegrationPreviewService {
   }
 
   async preview(recordingId: string, policy: IntegrationDataPolicy): Promise<IntegrationPayloadPreview> {
-    assertPreviewPolicy(policy);
+    const normalizedPolicy = requirePreviewPolicy(policy);
     const envelope: IntegrationSnapshotEnvelope = {
       eventTypePrefix: INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX,
       eventKind: 'recording.ready.v1',
@@ -58,7 +59,7 @@ export class IntegrationPreviewService {
       externalRecordingId: createIntegrationId('recording'),
       revision: 1,
     };
-    const built = await this.build(recordingId, policy, envelope);
+    const built = await this.build(recordingId, normalizedPolicy, envelope);
     return {
       body: built.body,
       eventId: envelope.eventId,
@@ -70,7 +71,7 @@ export class IntegrationPreviewService {
       totalBytes: built.totalBytes,
       transcriptBytes: built.transcriptBytes,
       otherBytes: built.otherBytes,
-      policy: { ...policy },
+      policy: { ...normalizedPolicy },
       syntheticIdentity: true,
     };
   }
@@ -80,24 +81,24 @@ export class IntegrationPreviewService {
     policy: IntegrationDataPolicy,
     envelope: IntegrationSnapshotEnvelope,
   ): Promise<BuiltIntegrationSnapshot> {
-    assertPreviewPolicy(policy);
+    const normalizedPolicy = requirePreviewPolicy(policy);
     const [history, context, notations, transcript, analysis] = await Promise.all([
       this.deps.getHistory(recordingId),
       this.deps.getContext(recordingId),
-      policy.notations ? this.deps.listNotations(recordingId) : Promise.resolve(undefined),
-      policy.transcript ? this.deps.getTranscript(recordingId) : Promise.resolve(undefined),
-      policy.analysis ? this.deps.getAnalysis(recordingId) : Promise.resolve(undefined),
+      normalizedPolicy.notations ? this.deps.listNotations(recordingId) : Promise.resolve(undefined),
+      normalizedPolicy.transcript ? this.deps.getTranscript(recordingId) : Promise.resolve(undefined),
+      normalizedPolicy.analysis ? this.deps.getAnalysis(recordingId) : Promise.resolve(undefined),
     ]);
     if (!history || history.deletedAt) throw new Error('Recording is unavailable');
     if (!context) throw new Error('Recording context is unavailable for this recording');
 
-    const readiness = previewReadiness(policy, history, transcript, analysis);
+    const readiness = previewReadiness(normalizedPolicy, history, transcript, analysis);
     const measurement = buildIntegrationSnapshotPayload({
       ...envelope,
       readiness,
       projection: {
         externalRecordingId: envelope.externalRecordingId,
-        policy,
+        policy: normalizedPolicy,
         source: {
           history,
           context,
@@ -133,21 +134,8 @@ function previewReadiness(
   };
 }
 
-function assertPreviewPolicy(policy: IntegrationDataPolicy): void {
-  const booleanKeys = [
-    'metadata',
-    'meetingIdentity',
-    'userNote',
-    'notations',
-    'transcript',
-    'analysis',
-    'artifactMetadata',
-    'artifactLinks',
-  ] as const;
-  if (booleanKeys.some((key) => typeof policy[key] !== 'boolean')) {
-    throw new Error('Invalid integration data policy');
-  }
-  if (!['names', 'pseudonyms', 'omit'].includes(policy.transcriptSpeakers)) {
-    throw new Error('Invalid transcript speaker policy');
-  }
+function requirePreviewPolicy(policy: IntegrationDataPolicy): IntegrationDataPolicy {
+  const normalized = normalizeIntegrationDataPolicy(policy);
+  if (!normalized?.metadata) throw new Error('Invalid integration data policy');
+  return normalized;
 }

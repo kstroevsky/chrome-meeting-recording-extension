@@ -5,7 +5,9 @@ import { IntegrationDeliveryRepository } from '../IntegrationDeliveryRepository'
 import { IntegrationDestinationRepository } from '../IntegrationDestinationRepository';
 import { IntegrationSecretRepository } from '../IntegrationSecretRepository';
 import { IntegrationStreamRepository } from '../IntegrationStreamRepository';
+import { IntegrationUnitOfWork } from '../IntegrationUnitOfWork';
 import { CONSERVATIVE_INTEGRATION_POLICY } from '../policy';
+import { INTEGRATION_MAX_PAYLOAD_BYTES } from '../payload';
 import { sha256Hex } from '../serialization';
 
 const POLICY = {
@@ -15,19 +17,25 @@ const POLICY = {
   transcriptSpeakers: 'pseudonyms' as const,
 };
 
-function runtime(options: { permission?: boolean; status?: number } = {}) {
+function runtime(options: { permission?: boolean; status?: number; payloadBytes?: number } = {}) {
   const factory = new IDBFactory();
   const destinations = new IntegrationDestinationRepository(factory);
   const secrets = new IntegrationSecretRepository(factory);
   const streams = new IntegrationStreamRepository(factory);
   const deliveries = new IntegrationDeliveryRepository(factory);
+  const unitOfWork = new IntegrationUnitOfWork(factory);
   const bodies: string[] = [];
   const snapshots = {
     build: jest.fn(async (_recordingId: string, _policy: typeof POLICY, envelope: any) => {
-      const body = JSON.stringify({ id: envelope.eventId, revision: envelope.revision, type: envelope.eventKind });
+      const body = options.payloadBytes
+        ? 'x'.repeat(options.payloadBytes)
+        : JSON.stringify({ id: envelope.eventId, revision: envelope.revision, type: envelope.eventKind });
       bodies.push(body);
       return {
         body,
+        totalBytes: new TextEncoder().encode(body).byteLength,
+        transcriptBytes: 0,
+        otherBytes: new TextEncoder().encode(body).byteLength,
         readiness: { complete: true, release: 'complete' as const, pending: [] },
       };
     }),
@@ -48,6 +56,7 @@ function runtime(options: { permission?: boolean; status?: number } = {}) {
     secrets,
     streams,
     deliveries,
+    unitOfWork,
     snapshots,
     transport,
     containsHostPermission: jest.fn(async () => options.permission ?? true),
@@ -178,5 +187,25 @@ describe('IntegrationCoordinator', () => {
       lastErrorCode: 'http-413',
     }));
     await expect(ctx.deliveries.get(delivery.id)).resolves.toEqual(delivery);
+  });
+
+  it('rejects an oversized serialized payload before planning or posting it', async () => {
+    const ctx = runtime({ payloadBytes: INTEGRATION_MAX_PAYLOAD_BYTES + 1 });
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'Limited receiver',
+      endpoint: 'https://receiver.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+
+    await expect(ctx.coordinator.sendRecording(destination.id, 'recording:large'))
+      .rejects.toMatchObject({
+        name: 'IntegrationPayloadTooLargeError',
+        maxBytes: INTEGRATION_MAX_PAYLOAD_BYTES,
+      });
+    expect(ctx.transport.send).not.toHaveBeenCalled();
+    await expect(ctx.deliveries.list()).resolves.toEqual([]);
+    await expect(ctx.streams.get(destination.id, 'recording:large')).resolves.toBeUndefined();
   });
 });

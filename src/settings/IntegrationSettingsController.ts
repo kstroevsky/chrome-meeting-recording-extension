@@ -2,9 +2,11 @@ import { normalizeWebhookEndpoint } from '../integrations/webhook/WebhookEndpoin
 import type { IntegrationDataPolicy, TranscriptSpeakerPolicy } from '../integrations/contracts';
 import type { IntegrationDestination } from '../integrations/persistence';
 import type { IntegrationRequestAuthDraft } from '../integrations/management';
+import { canonicalizeIntegrationDataPolicy } from '../integrations/policy';
 import { normalizeWebhookApiKeyHeader } from '../integrations/webhook/WebhookAuth';
 import { requestHostPermission } from '../platform/chrome/permissions';
 import { sendToBackground } from '../shared/messages';
+import { formatBytes } from '../shared/format';
 
 type Elements = {
   document: Document;
@@ -187,11 +189,28 @@ export class IntegrationSettingsController {
         destinationId: destination.id,
         recordingId,
       });
-      if (!response.ok) throw new Error(response.error);
+      if (!response.ok) {
+        if (response.payloadTooLarge) {
+          const size = response.payloadTooLarge;
+          this.setStatus(
+            `Payload too large: ${formatBytes(size.totalBytes)} JSON `
+            + `(${formatBytes(size.transcriptBytes)} transcript); `
+            + `limit ${formatBytes(size.maxBytes)}.`,
+            true,
+          );
+          return;
+        }
+        throw new Error(response.error);
+      }
       const delivery = response.delivery;
+      const payloadSize = delivery.totalBytes != null
+        ? ` · ${formatBytes(delivery.totalBytes)} JSON`
+          + (delivery.transcriptBytes != null ? ` · ${formatBytes(delivery.transcriptBytes)} transcript` : '')
+        : '';
       this.setStatus(
         `${destination.name}: ${delivery.state} · ${delivery.eventType} · revision ${delivery.revision}`
-        + (delivery.lastStatus ? ` · HTTP ${delivery.lastStatus}` : ''),
+        + (delivery.lastStatus ? ` · HTTP ${delivery.lastStatus}` : '')
+        + payloadSize,
         delivery.state !== 'delivered',
       );
       await this.refresh();
@@ -224,18 +243,17 @@ export class IntegrationSettingsController {
         .filter((input) => input.checked)
         .map((input) => input.dataset.integrationCreatePolicy),
     );
-    const artifactLinks = selected.has('artifactLinks');
-    return {
+    return canonicalizeIntegrationDataPolicy({
       metadata: true,
       meetingIdentity: selected.has('meetingIdentity'),
       userNote: selected.has('userNote'),
       notations: selected.has('notations'),
       transcript: selected.has('transcript'),
       analysis: selected.has('analysis'),
-      artifactMetadata: selected.has('artifactMetadata') || artifactLinks,
-      artifactLinks,
+      artifactMetadata: selected.has('artifactMetadata'),
+      artifactLinks: selected.has('artifactLinks'),
       transcriptSpeakers: normalizeSpeakerPolicy(this.el.speakerPolicy?.value),
-    };
+    });
   }
 
   private readRequestAuth(): IntegrationRequestAuthDraft {

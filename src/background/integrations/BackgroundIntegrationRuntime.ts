@@ -10,6 +10,7 @@ import { IntegrationDeliveryRepository } from '../../integrations/IntegrationDel
 import { IntegrationDestinationRepository } from '../../integrations/IntegrationDestinationRepository';
 import { IntegrationSecretRepository } from '../../integrations/IntegrationSecretRepository';
 import { IntegrationStreamRepository } from '../../integrations/IntegrationStreamRepository';
+import { IntegrationUnitOfWork } from '../../integrations/IntegrationUnitOfWork';
 import type { CreateIntegrationDestinationInput } from '../../integrations/management';
 import type { IntegrationDataPolicy } from '../../integrations/contracts';
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
@@ -35,6 +36,7 @@ export class BackgroundIntegrationRuntime {
       secrets: new IntegrationSecretRepository(factory),
       streams: new IntegrationStreamRepository(factory),
       deliveries: new IntegrationDeliveryRepository(factory),
+      unitOfWork: new IntegrationUnitOfWork(factory),
       snapshots: this.previewService,
       transport: new WebhookTransport(),
       containsHostPermission,

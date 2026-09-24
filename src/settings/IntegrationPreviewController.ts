@@ -2,6 +2,7 @@ import { formatBytes } from '../shared/format';
 import { sendToBackground } from '../shared/messages';
 import type { IntegrationDataPolicy, TranscriptSpeakerPolicy } from '../integrations/contracts';
 import type { IntegrationPayloadPreview } from '../integrations/preview';
+import { canonicalizeIntegrationDataPolicy } from '../integrations/policy';
 
 type PreviewElements = {
   recording: HTMLSelectElement | null;
@@ -102,7 +103,7 @@ export class IntegrationPreviewController {
         .filter((input) => input.checked)
         .map((input) => input.dataset.integrationPolicy),
     );
-    return {
+    return canonicalizeIntegrationDataPolicy({
       metadata: true,
       meetingIdentity: enabled.has('meetingIdentity'),
       userNote: enabled.has('userNote'),
@@ -112,7 +113,7 @@ export class IntegrationPreviewController {
       artifactMetadata: enabled.has('artifactMetadata'),
       artifactLinks: enabled.has('artifactLinks'),
       transcriptSpeakers: normalizeSpeakerPolicy(this.el.speakers?.value),
-    };
+    });
   }
 
   private downloadPreview(): void {
