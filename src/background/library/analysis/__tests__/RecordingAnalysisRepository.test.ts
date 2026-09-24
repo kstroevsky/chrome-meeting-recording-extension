@@ -58,6 +58,49 @@ describe('RecordingAnalysisRepository', () => {
     expect(stored?.completedAt).toBe(1_800_000);
   });
 
+  it('publishes a completed result and durable outcome in one repository transaction', async () => {
+    const completed = analysis({ completedAt: 2_000 });
+    await expect(repository.putCompleted('rec:1', completed, {
+      status: 'completed',
+      jobId: 'job:1',
+      startedAt: 1_000,
+      updatedAt: 2_000,
+    })).resolves.toBe(true);
+
+    await expect(repository.getSnapshot('rec:1')).resolves.toEqual({
+      analysis: expect.objectContaining({ completedAt: 2_000 }),
+      outcome: {
+        status: 'completed',
+        jobId: 'job:1',
+        startedAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+  });
+
+  it('does not let a replayed older job replace a newer durable outcome', async () => {
+    await repository.putOutcome('rec:1', {
+      status: 'analyzing',
+      jobId: 'job:new',
+      startedAt: 2_000,
+      updatedAt: 2_100,
+    });
+    await repository.putOutcome('rec:1', {
+      status: 'failed',
+      jobId: 'job:old',
+      error: 'late replay',
+      startedAt: 1_000,
+      updatedAt: 3_000,
+    });
+
+    await expect(repository.getOutcome('rec:1')).resolves.toEqual({
+      status: 'analyzing',
+      jobId: 'job:new',
+      startedAt: 2_000,
+      updatedAt: 2_100,
+    });
+  });
+
   it('refuses a result that does not decode, before it reaches disk', async () => {
     const incoherent = analysis({ topics: [] }); // segment names a topic that is gone
     await expect(repository.put('rec:1', incoherent)).rejects.toThrow(/does not decode/);
@@ -101,6 +144,20 @@ describe('RecordingAnalysisRepository', () => {
     await repository.remove('rec:1');
     await expect(repository.get('rec:1')).resolves.toBeUndefined();
     await expect(repository.remove('rec:1')).resolves.toBeUndefined();
+  });
+
+  it('removes analysis and outcome together for recording cleanup', async () => {
+    await repository.putCompleted('rec:1', analysis(), {
+      status: 'completed',
+      startedAt: 1,
+      updatedAt: 2,
+    });
+
+    await repository.removeAll('rec:1');
+    await expect(repository.getSnapshot('rec:1')).resolves.toEqual({
+      analysis: undefined,
+      outcome: undefined,
+    });
   });
 
   it('shares one database with the notation and transcript repositories', async () => {

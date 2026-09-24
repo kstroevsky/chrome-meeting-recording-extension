@@ -59,7 +59,7 @@ export function createBackgroundRuntime() {
     getContext: (recordingId) => library.recordingContexts.get(recordingId),
     listNotations: (recordingId) => library.notations.list(recordingId),
     getTranscript: (recordingId) => library.transcripts.get(recordingId),
-    getAnalysis: (recordingId) => library.analyses.get(recordingId),
+    getAnalysisState: (recordingId) => library.analyses.exportState(recordingId),
   });
   wireAnalysisRuntime({
     offscreen,

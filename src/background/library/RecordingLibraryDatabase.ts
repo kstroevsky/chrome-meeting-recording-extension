@@ -22,14 +22,16 @@ const DATABASE_NAME = 'recording-history';
  * v4 → v5 adds the `transcripts` store (ADR-0007).
  * v5 → v6 adds the `analyses` store (ADR-0007).
  * v6 → v7 adds the `recordingContexts` store (ADR-0008).
+ * v7 → v8 adds durable `analysisOutcomes` (ADR-0008 readiness semantics).
  */
-const DATABASE_VERSION = 7;
+const DATABASE_VERSION = 8;
 
 export const RECORDINGS_STORE = 'recordings';
 export const RECORDING_CONTEXTS_STORE = 'recordingContexts';
 export const NOTATIONS_STORE = 'notations';
 export const TRANSCRIPTS_STORE = 'transcripts';
 export const ANALYSES_STORE = 'analyses';
+export const ANALYSIS_OUTCOMES_STORE = 'analysisOutcomes';
 export const CREATED_AT_ID_INDEX = 'createdAtId';
 export const ACTIVE_CREATED_AT_ID_INDEX = 'activeCreatedAtId';
 
@@ -132,6 +134,13 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
   // recognizable rather than silently current.
   if (!database.objectStoreNames.contains(ANALYSES_STORE)) {
     database.createObjectStore(ANALYSES_STORE, { keyPath: 'recordingId' });
+  }
+
+  // Small durable job outcome kept separately from the analysis graph. This is
+  // what lets consumers distinguish active work from terminal failure/cancel/
+  // unsupported states after the offscreen outbox entry has been acknowledged.
+  if (!database.objectStoreNames.contains(ANALYSIS_OUTCOMES_STORE)) {
+    database.createObjectStore(ANALYSIS_OUTCOMES_STORE, { keyPath: 'recordingId' });
   }
 }
 

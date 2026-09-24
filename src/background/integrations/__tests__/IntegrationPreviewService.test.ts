@@ -55,7 +55,7 @@ describe('IntegrationPreviewService', () => {
           { tStartMs: 2_000, tEndMs: 3_000, speaker: 'Bob Private', text: 'Hi' },
         ],
       }),
-      getAnalysis: async () => undefined,
+      getAnalysisState: async () => ({ status: 'none' }),
       now: () => 30_000,
     });
 
@@ -87,7 +87,7 @@ describe('IntegrationPreviewService', () => {
       }),
       listNotations: async () => [],
       getTranscript: async () => undefined,
-      getAnalysis: async () => undefined,
+      getAnalysisState: async () => ({ status: 'none' }),
       now: () => 30_000,
     });
 
@@ -113,10 +113,66 @@ describe('IntegrationPreviewService', () => {
       getContext: async () => undefined,
       listNotations: async () => [],
       getTranscript: async () => undefined,
-      getAnalysis: async () => undefined,
+      getAnalysisState: async () => ({ status: 'none' }),
     });
 
     await expect(service.preview('recording:internal-secret', POLICY))
       .rejects.toThrow('Recording context is unavailable');
+  });
+
+  it('projects terminal analysis failure without leaving readiness pending', async () => {
+    const service = new IntegrationPreviewService({
+      getHistory: async () => history(),
+      getContext: async () => ({
+        recordingId: 'recording:internal-secret',
+        startedAt: 10_000,
+        source: { kind: 'tab' },
+      }),
+      listNotations: async () => [],
+      getTranscript: async () => undefined,
+      getAnalysisState: async () => ({ status: 'failed', error: 'analysis backend unavailable' }),
+      now: () => 30_000,
+    });
+
+    const preview = await service.preview('recording:internal-secret', {
+      ...POLICY,
+      transcript: false,
+      analysis: true,
+      artifactMetadata: false,
+    });
+
+    expect(preview.readiness).toEqual({ complete: true, release: 'complete', pending: [] });
+    expect(JSON.parse(preview.body).data.recording.analysis).toEqual({
+      status: 'failed',
+      error: 'analysis backend unavailable',
+    });
+  });
+
+  it('maps stale analysis to explicit terminal unsupported state', async () => {
+    const service = new IntegrationPreviewService({
+      getHistory: async () => history(),
+      getContext: async () => ({
+        recordingId: 'recording:internal-secret',
+        startedAt: 10_000,
+        source: { kind: 'tab' },
+      }),
+      listNotations: async () => [],
+      getTranscript: async () => undefined,
+      getAnalysisState: async () => ({ status: 'stale', error: 'Stored analysis is stale.' }),
+      now: () => 30_000,
+    });
+
+    const preview = await service.preview('recording:internal-secret', {
+      ...POLICY,
+      transcript: false,
+      analysis: true,
+      artifactMetadata: false,
+    });
+
+    expect(preview.readiness.pending).toEqual([]);
+    expect(JSON.parse(preview.body).data.recording.analysis).toEqual({
+      status: 'unsupported',
+      error: 'Stored analysis is stale.',
+    });
   });
 });
