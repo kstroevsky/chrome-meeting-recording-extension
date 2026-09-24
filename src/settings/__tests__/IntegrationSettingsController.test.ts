@@ -225,4 +225,52 @@ describe('IntegrationSettingsController', () => {
     expect(status).toContain('permission');
     expect(status).not.toContain('Delete failed');
   });
+
+  it('offers manual retry for the latest failed delivery and reuses its durable identity path', async () => {
+    const failedDelivery = {
+      id: 'delivery_failed',
+      destinationId: 'destination_1',
+      recordingId: 'recording_1',
+      externalRecordingId: 'external_1',
+      eventId: 'event_1',
+      eventType: 'recording.ready.v1' as const,
+      revision: 1,
+      eventTime: 1,
+      connectionVersion: 1,
+      state: 'failed' as const,
+      attemptCount: 6,
+      bodyHash: 'a'.repeat(64),
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') {
+        return { ok: true, recordings: [{ id: 'recording_1', name: 'Weekly sync', available: true }] } as any;
+      }
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') {
+        return { ok: true, deliveries: [failedDelivery] } as any;
+      }
+      if (message.type === 'RETRY_INTEGRATION_DELIVERY') {
+        return {
+          ok: true,
+          delivery: { ...failedDelivery, state: 'delivered', attemptCount: 1, lastStatus: 204 },
+        } as any;
+      }
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+
+    await mount().init();
+    const retry = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Retry last delivery')!;
+    expect(retry.hidden).toBe(false);
+    retry.click();
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+
+    expect(send).toHaveBeenCalledWith({
+      type: 'RETRY_INTEGRATION_DELIVERY',
+      deliveryId: 'delivery_failed',
+    });
+    expect(document.getElementById('integration-status')?.textContent).toContain('delivered');
+  });
 });

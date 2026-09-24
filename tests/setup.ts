@@ -117,6 +117,7 @@ Object.assign(global, {
     },
     alarms: {
       create: jest.fn().mockResolvedValue(undefined),
+      get: jest.fn().mockResolvedValue(undefined),
       clear: jest.fn().mockResolvedValue(true),
       onAlarm: {
         addListener: jest.fn(),

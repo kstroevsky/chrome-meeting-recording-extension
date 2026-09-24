@@ -5,7 +5,7 @@ import {
   getTab,
   queryTabs,
 } from '../tabs';
-import { addAlarmListener, createAlarm } from '../alarms';
+import { addAlarmListener, clearAlarm, createAlarm, getAlarm } from '../alarms';
 import { addCommandListener } from '../commands';
 import { downloadFile } from '../downloads';
 import { getRuntimeId, getRuntimeUrl, reloadRuntime } from '../runtime';
@@ -131,11 +131,16 @@ describe('platform/chrome runtime and event wrappers', () => {
     const alarm = jest.fn();
     addCommandListener(command);
     addAlarmListener(alarm);
+    (chrome.alarms.get as jest.Mock).mockResolvedValueOnce({ name: 'sweep', scheduledTime: 1_000 });
     await createAlarm('sweep', { delayInMinutes: 0.5 });
+    await expect(getAlarm('sweep')).resolves.toEqual({ name: 'sweep', scheduledTime: 1_000 });
+    await expect(clearAlarm('sweep')).resolves.toBe(true);
 
     expect(chrome.commands.onCommand.addListener).toHaveBeenCalledWith(command);
     expect(chrome.alarms.onAlarm.addListener).toHaveBeenCalledWith(alarm);
     expect(chrome.alarms.create).toHaveBeenCalledWith('sweep', { delayInMinutes: 0.5 });
+    expect(chrome.alarms.get).toHaveBeenCalledWith('sweep');
+    expect(chrome.alarms.clear).toHaveBeenCalledWith('sweep');
   });
 });
 

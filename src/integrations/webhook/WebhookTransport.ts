@@ -1,9 +1,12 @@
 import { signStandardWebhook } from './StandardWebhookSigner';
 import { applyWebhookRequestAuth, type ResolvedWebhookRequestAuth } from './WebhookAuth';
+import { clampRetryAfterMs } from '../IntegrationRetryPolicy';
 
 export type WebhookTransportResult = {
   ok: boolean;
   status: number;
+  /** Normalized relative delay; arbitrary receiver headers never cross this seam. */
+  retryAfterMs?: number;
 };
 
 export class WebhookTransportError extends Error {
@@ -56,7 +59,12 @@ export class WebhookTransport {
         cache: 'no-store',
         referrerPolicy: 'no-referrer',
       });
-      return { ok: response.status >= 200 && response.status < 300, status: response.status };
+      const retryAfterMs = parseRetryAfter(response.headers?.get?.('retry-after') ?? null, this.deps.now?.() ?? Date.now());
+      return {
+        ok: response.status >= 200 && response.status < 300,
+        status: response.status,
+        ...(retryAfterMs != null ? { retryAfterMs } : {}),
+      };
     } catch (error) {
       if (controller.signal.aborted) throw new WebhookTransportError('timeout', error);
       throw new WebhookTransportError('network-error', error);
@@ -64,4 +72,18 @@ export class WebhookTransport {
       clearTimeout(timer);
     }
   }
+}
+
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return clampRetryAfterMs(Number(trimmed) * 1_000);
+  }
+
+  const date = Date.parse(trimmed);
+  if (!Number.isFinite(date)) return undefined;
+  return clampRetryAfterMs(Math.max(0, date - now));
 }

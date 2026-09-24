@@ -2,7 +2,8 @@ import { createHmac } from 'crypto';
 import { buildIntegrationTestPayload } from '../IntegrationTestEvent';
 import { normalizeWebhookEndpoint } from '../webhook/WebhookEndpoint';
 import { createStandardWebhookSecret, signStandardWebhook } from '../webhook/StandardWebhookSigner';
-import { WebhookTransport, WebhookTransportError } from '../webhook/WebhookTransport';
+import { WebhookTransport, WebhookTransportError, parseRetryAfter } from '../webhook/WebhookTransport';
+import { INTEGRATION_MAX_RETRY_AFTER_MS } from '../IntegrationRetryPolicy';
 
 function fixedSecret(): string {
   return `whsec_${Buffer.from(Uint8Array.from({ length: 32 }, (_, index) => index)).toString('base64')}`;
@@ -98,5 +99,32 @@ describe('webhook transport', () => {
     }).catch((caught) => caught);
     expect(error).toBeInstanceOf(WebhookTransportError);
     expect(error.code).toBe('timeout');
+  });
+
+  it('normalizes Retry-After seconds and HTTP dates with a bounded maximum', () => {
+    const now = Date.UTC(2026, 8, 25, 12, 0, 0);
+    expect(parseRetryAfter('120', now)).toBe(120_000);
+    expect(parseRetryAfter('Fri, 25 Sep 2026 12:02:00 GMT', now)).toBe(120_000);
+    expect(parseRetryAfter('172800', now)).toBe(INTEGRATION_MAX_RETRY_AFTER_MS);
+    expect(parseRetryAfter('not-a-delay', now)).toBeUndefined();
+  });
+
+  it('returns only the normalized retry hint from the receiver response', async () => {
+    const fetcher = jest.fn(async () => ({
+      status: 429,
+      headers: new Headers({ 'Retry-After': '120' }),
+    } as Response));
+    const transport = new WebhookTransport({
+      fetch: fetcher as typeof fetch,
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(transport.send({
+      endpoint: 'https://hooks.example.test/events',
+      eventId: 'evt_retry_after',
+      body: '{}',
+      signingSecret: fixedSecret(),
+      requestAuth: { type: 'none' },
+    })).resolves.toEqual({ ok: false, status: 429, retryAfterMs: 120_000 });
   });
 });

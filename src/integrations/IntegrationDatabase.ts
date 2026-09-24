@@ -1,6 +1,9 @@
 const DATABASE_NAME = 'meeting-integrations';
-/** v1 held destination credentials; v2 adds recording routing and durable delivery state. */
-const DATABASE_VERSION = 2;
+/**
+ * v1 held destination credentials; v2 added routing/outbox state; v3 fences
+ * unresolved pre-authorization-ceiling deliveries from automatic replay.
+ */
+const DATABASE_VERSION = 3;
 
 export const INTEGRATION_DESTINATIONS_STORE = 'destinations';
 export const INTEGRATION_SECRETS_STORE = 'secrets';
@@ -69,4 +72,30 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
   if (!deliveries.indexNames.contains(DELIVERY_NEXT_ATTEMPT_INDEX)) {
     deliveries.createIndex(DELIVERY_NEXT_ATTEMPT_INDEX, 'nextAttemptAt');
   }
+  if (transaction.db.version >= 3 && transaction.objectStore(INTEGRATION_DELIVERIES_STORE)) {
+    fenceLegacyDeliveries(deliveries);
+  }
+}
+
+function fenceLegacyDeliveries(deliveries: IDBObjectStore): void {
+  const request = deliveries.openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const row = cursor.value as Record<string, unknown>;
+    if (
+      row.allowedPolicy == null
+      && (row.state === 'pending' || row.state === 'delivering' || row.state === 'retrying')
+    ) {
+      const next = {
+        ...row,
+        state: 'action-required',
+        lastErrorCode: 'authorization-ceiling-missing',
+        updatedAt: Date.now(),
+      };
+      delete (next as { nextAttemptAt?: unknown }).nextAttemptAt;
+      cursor.update(next);
+    }
+    cursor.continue();
+  };
 }

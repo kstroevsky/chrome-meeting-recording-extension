@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { IntegrationCoordinator } from '../IntegrationCoordinator';
+import { IntegrationDispatcher } from '../IntegrationDispatcher';
 import { IntegrationDeliveryRepository } from '../IntegrationDeliveryRepository';
 import { IntegrationDestinationRepository } from '../IntegrationDestinationRepository';
 import { IntegrationSecretRepository } from '../IntegrationSecretRepository';
@@ -57,7 +58,9 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
   };
   const removeHostPermission = jest.fn(async () => true);
   let now = 1_000;
-  const coordinator = new IntegrationCoordinator({
+  const clock = () => ++now;
+  const containsHostPermission = jest.fn(async () => options.permission ?? true);
+  const dispatcher = new IntegrationDispatcher({
     destinations,
     secrets,
     streams,
@@ -65,10 +68,24 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     unitOfWork,
     snapshots,
     transport,
-    containsHostPermission: jest.fn(async () => options.permission ?? true),
+    containsHostPermission,
+    eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+    now: clock,
+    random: () => 0.5,
+  });
+  const coordinator = new IntegrationCoordinator({
+    destinations,
+    secrets,
+    streams,
+    deliveries,
+    unitOfWork,
+    dispatcher,
+    snapshots,
+    transport,
+    containsHostPermission,
     removeHostPermission,
     eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
-    now: () => ++now,
+    now: clock,
   });
   return {
     coordinator,
@@ -81,6 +98,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     transportCalls,
     bodies,
     removeHostPermission,
+    dispatcher,
   };
 }
 

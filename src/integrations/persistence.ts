@@ -82,6 +82,12 @@ export type IntegrationDelivery = {
   revision: number;
   eventTime: number;
   connectionVersion: number;
+  /**
+   * Maximum recording data this logical send was authorized to export.
+   * Legacy Phase-5 rows can lack this field; those rows are never
+   * automatically reconstructed.
+   */
+  allowedPolicy?: IntegrationDataPolicy;
   state: IntegrationDeliveryState;
   attemptCount: number;
   nextAttemptAt?: number;
@@ -202,12 +208,16 @@ export function normalizeIntegrationDelivery(value: unknown): IntegrationDeliver
   const revision = positiveInteger(value.revision);
   const eventTime = timestamp(value.eventTime);
   const connectionVersion = positiveInteger(value.connectionVersion);
+  const allowedPolicy = value.allowedPolicy == null
+    ? undefined
+    : normalizeIntegrationDataPolicy(value.allowedPolicy);
   const attemptCount = nonNegativeInteger(value.attemptCount);
   const createdAt = timestamp(value.createdAt);
   const updatedAt = timestamp(value.updatedAt);
   if (!id || !destinationId || !recordingId || !externalRecordingId || !eventId) return undefined;
   if (!isEventKind(value.eventType) || !isDeliveryState(value.state)) return undefined;
   if (revision == null || eventTime == null || connectionVersion == null || attemptCount == null) return undefined;
+  if (value.allowedPolicy != null && !allowedPolicy) return undefined;
   if (createdAt == null || updatedAt == null) return undefined;
   const nextAttemptAt = optionalTimestamp(value.nextAttemptAt);
   const lastStatus = optionalHttpStatus(value.lastStatus);
@@ -231,6 +241,7 @@ export function normalizeIntegrationDelivery(value: unknown): IntegrationDeliver
     revision,
     eventTime,
     connectionVersion,
+    ...(allowedPolicy ? { allowedPolicy } : {}),
     state: value.state,
     attemptCount,
     ...(nextAttemptAt != null ? { nextAttemptAt } : {}),
