@@ -16,6 +16,7 @@ import type {
   IntegrationDestination,
   IntegrationRequestAuth,
   IntegrationSecret,
+  IntegrationSpeakerAlias,
   IntegrationStream,
 } from './persistence';
 import { sha256Hex } from './serialization';
@@ -50,12 +51,18 @@ type CoordinatorDeps = {
     list(): Promise<IntegrationDelivery[]>;
   };
   snapshots: {
-    build(recordingId: string, policy: IntegrationDataPolicy, envelope: SnapshotEnvelope): Promise<{
+    build(
+      recordingId: string,
+      policy: IntegrationDataPolicy,
+      envelope: SnapshotEnvelope,
+      currentSpeakerAliases?: readonly IntegrationSpeakerAlias[],
+    ): Promise<{
       body: string;
       totalBytes: number;
       transcriptBytes: number;
       otherBytes: number;
       readiness: { complete: boolean; release: 'complete' | 'timeout' | 'manual'; pending: string[] };
+      speakerAliases?: IntegrationSpeakerAlias[];
     }>;
   };
   unitOfWork: {
@@ -171,15 +178,20 @@ export class IntegrationCoordinator {
     const eventKind = current?.readyCreated ? 'recording.updated.v1' : 'recording.ready.v1';
     const eventId = createIntegrationId('event');
     const eventTime = this.now();
-    const snapshot = await this.deps.snapshots.build(recordingId, destination.dataPolicy, {
-      eventTypePrefix: this.deps.eventTypePrefix,
-      eventKind,
-      eventId,
-      eventTime,
-      producerId: destination.producerId,
-      externalRecordingId,
-      revision,
-    });
+    const snapshot = await this.deps.snapshots.build(
+      recordingId,
+      destination.dataPolicy,
+      {
+        eventTypePrefix: this.deps.eventTypePrefix,
+        eventKind,
+        eventId,
+        eventTime,
+        producerId: destination.producerId,
+        externalRecordingId,
+        revision,
+      },
+      current?.speakerAliases,
+    );
     assertIntegrationPayloadWithinLimit(snapshot, INTEGRATION_MAX_PAYLOAD_BYTES);
     const delivery = await this.planDelivery({
       destination,
@@ -193,6 +205,7 @@ export class IntegrationCoordinator {
       body: snapshot.body,
       totalBytes: snapshot.totalBytes,
       transcriptBytes: snapshot.transcriptBytes,
+      speakerAliases: snapshot.speakerAliases,
     });
     return await this.attempt(delivery, destination, snapshot.body);
   }
@@ -214,6 +227,7 @@ export class IntegrationCoordinator {
     body: string;
     totalBytes: number;
     transcriptBytes: number;
+    speakerAliases?: IntegrationSpeakerAlias[];
   }): Promise<IntegrationDelivery> {
     const createdAt = this.now();
     const delivery: IntegrationDelivery = {
@@ -243,6 +257,9 @@ export class IntegrationCoordinator {
       everAttempted: true,
       ...(input.current?.lastPlannedProjectionHash
         ? { lastPlannedProjectionHash: input.current.lastPlannedProjectionHash }
+        : {}),
+      ...((input.speakerAliases?.length || input.current?.speakerAliases?.length)
+        ? { speakerAliases: input.speakerAliases ?? input.current?.speakerAliases }
         : {}),
     };
     await this.deps.unitOfWork.planDelivery(delivery, stream);
