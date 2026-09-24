@@ -20,6 +20,15 @@ test('static/manifest.json keeps the 0.0.0 placeholder (real version is counted 
   );
 });
 
+test('integrations declare optional HTTPS access without pre-granting arbitrary hosts or HTTP', async () => {
+  const manifest = JSON.parse(
+    await fs.readFile(new URL('../../static/manifest.json', import.meta.url), 'utf8')
+  );
+  assert.deepEqual(manifest.optional_host_permissions, ['https://*/*']);
+  assert.equal(manifest.host_permissions.includes('https://*/*'), false);
+  assert.equal(manifest.optional_host_permissions.some((pattern) => pattern.startsWith('http://')), false);
+});
+
 test('package.json version carries only the major; the rest is counted from git', () => {
   assert.match(
     pkg.version,
