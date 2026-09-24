@@ -12,6 +12,7 @@
 import { SettingsController, type SettingsElements } from './settings/SettingsController';
 import { initializeExtensionTheme } from './shared/theme';
 import { IntegrationPreviewController } from './settings/IntegrationPreviewController';
+import { IntegrationSettingsController } from './settings/IntegrationSettingsController';
 
 initializeExtensionTheme();
 
@@ -55,6 +56,7 @@ const el: SettingsElements = {
 
 void new SettingsController(el).init();
 void IntegrationPreviewController.fromDocument(document).init();
+void IntegrationSettingsController.fromDocument(document).init();
 
 // E2E-only: expose crash-recovery entry points on `window` so a Playwright test
 // can drive them from this page (which has chrome.storage + OPFS, unlike the

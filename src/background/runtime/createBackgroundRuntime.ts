@@ -26,7 +26,7 @@ import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
-import { IntegrationPreviewService } from '../integrations/IntegrationPreviewService';
+import { BackgroundIntegrationRuntime } from '../integrations/BackgroundIntegrationRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
@@ -54,7 +54,7 @@ export function createBackgroundRuntime() {
     logger,
     onAnalysisSettled: () => criticalWork.sync(),
   });
-  const integrationPreview = new IntegrationPreviewService({
+  const integrations = new BackgroundIntegrationRuntime({
     getHistory: (recordingId) => library.historyRepository.get(recordingId),
     getContext: (recordingId) => library.recordingContexts.get(recordingId),
     listNotations: (recordingId) => library.notations.list(recordingId),
@@ -153,7 +153,7 @@ export function createBackgroundRuntime() {
     driveAuthLease,
     telemetry,
     sharing,
-    integrationPreview,
+    integrations,
     e2eAnalysisWork: () => offscreen.refreshAnalysisWork(),
     waitUntilReady: () => readiness.wait(),
   });

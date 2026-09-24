@@ -6,9 +6,31 @@ export async function handleIntegrationMessage(
   sendResponse: RuntimeSendResponse,
   deps: MessageHandlersDeps,
 ): Promise<boolean> {
-  if (msg.type !== 'PREVIEW_INTEGRATION_PAYLOAD') return false;
-  if (!deps.integrationPreview) throw new Error('Integration preview is unavailable');
-  const preview = await deps.integrationPreview.preview(msg.recordingId, msg.policy);
-  sendResponse({ ok: true, preview });
-  return true;
+  const integrations = deps.integrations;
+  if (!integrations) throw new Error('Integrations are unavailable');
+  switch (msg.type) {
+    case 'PREVIEW_INTEGRATION_PAYLOAD':
+      sendResponse({ ok: true, preview: await integrations.preview(msg.recordingId, msg.policy) });
+      return true;
+    case 'LIST_INTEGRATIONS':
+      sendResponse({ ok: true, destinations: await integrations.listDestinations() });
+      return true;
+    case 'CREATE_INTEGRATION':
+      sendResponse({ ok: true, created: await integrations.createDestination(msg.input) });
+      return true;
+    case 'TEST_INTEGRATION':
+      sendResponse({ ok: true, result: await integrations.testDestination(msg.destinationId) });
+      return true;
+    case 'SEND_RECORDING_TO_INTEGRATION':
+      sendResponse({
+        ok: true,
+        delivery: await integrations.sendRecording(msg.destinationId, msg.recordingId),
+      });
+      return true;
+    case 'LIST_INTEGRATION_DELIVERIES':
+      sendResponse({ ok: true, deliveries: await integrations.listDeliveries() });
+      return true;
+    default:
+      return false;
+  }
 }

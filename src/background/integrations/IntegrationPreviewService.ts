@@ -4,8 +4,14 @@ import type { RecordingContext } from '../../shared/recordingContext';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 import type { Transcript } from '../../shared/transcript';
 import { buildIntegrationSnapshotPayload } from '../../integrations/IntegrationSnapshotBuilder';
-import type { IntegrationDataPolicy, IntegrationReadinessPending } from '../../integrations/contracts';
+import type {
+  IntegrationDataPolicy,
+  IntegrationEventKind,
+  IntegrationReadiness,
+  IntegrationReadinessPending,
+} from '../../integrations/contracts';
 import { createIntegrationId } from '../../integrations/ids';
+import type { IntegrationPayloadMeasurement } from '../../integrations/payload';
 import type { IntegrationPayloadPreview } from '../../integrations/preview';
 
 export const INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX = 'dev.meeting-recorder.preview';
@@ -19,6 +25,20 @@ type IntegrationPreviewDeps = {
   now?: () => number;
 };
 
+export type IntegrationSnapshotEnvelope = {
+  eventTypePrefix: string;
+  eventKind: Extract<IntegrationEventKind, 'recording.ready.v1' | 'recording.updated.v1'>;
+  eventId: string;
+  eventTime: number;
+  producerId: string;
+  externalRecordingId: string;
+  revision: number;
+};
+
+export type BuiltIntegrationSnapshot = IntegrationPayloadMeasurement & {
+  readiness: IntegrationReadiness;
+};
+
 /** Reads canonical library aggregates and produces a real serialized fixture without networking. */
 export class IntegrationPreviewService {
   private readonly now: () => number;
@@ -28,6 +48,38 @@ export class IntegrationPreviewService {
   }
 
   async preview(recordingId: string, policy: IntegrationDataPolicy): Promise<IntegrationPayloadPreview> {
+    assertPreviewPolicy(policy);
+    const envelope: IntegrationSnapshotEnvelope = {
+      eventTypePrefix: INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX,
+      eventKind: 'recording.ready.v1',
+      eventId: createIntegrationId('event'),
+      eventTime: this.now(),
+      producerId: createIntegrationId('producer'),
+      externalRecordingId: createIntegrationId('recording'),
+      revision: 1,
+    };
+    const built = await this.build(recordingId, policy, envelope);
+    return {
+      body: built.body,
+      eventId: envelope.eventId,
+      eventType: `${envelope.eventTypePrefix}.${envelope.eventKind}`,
+      externalRecordingId: envelope.externalRecordingId,
+      schemaVersion: 'v1',
+      revision: envelope.revision,
+      readiness: built.readiness,
+      totalBytes: built.totalBytes,
+      transcriptBytes: built.transcriptBytes,
+      otherBytes: built.otherBytes,
+      policy: { ...policy },
+      syntheticIdentity: true,
+    };
+  }
+
+  async build(
+    recordingId: string,
+    policy: IntegrationDataPolicy,
+    envelope: IntegrationSnapshotEnvelope,
+  ): Promise<BuiltIntegrationSnapshot> {
     assertPreviewPolicy(policy);
     const [history, context, notations, transcript, analysis] = await Promise.all([
       this.deps.getHistory(recordingId),
@@ -39,21 +91,12 @@ export class IntegrationPreviewService {
     if (!history || history.deletedAt) throw new Error('Recording is unavailable');
     if (!context) throw new Error('Recording context is unavailable for this recording');
 
-    const externalRecordingId = createIntegrationId('recording');
-    const eventId = createIntegrationId('event');
-    const producerId = createIntegrationId('producer');
     const readiness = previewReadiness(policy, history, transcript, analysis);
     const measurement = buildIntegrationSnapshotPayload({
-      eventTypePrefix: INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX,
-      eventKind: 'recording.ready.v1',
-      eventId,
-      eventTime: this.now(),
-      producerId,
-      externalRecordingId,
-      revision: 1,
+      ...envelope,
       readiness,
       projection: {
-        externalRecordingId,
+        externalRecordingId: envelope.externalRecordingId,
         policy,
         source: {
           history,
@@ -64,21 +107,7 @@ export class IntegrationPreviewService {
         },
       },
     });
-
-    return {
-      body: measurement.body,
-      eventId,
-      eventType: `${INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX}.recording.ready.v1`,
-      externalRecordingId,
-      schemaVersion: 'v1',
-      revision: 1,
-      readiness,
-      totalBytes: measurement.totalBytes,
-      transcriptBytes: measurement.transcriptBytes,
-      otherBytes: measurement.otherBytes,
-      policy: { ...policy },
-      syntheticIdentity: true,
-    };
+    return { ...measurement, readiness };
   }
 }
 
