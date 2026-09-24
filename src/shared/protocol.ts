@@ -362,7 +362,12 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupCreateIntegration
     ? { ok: true; created: CreatedIntegrationDestination } | { ok: false; error: string } :
   T extends PopupDeleteIntegration
-    ? { ok: true; removed: true; hostPermissionRemoved: boolean } | { ok: false; error: string } :
+    ? {
+        ok: true;
+        removed: true;
+        hostPermissionRemoved: boolean;
+        hostPermissionCleanup: 'removed' | 'retained-in-use' | 'failed';
+      } | { ok: false; error: string } :
   T extends PopupTestIntegration
     ? { ok: true; result: IntegrationConnectionTestResult } | { ok: false; error: string } :
   T extends PopupSendRecordingToIntegration

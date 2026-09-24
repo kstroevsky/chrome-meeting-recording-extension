@@ -246,7 +246,14 @@ export class IntegrationSettingsController {
         destinationId: destination.id,
       });
       if (!response.ok) throw new Error(response.error);
-      this.setStatus(`Deleted ${destination.name} and its stored credentials.`);
+      if (response.hostPermissionCleanup === 'failed') {
+        this.setStatus(
+          `Deleted ${destination.name} and its stored credentials, but the browser host permission could not be cleaned up.`,
+          true,
+        );
+      } else {
+        this.setStatus(`Deleted ${destination.name} and its stored credentials.`);
+      }
       await this.refresh();
     } catch (error) {
       this.setStatus(`Delete failed: ${String(error)}`, true);

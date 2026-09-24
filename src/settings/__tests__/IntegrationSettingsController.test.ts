@@ -194,4 +194,35 @@ describe('IntegrationSettingsController', () => {
       .find((button) => button.textContent === 'Send recording')!;
     expect(sendButton.disabled).toBe(true);
   });
+
+  it('reports a cleanup warning without calling a committed destination deletion failed', async () => {
+    const controller = mount();
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') {
+        return { ok: true, recordings: [{ id: 'recording_1', name: 'Weekly sync', available: true }] } as any;
+      }
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'DELETE_INTEGRATION') {
+        return {
+          ok: true,
+          removed: true,
+          hostPermissionRemoved: false,
+          hostPermissionCleanup: 'failed',
+        } as any;
+      }
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await controller.init();
+
+    const deleteButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Delete')!;
+    deleteButton.click();
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+
+    const status = document.getElementById('integration-status')?.textContent ?? '';
+    expect(status).toContain('Deleted CRM');
+    expect(status).toContain('permission');
+    expect(status).not.toContain('Delete failed');
+  });
 });

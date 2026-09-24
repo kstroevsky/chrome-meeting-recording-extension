@@ -55,6 +55,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
       };
     }),
   };
+  const removeHostPermission = jest.fn(async () => true);
   let now = 1_000;
   const coordinator = new IntegrationCoordinator({
     destinations,
@@ -65,11 +66,22 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     snapshots,
     transport,
     containsHostPermission: jest.fn(async () => options.permission ?? true),
-    removeHostPermission: jest.fn(async () => true),
+    removeHostPermission,
     eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
     now: () => ++now,
   });
-  return { coordinator, destinations, secrets, streams, deliveries, snapshots, transport, transportCalls, bodies };
+  return {
+    coordinator,
+    destinations,
+    secrets,
+    streams,
+    deliveries,
+    snapshots,
+    transport,
+    transportCalls,
+    bodies,
+    removeHostPermission,
+  };
 }
 
 describe('IntegrationCoordinator', () => {
@@ -265,5 +277,59 @@ describe('IntegrationCoordinator', () => {
     await expect(ctx.destinations.get(destination.id)).resolves.toBeUndefined();
     await expect(ctx.secrets.get(signingSecretId)).resolves.toBeUndefined();
     await expect(ctx.secrets.get(requestSecretId)).resolves.toBeUndefined();
+  });
+
+  it('keeps an in-flight delivery canceled when its transport rejects after destination deletion', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+
+    let rejectTransport!: (error: Error) => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    ctx.transport.send.mockImplementationOnce(async () => await new Promise((_, reject) => {
+      rejectTransport = reject;
+      markStarted();
+    }));
+
+    const sending = ctx.coordinator.sendRecording(destination.id, 'recording:race');
+    await started;
+    await expect(ctx.deliveries.list()).resolves.toEqual([
+      expect.objectContaining({ state: 'delivering' }),
+    ]);
+
+    await ctx.coordinator.deleteDestination(destination.id);
+    rejectTransport(new Error('network failed after destination deletion'));
+
+    const final = await sending;
+    expect(final).toEqual(expect.objectContaining({
+      state: 'canceled',
+      lastErrorCode: 'destination-deleted',
+    }));
+    await expect(ctx.deliveries.get(final.id)).resolves.toEqual(final);
+  });
+
+  it('reports destination deletion success when post-commit permission cleanup fails', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+    ctx.removeHostPermission.mockRejectedValueOnce(new Error('permissions API unavailable'));
+
+    await expect(ctx.coordinator.deleteDestination(destination.id)).resolves.toEqual({
+      removed: true,
+      hostPermissionRemoved: false,
+      hostPermissionCleanup: 'failed',
+    });
+    await expect(ctx.destinations.get(destination.id)).resolves.toBeUndefined();
   });
 });
