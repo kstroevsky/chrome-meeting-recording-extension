@@ -61,6 +61,13 @@ export type RpcHandlerDeps = {
   /** Releases a completed analysis the background has now persisted (HOST-03). */
   acknowledgeAnalysisState?: (jobId: string) => Promise<void>;
   renameDriveResources?: (resources: DriveRenameResource[]) => Promise<DriveRenameResource[]>;
+  publishShare?: (
+    recordings: import('../sharing/PublishedManifestBuilder').PublishedRecordingInput[],
+    options: import('../sharing/PublishedManifestBuilder').PublishRecordingOptions,
+  ) => Promise<string>;
+  shareSnapshot?: () => Promise<import('../sharing/ShareRuntime').ShareRuntimeSnapshot>;
+  revokeShare?: (shareId: string) => Promise<void>;
+  deleteShare?: (shareId: string) => Promise<void>;
   pushState: (
     phase: RecordingPhase,
     extra?: Pick<OffscreenPhaseUpdate, 'uploadSummary' | 'error' | 'tabResolution'>
@@ -353,6 +360,55 @@ async function handleAcknowledgeAnalysisState(
   if (typeof msg.jobId === 'string' && msg.jobId) await deps.acknowledgeAnalysisState?.(msg.jobId);
 }
 
+async function handleSharePublish(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_SHARE_PUBLISH' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; shareId: string } | { ok: false; error: string }> {
+  if (!deps.publishShare) return { ok: false, error: 'Sharing is not configured for this build' };
+  try {
+    return { ok: true, shareId: await deps.publishShare(msg.recordings, msg.options) };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleShareSnapshot(
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; snapshot: import('../sharing/ShareRuntime').ShareRuntimeSnapshot } | { ok: false; error: string }> {
+  if (!deps.shareSnapshot) return { ok: false, error: 'Sharing is not configured for this build' };
+  try {
+    return { ok: true, snapshot: await deps.shareSnapshot() };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleShareRevoke(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_SHARE_REVOKE' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!deps.revokeShare) return { ok: false, error: 'Sharing is not configured for this build' };
+  try {
+    await deps.revokeShare(msg.shareId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleShareDelete(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_SHARE_DELETE' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!deps.deleteShare) return { ok: false, error: 'Permanent published-data deletion is not configured' };
+  try {
+    await deps.deleteShare(msg.shareId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
 /** Registers RPC and one-way port handlers for background -> offscreen commands. */
 export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps) {
   createPortRpcServer(
@@ -375,6 +431,10 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_ACK_UPLOAD_STATE: (msg) => handleAcknowledgeUploadState(msg, deps),
       OFFSCREEN_ANALYZE_TRANSCRIPT: (msg) => handleOffscreenAnalyzeTranscript(msg, deps),
       OFFSCREEN_CANCEL_ANALYSIS: (msg) => handleOffscreenCancelAnalysis(msg, deps),
+      OFFSCREEN_SHARE_PUBLISH: (msg) => handleSharePublish(msg, deps),
+      OFFSCREEN_SHARE_SNAPSHOT: () => handleShareSnapshot(deps),
+      OFFSCREEN_SHARE_REVOKE: (msg) => handleShareRevoke(msg, deps),
+      OFFSCREEN_SHARE_DELETE: (msg) => handleShareDelete(msg, deps),
       OFFSCREEN_LIST_ANALYSIS_WORK: () => handleOffscreenListAnalysisWork(deps),
       OFFSCREEN_ACK_ANALYSIS_STATE: (msg) => handleAcknowledgeAnalysisState(msg, deps),
     },

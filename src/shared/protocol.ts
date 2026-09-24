@@ -82,6 +82,15 @@ export type PopupStopRecording = { type: 'STOP_RECORDING' };
 export type PopupDiscardRecording = { type: 'DISCARD_RECORDING' };
 export type PopupGetRecordingStatus = { type: 'GET_RECORDING_STATUS' };
 export type PopupGetDriveToken = { type: 'GET_DRIVE_TOKEN'; refresh?: boolean };
+export type PopupGetShareIdentityToken = { type: 'GET_SHARE_IDENTITY_TOKEN'; refresh?: boolean };
+export type PopupPublishShare = {
+  type: 'PUBLISH_SHARE';
+  recordings: import('../sharing/PublishedManifestBuilder').PublishedRecordingInput[];
+  options: import('../sharing/PublishedManifestBuilder').PublishRecordingOptions;
+};
+export type PopupListShares = { type: 'LIST_SHARES' };
+export type PopupRevokeShare = { type: 'REVOKE_SHARE'; shareId: string };
+export type PopupDeleteShare = { type: 'DELETE_SHARE'; shareId: string };
 /** Toggles microphone mute on the live recording; the mic emits silence while muted. */
 export type PopupSetMicMuted = { type: 'SET_MIC_MUTED'; muted: boolean };
 /** Toggles the camera on the live self-video recording; it emits black frames while hidden. */
@@ -199,6 +208,11 @@ export type PopupToBg =
   | PopupDiscardRecording
   | PopupGetRecordingStatus
   | PopupGetDriveToken
+  | PopupGetShareIdentityToken
+  | PopupPublishShare
+  | PopupListShares
+  | PopupRevokeShare
+  | PopupDeleteShare
   | PopupSetMicMuted
   | PopupSetCameraMuted
   | PopupSetInputDevice
@@ -242,6 +256,13 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupDiscardRecording ? CommandResult :
   T extends PopupGetRecordingStatus ? { session: RecordingStatusView } :
   T extends PopupGetDriveToken ? DriveTokenResponse :
+  T extends PopupGetShareIdentityToken ? DriveTokenResponse :
+  T extends PopupPublishShare ? { ok: true; shareId: string } | { ok: false; error: string } :
+  T extends PopupListShares ?
+    { ok: true; snapshot: import('../sharing/ShareRuntime').ShareRuntimeSnapshot }
+    | { ok: false; error: string } :
+  T extends PopupRevokeShare ? { ok: true } | { ok: false; error: string } :
+  T extends PopupDeleteShare ? { ok: true } | { ok: false; error: string } :
   T extends PopupSetMicMuted ? CommandResult :
   T extends PopupSetCameraMuted ? CommandResult :
   T extends PopupSetInputDevice ? CommandResult :
@@ -493,6 +514,14 @@ export type BgToOffscreenRpc =
       provenance: import('./analysis/provenance').AnalysisProvenance;
     }>
   | RpcRequest<{ type: 'OFFSCREEN_CANCEL_ANALYSIS'; jobId: string }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_SHARE_PUBLISH';
+      recordings: import('../sharing/PublishedManifestBuilder').PublishedRecordingInput[];
+      options: import('../sharing/PublishedManifestBuilder').PublishRecordingOptions;
+    }>
+  | RpcRequest<{ type: 'OFFSCREEN_SHARE_SNAPSHOT' }>
+  | RpcRequest<{ type: 'OFFSCREEN_SHARE_REVOKE'; shareId: string }>
+  | RpcRequest<{ type: 'OFFSCREEN_SHARE_DELETE'; shareId: string }>
   /**
    * Every analysis job the data plane still considers unfinished — queued,
    * running, or holding a result nobody has acknowledged. Background asks this

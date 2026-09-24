@@ -13,6 +13,7 @@ import type { PlaybackLeaseManager } from '../playback/PlaybackLeaseManager';
 import type { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
 import type { RecordingController } from '../recording/RecordingController';
 import type { RecordingSession } from '../recording/session/RecordingSession';
+import type { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 
 export type MessageHandlersDeps = {
   L: {
@@ -53,6 +54,7 @@ export type MessageHandlersDeps = {
   deliverLocal?: (recordingId: string, folderId: string | null) => Promise<void>;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
+  sharing?: BackgroundSharingRuntime;
   /** E2E-only probe for real offscreen analysis work; never routed in production builds. */
   e2eAnalysisWork?: () => Promise<boolean>;
   waitUntilReady?: () => Promise<void>;

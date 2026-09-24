@@ -20,6 +20,9 @@ import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
 import { RecordingNotesSection, type RecordingNotesSectionActions } from './RecordingNotesSection';
 import { NoteEditor, type NoteEditorDeps } from './NoteEditor';
+import { ShareDialog, type QueuedShare, type ShareProgressReporter } from './ShareDialog';
+import type { PublishRecordingOptions } from '../sharing/PublishedManifestBuilder';
+import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
 
 export type RecordingsViewCallbacks = {
   rename: (id: string, name: string) => void;
@@ -30,6 +33,14 @@ export type RecordingsViewCallbacks = {
   fileTo: (recordingId: string, presetId: string | null) => void;
   play: (recordingId: string) => void;
   loadMore: () => void;
+  share?: (
+    recordingIds: string[],
+    options: PublishRecordingOptions,
+    report: ShareProgressReporter,
+  ) => Promise<QueuedShare>;
+  shareSnapshot?: () => Promise<ShareRuntimeSnapshot>;
+  revokeShare?: (shareId: string) => Promise<void>;
+  sharesChanged?: () => void;
   /** The open recording's notes (f2); the view supplies the undo toast itself. */
   notes: Omit<RecordingNotesSectionActions, 'offerUndo' | 'openEditor'> & Partial<Pick<NoteEditorDeps['notes'], 'add' | 'update'>>;
   /** What the note editor (f5, f6) reads besides notes; without it there is no ADD. */
@@ -277,8 +288,15 @@ export class RecordingsView {
     const canOpen = selection.some((entry) => entry.files.some((file) =>
       (file.destination === 'drive' && file.webViewLink) || (file.destination === 'local' && file.downloadId && file.status === 'available')));
 
+    const share = document.createElement('button');
+    share.className = 'bulk-button bulk-button--primary';
+    share.type = 'button';
+    share.textContent = 'Share';
+    share.hidden = !this.callbacks.share;
+    share.addEventListener('click', () => this.openShareDialog(selection));
+
     const move = document.createElement('button');
-    move.className = 'bulk-button bulk-button--primary';
+    move.className = 'bulk-button bulk-button--ghost';
     move.type = 'button';
     move.textContent = 'Move to Drive';
     move.disabled = true;
@@ -304,9 +322,21 @@ export class RecordingsView {
     clear.setAttribute('aria-label', 'Clear selection');
     clear.textContent = '×';
     clear.addEventListener('click', () => { this.selected.clear(); this.redraw(); });
-    actions.append(move, open, remove, clear);
+    actions.append(share, move, open, remove, clear);
     toolbar.append(count, actions);
     return toolbar;
+  }
+
+  private openShareDialog(entries: RecordingHistoryEntry[]): void {
+    if (!this.callbacks.share || !this.callbacks.shareSnapshot || !entries.length) return;
+    const ids = entries.map((entry) => entry.id);
+    const dialog = new ShareDialog(entries.map((entry) => entry.name), {
+      publish: (options, report) => this.callbacks.share!(ids, options, report),
+      snapshot: () => this.callbacks.shareSnapshot!(),
+      ...(this.callbacks.revokeShare ? { revoke: (shareId: string) => this.callbacks.revokeShare!(shareId) } : {}),
+      ...(this.callbacks.sharesChanged ? { changed: () => this.callbacks.sharesChanged!() } : {}),
+    });
+    dialog.open();
   }
 
   private table(entries: RecordingHistoryEntry[]): HTMLElement {
