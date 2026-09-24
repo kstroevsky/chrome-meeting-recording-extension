@@ -14,6 +14,7 @@ import type { RecordingPlaybackService } from '../playback/RecordingPlaybackServ
 import type { RecordingController } from '../recording/RecordingController';
 import type { RecordingSession } from '../recording/session/RecordingSession';
 import type { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
+import type { IntegrationPreviewService } from '../integrations/IntegrationPreviewService';
 
 export type MessageHandlersDeps = {
   L: {
@@ -56,6 +57,7 @@ export type MessageHandlersDeps = {
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
   sharing?: BackgroundSharingRuntime;
+  integrationPreview?: IntegrationPreviewService;
   /** E2E-only probe for real offscreen analysis work; never routed in production builds. */
   e2eAnalysisWork?: () => Promise<boolean>;
   waitUntilReady?: () => Promise<void>;
