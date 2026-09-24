@@ -124,13 +124,22 @@ export class RecordingAnalysisCoordinator {
       return { ok: false, reason: 'busy' };
     }
     this.pending.add(historyId);
+    const startedAt = this.deps.now?.() ?? Date.now();
     try {
       if (!options.force && await this.deps.analyses.get(historyId)) {
         return { ok: false, reason: 'already-analyzed' };
       }
 
       const transcript = await this.deps.readTranscript(historyId);
-      if (!transcript?.segments.length) return { ok: false, reason: 'no-transcript' };
+      if (!transcript?.segments.length) {
+        await this.recordPreJobTerminalOutcome(
+          historyId,
+          'unsupported',
+          'Analysis is unavailable because the recording has no transcript.',
+          startedAt,
+        );
+        return { ok: false, reason: 'no-transcript' };
+      }
 
       this.purged.delete(historyId);
       const provenance = this.deps.analyses.provenanceForNewRun();
@@ -142,7 +151,9 @@ export class RecordingAnalysisCoordinator {
         provenance,
       );
       if (!response.ok || !response.jobId) {
-        return { ok: false, reason: 'failed', error: response.error ?? 'The data plane refused the job' };
+        const error = response.error ?? 'The data plane refused the job';
+        await this.recordPreJobTerminalOutcome(historyId, 'failed', error, startedAt);
+        return { ok: false, reason: 'failed', error };
       }
       this.running.set(historyId, response.jobId);
       this.provenanceByJob.set(response.jobId, provenance);
@@ -150,6 +161,7 @@ export class RecordingAnalysisCoordinator {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       L.warn('Could not start topic analysis', historyId, message);
+      await this.recordPreJobTerminalOutcome(historyId, 'failed', message, startedAt);
       return { ok: false, reason: 'failed', error: message };
     } finally {
       this.pending.delete(historyId);
@@ -249,14 +261,6 @@ export class RecordingAnalysisCoordinator {
         );
         return;
       }
-      if (outcome.reason === 'no-transcript') {
-        await this.deps.analyses.recordJobOutcome(
-          job,
-          'unsupported',
-          'Analysis cannot be recovered because the recording has no transcript.',
-          this.deps.now?.(),
-        );
-      }
     }
     this.settle(job);
   }
@@ -270,6 +274,25 @@ export class RecordingAnalysisCoordinator {
    */
   async handleResult(job: AnalysisJob, wire: WireAnalysis, wireProvenance?: unknown): Promise<void> {
     await this.resultCommitter.commit(job, wire, wireProvenance);
+  }
+
+  private async recordPreJobTerminalOutcome(
+    historyId: string,
+    status: 'failed' | 'unsupported',
+    error: string,
+    startedAt: number,
+  ): Promise<void> {
+    try {
+      await this.deps.analyses.recordTerminalOutcome(
+        historyId,
+        status,
+        error,
+        startedAt,
+        this.deps.now?.() ?? Date.now(),
+      );
+    } catch (cause) {
+      L.warn('Could not persist pre-job analysis outcome', historyId, cause);
+    }
   }
 
   /**

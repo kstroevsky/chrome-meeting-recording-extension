@@ -120,6 +120,23 @@ export class RecordingAnalysisService {
     await this.repository.putOutcome(job.historyId, outcome);
   }
 
+  /** Persists a terminal attempt that ended before the data plane created a job. */
+  async recordTerminalOutcome(
+    recordingId: string,
+    status: Extract<AnalysisJobStatus, 'failed' | 'canceled' | 'unsupported'>,
+    error: string | undefined,
+    startedAt: number = Date.now(),
+    updatedAt: number = Date.now(),
+  ): Promise<void> {
+    const outcome: RecordingAnalysisOutcome = {
+      status,
+      startedAt,
+      updatedAt,
+      ...(error ? { error } : {}),
+    };
+    await this.repository.putOutcome(recordingId, outcome);
+  }
+
   /**
    * The conditions a run starting now would use. Captured at **enqueue** and
    * carried with the job, so what is stored describes the run that actually

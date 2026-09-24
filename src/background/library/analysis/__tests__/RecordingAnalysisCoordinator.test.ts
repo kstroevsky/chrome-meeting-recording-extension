@@ -138,10 +138,21 @@ describe('RecordingAnalysisCoordinator', () => {
   });
 
   it('refuses a recording with no transcript, rather than starting an empty run', async () => {
-    await expect(harness({}).coordinator.analyze('rec_1'))
+    const missing = harness({});
+    await expect(missing.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'no-transcript' });
-    await expect(harness({ transcript: { source: 'meet-captions', segments: [] } }).coordinator.analyze('rec_1'))
+    await expect(missing.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+    });
+
+    const empty = harness({ transcript: { source: 'meet-captions', segments: [] } });
+    await expect(empty.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'no-transcript' });
+    await expect(empty.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+    });
   });
 
   it('does not recompute a current result (INC-03)', async () => {
@@ -196,12 +207,28 @@ describe('RecordingAnalysisCoordinator', () => {
     const h = harness({ transcript: TRANSCRIPT, analyzeAnswer: { ok: false, error: 'Topic analysis is unavailable' } });
     await expect(h.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'failed', error: 'Topic analysis is unavailable' });
+    await expect(h.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'failed',
+      error: 'Topic analysis is unavailable',
+    });
   });
 
   it('reports an offscreen document that will not come up', async () => {
     const h = harness({ transcript: TRANSCRIPT, ensureReadyThrows: new Error('Offscreen ready timed out') });
     await expect(h.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'failed', error: 'Offscreen ready timed out' });
+    await expect(h.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'failed',
+      error: 'Offscreen ready timed out',
+    });
+  });
+
+  it('does not overwrite a running durable outcome when a duplicate start is busy', async () => {
+    const h = harness({ transcript: TRANSCRIPT });
+    await h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
+
+    await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
+    await expect(h.analyses.exportState('rec_1')).resolves.toEqual({ status: 'analyzing' });
   });
 
   it('acknowledges a job that ended without a result, so its outbox row drains', async () => {
