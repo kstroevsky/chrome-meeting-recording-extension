@@ -75,6 +75,20 @@ export class RecordingHistoryRepository implements RecordingHistoryRepositoryPor
     return normalizeRecordingHistoryEntry(raw);
   }
 
+  /**
+   * Every entry, tombstones included. Only for whole-library reconciliation
+   * (a Drive import must know what the user deleted); listing uses `listPage`.
+   */
+  async listAllIncludingDeleted(): Promise<RecordingHistoryEntry[]> {
+    const database = await this.open();
+    const rows = await this.request(
+      database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll(),
+    );
+    return rows
+      .map((row) => normalizeRecordingHistoryEntry(row))
+      .filter((entry): entry is RecordingHistoryEntry => entry != null);
+  }
+
   async listCleanupPending(): Promise<RecordingHistoryEntry[]> {
     const database = await this.open();
     const rows = await this.request(
