@@ -28,6 +28,7 @@
  */
 
 import { isTerminalAnalysisJob, normalizeAnalysisJob, type AnalysisJob } from '../../shared/analysis/job';
+import { hasStores, openAdditiveDatabase } from '../../shared/storage/openAdditiveDatabase';
 
 const TERMINAL_ANALYSIS_STATE_PREFIX = 'analysisJobState:';
 
@@ -85,26 +86,25 @@ export function createIndexedDbAnalysisJobStateArea(
 
   let opening: Promise<IDBDatabase> | null = null;
   const open = (): Promise<IDBDatabase> => {
-    opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-      const request = factory.open(ANALYSIS_OUTBOX_DATABASE, ANALYSIS_OUTBOX_VERSION);
-      request.onupgradeneeded = () => {
-        if (!request.result.objectStoreNames.contains(ANALYSIS_OUTBOX_STORE)) {
-          request.result.createObjectStore(ANALYSIS_OUTBOX_STORE);
+    opening ??= openAdditiveDatabase(factory, {
+      name: ANALYSIS_OUTBOX_DATABASE,
+      version: ANALYSIS_OUTBOX_VERSION,
+      upgrade: (database) => {
+        if (!database.objectStoreNames.contains(ANALYSIS_OUTBOX_STORE)) {
+          database.createObjectStore(ANALYSIS_OUTBOX_STORE);
         }
-      };
-      request.onsuccess = () => {
-        const database = request.result;
-        // Another context upgrading must not be blocked by a long-lived handle.
-        database.onversionchange = () => {
-          database.close();
-          opening = null;
-        };
-        resolve(database);
-      };
-      request.onerror = () => {
+      },
+      isSatisfied: (database) => hasStores(database, [ANALYSIS_OUTBOX_STORE]),
+    }).then((database) => {
+      // Another context upgrading must not be blocked by a long-lived handle.
+      database.onversionchange = () => {
+        database.close();
         opening = null;
-        reject(request.error ?? new Error('Could not open the analysis outbox'));
       };
+      return database;
+    }, (error) => {
+      opening = null;
+      throw error;
     });
     return opening;
   };

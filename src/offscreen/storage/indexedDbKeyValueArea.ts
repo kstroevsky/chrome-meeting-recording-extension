@@ -20,6 +20,8 @@
  * fails rejects rather than resolving, so a caller can decide what to do.
  */
 
+import { hasStores, openAdditiveDatabase } from '../../shared/storage/openAdditiveDatabase';
+
 export interface KeyValueArea {
   getAll(): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
@@ -52,24 +54,23 @@ export function createIndexedDbKeyValueArea(options: IndexedDbAreaOptions): KeyV
 
   let opening: Promise<IDBDatabase> | null = null;
   const open = (): Promise<IDBDatabase> => {
-    opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-      const request = factory.open(databaseName, version);
-      request.onupgradeneeded = () => {
-        if (!request.result.objectStoreNames.contains(storeName)) request.result.createObjectStore(storeName);
-      };
-      request.onsuccess = () => {
-        const database = request.result;
-        // Another context upgrading must not be blocked by a handle held here.
-        database.onversionchange = () => {
-          database.close();
-          opening = null;
-        };
-        resolve(database);
-      };
-      request.onerror = () => {
+    opening ??= openAdditiveDatabase(factory, {
+      name: databaseName,
+      version,
+      upgrade: (database) => {
+        if (!database.objectStoreNames.contains(storeName)) database.createObjectStore(storeName);
+      },
+      isSatisfied: (database) => hasStores(database, [storeName]),
+    }).then((database) => {
+      // Another context upgrading must not be blocked by a handle held here.
+      database.onversionchange = () => {
+        database.close();
         opening = null;
-        reject(request.error ?? new Error(`Could not open ${databaseName}`));
       };
+      return database;
+    }, (error) => {
+      opening = null;
+      throw error;
     });
     return opening;
   };
