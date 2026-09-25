@@ -215,6 +215,7 @@ export function createBackgroundRuntime() {
     logger,
     session,
     controller,
+    driveLibrary,
     messageListener,
     bootstrap,
     waitUntilReady: () => readiness.wait(),

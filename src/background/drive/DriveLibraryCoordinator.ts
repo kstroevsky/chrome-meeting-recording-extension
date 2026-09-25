@@ -2,6 +2,9 @@ import { getLocalStorageValues, setLocalStorageValues } from '../../platform/chr
 import { loadExtensionSettingsFromStorage } from '../../shared/settings';
 import { DRIVE_DEFAULT_DESTINATION_NAME } from '../../shared/settings';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../../shared/recordingHistory';
+import { DriveDestinationImporter } from './DriveDestinationImporter';
+import { DriveFolderBackfill } from './DriveFolderBackfill';
+import { listDriveChildren } from './driveListing';
 import { DriveArtifactResolver } from './DriveArtifactResolver';
 import { DriveDestinationFiler } from './DriveDestinationFiler';
 import { DriveRootFolder } from './DriveRootFolder';
@@ -23,13 +26,15 @@ const DRIVE_DESTINATIONS_GATHERED_KEY = 'driveDestinationsGathered';
 
 export class DriveLibraryCoordinator {
   readonly artifacts: DriveArtifactResolver;
+  readonly importer: DriveDestinationImporter;
+  readonly folderBackfill: DriveFolderBackfill;
 
   private readonly folders: DriveDestinationFiler;
   private readonly rootFolder: DriveRootFolder;
   private readonly folderPorts: DriveFolderPorts;
 
   constructor(
-    private readonly historyRepository: RecordingHistoryRepository,
+    readonly historyRepository: RecordingHistoryRepository,
     private readonly history: RecordingHistoryService,
     private readonly logger: Logger,
   ) {
@@ -96,6 +101,23 @@ export class DriveLibraryCoordinator {
 
     this.folders = new DriveDestinationFiler(this.folderPorts);
     this.rootFolder = new DriveRootFolder(this.folderPorts);
+    this.importer = new DriveDestinationImporter({
+      findFolder: this.folderPorts.findFolder,
+      listChildren: listDriveChildren,
+      history: historyRepository,
+      log: logger.log,
+    });
+    this.folderBackfill = new DriveFolderBackfill({
+      findFolder: this.folderPorts.findFolder,
+      getFolder: this.folderPorts.getFolder,
+      getFileParents: async (fileId) => {
+        const { status, body } = await this.driveJson(
+          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=parents,trashed`);
+        return status === 200 && !body?.trashed ? (body?.parents ?? null) : null;
+      },
+      history: historyRepository,
+      log: logger.log,
+    });
   }
 
   async fileRecordingToDestination(recordingId: string, presetId: string | null): Promise<void> {

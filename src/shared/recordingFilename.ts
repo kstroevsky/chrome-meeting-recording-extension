@@ -139,3 +139,47 @@ export function recordingStartedAtMs(filename: string): number | null {
 function utcStamp(date: Date): string {
   return date.toISOString().slice(0, 19).replace(/[-:]/g, '');
 }
+
+export type ImportedRecordingFilename = {
+  stream: RecordingStream;
+  /** UTC milliseconds the name says the stream started at. */
+  startedAtMs: number;
+  /**
+   * The recording's name in today's shape, `{slug}-{YYYYMMDDTHHmm[ss]}` — what
+   * {@link recordingGroupName} gives a current file — so an imported recording
+   * reads like one made today. Old names without a slug become `google-meet-…`.
+   */
+  label: string;
+};
+
+/**
+ * Reads a media file found in Drive, including the names older builds wrote,
+ * for bringing it into the library. Never used for naming anything new.
+ *
+ * Accepts, beyond {@link parseRecordingFilename}'s grammar:
+ * - a lowercase `t` in the stamp, and the ` (1)` Drive appends to a duplicate
+ *   upload (`…-20260417T1618-mic (1).webm`);
+ * - `google-meet-google-meet-20260402T153043Z-mic.webm`;
+ * - `google-meet-mic-google-meet-1773245064320.webm` (epoch milliseconds).
+ */
+export function readImportedRecordingFilename(filename: string): ImportedRecordingFilename | null {
+  const current = filename.match(/^(?:(.+)-)?(\d{8})[Tt](\d{4,6})-(recording|mic|self-video)(?: \(\d+\))?\.(?:webm|mp4|m4a)$/);
+  if (current) return fromStamp(current[1] ?? '', current[2], current[3], current[4]);
+  const zulu = filename.match(/^(?:google-meet-)+(\d{8})T(\d{6})Z-(recording|mic|self-video)\.webm$/);
+  if (zulu) return fromStamp('google-meet', zulu[1], zulu[2], zulu[3]);
+  const epoch = filename.match(/^google-meet-(recording|mic|self-video)-google-meet-(\d{13})\.webm$/);
+  if (epoch) {
+    const startedAtMs = Number(epoch[2]);
+    return { stream: SUFFIX_STREAM[epoch[1]], startedAtMs, label: `google-meet-${utcStamp(new Date(startedAtMs))}` };
+  }
+  return null;
+}
+
+function fromStamp(slug: string, date: string, time: string, suffix: string): ImportedRecordingFilename | null {
+  const startedAtMs = Date.UTC(
+    Number(date.slice(0, 4)), Number(date.slice(4, 6)) - 1, Number(date.slice(6, 8)),
+    Number(time.slice(0, 2)), Number(time.slice(2, 4)), Number(time.slice(4, 6) || 0),
+  );
+  if (!Number.isFinite(startedAtMs)) return null;
+  return { stream: SUFFIX_STREAM[suffix], startedAtMs, label: `${slug ? `${slug}-` : ''}${date}T${time}` };
+}
