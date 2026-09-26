@@ -48,11 +48,13 @@ export function createBackgroundRuntime() {
   });
   const { playbackLeases, driveAuthLease } = createPlaybackSupportRuntime(logger);
 
+  let notifyIntegrationChanged: (recordingId: string) => void = () => {};
   const library = createLibraryRuntime({
     offscreen,
     playbackLeases,
     logger,
     onAnalysisSettled: () => criticalWork.sync(),
+    onIntegrationChanged: (recordingId) => notifyIntegrationChanged(recordingId),
   });
   const integrations = new BackgroundIntegrationRuntime({
     listHistory: () => library.history.list(),
@@ -62,6 +64,10 @@ export function createBackgroundRuntime() {
     getTranscript: (recordingId) => library.transcripts.get(recordingId),
     getAnalysisState: (recordingId) => library.analyses.exportState(recordingId),
   });
+  notifyIntegrationChanged = (recordingId) => {
+    void integrations.consider(recordingId)
+      .catch((error) => logger.warn('Integration recording consideration deferred:', error));
+  };
   wireAnalysisRuntime({
     offscreen,
     analysisCoordinator: library.analysisCoordinator,
