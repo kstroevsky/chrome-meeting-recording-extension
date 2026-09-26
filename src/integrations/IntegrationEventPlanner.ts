@@ -107,9 +107,15 @@ export class IntegrationEventPlanner {
         this.deps.streams.get(destinationId, recordingId),
         this.deps.isRecordingFinalized(recordingId),
       ]);
-      if (!destination?.enabled || !routing || !finalized) return { kind: 'noop' };
+      if (!destination?.enabled || !routing || !finalized) {
+        await this.clearReadyDeadline(current);
+        return { kind: 'noop' };
+      }
       const intent = activeAutomaticIntent(routing, destinationId, current);
-      if (!intent || intent.connectionVersion !== destination.connectionVersion) return { kind: 'noop' };
+      if (!intent || intent.connectionVersion !== destination.connectionVersion) {
+        await this.clearReadyDeadline(current);
+        return { kind: 'noop' };
+      }
 
       const effectivePolicy = intersectIntegrationPolicy(intent.allowedPolicy, destination.dataPolicy);
       const readiness = await this.deps.snapshots.evaluateReadiness(recordingId, effectivePolicy);
@@ -223,6 +229,12 @@ export class IntegrationEventPlanner {
       release();
       if (this.streamRuns.get(key) === queued) this.streamRuns.delete(key);
     });
+  }
+
+  private async clearReadyDeadline(stream: IntegrationStream | undefined): Promise<void> {
+    if (stream?.readyDeadlineAt == null) return;
+    const { readyDeadlineAt: _dropped, ...withoutDeadline } = stream;
+    await this.deps.streams.put(withoutDeadline);
   }
 }
 

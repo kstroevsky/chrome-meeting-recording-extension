@@ -131,6 +131,7 @@ function harness(policy: IntegrationDataPolicy, start = 1_000) {
     streams,
     deliveries,
     destinations,
+    routing,
     seed,
     setNow(value: number) { now = value; },
   };
@@ -257,5 +258,22 @@ describe('IntegrationEventPlanner', () => {
 
     await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual({ kind: 'noop' });
     await expect(ctx.streams.get('destination_1', 'recording_1')).resolves.toBeUndefined();
+  });
+
+  it('retires a durable readiness deadline when automatic routing is no longer active', async () => {
+    const ctx = harness({ ...BASE_POLICY, analysis: true });
+    ctx.source.analysis = 'analyzing';
+    await ctx.seed();
+    await ctx.planner.consider('destination_1', 'recording_1');
+    await expect(ctx.streams.get('destination_1', 'recording_1')).resolves.toEqual(
+      expect.objectContaining({ readyDeadlineAt: 1_100 }),
+    );
+
+    await ctx.routing.remove('recording_1');
+    ctx.setNow(1_100);
+    await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual({ kind: 'noop' });
+    await expect(ctx.streams.get('destination_1', 'recording_1')).resolves.toEqual(
+      expect.not.objectContaining({ readyDeadlineAt: expect.any(Number) }),
+    );
   });
 });
