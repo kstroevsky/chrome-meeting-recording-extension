@@ -12,9 +12,12 @@
 
 import { readFileByKey, type DirectoryHandleLike } from '../../offscreen/storage/opfsLayout';
 import type { PlaybackSource, PlaybackTrack } from '../../shared/playback';
+import type { ResolvedTrackUrl, TrackUrlResolver } from './trackResolver';
 
 export type ResolvedSource =
   | { kind: 'opfs'; url: string; revoke: () => void }
+  /** Sharing service endpoint; authorization is enforced by the server/session. */
+  | { kind: 'remote'; url: string }
   /** Drive needs a tab-scoped DNR authorization lease, which does not exist yet. */
   | { kind: 'unsupported'; reason: 'drive-not-wired' }
   /** Only a Downloads copy remains: openable by Chrome, unreadable by us. */
@@ -29,10 +32,32 @@ export type SourceResolverDeps = {
 
 /** What turning a track into a playable URL needs from the page. */
 export type PlaybackUrlDeps = {
-  prepareDriveSource: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
+  prepareDriveSource?: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
   resolver?: SourceResolverDeps;
   warn?: (...args: unknown[]) => void;
 };
+
+/**
+ * Extension adapter for the player core. It owns every OPFS/Drive/source-kind
+ * decision and exposes only a playable URL plus an optional refresh operation.
+ */
+export function createPlaybackTrackResolver(deps: PlaybackUrlDeps): TrackUrlResolver {
+  return async (recordingId, track) => {
+    const resolved = await playbackUrl(recordingId, track, deps);
+    if (!resolved) return undefined;
+
+    const canRefresh = track.sources.some((source) => source.kind === 'drive');
+    return {
+      ...resolved,
+      ...(canRefresh ? {
+        refresh: async (): Promise<ResolvedTrackUrl | undefined> => {
+          const fresh = await playbackUrl(recordingId, track, deps, true);
+          return fresh ? { ...fresh } : undefined;
+        },
+      } : {}),
+    };
+  };
+}
 
 /**
  * A URL a media element can load for `track`: the retained copy when there is
@@ -46,11 +71,15 @@ export async function playbackUrl(
   deps: PlaybackUrlDeps,
   refresh = false,
 ): Promise<{ url: string; revoke?: () => void } | undefined> {
+  if (!refresh) {
+    const remote = track.sources.find((source) => source.kind === 'remote');
+    if (remote) return { url: remote.url };
+  }
   if (!refresh && track.sources.some((source) => source.kind === 'opfs')) {
     const resolved = await resolveTrackSource(track, deps.resolver);
     if (resolved.kind === 'opfs') return { url: resolved.url, revoke: resolved.revoke };
   }
-  if (track.sources.some((source) => source.kind === 'drive')) {
+  if (deps.prepareDriveSource && track.sources.some((source) => source.kind === 'drive')) {
     const url = await deps.prepareDriveSource(recordingId, track.fileId, refresh)
       .catch((error) => { deps.warn?.('Drive playback preparation failed', error); return undefined; });
     if (url) return { url };
@@ -89,5 +118,6 @@ async function tryOne(
     return { kind: 'opfs', url, revoke: () => revokeUrl(url) };
   }
   if (source.kind === 'drive') return { kind: 'unsupported', reason: 'drive-not-wired' };
+  if (source.kind === 'remote') return { kind: 'remote', url: source.url };
   return { kind: 'external', downloadId: source.downloadId };
 }

@@ -77,8 +77,10 @@ git clone https://github.com/kstroevsky/chrome-meeting-recording-extension.git
 cd chrome-recording-transcription-extension
 npm install
 
-# 2. Build production with the deployed write-only telemetry endpoint
-TELEMETRY_ENDPOINT=https://recording-extension-telemetry.kstroevsky.workers.dev/api/telemetry/batches npm run build
+# 2. Build production with the deployed endpoints
+TELEMETRY_ENDPOINT=https://recording-extension-telemetry.kstroevsky.workers.dev/api/telemetry/batches \
+SHARING_SERVICE_ORIGIN=https://your-sharing-worker.example.workers.dev \
+npm run build
 # outputs to ./dist; development builds may omit TELEMETRY_ENDPOINT
 
 # 3. Load into Chrome
@@ -86,6 +88,8 @@ TELEMETRY_ENDPOINT=https://recording-extension-telemetry.kstroevsky.workers.dev/
 ```
 
 > If you plan to use Drive mode, create `.env` from `.env.example` and set `GOOGLE_OAUTH_CLIENT_ID` before building. See [Google Drive setup](#google-drive-setup).
+
+`SHARING_SERVICE_ORIGIN` is optional and must be a bare HTTPS origin. When it is set, the recordings page enables the owner sharing flow and webpack adds that exact origin to the extension's host permissions. When it is absent, sharing UI stays disabled and no sharing-service host permission is added.
 
 Open a Google Meet, click the extension icon, and you're ready to record or download transcripts.
 

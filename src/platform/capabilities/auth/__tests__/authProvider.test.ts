@@ -24,6 +24,21 @@ describe('ChromeIdentityAuthProvider', () => {
     expect(chrome.identity.getAuthToken).toHaveBeenCalledWith({ interactive: true }, expect.any(Function));
   });
 
+  it('requests an explicit scope set when configured for a narrower identity token', async () => {
+    (chrome.identity.getAuthToken as jest.Mock).mockImplementation((_d: any, cb: (t?: string) => void) => {
+      (chrome.runtime as any).lastError = undefined;
+      cb('identity-token');
+    });
+    const scopes = ['openid', 'email', 'profile'];
+
+    await expect(new ChromeIdentityAuthProvider(scopes).getToken({ interactive: false })).resolves.toBe('identity-token');
+
+    expect(chrome.identity.getAuthToken).toHaveBeenCalledWith(
+      { interactive: false, scopes },
+      expect.any(Function),
+    );
+  });
+
   it('delegates invalidateToken to removeCachedAuthToken', async () => {
     await new ChromeIdentityAuthProvider().invalidateToken('old-token');
     expect(chrome.identity.removeCachedAuthToken).toHaveBeenCalledWith(

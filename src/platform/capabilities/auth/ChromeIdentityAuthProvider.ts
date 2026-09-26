@@ -10,8 +10,10 @@ import type { AuthProvider, AuthTokenRequest } from '../AuthProvider';
 import { getAuthToken, removeCachedAuthToken } from '../../chrome/identity';
 
 export class ChromeIdentityAuthProvider implements AuthProvider {
+  constructor(private readonly scopes?: readonly string[]) {}
+
   getToken({ interactive }: AuthTokenRequest): Promise<string> {
-    return getAuthToken(interactive);
+    return getAuthToken(interactive, this.scopes);
   }
 
   invalidateToken(token: string): Promise<void> {

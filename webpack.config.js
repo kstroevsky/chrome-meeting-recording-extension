@@ -13,12 +13,14 @@ const {
   applyTargetToManifest,
 } = require('./scripts/lib/manifestTargets.cjs')
 const { telemetryHostPermission } = require('./scripts/lib/telemetryEndpoint.cjs')
+const { normalizeSharingServiceOrigin, sharingHostPermission } = require('./scripts/lib/sharingServiceOrigin.cjs')
 const { ANALYSIS_MODEL, modelCacheDir } = require('./scripts/lib/analysisModel.cjs')
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_SECRET_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_SECRET'
 const TELEMETRY_ENDPOINT_ENV_KEY = 'TELEMETRY_ENDPOINT'
+const SHARING_SERVICE_ORIGIN_ENV_KEY = 'SHARING_SERVICE_ORIGIN'
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
 const STATIC_DIR = 'static'
 const PUBLIC_DIR = 'public'
@@ -103,7 +105,7 @@ function resolveReleaseVersion(isDevBuild) {
   }
 }
 
-function transformManifest(content, oauthClientId, isDevBuild, browserTarget, telemetryEndpoint, release) {
+function transformManifest(content, oauthClientId, isDevBuild, browserTarget, telemetryEndpoint, sharingServiceOrigin, release) {
   const manifest = JSON.parse(content.toString('utf8'))
   // Per-target manifest decisions (oauth2 / key) live in the tested profile model
   // (scripts/lib/manifestTargets.cjs), keyed off browser family + auth capability.
@@ -122,6 +124,10 @@ function transformManifest(content, oauthClientId, isDevBuild, browserTarget, te
   const telemetryPermission = telemetryHostPermission(telemetryEndpoint)
   if (telemetryPermission && !manifest.host_permissions.includes(telemetryPermission)) {
     manifest.host_permissions.push(telemetryPermission)
+  }
+  const sharingPermission = sharingHostPermission(sharingServiceOrigin)
+  if (sharingPermission && !manifest.host_permissions.includes(sharingPermission)) {
+    manifest.host_permissions.push(sharingPermission)
   }
   return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
 }
@@ -154,6 +160,9 @@ module.exports = (_env, argv) => {
   const webOauthClientSecret = isWebAuthFlowTarget ? resolveWebOauthClientSecret(__dirname) : ''
   const fileEnv = loadProjectDotEnv(__dirname)
   const telemetryEndpoint = String(process.env[TELEMETRY_ENDPOINT_ENV_KEY] || fileEnv[TELEMETRY_ENDPOINT_ENV_KEY] || '').trim()
+  const sharingServiceOrigin = normalizeSharingServiceOrigin(
+    process.env[SHARING_SERVICE_ORIGIN_ENV_KEY] || fileEnv[SHARING_SERVICE_ORIGIN_ENV_KEY] || ''
+  )
   if (!isDevBuild && !telemetryEndpoint) {
     throw new Error(`${TELEMETRY_ENDPOINT_ENV_KEY} is required for production builds`)
   }
@@ -243,6 +252,7 @@ module.exports = (_env, argv) => {
         '__WEB_OAUTH_CLIENT_ID__': JSON.stringify(webOauthClientId),
         '__WEB_OAUTH_CLIENT_SECRET__': JSON.stringify(webOauthClientSecret),
         '__TELEMETRY_ENDPOINT__': JSON.stringify(telemetryEndpoint),
+        '__SHARING_SERVICE_ORIGIN__': JSON.stringify(sharingServiceOrigin),
         // The model this build actually packaged. Defined rather than written
         // in TypeScript so an analysis can never record provenance for a model
         // or quantization other than the one on disk beside it (ADR-0007).
@@ -267,7 +277,7 @@ module.exports = (_env, argv) => {
           {
             from: path.join(STATIC_DIR, 'manifest.json'),
             to: 'manifest.json',
-            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild, browserTarget, telemetryEndpoint, release),
+            transform: (content) => transformManifest(content, googleOauthClientId, isDevBuild, browserTarget, telemetryEndpoint, sharingServiceOrigin, release),
           },
           { from: path.join(STATIC_DIR, 'popup.html'),     to: 'popup.html' },
           ...(isDevBuild ? [{ from: path.join(STATIC_DIR, 'popup-gallery.html'), to: 'popup-gallery.html' }] : []),

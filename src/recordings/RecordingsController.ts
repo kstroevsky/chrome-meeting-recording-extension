@@ -2,17 +2,78 @@ import { createExternalTab } from '../platform/chrome/tabs';
 import { loadExtensionSettingsFromStorage } from '../shared/settings';
 import { sendToBackground } from '../shared/messages';
 import { PlayerController } from './player/PlayerController';
+import { createPlaybackTrackResolver } from './player/playbackSource';
+import type { PlayerStatus } from './player/PlayerView';
+import type { PlaybackTrack } from '../shared/playback';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
+import type { PublishRecordingOptions, PublishedRecordingInput } from '../sharing/PublishedManifestBuilder';
+import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
 import { RecordingsView } from './RecordingsView';
+import type { QueuedShare, ShareProgressReporter } from './ShareDialog';
+
+export type RecordingsSharing = {
+  enabled: true;
+};
 
 export class RecordingsController {
   private player: PlayerController | null = null;
   private entries: RecordingHistoryEntry[] = [];
   private nextCursor: RecordingHistoryCursor | undefined;
   private loadingMore = false;
-  constructor(private readonly view: RecordingsView) {}
+  constructor(
+    private readonly view: RecordingsView,
+    private readonly sharing?: RecordingsSharing,
+  ) {}
 
-  async init() { await Promise.all([this.refresh(), this.loadDestinations()]); }
+  async init() {
+    await Promise.all([this.refresh(), this.loadDestinations()]);
+  }
+
+  async share(
+    recordingIds: readonly string[],
+    options: PublishRecordingOptions,
+    report: ShareProgressReporter = () => {},
+  ): Promise<QueuedShare> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    const ids = [...new Set(recordingIds)].filter((id) => this.entries.some((entry) => entry.id === id));
+    if (!ids.length) throw new Error('Select at least one recording to share');
+
+    report(`Preparing ${ids.length} recording${ids.length === 1 ? '' : 's'}…`);
+    const recordings: PublishedRecordingInput[] = await Promise.all(ids.map(async (recordingId) => {
+      const manifest = await this.playback.getManifest(recordingId);
+      if (!manifest) throw new Error(`Could not prepare “${this.entries.find((entry) => entry.id === recordingId)?.name ?? recordingId}” for sharing`);
+      const transcript = options.includeTranscript ? await this.transcript(recordingId) : undefined;
+      if (options.includeTranscript && manifest.transcriptStatus === 'ready' && !transcript) {
+        throw new Error(`Could not load the transcript for “${manifest.title}”`);
+      }
+      return transcript ? { manifest, transcript } : { manifest };
+    }));
+
+    report('Starting publication…');
+    const response = await sendToBackground({ type: 'PUBLISH_SHARE', recordings, options });
+    if (!response.ok) throw new Error(response.error || 'Could not start sharing');
+    report('Publication continues in the background.');
+    return { shareId: response.shareId };
+  }
+
+  async revokeShare(shareId: string): Promise<void> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    const response = await sendToBackground({ type: 'REVOKE_SHARE', shareId });
+    if (!response.ok) throw new Error(response.error || 'Could not revoke share');
+  }
+
+  async deleteShare(shareId: string): Promise<void> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    const response = await sendToBackground({ type: 'DELETE_SHARE', shareId });
+    if (!response.ok) throw new Error(response.error || 'Could not delete published data');
+  }
+
+  async shareSnapshot(): Promise<ShareRuntimeSnapshot> {
+    if (!this.sharing) throw new Error('Sharing is not configured for this build');
+    const response = await sendToBackground({ type: 'LIST_SHARES' });
+    if (!response.ok) throw new Error(response.error || 'Could not load shared recordings');
+    return response.snapshot;
+  }
 
   async rename(id: string, name: string) {
     try {
@@ -82,6 +143,15 @@ export class RecordingsController {
     warn: (...args: unknown[]) => console.warn('[recordings]', ...args),
   };
 
+  private unavailablePlaybackStatus(track: PlaybackTrack): PlayerStatus | undefined {
+    if (!track.sources.some((source) => source.kind === 'drive')) return undefined;
+    return {
+      title: 'Could not open this recording from Google Drive.',
+      body: 'It was deleted or moved, or Drive could not be reached. Notes and transcript are kept by the extension and are still available.',
+      actions: ['folder', 'remove'],
+    };
+  }
+
   /** A recording's persisted transcript (ADR-0007), for the player's rail and the note editor. */
   async transcript(id: string) {
     const response = await sendToBackground({ type: 'GET_RECORDING_TRANSCRIPT', recordingId: id });
@@ -102,7 +172,10 @@ export class RecordingsController {
     try {
       this.player?.close();
       const player = new PlayerController({
-        ...this.playback,
+        getManifest: this.playback.getManifest,
+        resolveTrack: createPlaybackTrackResolver(this.playback),
+        unavailableStatus: (track) => this.unavailablePlaybackStatus(track),
+        warn: this.playback.warn,
         getTranscript: (id) => this.transcript(id),
         // f16: the way to the folder the video should have been in, and the way out of history.
         openFolder: (id) => {
