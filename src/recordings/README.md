@@ -13,14 +13,14 @@ Open **Recordings** from the popup to see recordings in newest-first order. An e
 - a pending save/upload;
 - an unavailable file, with the recovery or download error that explains why it cannot be opened.
 
-Renaming a local recording changes only its history label. Renaming a current Drive recording with persisted folder/file IDs changes the remote Drive folder and every available uploaded filename first, then commits the matching history projection. Legacy Drive rows without a folder ID retain display-only rename behavior because they cannot safely identify the remote folder. **Delete history** is a soft delete: it hides the entry from this page but never deletes a local download or a Drive file. The tombstone also prevents delayed upload, download-settlement, or recovery messages from recreating an entry the user removed.
+Renaming a local recording changes only its history label. Renaming a current Drive recording with persisted folder/file IDs changes the remote Drive folder and every available uploaded filename first, then commits the matching history projection. Legacy Drive rows without a folder ID retain display-only rename behavior because they cannot safely identify the remote folder. **Remove from history** is a soft delete: it hides the entry from this page and, by default, leaves its local download and Drive files alone. The tombstone also prevents delayed upload, download-settlement, or recovery messages from recreating an entry the user removed. Deleting the files too is a separate, explicit choice — see *Removing, and deleting files* below.
 
 ## Data flow
 
 ```mermaid
 flowchart LR
     PAGE["recordings.html"] --> CTRL["RecordingsController"]
-    CTRL -->|"LIST / RENAME / REMOVE / OPEN"| BG["background message handler"]
+    CTRL -->|"LIST / RENAME / REMOVE / OPEN / SYNC_DRIVE"| BG["background message handler"]
     BG --> SVC["RecordingHistoryService"]
     SVC --> DB["IndexedDB RecordingHistoryRepository"]
     BG --> CTRL
@@ -62,13 +62,23 @@ Without a transcript (`f6`) the saved notes take the lines' place in their detai
 
 Notes are written through `ADD_RECORDING_NOTATION` and `UPDATE_RECORDING_NOTATION` (which also moves a note's start and end). Playback reuses the player's source resolution (`player/playbackSource.playbackUrl`). The Drive `notes.vtt` is written once when recording stops, so notes added or re-timed here are not in it.
 
+## Removing, and deleting files
+
+The page's own dialog is the only confirmation for **Remove from history**. It carries an unticked **Also delete its files**: ticking it replaces the dialog's text with exactly what will happen (`fileDeletion.ts`) and renames the button, and Remove then asks once more with a native `confirm`, because deleting a Downloads file cannot be undone. Declining that keeps the dialog open; nothing is closed, cleared or removed.
+
+The background (`REMOVE_RECORDING_HISTORY` with `deleteFiles`) first ends every live share that includes the recording — a share is served from those Drive files — and removes nothing if that fails. It then removes the entry and deletes its files (`background/library/history/RecordingFileDeletion.ts`): each Drive file goes to the Drive trash (recoverable for 30 days) and each Downloads file is deleted from disk. The recording's Drive folder is never trashed, even when it looks empty: the extension sees only the files it created, and trashing a folder trashes everything in it. A file that cannot be deleted is reported on the page, never hidden.
+
+## Sync with Drive
+
+The toolbar's **Sync with Drive** (`DriveSyncDialog.ts`, background `DriveLibrarySync`) compares the library with every destination folder in Drive and previews: recordings whose folder moved or was re-filed (re-pointed and re-tagged by where the folder is now; ticked), recording folders the library lacks — ones the user removed and ones it never had (each unticked, brought back only if ticked), recordings without a duration (read from the file's own WebM header or last timestamps; ticked), files missing from Drive (reported only) and folders it cannot read as one recording (reported only). `SYNC_DRIVE_APPLY` plans again against Drive as it is then and does only what was ticked; sync never deletes. It sees only files the extension created (`drive.file`).
+
 ## Sidecar rows
 
 A recording's notes and transcript are delivered as WebVTT files beside the media (ADR-0005, ADR-0007), so history carries them as rows with a `kind`. They are not playable tracks — the playback manifest keeps only rows with no `kind` — and in the files list they are named for what they are, `NOTES` and `VTT`, since the stream a sidecar rides says nothing about it.
 
 ## Pagination and reconciliation
 
-History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make **Load more** scan every deleted record. `loadMore()` appends only entries not already present, so a repeated response cannot duplicate a card.
+History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The first page also carries `total`, the library's size (counted on the active index, so tombstones never count); the page's `N RECORDINGS` and the popup's badge show it rather than the length of whatever has been paged in. The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make **Load more** scan every deleted record. `loadMore()` appends only entries not already present, so a repeated response cannot duplicate a card.
 
 Rename and delete update the rendered list from their command responses rather than reloading the first page. This preserves entries already loaded through **Load more** and avoids a stale first-page refresh overwriting the user's local page state.
 
