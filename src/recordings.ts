@@ -22,13 +22,12 @@ const get = (id: string) => document.getElementById(id);
 const list = get('recordings-list');
 const empty = get('recordings-empty');
 const error = get('recordings-error');
-const loadMore = get('recordings-load-more');
-if (list && empty && error && loadMore instanceof HTMLButtonElement) {
+if (list && empty && error) {
   let controller: RecordingsController;
   let sharedView: SharedView | undefined;
   const serviceOrigin = sharingServiceOrigin();
   const sharingEnabled = Boolean(serviceOrigin);
-  const view = new RecordingsView(list, empty, error, loadMore, {
+  const view = new RecordingsView(list, empty, error, {
     rename: (id, name) => void controller.rename(id, name),
     note: (id, note) => void controller.setNote(id, note),
     remove: (id, deleteFiles) => void controller.remove(id, deleteFiles),

@@ -22,9 +22,8 @@ function mount() {
   const list = document.createElement('div');
   const empty = document.createElement('div');
   const error = document.createElement('div');
-  const loadMore = document.createElement('button');
-  document.body.replaceChildren(list, empty, error, loadMore);
-  return { view: new RecordingsView(list, empty, error, loadMore, callbacks), list };
+  document.body.replaceChildren(list, empty, error);
+  return { view: new RecordingsView(list, empty, error, callbacks), list };
 }
 
 /** Types into the live search box; the count updates without the debounce. */
