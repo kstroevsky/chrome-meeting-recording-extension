@@ -9,6 +9,9 @@
  */
 import 'fake-indexeddb/auto';
 
+/** The popup, as Chrome identifies it: privileged requests are accepted only from extension pages. */
+const POPUP_SENDER = { url: 'chrome-extension://mock-id/popup.html' } as chrome.runtime.MessageSender;
+
 describe('background notation commands', () => {
   let stopBackgroundKeepAlive: (() => void) | undefined;
 
@@ -81,7 +84,7 @@ describe('background notation commands', () => {
   });
 
   const send = (listener: any, message: unknown) =>
-    new Promise<any>((resolve) => { listener(message, {}, resolve); });
+    new Promise<any>((resolve) => { listener(message, POPUP_SENDER, resolve); });
 
   it('marks and lists a notation through the real message listener', async () => {
     const hydrated = recordingSince(6_000);

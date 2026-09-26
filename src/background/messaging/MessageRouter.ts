@@ -1,3 +1,4 @@
+import { getRuntimeUrl } from '../../platform/chrome/runtime';
 import { isRecordingNotationMessage } from '../../shared/notations';
 import {
   isPopupToBgMessage,
@@ -108,6 +109,17 @@ function failsSessionOnError(type: string): boolean {
   return includes(SESSION_FAILURE_MESSAGE_TYPES, type);
 }
 
+/**
+ * Popup-protocol requests hand out Drive tokens, create integrations, publish
+ * shares, and delete files, so they are accepted only from the extension's own
+ * pages. The content script lives in a web page's renderer and speaks only the
+ * ingress messages handled before this point; a compromised page renderer must
+ * not be able to speak for the popup.
+ */
+function isExtensionPageSender(sender: chrome.runtime.MessageSender): boolean {
+  return typeof sender.url === 'string' && sender.url.startsWith(getRuntimeUrl(''));
+}
+
 function validatePopupMessage(msg: PopupToBg): void {
   if (
     includes(RECORDING_HISTORY_MESSAGE_TYPES, msg.type)
@@ -155,6 +167,11 @@ export function createMessageListener(deps: MessageHandlersDeps) {
     if (ingressResult !== undefined) return ingressResult;
 
     if (!isPopupToBgMessage(msg)) return false;
+    if (!isExtensionPageSender(sender)) {
+      deps.L.warn('Refused a popup request from outside the extension pages:', msg.type, sender.url);
+      sendResponse({ ok: false, error: 'This request is accepted only from the extension' });
+      return false;
+    }
 
     const driveTokenResult = handleDriveTokenMessage(msg, sendResponse, deps);
     if (driveTokenResult !== undefined) return driveTokenResult;
