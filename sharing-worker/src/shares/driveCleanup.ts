@@ -156,7 +156,12 @@ async function claimCleanupCandidates(
   const claimedResources = new Set<string>();
   let pending = initialPending;
   for (const candidate of candidates) {
-    if (await hasLiveReference(env.SHARING_DB, candidate)) {
+    // Another owner's file is never this owner's to clean up — their Drive
+    // token cannot touch it, and a lease on it would only stall the real
+    // owner's cleanup. Such candidates exist only from registrations made
+    // before files were bound to one owner.
+    if (await hasLiveReference(env.SHARING_DB, candidate)
+      || await isForeignFile(env.SHARING_DB, candidate)) {
       await env.SHARING_DB.prepare('DELETE FROM drive_cleanup_candidates WHERE id = ?')
         .bind(candidate.id).run();
       continue;
@@ -182,6 +187,7 @@ async function claimCleanupCandidates(
            FROM media_assets AS a
            JOIN shares AS s ON s.id = a.share_id
           WHERE s.status IN ('draft', 'uploading', 'active')
+            AND s.owner_id = ?
             AND a.drive_file_id = ?
             AND (? = 'permission' OR a.revision_id = ?)
        )
@@ -228,6 +234,7 @@ async function claimCleanupCandidates(
       expiresAt,
       now,
       now,
+      ownerId,
       candidate.drive_file_id,
       candidate.kind,
       candidate.revision_id,
@@ -296,19 +303,50 @@ export function originRegistrationLeaseGuardSql(): string {
   )`;
 }
 
+/**
+ * Whether one of the candidate owner's own live shares still needs the file.
+ * Scoped to that owner on purpose: a share belonging to anyone else must never
+ * keep this owner's reader permission or revision pin alive, or that share
+ * would outlive the owner's revoke.
+ */
 async function hasLiveReference(db: D1Database, candidate: CleanupCandidateRow): Promise<boolean> {
   const revisionClause = candidate.kind === 'revision' ? 'AND a.revision_id = ?' : '';
   const bindings = candidate.kind === 'revision'
-    ? [candidate.drive_file_id, candidate.revision_id]
-    : [candidate.drive_file_id];
+    ? [candidate.owner_id, candidate.drive_file_id, candidate.revision_id]
+    : [candidate.owner_id, candidate.drive_file_id];
   const row = await db.prepare(
     `SELECT 1 AS present
        FROM media_assets AS a
        JOIN shares AS s ON s.id = a.share_id
       WHERE s.status IN ('draft', 'uploading', 'active')
+        AND s.owner_id = ?
         AND a.drive_file_id = ?
         ${revisionClause}
       LIMIT 1`,
   ).bind(...bindings).first<{ present: number }>();
   return row != null;
+}
+
+async function isForeignFile(db: D1Database, candidate: CleanupCandidateRow): Promise<boolean> {
+  const row = await db.prepare(
+    'SELECT owner_id FROM drive_file_owners WHERE drive_file_id = ?',
+  ).bind(candidate.drive_file_id).first<{ owner_id: string }>();
+  return row != null && row.owner_id !== candidate.owner_id;
+}
+
+/**
+ * Forgets file bindings nothing refers to any more. A binding outlives its
+ * shares for the retention period and for as long as any cleanup is still
+ * pending, because until the owner's extension removes the reader permission
+ * the service account can still read the file.
+ */
+export async function pruneDriveFileOwners(env: Env, olderThan: number): Promise<number> {
+  const result = await env.SHARING_DB.prepare(
+    `DELETE FROM drive_file_owners
+      WHERE updated_at < ?
+        AND NOT EXISTS (SELECT 1 FROM media_assets AS a WHERE a.drive_file_id = drive_file_owners.drive_file_id)
+        AND NOT EXISTS (SELECT 1 FROM drive_cleanup_candidates AS c WHERE c.drive_file_id = drive_file_owners.drive_file_id)
+        AND NOT EXISTS (SELECT 1 FROM drive_cleanup_leases AS l WHERE l.drive_file_id = drive_file_owners.drive_file_id)`,
+  ).bind(olderThan).run();
+  return Number(result.meta.changes ?? 0);
 }

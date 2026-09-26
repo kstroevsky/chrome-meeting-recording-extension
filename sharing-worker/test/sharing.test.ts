@@ -748,6 +748,102 @@ describe('sharing worker vertical slice', () => {
     expect(await response.json()).toEqual({ code: 'OWNER_IDENTITY_INVALID' });
   });
 
+  it('refuses to register another owner\'s Drive revision into a share, even with its exact locator', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+    expect((await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' })).status).toBe(200);
+
+    expect((await putManifestAs('owner-b-token', 'share-owner-b')).status).toBe(201);
+    const { permissionId: _permissionId, ...exactLocator } = driveOriginBody();
+    const stolen = await registerOriginAs('owner-b-token', 'share-owner-b', exactLocator);
+    expect(stolen.status).toBe(409);
+    // Indistinguishable from a file the reader cannot see.
+    expect(await stolen.json()).toEqual({ code: 'DRIVE_ORIGIN_UNREADABLE' });
+    const finalize = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-b/finalize', { method: 'POST' });
+    expect(finalize.status).toBe(409);
+
+    // The rightful owner's revoke still yields its cleanup.
+    expect((await ownerFetch('/api/shares/share-owner-id/revoke', { method: 'POST' })).status).toBe(204);
+    expect((await claimCleanup('share-owner-id', 'revoke')).claims).toEqual([
+      expect.objectContaining({ kind: 'permission', fileId: 'drive-file-1', permissionId: 'permission-1' }),
+    ]);
+  });
+
+  it('lets the same owner register the same Drive file into a second share', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+    expect((await putManifestFor('share-owner-id-2')).status).toBe(201);
+    expect((await registerOriginFor('share-owner-id-2')).status).toBe(201);
+    const binding = await env.SHARING_DB.prepare(
+      'SELECT owner_id FROM drive_file_owners WHERE drive_file_id = ?',
+    ).bind('drive-file-1').first<{ owner_id: string }>();
+    expect(binding?.owner_id).toBe('google:subject-owner-a');
+  });
+
+  it('does not let another owner\'s pre-existing share keep a revoked owner\'s Drive file readable', async () => {
+    // A cross-owner registration made before files were bound to one owner.
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+    expect((await ownerFetch('/api/shares/share-owner-id/finalize', { method: 'POST' })).status).toBe(200);
+    expect((await putManifestAs('owner-b-token', 'share-owner-b')).status).toBe(201);
+    await injectLegacyAsset('share-owner-b');
+
+    expect((await ownerFetch('/api/shares/share-owner-id/revoke', { method: 'POST' })).status).toBe(204);
+    const cleanup = await claimCleanup('share-owner-id', 'revoke');
+    expect(cleanup.claims).toEqual([
+      expect.objectContaining({ kind: 'permission', fileId: 'drive-file-1', permissionId: 'permission-1' }),
+    ]);
+    await completeCleanup(cleanup.claims[0]);
+
+    // Owner B's own cleanup never reaches a file B does not own.
+    expect((await ownerFetchAs('owner-b-token', '/api/shares/share-owner-b/revoke', { method: 'POST' })).status).toBe(204);
+    const foreign = await ownerFetchAs('owner-b-token', '/api/shares/share-owner-b/origin-cleanup/claim', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'revoke' }),
+    });
+    expect(await foreign.json()).toEqual({ claims: [], pending: false });
+  });
+
+  it('keeps a Drive file bound while cleanup is pending and forgets it once nothing refers to it', async () => {
+    expect((await putManifest()).status).toBe(201);
+    expect((await registerOrigin()).status).toBe(201);
+    expect((await ownerFetch('/api/shares/share-owner-id', { method: 'DELETE' })).status).toBe(204);
+
+    const now = 2_000_000_000_000;
+    const bindings = async () => (await env.SHARING_DB.prepare(
+      'SELECT COUNT(*) AS count FROM drive_file_owners',
+    ).first<{ count: number }>())?.count;
+    await cleanupExpiredShares(env, now);
+    expect(await bindings()).toBe(1);
+
+    await drainPendingCleanup();
+    await cleanupExpiredShares(env, now);
+    expect(await bindings()).toBe(0);
+  });
+
+  it('backfills Drive file owners from existing registrations, first publisher first', async () => {
+    // Inserted in the opposite order to their publication times, so only the
+    // backfill's ordering can pick the right owner.
+    expect((await putManifest()).status).toBe(201);
+    await injectLegacyAsset('share-owner-id');
+    expect((await putManifestAs('owner-b-token', 'share-owner-b')).status).toBe(201);
+    await injectLegacyAsset('share-owner-b');
+    await env.SHARING_DB.prepare('UPDATE media_assets SET created_at = 1 WHERE share_id = ?').bind('share-owner-b').run();
+    await env.SHARING_DB.prepare('UPDATE media_assets SET created_at = 2 WHERE share_id = ?').bind('share-owner-id').run();
+    await env.SHARING_DB.prepare('DELETE FROM drive_file_owners').run();
+
+    const migration = (env as Env & { TEST_D1_MIGRATIONS: D1Migration[] }).TEST_D1_MIGRATIONS
+      .find((candidate) => candidate.name.startsWith('0007_'))!;
+    const backfill = migration.queries.find((query) => query.includes('INSERT OR IGNORE INTO drive_file_owners'))!;
+    await env.SHARING_DB.prepare(backfill).run();
+
+    const binding = await env.SHARING_DB.prepare(
+      'SELECT owner_id FROM drive_file_owners WHERE drive_file_id = ?',
+    ).bind('drive-file-1').first<{ owner_id: string }>();
+    expect(binding?.owner_id).toBe('google:subject-owner-b');
+  });
+
   it('isolates shares and Drive-origin registration by authenticated owner identity', async () => {
     expect((await putManifest()).status).toBe(201);
     const ownedShare = await env.SHARING_DB.prepare(
@@ -791,6 +887,47 @@ describe('sharing worker vertical slice', () => {
     expect((await registerOrigin()).status).toBe(201);
   });
 });
+
+async function putManifestAs(identityToken: string, shareId: string): Promise<Response> {
+  const body = structuredClone(manifest);
+  body.id = shareId;
+  return ownerFetchAs(identityToken, `/api/shares/${shareId}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+async function registerOriginAs(identityToken: string, shareId: string, origin: object): Promise<Response> {
+  return ownerFetchAs(
+    identityToken,
+    `/api/shares/${shareId}/recordings/public-recording-id/tracks/tab-track/origin`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(origin),
+    },
+  );
+}
+
+/** Writes a media asset the way an unbound registration once could. */
+async function injectLegacyAsset(shareId: string): Promise<void> {
+  const now = Date.now();
+  await env.SHARING_DB.batch([
+    env.SHARING_DB.prepare(
+      `INSERT INTO media_assets
+         (id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
+          md5_checksum, permission_id, created_at, updated_at)
+       VALUES (?, ?, 'public-recording-id', 'tab-track', 'drive-file-1', 'revision-1', 6, 'video/webm',
+               NULL, NULL, ?, ?)`,
+    ).bind(`legacy-${shareId}`, shareId, now, now),
+    env.SHARING_DB.prepare(
+      `UPDATE share_tracks SET media_asset_id = ?, bytes = 6, status = 'complete'
+        WHERE share_id = ? AND recording_id = 'public-recording-id' AND track_id = 'tab-track'`,
+    ).bind(`legacy-${shareId}`, shareId),
+    env.SHARING_DB.prepare(`UPDATE shares SET status = 'active' WHERE id = ?`).bind(shareId),
+  ]);
+}
 
 async function putManifest(): Promise<Response> {
   return putManifestFor('share-owner-id');

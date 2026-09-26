@@ -155,6 +155,15 @@ async function putDriveOrigin(
   }
   if (share.status === 'active') return json({ code: 'SHARE_ALREADY_ACTIVE' }, 409);
 
+  // The service account reads every owner's published files, so a successful
+  // read below proves nothing about ownership. A file already bound to another
+  // owner answers exactly like an unreadable one: whether someone else has
+  // published a given file is not this caller's to learn.
+  const binding = await env.SHARING_DB.prepare(
+    'SELECT owner_id FROM drive_file_owners WHERE drive_file_id = ?',
+  ).bind(body.fileId).first<{ owner_id: string }>();
+  if (binding && binding.owner_id !== ownerId) return json({ code: 'DRIVE_ORIGIN_UNREADABLE' }, 409);
+
   let revision;
   try {
     revision = await getDriveRevisionMetadata(env, body.fileId, body.revisionId);
@@ -175,12 +184,22 @@ async function putDriveOrigin(
   const assetId = crypto.randomUUID();
   const now = Date.now();
   const results = await env.SHARING_DB.batch([
+    // First publisher binds the file; a later registration by the same owner
+    // only refreshes it. The asset insert below re-checks the binding, so two
+    // owners racing past the read above cannot both succeed.
+    env.SHARING_DB.prepare(
+      `INSERT INTO drive_file_owners (drive_file_id, owner_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(drive_file_id) DO UPDATE SET updated_at = excluded.updated_at
+        WHERE drive_file_owners.owner_id = excluded.owner_id`,
+    ).bind(body.fileId, ownerId, now, now),
     env.SHARING_DB.prepare(
       `INSERT INTO media_assets
          (id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
           md5_checksum, permission_id, created_at, updated_at)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE ${originRegistrationLeaseGuardSql()}`,
+        WHERE ${originRegistrationLeaseGuardSql()}
+          AND EXISTS (SELECT 1 FROM drive_file_owners WHERE drive_file_id = ? AND owner_id = ?)`,
     ).bind(
       assetId,
       shareId,
@@ -197,6 +216,8 @@ async function putDriveOrigin(
       now,
       body.fileId,
       body.revisionId,
+      body.fileId,
+      ownerId,
     ),
     env.SHARING_DB.prepare(
       `UPDATE share_tracks
@@ -212,8 +233,13 @@ async function putDriveOrigin(
           AND EXISTS (SELECT 1 FROM media_assets WHERE id = ?)`,
     ).bind(now, shareId, assetId),
   ]);
-  if (!results[0]?.meta.changes) {
-    return json({ code: 'DRIVE_ORIGIN_CLEANUP_IN_PROGRESS' }, 409);
+  if (!results[1]?.meta.changes) {
+    const bound = await env.SHARING_DB.prepare(
+      'SELECT owner_id FROM drive_file_owners WHERE drive_file_id = ?',
+    ).bind(body.fileId).first<{ owner_id: string }>();
+    return bound?.owner_id === ownerId
+      ? json({ code: 'DRIVE_ORIGIN_CLEANUP_IN_PROGRESS' }, 409)
+      : json({ code: 'DRIVE_ORIGIN_UNREADABLE' }, 409);
   }
   return new Response(null, { status: 201 });
 }
