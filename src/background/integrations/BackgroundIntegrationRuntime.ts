@@ -9,6 +9,9 @@ import { IntegrationCoordinator } from '../../integrations/IntegrationCoordinato
 import { IntegrationDispatcher } from '../../integrations/IntegrationDispatcher';
 import { IntegrationDeliveryRepository } from '../../integrations/IntegrationDeliveryRepository';
 import { IntegrationDestinationRepository } from '../../integrations/IntegrationDestinationRepository';
+import { IntegrationEventPlanner } from '../../integrations/IntegrationEventPlanner';
+import { IntegrationReadinessScheduler } from '../../integrations/IntegrationReadinessScheduler';
+import { IntegrationRoutingRepository } from '../../integrations/IntegrationRoutingRepository';
 import { IntegrationSecretRepository } from '../../integrations/IntegrationSecretRepository';
 import { IntegrationStreamRepository } from '../../integrations/IntegrationStreamRepository';
 import { IntegrationUnitOfWork } from '../../integrations/IntegrationUnitOfWork';
@@ -33,17 +36,22 @@ export class BackgroundIntegrationRuntime {
   private readonly previewService: IntegrationPreviewService;
   private readonly coordinator: IntegrationCoordinator;
   private readonly dispatcher: IntegrationDispatcher;
-  private readonly scheduler: IntegrationScheduler;
+  private readonly deliveryScheduler: IntegrationScheduler;
+  private readonly readinessScheduler: IntegrationReadinessScheduler;
+  private readonly planner: IntegrationEventPlanner;
+  private readonly routing: IntegrationRoutingRepository;
 
   constructor(private readonly readers: CanonicalRecordingReaders, factory?: IDBFactory) {
     this.previewService = new IntegrationPreviewService(readers);
     const destinations = new IntegrationDestinationRepository(factory);
     const secrets = new IntegrationSecretRepository(factory);
     const streams = new IntegrationStreamRepository(factory);
+    const routing = new IntegrationRoutingRepository(factory);
     const deliveries = new IntegrationDeliveryRepository(factory);
     const unitOfWork = new IntegrationUnitOfWork(factory);
     const transport = new WebhookTransport();
-    let scheduler!: IntegrationScheduler;
+    this.routing = routing;
+    let deliveryScheduler!: IntegrationScheduler;
     this.dispatcher = new IntegrationDispatcher({
       destinations,
       secrets,
@@ -54,9 +62,9 @@ export class BackgroundIntegrationRuntime {
       transport,
       containsHostPermission,
       eventTypePrefix: integrationEventTypePrefix(),
-      onStateChanged: () => scheduler.stateChanged(),
+      onStateChanged: () => deliveryScheduler.stateChanged(),
     });
-    scheduler = new IntegrationScheduler({
+    deliveryScheduler = new IntegrationScheduler({
       deliveries,
       dispatcher: this.dispatcher,
       createAlarm,
@@ -64,15 +72,31 @@ export class BackgroundIntegrationRuntime {
       clearAlarm,
       warn: (...args) => console.warn('[integrations]', ...args),
     });
-    this.scheduler = scheduler;
+    this.deliveryScheduler = deliveryScheduler;
+    this.planner = new IntegrationEventPlanner({
+      destinations,
+      routing,
+      streams,
+      unitOfWork,
+      snapshots: this.previewService,
+      isRecordingFinalized: async (recordingId) => (await readers.getContext(recordingId))?.endedAt != null,
+      eventTypePrefix: integrationEventTypePrefix(),
+    });
+    this.readinessScheduler = new IntegrationReadinessScheduler({
+      streams,
+      consider: (destinationId, recordingId) => this.considerStream(destinationId, recordingId),
+      createAlarm,
+      getAlarm,
+      clearAlarm,
+      warn: (...args) => console.warn('[integrations]', ...args),
+    });
     this.coordinator = new IntegrationCoordinator({
       destinations,
       secrets,
-      streams,
       deliveries,
       unitOfWork,
+      planner: this.planner,
       dispatcher: this.dispatcher,
-      snapshots: this.previewService,
       transport,
       containsHostPermission,
       removeHostPermission,
@@ -111,8 +135,10 @@ export class BackgroundIntegrationRuntime {
     return this.coordinator.testDestination(destinationId);
   }
 
-  deleteDestination(destinationId: string) {
-    return this.coordinator.deleteDestination(destinationId);
+  async deleteDestination(destinationId: string) {
+    const result = await this.coordinator.deleteDestination(destinationId);
+    await this.readinessScheduler.stateChanged();
+    return result;
   }
 
   sendRecording(destinationId: string, recordingId: string) {
@@ -127,11 +153,34 @@ export class BackgroundIntegrationRuntime {
     return this.dispatcher.retry(deliveryId);
   }
 
-  reconcile() {
-    return this.scheduler.reconcile();
+  async consider(recordingId: string): Promise<void> {
+    const intent = await this.routing.get(recordingId);
+    if (!intent) return;
+    const results = await Promise.allSettled(
+      intent.destinations.map(({ destinationId }) => this.considerStream(destinationId, recordingId)),
+    );
+    for (const result of results) {
+      if (result.status === 'rejected') console.warn('[integrations] recording consideration failed:', result.reason);
+    }
+  }
+
+  async reconcile(): Promise<void> {
+    const intents = await this.routing.list();
+    for (const intent of intents) await this.consider(intent.recordingId);
+    await this.readinessScheduler.reconcile();
+    await this.deliveryScheduler.reconcile();
   }
 
   handleAlarm(alarm: { name: string }): void {
-    this.scheduler.handleAlarm(alarm);
+    this.deliveryScheduler.handleAlarm(alarm);
+    this.readinessScheduler.handleAlarm(alarm);
+  }
+
+  private async considerStream(destinationId: string, recordingId: string): Promise<void> {
+    const result = await this.planner.consider(destinationId, recordingId);
+    await this.readinessScheduler.stateChanged();
+    if (result.kind === 'planned') {
+      await this.dispatcher.dispatch(result.delivery.id, result.body);
+    }
   }
 }

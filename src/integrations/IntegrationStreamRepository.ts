@@ -18,6 +18,14 @@ export class IntegrationStreamRepository extends IntegrationRepositorySupport {
     await this.writeRow(INTEGRATION_STREAMS_STORE, normalized, 'Could not write integration stream');
   }
 
+  list(): Promise<IntegrationStream[]> {
+    return this.readAllRows(
+      INTEGRATION_STREAMS_STORE,
+      normalizeIntegrationStream,
+      'Could not list integration streams',
+    );
+  }
+
   remove(destinationId: string, recordingId: string): Promise<void> {
     return this.deleteRow(
       INTEGRATION_STREAMS_STORE,

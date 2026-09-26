@@ -21,6 +21,14 @@ export class IntegrationRoutingRepository extends IntegrationRepositorySupport {
     await this.writeRow(INTEGRATION_ROUTING_INTENTS_STORE, normalized, 'Could not write integration routing intent');
   }
 
+  list(): Promise<RecordingIntegrationIntent[]> {
+    return this.readAllRows(
+      INTEGRATION_ROUTING_INTENTS_STORE,
+      normalizeRecordingIntegrationIntent,
+      'Could not list integration routing intents',
+    );
+  }
+
   remove(recordingId: string): Promise<void> {
     return this.deleteRow(INTEGRATION_ROUTING_INTENTS_STORE, recordingId, 'Could not delete integration routing intent');
   }

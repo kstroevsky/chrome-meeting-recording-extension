@@ -4,6 +4,8 @@ import { IntegrationCoordinator } from '../IntegrationCoordinator';
 import { IntegrationDispatcher } from '../IntegrationDispatcher';
 import { IntegrationDeliveryRepository } from '../IntegrationDeliveryRepository';
 import { IntegrationDestinationRepository } from '../IntegrationDestinationRepository';
+import { IntegrationEventPlanner } from '../IntegrationEventPlanner';
+import { IntegrationRoutingRepository } from '../IntegrationRoutingRepository';
 import { IntegrationSecretRepository } from '../IntegrationSecretRepository';
 import { IntegrationStreamRepository } from '../IntegrationStreamRepository';
 import { IntegrationUnitOfWork } from '../IntegrationUnitOfWork';
@@ -23,26 +25,42 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
   const destinations = new IntegrationDestinationRepository(factory);
   const secrets = new IntegrationSecretRepository(factory);
   const streams = new IntegrationStreamRepository(factory);
+  const routing = new IntegrationRoutingRepository(factory);
   const deliveries = new IntegrationDeliveryRepository(factory);
   const unitOfWork = new IntegrationUnitOfWork(factory);
   const bodies: string[] = [];
   const snapshots = {
+    evaluateReadiness: jest.fn(async () => ({ complete: true, pending: [] as [] })),
     build: jest.fn(async (
       _recordingId: string,
       _policy: typeof POLICY,
       envelope: any,
       _currentSpeakerAliases?: readonly { speakerHash: string; ordinal: number }[],
     ) => {
+      const readiness = { complete: true, release: 'complete' as const, pending: [] };
       const body = options.payloadBytes
         ? 'x'.repeat(options.payloadBytes)
-        : JSON.stringify({ id: envelope.eventId, revision: envelope.revision, type: envelope.eventKind });
+        : JSON.stringify({
+            id: envelope.eventId,
+            type: envelope.eventKind,
+            data: {
+              revision: envelope.revision,
+              readiness,
+              recording: {
+                id: envelope.externalRecordingId,
+                title: 'Recording',
+                startedAt: '2026-09-26T10:00:00.000Z',
+                source: { kind: 'tab' },
+              },
+            },
+          });
       bodies.push(body);
       return {
         body,
         totalBytes: new TextEncoder().encode(body).byteLength,
         transcriptBytes: 0,
         otherBytes: new TextEncoder().encode(body).byteLength,
-        readiness: { complete: true, release: 'complete' as const, pending: [] },
+        readiness,
       };
     }),
   };
@@ -73,14 +91,23 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     now: clock,
     random: () => 0.5,
   });
+  const planner = new IntegrationEventPlanner({
+    destinations,
+    routing,
+    streams,
+    unitOfWork,
+    snapshots,
+    isRecordingFinalized: async () => true,
+    eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+    now: clock,
+  });
   const coordinator = new IntegrationCoordinator({
     destinations,
     secrets,
-    streams,
     deliveries,
     unitOfWork,
+    planner,
     dispatcher,
-    snapshots,
     transport,
     containsHostPermission,
     removeHostPermission,
@@ -217,13 +244,26 @@ describe('IntegrationCoordinator', () => {
     });
     const speakerAliases = [{ speakerHash: 'a'.repeat(64), ordinal: 1 }];
     ctx.snapshots.build.mockImplementationOnce(async (_recordingId, _policy, envelope) => {
-      const body = JSON.stringify({ id: envelope.eventId, revision: envelope.revision });
+      const readiness = { complete: true, release: 'complete' as const, pending: [] };
+      const body = JSON.stringify({
+        id: envelope.eventId,
+        data: {
+          revision: envelope.revision,
+          readiness,
+          recording: {
+            id: envelope.externalRecordingId,
+            title: 'Recording',
+            startedAt: '2026-09-26T10:00:00.000Z',
+            source: { kind: 'tab' },
+          },
+        },
+      });
       return {
         body,
         totalBytes: new TextEncoder().encode(body).byteLength,
         transcriptBytes: 0,
         otherBytes: new TextEncoder().encode(body).byteLength,
-        readiness: { complete: true, release: 'complete' as const, pending: [] },
+        readiness,
         speakerAliases,
       };
     });
