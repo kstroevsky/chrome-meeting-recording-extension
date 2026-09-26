@@ -111,6 +111,10 @@ beforeEach(async () => {
         : identityToken === 'wrong-audience-token'
           ? 'subject-wrong-audience'
         : null;
+    if (identityToken === 'google-rejected-token') {
+      // Google's real answer for an invalid, expired, or revoked access token.
+      return Response.json({ error: 'invalid_token', error_description: 'Invalid Value' }, { status: 400 });
+    }
     if (!subject) return new Response('{}', { status: 401 });
     return new Response(JSON.stringify({
       sub: subject,
@@ -620,6 +624,32 @@ describe('sharing worker vertical slice', () => {
     expect(driveMediaRequests).toBe(0);
   });
 
+  it('serves an empty track as an empty 200 without asking Drive', async () => {
+    const { cookie } = await createActiveViewer();
+    await env.SHARING_DB.prepare(
+      "UPDATE share_tracks SET bytes = 0 WHERE share_id = 'share-owner-id'",
+    ).run();
+    const media = (method: string, range?: string) => worker.fetch(new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { method, headers: { cookie, ...(range ? { range } : {}) } },
+    ), env);
+
+    const get = await media('GET');
+    expect(get.status).toBe(200);
+    expect(get.headers.get('content-length')).toBe('0');
+    expect((await get.arrayBuffer()).byteLength).toBe(0);
+
+    const head = await media('HEAD');
+    expect(head.status).toBe(200);
+    expect(head.headers.get('content-length')).toBe('0');
+
+    const ranged = await media('GET', 'bytes=0-');
+    expect(ranged.status).toBe(416);
+    expect(ranged.headers.get('content-range')).toBe('bytes */0');
+
+    expect(driveMediaRequests).toBe(0);
+  });
+
   it('deletes publication metadata and exact cache objects without deleting Drive media', async () => {
     await putManifest();
     await registerOrigin();
@@ -793,6 +823,15 @@ describe('sharing worker vertical slice', () => {
       headers: { authorization: 'Bearer wrong', origin: 'chrome-extension://test-extension' },
     }), env);
     expect(badToken.status).toBe(401);
+  });
+
+  it('reports a token Google rejects as invalid (401), so the extension refreshes it', async () => {
+    const response = await worker.fetch(new Request(`${origin}/api/auth/session`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer google-rejected-token', origin: extensionOrigin },
+    }), env);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: 'OWNER_IDENTITY_INVALID' });
   });
 
   it('rejects Google access tokens issued for another OAuth client', async () => {

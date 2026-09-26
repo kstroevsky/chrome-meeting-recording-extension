@@ -136,6 +136,12 @@ async function serveMedia(
   if (requested === 'invalid') {
     return new Response(null, { status: 416, headers: { 'content-range': `bytes */${track.bytes}` } });
   }
+  // An empty track has no byte to range over. Any Range header was already
+  // answered 416 above; without one it is simply an empty 200, and Drive has
+  // nothing to be asked for.
+  if (track.bytes === 0) {
+    return new Response(null, { status: 200, headers: mediaHeaders(track.mime_type, 0, 0, -1, false) });
+  }
   const served = boundedMediaRange(requested, track.bytes);
   const partial = requested != null || served.start !== 0 || served.end !== track.bytes - 1;
   const headers = mediaHeaders(track.mime_type, track.bytes, served.start, served.end, partial);
