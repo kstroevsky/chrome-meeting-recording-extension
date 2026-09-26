@@ -52,6 +52,24 @@ function respond(handlers: Record<string, unknown[]>) {
 describe('RecordingsController', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it('sends a confirmed file deletion straight through: the dialog already asked', async () => {
+    const nativeConfirm = jest.spyOn(window, 'confirm');
+    const view = makeView();
+    const controller = new RecordingsController(view);
+    respond({
+      LIST_RECORDING_HISTORY: [{ ok: true, entries: [entry('a', 2)], total: 1 }],
+      REMOVE_RECORDING_HISTORY: [{ ok: true, removed: true, filesDeleted: 1, fileErrors: ['Drive file x.webm: not found in Google Drive'] }],
+    });
+    await controller.init();
+
+    await controller.remove('a', true);
+    expect(send).toHaveBeenCalledWith({ type: 'REMOVE_RECORDING_HISTORY', id: 'a', deleteFiles: true });
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    expect((view.render as jest.Mock)).toHaveBeenLastCalledWith([], false, 0);
+    expect(view.showError).toHaveBeenLastCalledWith('Removed, but 1 file could not be deleted — Drive file x.webm: not found in Google Drive');
+    nativeConfirm.mockRestore();
+  });
+
   it('removes without a second, native confirmation and counts the library down', async () => {
     const nativeConfirm = jest.spyOn(window, 'confirm');
     const view = makeView();
