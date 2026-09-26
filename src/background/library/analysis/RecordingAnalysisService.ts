@@ -10,6 +10,7 @@
  * conditions that produced it, and this is the layer that compares them.
  */
 
+import type { AnalysisJob, AnalysisJobStatus } from '../../../shared/analysis/job';
 import { isStale, type AnalysisProvenance } from '../../../shared/analysis/provenance';
 import {
   summarize,
@@ -19,6 +20,7 @@ import {
   type StoredAnalysis,
 } from '../../../shared/analysis/storedAnalysis';
 import type { RecordingAnalysisRepositoryPort } from './RecordingAnalysisRepository';
+import type { RecordingAnalysisOutcome } from './RecordingAnalysisOutcome';
 
 /** Why a recording has no usable analysis, or that it has one. */
 export type AnalysisState =
@@ -27,6 +29,14 @@ export type AnalysisState =
   | { status: 'none' }
   /** Analysed under conditions that no longer apply; recompute to replace it. */
   | { status: 'stale' };
+
+/** Library-owned state for consumers that must distinguish waiting from terminal unavailability. */
+export type AnalysisExportState =
+  | { status: 'none' }
+  | { status: 'analyzing'; error?: string }
+  | { status: 'completed'; result: StoredAnalysis }
+  | { status: 'failed' | 'canceled' | 'unsupported'; error?: string }
+  | { status: 'stale'; error: string };
 
 export class RecordingAnalysisService {
   constructor(
@@ -57,6 +67,77 @@ export class RecordingAnalysisService {
   }
 
   /**
+   * Durable readiness seam for integrations and future automation.
+   *
+   * A current result wins over job bookkeeping. Otherwise active work remains
+   * pending, terminal job outcomes remain terminal after their offscreen rows
+   * are acknowledged, and a stale result is explicitly terminal-unavailable
+   * until somebody starts a recomputation.
+   */
+  async exportState(recordingId: string): Promise<AnalysisExportState> {
+    const { analysis, outcome } = await this.repository.getSnapshot(recordingId);
+    if (analysis && !isStale(analysis.provenance, this.currentProvenance())) {
+      return { status: 'completed', result: analysis };
+    }
+
+    if (outcome?.status === 'analyzing') {
+      return { status: 'analyzing', ...(outcome.error ? { error: outcome.error } : {}) };
+    }
+    if (outcome && (outcome.status === 'failed' || outcome.status === 'canceled' || outcome.status === 'unsupported')) {
+      return { status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) };
+    }
+    if (analysis) {
+      return {
+        status: 'stale',
+        error: 'Stored analysis is stale and must be recomputed before it can be exported.',
+      };
+    }
+    if (outcome?.status === 'completed') {
+      return {
+        status: 'failed',
+        error: 'Analysis completed, but its stored result is unavailable.',
+      };
+    }
+    return { status: 'none' };
+  }
+
+  /** Persists a job state before its offscreen outbox row may be acknowledged. */
+  async recordJobOutcome(
+    job: AnalysisJob,
+    status: AnalysisJobStatus = job.status,
+    error: string | undefined = job.error,
+    now: number = Date.now(),
+  ): Promise<void> {
+    const outcome: RecordingAnalysisOutcome = {
+      status,
+      jobId: job.id,
+      startedAt: job.startedAt,
+      // Receipt order is the control-plane ordering we can trust. `finishedAt`
+      // can precede a previously received running update after reconnect/replay.
+      updatedAt: now,
+      ...(error ? { error } : {}),
+    };
+    await this.repository.putOutcome(job.historyId, outcome);
+  }
+
+  /** Persists a terminal attempt that ended before the data plane created a job. */
+  async recordTerminalOutcome(
+    recordingId: string,
+    status: Extract<AnalysisJobStatus, 'failed' | 'canceled' | 'unsupported'>,
+    error: string | undefined,
+    startedAt: number = Date.now(),
+    updatedAt: number = Date.now(),
+  ): Promise<void> {
+    const outcome: RecordingAnalysisOutcome = {
+      status,
+      startedAt,
+      updatedAt,
+      ...(error ? { error } : {}),
+    };
+    await this.repository.putOutcome(recordingId, outcome);
+  }
+
+  /**
    * The conditions a run starting now would use. Captured at **enqueue** and
    * carried with the job, so what is stored describes the run that actually
    * produced those vectors.
@@ -83,9 +164,16 @@ export class RecordingAnalysisService {
     result: Omit<StoredAnalysis, 'provenance' | 'completedAt'>,
     provenance: AnalysisProvenance,
     now: number = Date.now(),
+    job?: Pick<AnalysisJob, 'id' | 'startedAt'>,
   ): Promise<StoredAnalysis> {
     const analysis: StoredAnalysis = { ...result, provenance, completedAt: now };
-    await this.repository.put(recordingId, analysis);
+    const outcome: RecordingAnalysisOutcome = {
+      status: 'completed',
+      ...(job ? { jobId: job.id } : {}),
+      startedAt: job?.startedAt ?? now,
+      updatedAt: now,
+    };
+    await this.repository.putCompleted(recordingId, analysis, outcome);
     return analysis;
   }
 
@@ -113,6 +201,6 @@ export class RecordingAnalysisService {
 
   /** Drops a recording's analysis — a discarded run, a deleted entry, or a recompute. */
   async removeAll(recordingId: string): Promise<void> {
-    await this.repository.remove(recordingId);
+    await this.repository.removeAll(recordingId);
   }
 }

@@ -7,6 +7,7 @@ import { toStatusView, type RecordingInputDevice, type RecordingInterruption } f
 import type { CommandResult, NotationResult } from '../../shared/protocol';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
 import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
@@ -31,6 +32,7 @@ export type RecordingControllerDeps = {
   offscreen: OffscreenManager;
   session: RecordingSession;
   telemetry?: TelemetryRuntime;
+  recordingContexts?: RecordingContextService;
   notations?: RecordingNotationService;
   transcripts?: RecordingTranscriptService;
   transcriptCapture?: RecordingTranscriptCapture;
@@ -58,6 +60,7 @@ export class RecordingController {
       L: deps.L,
       offscreen: deps.offscreen,
       session: deps.session,
+      recordingContexts: deps.recordingContexts,
       telemetry: deps.telemetry,
       result,
     });

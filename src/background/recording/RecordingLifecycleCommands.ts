@@ -4,12 +4,14 @@ import { isStoppablePhase, type RecordingInterruption } from '../../shared/recor
 import type { TelemetrySnapshot } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
 import type { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import type { RecordingSession } from './session/RecordingSession';
 import type { RecordingSidecars } from './RecordingSidecars';
 import { DiscardDerivedDataCleanup } from './DiscardDerivedDataCleanup';
+import { finishRecordingContext } from './RecordingContextFinalizer';
 
 type ResultFactory = {
   ok: () => CommandResult;
@@ -18,13 +20,13 @@ type ResultFactory = {
 
 export class RecordingLifecycleCommands {
   private readonly discardData: DiscardDerivedDataCleanup;
-
   constructor(
     private readonly deps: {
       L: { log: (...a: any[]) => void; warn: (...a: any[]) => void };
       offscreen: OffscreenManager;
       session: RecordingSession;
       telemetry?: TelemetryRuntime;
+      recordingContexts?: Pick<RecordingContextService, 'finish' | 'remove'>;
       notations?: RecordingNotationService;
       transcripts?: RecordingTranscriptService;
       transcriptCapture?: RecordingTranscriptCapture;
@@ -74,6 +76,12 @@ export class RecordingLifecycleCommands {
     this.deps.session.markStopping(interruption);
     await this.deps.session.flush();
     snapshot = this.deps.session.getSnapshot();
+    await finishRecordingContext(
+      this.deps.recordingContexts,
+      historyId,
+      snapshot,
+      this.deps.L.warn,
+    );
     this.deps.L.log('Stopping recording:', reason);
     return this.finishKeptStop(
       historyId,

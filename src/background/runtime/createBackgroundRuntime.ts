@@ -1,9 +1,7 @@
-import { listLibraryFiles, removeByKey } from '../../offscreen/storage/opfsLayout';
+import { listLibraryFiles } from '../../offscreen/storage/opfsLayout';
 import { reloadRuntime } from '../../platform/chrome/runtime';
-import { getSessionStorageValues, setSessionStorageValues } from '../../platform/chrome/storage';
 import { makeLogger } from '../../shared/logger';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
-import { fetchDriveTokenWithFallback } from '../drive/driveAuth';
 import { DriveLibraryCoordinator } from '../drive/DriveLibraryCoordinator';
 import { createLibraryRuntime } from '../library/createLibraryRuntime';
 import { LocalDeliveryOrchestrator } from '../delivery/LocalDeliveryOrchestrator';
@@ -12,8 +10,6 @@ import { createChromeCpuSampler } from '../observability/perf/CpuSampler';
 import { PerfDebugStore } from '../observability/perf/PerfDebugStore';
 import { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import { OffscreenManager } from '../offscreen/OffscreenManager';
-import { DrivePlaybackAuthLeaseManager } from '../playback/DrivePlaybackAuthLeaseManager';
-import { PlaybackLeaseManager, type PlaybackLeaseState } from '../playback/PlaybackLeaseManager';
 import { RecordingController } from '../recording/RecordingController';
 import { RecordingSession } from '../recording/session/RecordingSession';
 import { UnsavedRecordingRecovery } from '../recording/UnsavedRecordingRecovery';
@@ -30,8 +26,9 @@ import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
+import { BackgroundIntegrationRuntime } from '../integrations/BackgroundIntegrationRuntime';
+import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
 
-const PLAYBACK_LEASE_STORAGE_KEY = 'playbackLeases';
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
   const logger = makeLogger('background');
@@ -49,33 +46,21 @@ export function createBackgroundRuntime() {
     reload: reloadRuntime,
     logger,
   });
-  const playbackLeases = new PlaybackLeaseManager({
-    read: async () => (
-      await getSessionStorageValues(PLAYBACK_LEASE_STORAGE_KEY)
-    )?.[PLAYBACK_LEASE_STORAGE_KEY] as PlaybackLeaseState | undefined,
-    write: async (state) => {
-      await setSessionStorageValues({ [PLAYBACK_LEASE_STORAGE_KEY]: state });
-    },
-    deleteRetained: async (keys) => {
-      const root = await navigator.storage.getDirectory();
-      for (const key of keys) await removeByKey(root, key);
-    },
-    warn: logger.warn,
-  });
-  const driveAuthLease = new DrivePlaybackAuthLeaseManager({
-    getToken: async (options) => {
-      const result = await fetchDriveTokenWithFallback({ refresh: options?.refresh === true });
-      if (!result.ok) throw new Error(result.error);
-      return result.token;
-    },
-    warn: logger.warn,
-  });
+  const { playbackLeases, driveAuthLease } = createPlaybackSupportRuntime(logger);
 
   const library = createLibraryRuntime({
     offscreen,
     playbackLeases,
     logger,
     onAnalysisSettled: () => criticalWork.sync(),
+  });
+  const integrations = new BackgroundIntegrationRuntime({
+    listHistory: () => library.history.list(),
+    getHistory: (recordingId) => library.historyRepository.get(recordingId),
+    getContext: (recordingId) => library.recordingContexts.get(recordingId),
+    listNotations: (recordingId) => library.notations.list(recordingId),
+    getTranscript: (recordingId) => library.transcripts.get(recordingId),
+    getAnalysisState: (recordingId) => library.analyses.exportState(recordingId),
   });
   wireAnalysisRuntime({
     offscreen,
@@ -135,6 +120,7 @@ export function createBackgroundRuntime() {
     offscreen,
     session,
     telemetry,
+    recordingContexts: library.recordingContexts,
     notations: library.notations,
     transcripts: library.transcripts,
     transcriptCapture,
@@ -168,6 +154,7 @@ export function createBackgroundRuntime() {
     driveAuthLease,
     telemetry,
     sharing,
+    integrations,
     e2eAnalysisWork: () => offscreen.refreshAnalysisWork(),
     waitUntilReady: () => readiness.wait(),
   });
@@ -204,6 +191,7 @@ export function createBackgroundRuntime() {
         logger,
       });
       await sharing.resumeIfPending().catch((error) => logger.warn('Pending sharing recovery deferred:', error));
+      await integrations.reconcile().catch((error) => logger.warn('Integration delivery recovery deferred:', error));
     } catch (error) {
       if (!sessionHydrated) readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);
@@ -219,7 +207,10 @@ export function createBackgroundRuntime() {
     messageListener,
     bootstrap,
     waitUntilReady: () => readiness.wait(),
-    handleAlarm: (alarm: chrome.alarms.Alarm) => localDelivery.handleAlarm(alarm),
+    handleAlarm: (alarm: chrome.alarms.Alarm) => {
+      localDelivery.handleAlarm(alarm);
+      integrations.handleAlarm(alarm);
+    },
     handleConnect: (port: chrome.runtime.Port) => {
       if (port.name === 'offscreen') offscreen.attachPort(port);
     },

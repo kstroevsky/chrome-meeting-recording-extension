@@ -37,6 +37,12 @@ export class AnalysisResultCommitter {
     const result = fromWireAnalysis(wire);
     if (!result) {
       L.warn('Discarding an incoherent analysis result', job.historyId, job.id);
+      await this.deps.analyses.recordJobOutcome(
+        job,
+        'failed',
+        'The completed analysis result was invalid and could not be stored.',
+        this.deps.now?.(),
+      );
       this.deps.settle(job);
       return;
     }
@@ -46,7 +52,7 @@ export class AnalysisResultCommitter {
       ?? this.deps.analyses.provenanceForNewRun();
 
     try {
-      await this.deps.analyses.save(job.historyId, result, provenance, this.deps.now?.());
+      await this.deps.analyses.save(job.historyId, result, provenance, this.deps.now?.(), job);
     } catch (error) {
       if (!isQuotaExceeded(error)) {
         L.warn('Could not store an analysis result', job.historyId, error);
@@ -56,6 +62,12 @@ export class AnalysisResultCommitter {
         `Discarding the analysis for ${job.historyId}: storage is full. `
         + 'The recording is unaffected and can be analysed again after freeing space.',
       );
+      await this.deps.analyses.recordJobOutcome(
+        job,
+        'failed',
+        'Analysis completed, but its result could not be stored because storage is full.',
+        this.deps.now?.(),
+      ).catch(() => {});
       this.deps.settle(job);
       return;
     }

@@ -12,6 +12,7 @@ import {
 import { toStatusView } from '../../shared/recording';
 import { isRecordingHistoryMessage } from '../../shared/recordingHistory';
 import { handleLibraryMessage } from './libraryMessages';
+import { handleIntegrationMessage } from './integrationMessages';
 import { handlePlaybackMessage } from './playbackMessages';
 import { handleRecordingMessage } from './recordingMessages';
 import { handleShareIdentityTokenMessage } from './sharingMessages';
@@ -24,7 +25,7 @@ import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 const includes = (types: readonly string[], type: string): boolean => types.includes(type);
 
-type PopupRouteOwner = 'drive-token' | 'share-identity-token' | 'library' | 'playback' | 'recording' | 'system';
+type PopupRouteOwner = 'drive-token' | 'share-identity-token' | 'integrations' | 'library' | 'playback' | 'recording' | 'system';
 
 /** Compile-time ownership table: every recognized popup message must have one background route. */
 export const POPUP_ROUTE_OWNERS = {
@@ -76,6 +77,15 @@ export const POPUP_ROUTE_OWNERS = {
   REMOVE_RECORDING_NOTATION: 'library',
   GET_RECORDING_TRANSCRIPT: 'library',
   LIST_RECORDING_TOPIC_SUMMARIES: 'library',
+  PREVIEW_INTEGRATION_PAYLOAD: 'integrations',
+  LIST_INTEGRATION_RECORDINGS: 'integrations',
+  LIST_INTEGRATIONS: 'integrations',
+  CREATE_INTEGRATION: 'integrations',
+  DELETE_INTEGRATION: 'integrations',
+  TEST_INTEGRATION: 'integrations',
+  SEND_RECORDING_TO_INTEGRATION: 'integrations',
+  LIST_INTEGRATION_DELIVERIES: 'integrations',
+  RETRY_INTEGRATION_DELIVERY: 'integrations',
 } satisfies Record<PopupToBg['type'], PopupRouteOwner>;
 
 const SESSION_FAILURE_MESSAGE_TYPES = [
@@ -121,7 +131,9 @@ async function routePopupMessage(
 ): Promise<void> {
   validatePopupMessage(msg);
   const owner = POPUP_ROUTE_OWNERS[msg.type];
-  const handled = owner === 'library'
+  const handled = owner === 'integrations'
+    ? await handleIntegrationMessage(msg, sendResponse, deps)
+    : owner === 'library'
     ? await handleLibraryMessage(msg, sendResponse, deps)
     : owner === 'playback'
       ? await handlePlaybackMessage(msg, sender, sendResponse, deps)

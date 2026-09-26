@@ -2,8 +2,8 @@
  * @file background/library/RecordingLibraryDatabase.ts
  *
  * Owns the `recording-history` IndexedDB connection and schema for every
- * repository that reads it. Four repositories now share this database — history
- * entries, notations, transcripts and analyses — and a database has exactly one version, so the
+ * repository that reads it. Five repositories now share this database — history
+ * entries, recording contexts, notations, transcripts and analyses — and a database has exactly one version, so the
  * version number and the `onupgradeneeded` that satisfies it must live in one
  * place. A repository that declared its own version would downgrade-block the
  * other on open.
@@ -21,13 +21,17 @@ const DATABASE_NAME = 'recording-history';
  * v3 → v4 adds the `notations` store (ADR-0005).
  * v4 → v5 adds the `transcripts` store (ADR-0007).
  * v5 → v6 adds the `analyses` store (ADR-0007).
+ * v6 → v7 adds the `recordingContexts` store (ADR-0008).
+ * v7 → v8 adds durable `analysisOutcomes` (ADR-0008 readiness semantics).
  */
-const DATABASE_VERSION = 6;
+const DATABASE_VERSION = 8;
 
 export const RECORDINGS_STORE = 'recordings';
+export const RECORDING_CONTEXTS_STORE = 'recordingContexts';
 export const NOTATIONS_STORE = 'notations';
 export const TRANSCRIPTS_STORE = 'transcripts';
 export const ANALYSES_STORE = 'analyses';
+export const ANALYSIS_OUTCOMES_STORE = 'analysisOutcomes';
 export const CREATED_AT_ID_INDEX = 'createdAtId';
 export const ACTIVE_CREATED_AT_ID_INDEX = 'activeCreatedAtId';
 
@@ -107,6 +111,12 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
     migrateVisibilityKeys(recordings);
   }
 
+  // Recording occurrence/provider context is available before the history row is
+  // finalized, so it is a separate aggregate keyed by the same recording id.
+  if (!database.objectStoreNames.contains(RECORDING_CONTEXTS_STORE)) {
+    database.createObjectStore(RECORDING_CONTEXTS_STORE, { keyPath: 'recordingId' });
+  }
+
   // Notations are keyed by the recording's history id and hold the whole list,
   // so a mark can be written before the history row it belongs to exists.
   if (!database.objectStoreNames.contains(NOTATIONS_STORE)) {
@@ -124,6 +134,13 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
   // recognizable rather than silently current.
   if (!database.objectStoreNames.contains(ANALYSES_STORE)) {
     database.createObjectStore(ANALYSES_STORE, { keyPath: 'recordingId' });
+  }
+
+  // Small durable job outcome kept separately from the analysis graph. This is
+  // what lets consumers distinguish active work from terminal failure/cancel/
+  // unsupported states after the offscreen outbox entry has been acknowledged.
+  if (!database.objectStoreNames.contains(ANALYSIS_OUTCOMES_STORE)) {
+    database.createObjectStore(ANALYSIS_OUTCOMES_STORE, { keyPath: 'recordingId' });
   }
 }
 

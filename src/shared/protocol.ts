@@ -23,13 +23,24 @@ import type {
 import {
   BG_TO_OFFSCREEN_RUNTIME_CONNECT,
   CONTENT_TO_BG_MESSAGE_TYPES,
+  INTEGRATION_MESSAGE_TYPES,
   OFFSCREEN_TO_BG_MESSAGE_TYPES,
   PERF_EVENT_MESSAGE_TYPE,
   POPUP_TO_BG_MESSAGE_TYPES,
   POPUP_TO_CONTENT_MESSAGE_TYPES,
 } from './protocolMessageTypes';
-import { getMessageType, hasKnownMessageType } from './typeGuards';
+import { getMessageType, hasKnownMessageType, isRecord } from './typeGuards';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from './recordingHistory';
+import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../integrations/contracts';
+import type { IntegrationPayloadPreview } from '../integrations/preview';
+import {
+  normalizeCreateIntegrationDestinationInput,
+  type CreateIntegrationDestinationInput,
+  type CreatedIntegrationDestination,
+  type IntegrationConnectionTestResult,
+} from '../integrations/management';
+import { normalizeIntegrationDataPolicy } from '../integrations/policy';
+import type { IntegrationDelivery, IntegrationDestination } from '../integrations/persistence';
 
 export type RpcId = string;
 
@@ -207,6 +218,26 @@ export type PopupUpdateRecordingNotation = {
   text?: string;
 };
 export type PopupRemoveRecordingNotation = { type: 'REMOVE_RECORDING_NOTATION'; recordingId: string; id: string };
+export type PopupPreviewIntegrationPayload = {
+  type: 'PREVIEW_INTEGRATION_PAYLOAD';
+  recordingId: string;
+  policy: IntegrationDataPolicy;
+};
+export type PopupListIntegrationRecordings = { type: 'LIST_INTEGRATION_RECORDINGS' };
+export type PopupListIntegrations = { type: 'LIST_INTEGRATIONS' };
+export type PopupCreateIntegration = { type: 'CREATE_INTEGRATION'; input: CreateIntegrationDestinationInput };
+export type PopupDeleteIntegration = { type: 'DELETE_INTEGRATION'; destinationId: string };
+export type PopupTestIntegration = { type: 'TEST_INTEGRATION'; destinationId: string };
+export type PopupSendRecordingToIntegration = {
+  type: 'SEND_RECORDING_TO_INTEGRATION';
+  destinationId: string;
+  recordingId: string;
+};
+export type PopupListIntegrationDeliveries = { type: 'LIST_INTEGRATION_DELIVERIES' };
+export type PopupRetryIntegrationDelivery = {
+  type: 'RETRY_INTEGRATION_DELIVERY';
+  deliveryId: string;
+};
 
 export type PopupToBg =
   | PopupStartRecording
@@ -256,7 +287,16 @@ export type PopupToBg =
   | PopupAddRecordingNotation
   | PopupUpdateRecordingNotation
   | PopupRemoveRecordingNotation
-  | PopupGetRecordingTranscript;
+  | PopupGetRecordingTranscript
+  | PopupPreviewIntegrationPayload
+  | PopupListIntegrationRecordings
+  | PopupListIntegrations
+  | PopupCreateIntegration
+  | PopupDeleteIntegration
+  | PopupTestIntegration
+  | PopupSendRecordingToIntegration
+  | PopupListIntegrationDeliveries
+  | PopupRetryIntegrationDelivery;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -318,9 +358,39 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupUpdateRecordingNotation ? NotationListResult :
   T extends PopupRemoveRecordingNotation ? NotationListResult :
   T extends PopupGetRecordingTranscript ? TranscriptResult :
+  T extends PopupPreviewIntegrationPayload
+    ? { ok: true; preview: IntegrationPayloadPreview } | { ok: false; error: string } :
+  T extends PopupListIntegrationRecordings
+    ? { ok: true; recordings: IntegrationRecordingOption[] } | { ok: false; error: string } :
+  T extends PopupListIntegrations
+    ? { ok: true; destinations: IntegrationDestination[] } | { ok: false; error: string } :
+  T extends PopupCreateIntegration
+    ? { ok: true; created: CreatedIntegrationDestination } | { ok: false; error: string } :
+  T extends PopupDeleteIntegration
+    ? {
+        ok: true;
+        removed: true;
+        hostPermissionRemoved: boolean;
+        hostPermissionCleanup: 'removed' | 'retained-in-use' | 'failed';
+      } | { ok: false; error: string } :
+  T extends PopupTestIntegration
+    ? { ok: true; result: IntegrationConnectionTestResult } | { ok: false; error: string } :
+  T extends PopupSendRecordingToIntegration
+    ? { ok: true; delivery: IntegrationDelivery }
+      | {
+          ok: false;
+          error: string;
+          payloadTooLarge?: { totalBytes: number; transcriptBytes: number; maxBytes: number };
+        } :
+  T extends PopupListIntegrationDeliveries
+    ? { ok: true; deliveries: IntegrationDelivery[] } | { ok: false; error: string } :
+  T extends PopupRetryIntegrationDelivery
+    ? { ok: true; delivery: IntegrationDelivery } | { ok: false; error: string } :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
+/** Reads provider identity without forcing transcript materialization. */
+export type BgGetMeetingProvider = { type: 'GET_MEETING_PROVIDER' };
 export type PopupResetTranscript = { type: 'RESET_TRANSCRIPT' };
 /** Asks the content script whether the Meet captions region is currently present. */
 export type PopupGetCaptionState = { type: 'GET_CAPTION_STATE' };
@@ -343,6 +413,7 @@ export type BgGetTranscriptUtterances = { type: 'GET_TRANSCRIPT_UTTERANCES' };
 
 export type PopupToContent =
   | PopupGetTranscript
+  | BgGetMeetingProvider
   | PopupResetTranscript
   | PopupGetCaptionState
   | BgSetTranscriptCapture
@@ -350,6 +421,7 @@ export type PopupToContent =
 
 export type PopupToContentResponse<T extends PopupToContent> =
   T extends PopupGetTranscript ? { transcript: string; provider: MeetingProviderInfo } :
+  T extends BgGetMeetingProvider ? { provider: MeetingProviderInfo } :
   T extends PopupResetTranscript ? { ok: true } :
   T extends PopupGetCaptionState ? { captionsActive: boolean } :
   T extends BgSetTranscriptCapture ? { ok: true } :
@@ -595,7 +667,39 @@ export type E2EDriveFetchMessage = {
 
 /** Checks whether a runtime message belongs to the popup -> background command set. */
 export function isPopupToBgMessage(value: unknown): value is PopupToBg {
-  return hasKnownMessageType(value, POPUP_TO_BG_MESSAGE_TYPES);
+  if (!hasKnownMessageType(value, POPUP_TO_BG_MESSAGE_TYPES)) return false;
+  const type = getMessageType(value);
+  if (!type || !INTEGRATION_MESSAGE_TYPES.includes(type as (typeof INTEGRATION_MESSAGE_TYPES)[number])) {
+    return true;
+  }
+  return isIntegrationPopupMessage(value);
+}
+
+function isIntegrationPopupMessage(value: unknown): boolean {
+  if (!isRecord(value) || Array.isArray(value)) return false;
+  switch (value.type) {
+    case 'PREVIEW_INTEGRATION_PAYLOAD':
+      return nonEmptyText(value.recordingId) && normalizeIntegrationDataPolicy(value.policy)?.metadata === true;
+    case 'LIST_INTEGRATION_RECORDINGS':
+    case 'LIST_INTEGRATIONS':
+    case 'LIST_INTEGRATION_DELIVERIES':
+      return true;
+    case 'CREATE_INTEGRATION':
+      return normalizeCreateIntegrationDestinationInput(value.input) != null;
+    case 'DELETE_INTEGRATION':
+    case 'TEST_INTEGRATION':
+      return nonEmptyText(value.destinationId);
+    case 'SEND_RECORDING_TO_INTEGRATION':
+      return nonEmptyText(value.destinationId) && nonEmptyText(value.recordingId);
+    case 'RETRY_INTEGRATION_DELIVERY':
+      return nonEmptyText(value.deliveryId);
+    default:
+      return false;
+  }
+}
+
+function nonEmptyText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 /** Checks whether a tab message belongs to the popup -> content command set. */

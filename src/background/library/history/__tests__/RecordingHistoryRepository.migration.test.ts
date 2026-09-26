@@ -63,10 +63,12 @@ describe('recording-history v2 migration', () => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    expect(database.version).toBe(6);
+    expect(database.version).toBe(8);
+    expect(database.objectStoreNames.contains('recordingContexts')).toBe(true);
     expect(database.objectStoreNames.contains('notations')).toBe(true);
     expect(database.objectStoreNames.contains('transcripts')).toBe(true);
     expect(database.objectStoreNames.contains('analyses')).toBe(true);
+    expect(database.objectStoreNames.contains('analysisOutcomes')).toBe(true);
     const transaction = database.transaction('recordings', 'readonly');
     const store = transaction.objectStore('recordings');
     expect(store.indexNames.contains('activeCreatedAtId')).toBe(true);

@@ -2,6 +2,7 @@ import { RecordingAnalysisService } from '../RecordingAnalysisService';
 import type { RecordingAnalysisRepositoryPort } from '../RecordingAnalysisRepository';
 import { PIPELINE_VERSION, type AnalysisProvenance } from '../../../../shared/analysis/provenance';
 import { normalizeStoredAnalysis, type StoredAnalysis } from '../../../../shared/analysis/storedAnalysis';
+import type { RecordingAnalysisOutcome } from '../RecordingAnalysisOutcome';
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
   pipelineVersion: PIPELINE_VERSION,
@@ -29,15 +30,31 @@ const result = () => ({
 
 function fakeRepository() {
   const rows = new Map<string, StoredAnalysis>();
-  const port: RecordingAnalysisRepositoryPort & { rows: Map<string, StoredAnalysis> } = {
+  const outcomes = new Map<string, RecordingAnalysisOutcome>();
+  const port: RecordingAnalysisRepositoryPort & {
+    rows: Map<string, StoredAnalysis>;
+    outcomes: Map<string, RecordingAnalysisOutcome>;
+  } = {
     rows,
+    outcomes,
     async get(id) { return rows.get(id); },
+    async getOutcome(id) { return outcomes.get(id); },
+    async getSnapshot(id) { return { analysis: rows.get(id), outcome: outcomes.get(id) }; },
     async put(id, analysis) {
       const checked = normalizeStoredAnalysis(analysis);
       if (!checked) throw new Error('Refusing to store an analysis that does not decode');
       rows.set(id, checked);
     },
+    async putOutcome(id, outcome) { outcomes.set(id, outcome); },
+    async putCompleted(id, analysis, outcome) {
+      const checked = normalizeStoredAnalysis(analysis);
+      if (!checked) throw new Error('Refusing to store an analysis that does not decode');
+      rows.set(id, checked);
+      outcomes.set(id, outcome);
+      return true;
+    },
     async remove(id) { rows.delete(id); },
+    async removeAll(id) { rows.delete(id); outcomes.delete(id); },
   };
   return port;
 }
@@ -109,6 +126,60 @@ describe('RecordingAnalysisService', () => {
     await expect(service.state('rec:1')).resolves.toEqual({ status: 'stale' });
   });
 
+  it('exposes durable terminal outcomes without treating them as pending', async () => {
+    const repository = fakeRepository();
+    const service = new RecordingAnalysisService(repository, () => provenance());
+    repository.outcomes.set('rec:1', {
+      status: 'failed',
+      jobId: 'job:1',
+      error: 'backend unavailable',
+      startedAt: 10,
+      updatedAt: 20,
+    });
+
+    await expect(service.exportState('rec:1')).resolves.toEqual({
+      status: 'failed',
+      error: 'backend unavailable',
+    });
+  });
+
+  it('persists terminal outcomes that happen before an analysis job exists', async () => {
+    const repository = fakeRepository();
+    const service = new RecordingAnalysisService(repository, () => provenance());
+
+    await service.recordTerminalOutcome(
+      'rec:1',
+      'unsupported',
+      'Analysis is unavailable because the recording has no transcript.',
+      10,
+      20,
+    );
+
+    expect(repository.outcomes.get('rec:1')).toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+      startedAt: 10,
+      updatedAt: 20,
+    });
+    await expect(service.exportState('rec:1')).resolves.toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+    });
+  });
+
+  it('reports stale analysis as terminal-unavailable for export', async () => {
+    const repository = fakeRepository();
+    let current = provenance();
+    const service = new RecordingAnalysisService(repository, () => current);
+    await service.save('rec:1', result(), provenance(), 10);
+    current = provenance({ configHash: 'new-config' });
+
+    await expect(service.exportState('rec:1')).resolves.toEqual({
+      status: 'stale',
+      error: 'Stored analysis is stale and must be recomputed before it can be exported.',
+    });
+  });
+
   it('summarizes for a list surface without carrying the vectors', async () => {
     const service = new RecordingAnalysisService(fakeRepository(), () => provenance());
     await service.save('rec:1', result(), provenance());
@@ -141,6 +212,7 @@ describe('RecordingAnalysisService', () => {
 
     await service.removeAll('rec:1');
     expect(repository.rows.has('rec:1')).toBe(false);
+    expect(repository.outcomes.has('rec:1')).toBe(false);
     await expect(service.state('rec:1')).resolves.toEqual({ status: 'none' });
   });
 

@@ -2,7 +2,6 @@ import {
   activateTab,
   getCapturedTabs,
   getMediaStreamIdForTab,
-  getTab,
   sendTabMessage,
 } from '../../platform/chrome/tabs';
 import { isE2ERealCaptureTabBuild } from '../../shared/build';
@@ -15,9 +14,11 @@ import {
 } from '../../shared/settings';
 import { createTelemetryId } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import { markCaptureStarted } from './unsavedCaptureFlag';
 import type { RecordingSession } from './session/RecordingSession';
+import { resolveRecordingTarget } from './RecordingTargetResolver';
 
 export type StartRecordingMessage = {
   type: 'START_RECORDING';
@@ -40,6 +41,7 @@ export class RecordingStartCommands {
       };
       offscreen: OffscreenManager;
       session: RecordingSession;
+      recordingContexts?: Pick<RecordingContextService, 'begin' | 'remove'>;
       telemetry?: TelemetryRuntime;
       result: ResultFactory;
     },
@@ -82,12 +84,20 @@ export class RecordingStartCommands {
       recorderSettings.tab.output.contentType = runConfig.tabContentType;
     }
 
-    const meetingSlug = await this.resolveMeetingSlug(msg.tabId);
+    const target = await resolveRecordingTarget(msg.tabId);
+    const meetingSlug = target.meetingSlug;
     const started = this.deps.session.start(runConfig, {
       targetTabId: msg.tabId,
       meetingSlug: meetingSlug || undefined,
     });
     await this.deps.session.flush();
+    if (started.historyId) {
+      await this.deps.recordingContexts?.begin(
+        started.historyId,
+        started.runningSince ?? started.updatedAt,
+        target.source,
+      ).catch((error) => this.deps.L.warn('Could not persist recording context:', error));
+    }
     this.deps.telemetry?.configureRun(
       telemetryRunId,
       runConfig,
@@ -165,12 +175,17 @@ export class RecordingStartCommands {
     }
   }
 
-  private failStart(
+  private async failStart(
     message: string,
     stage: 'runtime_ready' | 'offscreen_start' | 'offscreen_rpc',
     error: unknown,
-  ): CommandResult {
+  ): Promise<CommandResult> {
     this.deps.telemetry?.incident({ kind: 'recording_start_failed', stage, error });
+    const historyId = this.deps.session.getSnapshot().historyId;
+    if (historyId) {
+      await this.deps.recordingContexts?.remove(historyId)
+        .catch((cause) => this.deps.L.warn('Could not remove failed recording context:', cause));
+    }
     this.deps.session.fail(message);
     return this.deps.result.fail(message);
   }
@@ -206,28 +221,4 @@ export class RecordingStartCommands {
     }
   }
 
-  private async resolveMeetingSlug(tabId: number): Promise<string> {
-    try {
-      const tab = await getTab(tabId);
-      if (!tab?.url) return '';
-      const url = new URL(tab.url);
-      if (url.hostname === 'meet.google.com') {
-        const code = url.pathname.split('/').filter(Boolean).pop() ?? '';
-        return code ? `meet-${code}` : '';
-      }
-      const titleSlug = tab.title ? sanitizeAsSlug(tab.title) : '';
-      return titleSlug || sanitizeAsSlug(`${url.hostname}${url.pathname}`);
-    } catch {
-      return '';
-    }
-  }
-}
-
-function sanitizeAsSlug(text: string, maxLength = 48): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, maxLength)
-    .replace(/-+$/, '');
 }
