@@ -1,5 +1,6 @@
 import type { PlaybackTrack } from '../../shared/playback';
 import {
+  acceptSharingReaderEmail,
   DriveOriginPreparer,
   type DriveOriginApi,
 } from '../DriveOriginPreparer';
@@ -88,7 +89,69 @@ function driveMetadata(fileId: string) {
   };
 }
 
+describe('acceptSharingReaderEmail', () => {
+  it('accepts a Google service account, normalized', () => {
+    expect(acceptSharingReaderEmail(' Reader@Project-1.iam.gserviceaccount.com '))
+      .toBe('reader@project-1.iam.gserviceaccount.com');
+    // Domain-scoped projects put the domain in the service-account host.
+    expect(acceptSharingReaderEmail('reader@relay.example.com.iam.gserviceaccount.com'))
+      .toBe('reader@relay.example.com.iam.gserviceaccount.com');
+  });
+
+  it.each([
+    'someone@gmail.com',
+    'reader@project.iam.gserviceaccount.com.attacker.example',
+    'reader@iam.gserviceaccount.com',
+    '',
+    undefined,
+  ])('refuses %p as a Drive reader', (email) => {
+    expect(() => acceptSharingReaderEmail(email)).toThrow('invalid Drive reader identity');
+  });
+
+  it('refuses a service account other than the pinned one', () => {
+    expect(() => acceptSharingReaderEmail(
+      'other@attacker-project.iam.gserviceaccount.com',
+      'reader@example.iam.gserviceaccount.com',
+    )).toThrow('does not trust');
+    expect(acceptSharingReaderEmail(
+      'READER@example.iam.gserviceaccount.com',
+      'reader@example.iam.gserviceaccount.com',
+    )).toBe('reader@example.iam.gserviceaccount.com');
+  });
+});
+
 describe('DriveOriginPreparer', () => {
+  it('never grants Drive access to a reader the build does not trust', async () => {
+    const service = api({
+      getDriveReaderIdentity: jest.fn(async () => ({ email: 'collector@attacker-project.iam.gserviceaccount.com' })),
+    });
+    const requests: string[] = [];
+    const fetcher = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      requests.push(`${method} ${url}`);
+      if (url.includes('/drive/v3/files/drive-file-1?fields=')) return json(driveMetadata('drive-file-1'));
+      if (url.includes('/revisions/revision-1?fields=') && method === 'PATCH') {
+        return json({ id: 'revision-1', keepForever: true });
+      }
+      if (url.includes('/permissions?fields=permissions') && method === 'GET') return json({ permissions: [] });
+      return json({ id: 'permission-1' }, 201);
+    });
+    const preparer = new DriveOriginPreparer({
+      store: new ShareUploadStore(memoryArea()),
+      source: jest.fn(),
+      api: service,
+      getDriveToken: async () => 'owner-token',
+      fetch: fetcher as typeof fetch,
+      expectedReaderEmail: 'reader@example.iam.gserviceaccount.com',
+    });
+
+    await expect(preparer.prepare('share-1', [plan({ kind: 'drive', fileId: 'drive-file-1' })]))
+      .rejects.toThrow('does not trust');
+    expect(requests.filter((request) => request.startsWith('POST') && request.includes('/permissions'))).toEqual([]);
+    expect(service.registerDriveOrigin).not.toHaveBeenCalled();
+  });
+
   it('reuses Drive-backed media without reading source bytes', async () => {
     const store = new ShareUploadStore(memoryArea());
     const source = jest.fn(async () => {

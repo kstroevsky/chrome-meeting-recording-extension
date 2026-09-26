@@ -21,6 +21,8 @@ const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_SECRET_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_SECRET'
 const TELEMETRY_ENDPOINT_ENV_KEY = 'TELEMETRY_ENDPOINT'
 const SHARING_SERVICE_ORIGIN_ENV_KEY = 'SHARING_SERVICE_ORIGIN'
+const SHARING_READER_EMAIL_ENV_KEY = 'GOOGLE_DRIVE_READER_EMAIL'
+const SHARING_READER_EMAIL_PATTERN = /^[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9.-]*\.iam\.gserviceaccount\.com$/
 const OAUTH_CLIENT_ID_PLACEHOLDER = '__GOOGLE_OAUTH_CLIENT_ID__'
 const STATIC_DIR = 'static'
 const PUBLIC_DIR = 'public'
@@ -163,6 +165,20 @@ module.exports = (_env, argv) => {
   const sharingServiceOrigin = normalizeSharingServiceOrigin(
     process.env[SHARING_SERVICE_ORIGIN_ENV_KEY] || fileEnv[SHARING_SERVICE_ORIGIN_ENV_KEY] || ''
   )
+  // The one Google account the extension grants reader access on published
+  // Drive files. Pinned here so a compromised or misconfigured sharing Worker
+  // cannot name a different grantee; the Worker must report exactly this one.
+  const sharingReaderEmail = String(
+    process.env[SHARING_READER_EMAIL_ENV_KEY] || fileEnv[SHARING_READER_EMAIL_ENV_KEY] || ''
+  ).trim().toLowerCase()
+  if (sharingReaderEmail && !SHARING_READER_EMAIL_PATTERN.test(sharingReaderEmail)) {
+    throw new Error(`${SHARING_READER_EMAIL_ENV_KEY} must be a Google service-account email (…@<project>.iam.gserviceaccount.com)`)
+  }
+  if (sharingServiceOrigin && !sharingReaderEmail) {
+    console.warn(
+      `[build] ${SHARING_READER_EMAIL_ENV_KEY} is not set; the extension will accept any service-account reader the sharing Worker names.`
+    )
+  }
   if (!isDevBuild && !telemetryEndpoint) {
     throw new Error(`${TELEMETRY_ENDPOINT_ENV_KEY} is required for production builds`)
   }
@@ -253,6 +269,7 @@ module.exports = (_env, argv) => {
         '__WEB_OAUTH_CLIENT_SECRET__': JSON.stringify(webOauthClientSecret),
         '__TELEMETRY_ENDPOINT__': JSON.stringify(telemetryEndpoint),
         '__SHARING_SERVICE_ORIGIN__': JSON.stringify(sharingServiceOrigin),
+        '__SHARING_READER_EMAIL__': JSON.stringify(sharingReaderEmail),
         // The model this build actually packaged. Defined rather than written
         // in TypeScript so an analysis can never record provenance for a model
         // or quantization other than the one on disk beside it (ADR-0007).

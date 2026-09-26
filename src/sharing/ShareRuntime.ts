@@ -5,6 +5,7 @@
  */
 
 import type { TokenProvider } from '../offscreen/drive/request';
+import { sharingReaderEmail } from './config';
 import { DriveOriginPreparer } from './DriveOriginPreparer';
 import { SharePublicationCoordinator } from './SharePublicationCoordinator';
 import { createSharePublicationStore } from './SharePublicationStore';
@@ -54,6 +55,7 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
     api: service,
     registry: driveOriginRegistry,
     getDriveToken: auth.getDriveToken,
+    expectedReaderEmail: sharingReaderEmail(),
   });
   const cleanup = new ShareOriginCleanupCoordinator({
     api: service,

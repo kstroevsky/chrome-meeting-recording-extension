@@ -82,7 +82,29 @@ export type DriveOriginPreparerDeps = {
   concurrency?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** The reader email this build pinned; empty or absent means not pinned. */
+  expectedReaderEmail?: string;
 };
+
+const SERVICE_ACCOUNT_EMAIL = /^[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9.-]*\.iam\.gserviceaccount\.com$/;
+
+/**
+ * The extension shares the user's Drive file with whatever account the sharing
+ * Worker names, so that name is checked rather than trusted: it must be a
+ * Google service account, and exactly the pinned one when the build pins it.
+ * A compromised Worker must not be able to redirect published recordings to an
+ * arbitrary account.
+ */
+export function acceptSharingReaderEmail(reported: unknown, expected = ''): string {
+  const email = typeof reported === 'string' ? reported.trim().toLowerCase() : '';
+  if (!SERVICE_ACCOUNT_EMAIL.test(email)) {
+    throw new Error('Sharing service returned an invalid Drive reader identity');
+  }
+  if (expected && email !== expected.trim().toLowerCase()) {
+    throw new Error('Sharing service named a Drive reader this build does not trust');
+  }
+  return email;
+}
 
 type DriveFileMetadata = {
   id: string;
@@ -581,10 +603,15 @@ export class DriveOriginPreparer {
   }
 
   private async readerEmail(): Promise<string> {
-    this.readerEmailPromise ??= this.deps.api.getDriveReaderIdentity().then(({ email }) => {
-      if (!email || !email.includes('@')) throw new Error('Sharing service returned an invalid Drive reader identity');
-      return email;
-    });
+    if (!this.readerEmailPromise) {
+      const pending = this.deps.api.getDriveReaderIdentity()
+        .then(({ email }) => acceptSharingReaderEmail(email, this.deps.expectedReaderEmail));
+      // A refused identity is not cached: the next publication asks again.
+      pending.catch(() => {
+        if (this.readerEmailPromise === pending) this.readerEmailPromise = null;
+      });
+      this.readerEmailPromise = pending;
+    }
     return await this.readerEmailPromise;
   }
 
