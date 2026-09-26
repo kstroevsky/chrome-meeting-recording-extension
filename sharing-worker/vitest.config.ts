@@ -1,9 +1,16 @@
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin';
+import { generateKeyPairSync } from 'node:crypto';
 import { defineConfig } from 'vitest/config';
 
 process.env.CAPABILITY_KEY ??= 'test-capability-key-with-enough-entropy';
 process.env.CAPABILITY_KEYS_JSON ??= JSON.stringify({ v1: 'test-capability-v1-with-enough-entropy' });
 process.env.SESSION_KEY ??= 'test-session-key-with-enough-entropy';
+const testDrivePrivateKey = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+}).privateKey;
+process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY ??= testDrivePrivateKey;
 
 const migrations = await readD1Migrations('./migrations');
 
@@ -17,6 +24,8 @@ export default defineConfig({
           VIEWER_SESSION_TTL_SECONDS: '3600',
           OWNER_SESSION_TTL_SECONDS: '3600',
           GOOGLE_OAUTH_CLIENT_ID: 'test-client.apps.googleusercontent.com',
+          GOOGLE_DRIVE_READER_EMAIL: 'recording-share-reader@test-project.iam.gserviceaccount.com',
+          GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY: testDrivePrivateKey,
           CAPABILITY_KEY_ID: 'v1',
           CAPABILITY_KEY: 'test-capability-key-with-enough-entropy',
           CAPABILITY_KEYS_JSON: JSON.stringify({ v1: 'test-capability-v1-with-enough-entropy' }),

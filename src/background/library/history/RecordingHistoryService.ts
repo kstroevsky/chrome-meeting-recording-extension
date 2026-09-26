@@ -49,6 +49,11 @@ export class RecordingHistoryService {
     return this.repository.listPage({ cursor });
   }
 
+  async get(id: string): Promise<RecordingHistoryEntry | undefined> {
+    const entry = await this.repository.get(id);
+    return entry?.deletedAt ? undefined : entry;
+  }
+
   async list(): Promise<RecordingHistoryEntry[]> {
     return (await this.listPage()).entries;
   }

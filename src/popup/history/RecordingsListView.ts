@@ -121,7 +121,8 @@ export class RecordingsListView {
     try {
       const response = await sendToBackground({ type: 'LIST_RECORDING_HISTORY' });
       if (!response.ok) return;
-      count.textContent = String(response.entries.length);
+      // The first page holds 50; the library may hold more.
+      count.textContent = String(response.total ?? response.entries.length);
       count.hidden = false;
     } catch {
       count.hidden = true;

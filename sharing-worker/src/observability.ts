@@ -26,11 +26,10 @@ export function observeSharingResponse(url: URL, response: Response): void {
 
 function publicationOperation(pathname: string): string | null {
   if (/^\/api\/shares\/[^/]+\/finalize$/.test(pathname)) return 'finalize';
-  if (/^\/api\/shares\/[^/]+\/recordings\/[^/]+\/tracks\/[^/]+\/uploads$/.test(pathname)) {
-    return 'upload_begin';
+  if (/^\/api\/shares\/[^/]+\/recordings\/[^/]+\/tracks\/[^/]+\/origin$/.test(pathname)) {
+    return 'drive_origin';
   }
-  if (/^\/api\/share-uploads\/[^/]+\/chunks\/\d+$/.test(pathname)) return 'upload_chunk';
-  if (/^\/api\/share-uploads\/[^/]+\/complete$/.test(pathname)) return 'upload_complete';
+  if (/^\/api\/shares\/[^/]+\/revoke$/.test(pathname)) return 'revoke';
   if (/^\/api\/shares\/[^/]+$/.test(pathname)) return 'share_manifest';
   return null;
 }

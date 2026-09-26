@@ -1,17 +1,28 @@
 import { capabilityUrl, deriveCapability, shareUrl } from '../auth/capability';
 import { activeCapabilityKey } from '../auth/capabilityKeys';
 import { base64UrlDecode, base64UrlEncode, sha256Base64Url } from '../auth/crypto';
+import { driveReaderEmail, getDriveRevisionMetadata } from '../drive/DriveClient';
 import { json, readJson } from '../http/responses';
 import { ensureNewShareQuota } from '../security/limits';
 import { SHARING_CONTRACT_LIMITS } from '../../../src/shared/sharingContract';
 import { canonicalizeManifest, canonicalizeStoredManifest } from './manifestSchema';
 import { deletePublishedShare } from './deleteShare';
 import {
+  claimDriveCleanup,
+  claimPendingDriveCleanup,
+  completeDriveCleanupClaim,
+  enqueueDriveCleanupCandidates,
+  originRegistrationLeaseGuardSql,
+  type DriveCleanupAction,
+} from './driveCleanup';
+import {
   getOwnedShare,
   getShare,
   mediaObjectKey,
   type ShareRow,
   type ShareSummaryRow,
+  type TrackRow,
+  type MediaAssetRow,
 } from './ShareRepository';
 
 const DEFAULT_SHARE_LIST_LIMIT = 50;
@@ -27,6 +38,10 @@ export async function routeShareOwnerRequest(
   url: URL,
   ownerId: string,
 ): Promise<Response | null> {
+  if (url.pathname === '/api/sharing-reader' && request.method === 'GET') {
+    return json({ email: driveReaderEmail(env) }, 200, { 'cache-control': 'no-store' });
+  }
+
   if (url.pathname === '/api/shares' && request.method === 'GET') {
     return listShares(request, env, ownerId);
   }
@@ -44,12 +59,267 @@ export async function routeShareOwnerRequest(
     return revokeShare(decodeURIComponent(revokeMatch[1]), env, ownerId);
   }
 
+  const originsMatch = /^\/api\/shares\/([^/]+)\/origins$/.exec(url.pathname);
+  if (originsMatch && request.method === 'GET') {
+    return getDriveOrigins(decodeURIComponent(originsMatch[1]), env, ownerId);
+  }
+
+  const cleanupClaimMatch = /^\/api\/shares\/([^/]+)\/origin-cleanup\/claim$/.exec(url.pathname);
+  if (cleanupClaimMatch && request.method === 'POST') {
+    return claimDriveOriginCleanup(
+      decodeURIComponent(cleanupClaimMatch[1]),
+      request,
+      env,
+      ownerId,
+    );
+  }
+
+  if (url.pathname === '/api/origin-cleanup/claim-pending' && request.method === 'POST') {
+    return claimPendingDriveOriginCleanup(env, ownerId);
+  }
+
+  const cleanupCompleteMatch = /^\/api\/origin-cleanup\/([^/]+)\/complete$/.exec(url.pathname);
+  if (cleanupCompleteMatch && request.method === 'POST') {
+    return completeDriveOriginCleanup(
+      decodeURIComponent(cleanupCompleteMatch[1]),
+      request,
+      env,
+      ownerId,
+    );
+  }
+
+  const originMatch = /^\/api\/shares\/([^/]+)\/recordings\/([^/]+)\/tracks\/([^/]+)\/origin$/.exec(url.pathname);
+  if (originMatch && request.method === 'PUT') {
+    return putDriveOrigin(
+      decodeURIComponent(originMatch[1]),
+      decodeURIComponent(originMatch[2]),
+      decodeURIComponent(originMatch[3]),
+      request,
+      env,
+      ownerId,
+    );
+  }
+
   const finalizeMatch = /^\/api\/shares\/([^/]+)\/finalize$/.exec(url.pathname);
   if (finalizeMatch && request.method === 'POST') {
     return finalizeShare(decodeURIComponent(finalizeMatch[1]), request, env, ownerId);
   }
 
   return null;
+}
+
+type DriveOriginBody = {
+  fileId: string;
+  revisionId: string;
+  bytes: number;
+  mimeType: string;
+  md5Checksum?: string;
+  permissionId?: string;
+};
+
+async function putDriveOrigin(
+  shareId: string,
+  recordingId: string,
+  trackId: string,
+  request: Request,
+  env: Env,
+  ownerId: string,
+): Promise<Response> {
+  const share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
+  if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
+  if (share.status === 'revoked') return json({ code: 'SHARE_REVOKED' }, 410);
+
+  const body = parseDriveOriginBody(await readJson(request, 8 * 1024));
+  if (!body) return json({ code: 'INVALID_DRIVE_ORIGIN' }, 400);
+
+  const track = await env.SHARING_DB.prepare(
+    `SELECT share_id, recording_id, track_id, mime_type, bytes, object_key, media_asset_id, status
+       FROM share_tracks
+      WHERE share_id = ? AND recording_id = ? AND track_id = ?`,
+  ).bind(shareId, recordingId, trackId).first<TrackRow>();
+  if (!track) return json({ code: 'TRACK_NOT_FOUND' }, 404);
+  if (track.mime_type !== body.mimeType || (track.bytes != null && track.bytes !== body.bytes)) {
+    return json({ code: 'DRIVE_ORIGIN_TRACK_MISMATCH' }, 409);
+  }
+
+  const existing = await env.SHARING_DB.prepare(
+    `SELECT id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
+            md5_checksum, permission_id, created_at, updated_at
+       FROM media_assets
+      WHERE share_id = ? AND recording_id = ? AND track_id = ?`,
+  ).bind(shareId, recordingId, trackId).first<MediaAssetRow>();
+  if (existing) {
+    return sameDriveOrigin(existing, body)
+      ? new Response(null, { status: 200 })
+      : json({ code: 'DRIVE_ORIGIN_CONFLICT' }, 409);
+  }
+  if (share.status === 'active') return json({ code: 'SHARE_ALREADY_ACTIVE' }, 409);
+
+  let revision;
+  try {
+    revision = await getDriveRevisionMetadata(env, body.fileId, body.revisionId);
+  } catch (error) {
+    const status = errorStatus(error);
+    if (status === 403 || status === 404) {
+      return json({ code: 'DRIVE_ORIGIN_UNREADABLE' }, 409);
+    }
+    throw error;
+  }
+  if (!revision.keepForever
+    || revision.size !== body.bytes
+    || revision.mimeType !== body.mimeType
+    || (body.md5Checksum != null && revision.md5Checksum !== body.md5Checksum)) {
+    return json({ code: 'DRIVE_ORIGIN_VERIFICATION_FAILED' }, 409);
+  }
+
+  const assetId = crypto.randomUUID();
+  const now = Date.now();
+  const results = await env.SHARING_DB.batch([
+    env.SHARING_DB.prepare(
+      `INSERT INTO media_assets
+         (id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
+          md5_checksum, permission_id, created_at, updated_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE ${originRegistrationLeaseGuardSql()}`,
+    ).bind(
+      assetId,
+      shareId,
+      recordingId,
+      trackId,
+      body.fileId,
+      body.revisionId,
+      body.bytes,
+      body.mimeType,
+      body.md5Checksum ?? null,
+      body.permissionId ?? null,
+      now,
+      now,
+      now,
+      body.fileId,
+      body.revisionId,
+    ),
+    env.SHARING_DB.prepare(
+      `UPDATE share_tracks
+          SET media_asset_id = ?, bytes = ?, status = 'complete'
+        WHERE share_id = ? AND recording_id = ? AND track_id = ?
+          AND EXISTS (SELECT 1 FROM media_assets WHERE id = ?)`,
+    ).bind(assetId, body.bytes, shareId, recordingId, trackId, assetId),
+    env.SHARING_DB.prepare(
+      `UPDATE shares
+          SET status = CASE WHEN status = 'draft' THEN 'uploading' ELSE status END,
+              updated_at = ?
+        WHERE id = ?
+          AND EXISTS (SELECT 1 FROM media_assets WHERE id = ?)`,
+    ).bind(now, shareId, assetId),
+  ]);
+  if (!results[0]?.meta.changes) {
+    return json({ code: 'DRIVE_ORIGIN_CLEANUP_IN_PROGRESS' }, 409);
+  }
+  return new Response(null, { status: 201 });
+}
+
+function parseDriveOriginBody(value: unknown): DriveOriginBody | null {
+  if (!value || typeof value !== 'object') return null;
+  const body = value as Record<string, unknown>;
+  if (typeof body.fileId !== 'string' || !body.fileId || body.fileId.length > 1024
+    || typeof body.revisionId !== 'string' || !body.revisionId || body.revisionId.length > 1024
+    || !Number.isSafeInteger(body.bytes) || Number(body.bytes) < 0
+    || typeof body.mimeType !== 'string' || !body.mimeType || body.mimeType.length > 255
+    || (body.md5Checksum != null && (typeof body.md5Checksum !== 'string' || body.md5Checksum.length > 128))
+    || (body.permissionId != null && (typeof body.permissionId !== 'string' || body.permissionId.length > 1024))) {
+    return null;
+  }
+  return {
+    fileId: body.fileId,
+    revisionId: body.revisionId,
+    bytes: Number(body.bytes),
+    mimeType: body.mimeType,
+    ...(typeof body.md5Checksum === 'string' ? { md5Checksum: body.md5Checksum } : {}),
+    ...(typeof body.permissionId === 'string' ? { permissionId: body.permissionId } : {}),
+  };
+}
+
+function sameDriveOrigin(existing: MediaAssetRow, body: DriveOriginBody): boolean {
+  return existing.drive_file_id === body.fileId
+    && existing.revision_id === body.revisionId
+    && existing.bytes === body.bytes
+    && existing.mime_type === body.mimeType
+    && (existing.md5_checksum ?? undefined) === body.md5Checksum
+    && (existing.permission_id ?? undefined) === body.permissionId;
+}
+
+function errorStatus(error: unknown): number | undefined {
+  return error && typeof error === 'object' && typeof (error as { status?: unknown }).status === 'number'
+    ? (error as { status: number }).status
+    : undefined;
+}
+
+async function getDriveOrigins(shareId: string, env: Env, ownerId: string): Promise<Response> {
+  const share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
+  if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
+  const assets = await env.SHARING_DB.prepare(
+    `SELECT id, share_id, recording_id, track_id, drive_file_id, revision_id, bytes, mime_type,
+            md5_checksum, permission_id, created_at, updated_at
+       FROM media_assets
+      WHERE share_id = ?
+      ORDER BY recording_id ASC, track_id ASC`,
+  ).bind(shareId).all<MediaAssetRow>();
+  return json({
+    origins: assets.results.map((asset) => ({
+      fileId: asset.drive_file_id,
+      revisionId: asset.revision_id,
+      ...(asset.permission_id ? { permissionId: asset.permission_id } : {}),
+    })),
+  }, 200, { 'cache-control': 'no-store' });
+}
+
+async function claimDriveOriginCleanup(
+  shareId: string,
+  request: Request,
+  env: Env,
+  ownerId: string,
+): Promise<Response> {
+  const body = await readJson(request, 1024);
+  const action = parseCleanupAction(body);
+  if (!action) return json({ code: 'INVALID_DRIVE_CLEANUP_ACTION' }, 400);
+  const result = await claimDriveCleanup(env, ownerId, shareId, action);
+  return json(result, 200, { 'cache-control': 'no-store' });
+}
+
+async function claimPendingDriveOriginCleanup(env: Env, ownerId: string): Promise<Response> {
+  const result = await claimPendingDriveCleanup(env, ownerId);
+  return json(result, 200, { 'cache-control': 'no-store' });
+}
+
+async function completeDriveOriginCleanup(
+  candidateId: string,
+  request: Request,
+  env: Env,
+  ownerId: string,
+): Promise<Response> {
+  const body = await readJson(request, 2048);
+  if (!body || typeof body !== 'object') return json({ code: 'INVALID_DRIVE_CLEANUP_CLAIM' }, 400);
+  const values = body as Record<string, unknown>;
+  if (typeof values.leaseId !== 'string' || !values.leaseId
+    || typeof values.leaseToken !== 'string' || !values.leaseToken) {
+    return json({ code: 'INVALID_DRIVE_CLEANUP_CLAIM' }, 400);
+  }
+  const completed = await completeDriveCleanupClaim(
+    env,
+    ownerId,
+    candidateId,
+    values.leaseId,
+    values.leaseToken,
+  );
+  return completed
+    ? new Response(null, { status: 204 })
+    : json({ code: 'DRIVE_CLEANUP_LEASE_LOST' }, 409);
+}
+
+function parseCleanupAction(value: unknown): DriveCleanupAction | null {
+  if (!value || typeof value !== 'object') return null;
+  const action = (value as Record<string, unknown>).action;
+  return action === 'revoke' || action === 'delete' ? action : null;
 }
 
 async function putShare(shareId: string, request: Request, env: Env, ownerId: string): Promise<Response> {
@@ -222,7 +492,10 @@ async function ownerShareSummaryFromDetail(
 async function revokeShare(shareId: string, env: Env, ownerId: string): Promise<Response> {
   const share = await getOwnedShare(env.SHARING_DB, shareId, ownerId);
   if (!share) return json({ code: 'SHARE_NOT_FOUND' }, 404);
-  if (share.status === 'revoked') return new Response(null, { status: 204 });
+  if (share.status === 'revoked') {
+    await enqueueDriveCleanupCandidates(env, ownerId, shareId, 'revoke');
+    return new Response(null, { status: 204 });
+  }
 
   const now = Date.now();
   await env.SHARING_DB.batch([
@@ -234,6 +507,7 @@ async function revokeShare(shareId: string, env: Env, ownerId: string): Promise<
        WHERE share_id = ? AND status = 'uploading'`,
     ).bind(now, shareId),
   ]);
+  await enqueueDriveCleanupCandidates(env, ownerId, shareId, 'revoke');
   return new Response(null, { status: 204 });
 }
 

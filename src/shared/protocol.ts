@@ -5,6 +5,7 @@
  * extension.
  */
 
+import type { DriveSyncChoice, DriveSyncPlan, DriveSyncResult } from './driveSync';
 import type { MeetingProviderInfo } from './provider';
 import type { RecordingNotation, RecordingNotationSummary } from './notations';
 import type { RecorderRuntimeSettingsSnapshot } from './settings';
@@ -113,7 +114,8 @@ export type PopupDismissInterruption = { type: 'DISMISS_INTERRUPTION' };
 export type PopupListRecordingHistory = { type: 'LIST_RECORDING_HISTORY'; cursor?: RecordingHistoryCursor };
 export type PopupRenameRecordingHistory = { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string };
 export type PopupSetRecordingHistoryNote = { type: 'SET_RECORDING_HISTORY_NOTE'; id: string; note: string };
-export type PopupRemoveRecordingHistory = { type: 'REMOVE_RECORDING_HISTORY'; id: string };
+/** `deleteFiles` also trashes its Drive files and deletes its Downloads files, ending any share first. */
+export type PopupRemoveRecordingHistory = { type: 'REMOVE_RECORDING_HISTORY'; id: string; deleteFiles?: boolean };
 export type PopupOpenRecordingHistoryFile = { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
 /** Stamps a notation at the live recording position (ADR-0005). Targets the active run. */
@@ -124,6 +126,10 @@ export type PopupListActiveNotations = { type: 'LIST_ACTIVE_NOTATIONS' };
 export type PopupUpdateActiveNotation = { type: 'UPDATE_ACTIVE_NOTATION'; id: string; text: string };
 export type PopupRemoveActiveNotation = { type: 'REMOVE_ACTIVE_NOTATION'; id: string };
 export type PopupListRecordingNotations = { type: 'LIST_RECORDING_NOTATIONS'; recordingId: string };
+/** "Sync with Drive": a preview of what differs. Writes nothing. */
+export type PopupSyncDrivePlan = { type: 'SYNC_DRIVE_PLAN' };
+/** "Sync with Drive": do what the user chose from the preview. */
+export type PopupSyncDriveApply = { type: 'SYNC_DRIVE_APPLY'; choice: DriveSyncChoice };
 /** Files a finished recording into one of the user's destinations; null unfiles it. */
 export type PopupFileRecordingToDestination = {
   type: 'FILE_RECORDING_TO_DESTINATION';
@@ -235,6 +241,8 @@ export type PopupToBg =
   | PopupListRecordingNotations
   | PopupGetPlaybackManifest
   | PopupFileRecordingToDestination
+  | PopupSyncDrivePlan
+  | PopupSyncDriveApply
   | PopupGetStorageUsage
   | SettingsRenameDriveRootFolder
   | PopupListUnsavedRecordings
@@ -270,12 +278,12 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupDismissUploadJob ? { session: RecordingStatusView } :
   T extends PopupRetryUploadJob ? CommandResult :
   T extends PopupCancelUploadJob ? CommandResult :
-  T extends PopupListRecordingHistory ? { ok: true; entries: RecordingHistoryEntry[]; nextCursor?: RecordingHistoryCursor } | { ok: false; error: string } :
+  T extends PopupListRecordingHistory ? { ok: true; entries: RecordingHistoryEntry[]; nextCursor?: RecordingHistoryCursor; total?: number } | { ok: false; error: string } :
   T extends PopupRenameRecordingHistory ? { ok: true; entry?: RecordingHistoryEntry; session?: RecordingStatusView } | { ok: false; error: string } :
   T extends PopupSkipRecordingNaming ? CommandResult :
   T extends PopupDismissInterruption ? { session: RecordingStatusView } :
   T extends PopupSetRecordingHistoryNote ? { ok: true; entry?: RecordingHistoryEntry } | { ok: false; error: string } :
-  T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean } | { ok: false; error: string } :
+  T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean; filesDeleted?: number; fileErrors?: string[]; sharesEnded?: number } | { ok: false; error: string } :
   T extends PopupOpenRecordingHistoryFile ? { ok: true } | { ok: false; error: string } :
   T extends PopupMarkNotation ? NotationResult :
   T extends PopupEndNotation ? NotationResult :
@@ -295,6 +303,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupFileRecordingToDestination ? { ok: true } | { ok: false; error: string } :
+  T extends PopupSyncDrivePlan ? { ok: true; plan: DriveSyncPlan } | { ok: false; error: string } :
+  T extends PopupSyncDriveApply ? { ok: true; result: DriveSyncResult } | { ok: false; error: string } :
   T extends PopupGetPlaybackManifest ?
     { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :
   T extends PopupPreparePlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
@@ -580,6 +590,7 @@ export type E2EDriveFetchMessage = {
   method: string;
   headers: Record<string, string>;
   body?: string;
+  bodyBase64?: string;
 };
 
 /** Checks whether a runtime message belongs to the popup -> background command set. */

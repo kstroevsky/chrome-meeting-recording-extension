@@ -1,4 +1,5 @@
 import type { PlaybackTrack } from '../../shared/playback';
+import type { DriveMediaOrigin } from '../DriveOriginPreparer';
 import type { PublishedRecordingPlan } from '../PublishedManifestBuilder';
 import { SharePublicationCoordinator } from '../SharePublicationCoordinator';
 import {
@@ -69,6 +70,33 @@ function publication(status: SharePublication['status'], overrides: Partial<Shar
   };
 }
 
+function driveOrigin(): DriveMediaOrigin {
+  return {
+    sourceRecordingId: 'private-history',
+    recordingId: 'public-recording',
+    trackId: 'public-track',
+    fileId: 'private-drive-file',
+    revisionId: 'private-drive-revision',
+    bytes: 10,
+    mimeType: 'video/webm',
+    permissionId: 'private-reader-permission',
+    createdDriveCopy: false,
+  };
+}
+
+function originOps(overrides: Partial<{
+  prepare: (shareId: string, plans: readonly PublishedRecordingPlan[]) => Promise<DriveMediaOrigin[]>;
+  clearShare: (shareId: string) => Promise<void>;
+  cleanupPermissions: (origins: readonly DriveMediaOrigin[]) => Promise<void>;
+}> = {}) {
+  return {
+    prepare: async () => [driveOrigin()],
+    clearShare: async () => {},
+    cleanupPermissions: async () => {},
+    ...overrides,
+  };
+}
+
 describe('SharePublicationCoordinator', () => {
   it('persists the complete publication before the first request and advances durable phases', async () => {
     const store = new SharePublicationStore(memoryArea());
@@ -80,12 +108,13 @@ describe('SharePublicationCoordinator', () => {
       expect(JSON.stringify(publicManifest)).not.toContain('private-file-id');
       expect(JSON.stringify(publicManifest)).not.toContain('library/');
     });
-    const upload = jest.fn(async (shareId, plans) => {
-      calls.push('upload');
+    const prepare = jest.fn(async (shareId, plans) => {
+      calls.push('prepare');
       expect(shareId).toBe('share-control-id');
-      expect((await store.get(shareId))?.status).toBe('uploading');
+      expect((await store.get(shareId))?.status).toBe('preparing-origin');
       expect(plans[0].recording.id).toBe('public-recording');
       expect(plans[0].tracks[0].source.fileId).toBe('private-file-id');
+      return [driveOrigin()];
     });
     const finalizeShare = jest.fn(async (shareId) => {
       calls.push('finalize');
@@ -99,14 +128,14 @@ describe('SharePublicationCoordinator', () => {
     const coordinator = new SharePublicationCoordinator({
       store,
       api: { createShare, finalizeShare, revokeShare: async () => {} },
-      uploads: { upload, clearShare },
+      origins: originOps({ prepare, clearShare }),
       now: (() => { let value = 10; return () => value++; })(),
     });
 
     const input = publication('draft');
     const result = await coordinator.publishNew({ manifest: input.manifest, plans: input.plans });
 
-    expect(calls).toEqual(['create', 'upload', 'finalize', 'clear']);
+    expect(calls).toEqual(['create', 'prepare', 'finalize', 'clear']);
     expect(result).toMatchObject({
       id: 'share-control-id',
       status: 'active',
@@ -119,18 +148,18 @@ describe('SharePublicationCoordinator', () => {
     const store = new SharePublicationStore(memoryArea());
     await store.put(publication('uploading'));
     const createShare = jest.fn(async () => {});
-    const upload = jest.fn(async () => {});
+    const prepare = jest.fn(async () => [driveOrigin()]);
     const finalizeShare = jest.fn(async () => ({ shareUrl: 'https://watch.example/s/viewer-token' }));
     const coordinator = new SharePublicationCoordinator({
       store,
       api: { createShare, finalizeShare, revokeShare: async () => {} },
-      uploads: { upload, clearShare: async () => {} },
+      origins: originOps({ prepare }),
     });
 
     const [result] = await coordinator.resumePending();
 
     expect(createShare).not.toHaveBeenCalled();
-    expect(upload).toHaveBeenCalledWith('share-control-id', [expect.objectContaining({
+    expect(prepare).toHaveBeenCalledWith('share-control-id', [expect.objectContaining({
       sourceRecordingId: 'private-history',
       recording: expect.objectContaining({ id: 'public-recording' }),
       tracks: [expect.objectContaining({ published: expect.objectContaining({ id: 'public-track' }) })],
@@ -152,7 +181,7 @@ describe('SharePublicationCoordinator', () => {
     const deps = {
       store,
       api: { createShare: async () => {}, finalizeShare, revokeShare: async () => {} },
-      uploads: { upload: async () => {}, clearShare: jest.fn(async () => {}) },
+      origins: originOps(),
     };
     const first = new SharePublicationCoordinator(deps);
 
@@ -178,7 +207,7 @@ describe('SharePublicationCoordinator', () => {
         finalizeShare: async () => ({ shareUrl: 'unused' }),
         revokeShare: async () => {},
       },
-      uploads: { upload: async () => {}, clearShare },
+      origins: originOps({ clearShare }),
     });
 
     await coordinator.resumePending();
@@ -195,10 +224,9 @@ describe('SharePublicationCoordinator', () => {
         finalizeShare: async () => ({ shareUrl: 'https://watch.example/s/token' }),
         revokeShare: async () => {},
       },
-      uploads: {
-        upload: async () => {},
+      origins: originOps({
         clearShare: async () => { throw new Error('IndexedDB cleanup failed'); },
-      },
+      }),
     });
     const input = publication('draft');
 
@@ -224,10 +252,12 @@ describe('SharePublicationCoordinator', () => {
         finalizeShare: async (shareId) => ({ shareUrl: `https://watch.example/s/${shareId}-viewer` }),
         revokeShare: async () => {},
       },
-      uploads: {
-        upload: async (shareId) => { if (shareId === 'share-control-id') throw new Error('source missing'); },
-        clearShare: async () => {},
-      },
+      origins: originOps({
+        prepare: async (shareId) => {
+          if (shareId === 'share-control-id') throw new Error('source missing');
+          return [driveOrigin()];
+        },
+      }),
     });
 
     const outcomes = await coordinator.resumePending();
@@ -258,7 +288,7 @@ describe('SharePublicationCoordinator', () => {
         finalizeShare: async () => ({ shareUrl: 'unused' }),
         revokeShare,
       },
-      uploads: { upload: async () => {}, clearShare },
+      origins: originOps({ clearShare }),
     });
 
     const result = await coordinator.revoke('share-control-id');
@@ -279,7 +309,7 @@ describe('SharePublicationCoordinator', () => {
         finalizeShare: async () => ({ shareUrl: 'unused' }),
         revokeShare,
       },
-      uploads: { upload: async () => {}, clearShare: async () => {} },
+      origins: originOps(),
     });
 
     const [result] = await coordinator.resumePending();
@@ -302,7 +332,7 @@ describe('SharePublicationCoordinator', () => {
         finalizeShare: async () => ({ shareUrl: 'unused' }),
         revokeShare,
       },
-      uploads: { upload: async () => {}, clearShare: async () => {} },
+      origins: originOps(),
     };
     const coordinator = new SharePublicationCoordinator(deps);
 
@@ -331,7 +361,7 @@ describe('SharePublicationCoordinator', () => {
         finalizeShare: async () => ({ shareUrl: 'unused' }),
         revokeShare,
       },
-      uploads: { upload: async () => {}, clearShare: async () => {} },
+      origins: originOps(),
     });
 
     await expect(coordinator.revoke('share-control-id')).resolves.toEqual(existing);
