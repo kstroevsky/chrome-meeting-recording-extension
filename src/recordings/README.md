@@ -78,9 +78,9 @@ A recording's notes and transcript are delivered as WebVTT files beside the medi
 
 ## Pagination and reconciliation
 
-History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The first page also carries `total`, the library's size (counted on the active index, so tombstones never count); the page's `N RECORDINGS` and the popup's badge show it rather than the length of whatever has been paged in. The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make **Load more** scan every deleted record. `loadMore()` appends only entries not already present, so a repeated response cannot duplicate a card.
+History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The first page also carries `total`, the library's size (counted on the active index, so tombstones never count); the page's `N RECORDINGS` and the popup's badge show it rather than the length of whatever has been paged in. The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make paging scan every deleted record. There is no Load more button: the list ends in a "Loading more recordings…" marker, and an `IntersectionObserver` rooted on the scrolling list calls `loadMore()` once that marker is within 600px of view. A page too short to fill the list leaves the marker in view, so the next one follows at once. `loadMore()` ignores calls while a page is in flight, and appends only entries not already present, so a repeated response cannot duplicate a card.
 
-Rename and delete update the rendered list from their command responses rather than reloading the first page. This preserves entries already loaded through **Load more** and avoids a stale first-page refresh overwriting the user's local page state.
+Rename and delete update the rendered list from their command responses rather than reloading the first page. This preserves entries already paged in and avoids a stale first-page refresh overwriting the user's local page state.
 
 ## Files
 

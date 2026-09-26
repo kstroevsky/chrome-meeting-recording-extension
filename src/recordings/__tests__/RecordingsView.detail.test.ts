@@ -36,9 +36,8 @@ function mount() {
   const list = document.createElement('div');
   const empty = document.createElement('div');
   const error = document.createElement('div');
-  const loadMore = document.createElement('button');
-  document.body.replaceChildren(list, empty, error, loadMore);
-  const view = new RecordingsView(list, empty, error, loadMore, callbacks);
+  document.body.replaceChildren(list, empty, error);
+  const view = new RecordingsView(list, empty, error, callbacks);
   return { view, list, callbacks };
 }
 
@@ -237,9 +236,8 @@ describe('RecordingsView note editor entry (f2 → f5)', () => {
     const list = document.createElement('div');
     const empty = document.createElement('div');
     const error = document.createElement('div');
-    const loadMore = document.createElement('button');
-    document.body.replaceChildren(list, empty, error, loadMore);
-    const view = new RecordingsView(list, empty, error, loadMore, callbacks);
+      document.body.replaceChildren(list, empty, error);
+    const view = new RecordingsView(list, empty, error, callbacks);
     return { view, list, callbacks, notesChanged };
   }
 

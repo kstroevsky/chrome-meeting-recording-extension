@@ -172,7 +172,7 @@
 }
 
 * { box-sizing: border-box; }
-/* A class that sets `display` would otherwise beat the attribute (Load more was always shown). */
+/* A class that sets `display` would otherwise beat the attribute. */
 [hidden] { display: none !important; }
 /* Anything that reacts to the pointer eases into its hover. `:where` keeps this
    at zero specificity, so a rule that animates transform or size still wins. */
@@ -185,7 +185,7 @@ button { -webkit-font-smoothing: antialiased; }
 .recordings-page { width: 700px; min-height: 100vh; margin: 0 auto; border-inline: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow); }
 .recordings-header { display: flex; align-items: center; justify-content: space-between; min-height: 54px; padding: 15px 28px; border-bottom: 1px solid var(--divider); }
 .recordings-brand { display: inline-flex; align-items: center; gap: 9px; color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: -.02em; line-height: 1; }
-.recording-row:focus-visible, .detail-title:focus-visible, .icon-button:focus-visible, .bulk-button:focus-visible, .load-more:focus-visible, .table-header-button:focus-visible, .recording-search:focus-visible, .modal-button:focus-visible, .file-action:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
+.recording-row:focus-visible, .detail-title:focus-visible, .icon-button:focus-visible, .bulk-button:focus-visible, .table-header-button:focus-visible, .recording-search:focus-visible, .modal-button:focus-visible, .file-action:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
 .recordings-brand__indicator { width: 9px; height: 9px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 16%, transparent); }
 .recordings-header__nav { display: inline-flex; align-items: center; gap: 4px; }
 .recordings-header__tab { height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--faint); cursor: pointer; font: 500 9.5px/1 'IBM Plex Mono', monospace; letter-spacing: .12em; padding: 0 9px; }
@@ -307,9 +307,8 @@ button { -webkit-font-smoothing: antialiased; }
 .recording-row__remove { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; justify-self: end; border: 0; border-radius: 6px; background: transparent; color: color-mix(in srgb, var(--muted) 56%, transparent); cursor: pointer; font: 400 14px/1 'IBM Plex Mono', monospace; padding: 0; transition: var(--hover-transition); }
 .recording-row__remove:hover { background: var(--border); color: var(--accent-dark); }
 .recording-no-results { padding: 48px 0; color: var(--faint); font: 500 11px/1.5 'IBM Plex Mono', monospace; letter-spacing: .1em; text-align: center; }
+.recording-table__more { padding: 18px 0 6px; color: var(--faint); font: 500 10.5px/1.5 'IBM Plex Mono', monospace; letter-spacing: .1em; text-align: center; text-transform: uppercase; }
 
-.load-more { display: block; width: calc(100% - 56px); height: 36px; margin: 0 28px 22px; border: 1px solid var(--border); border-radius: 6px; background: var(--field); color: var(--body); cursor: pointer; font-size: 12.5px; font-weight: 600; transition: var(--hover-transition); }
-.load-more:hover { border-color: var(--faint); background: var(--raised); }
 
 .recording-detail-overlay { position: fixed; z-index: 20; inset: 0; display: flex; align-items: flex-start; justify-content: center; background: var(--overlay); padding: max(28px, 8vh) 28px 28px; }
 .recording-detail { width: min(520px, calc(100vw - 56px)); max-height: calc(100vh - max(28px, 8vh) - 28px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--modal-shadow); }
@@ -350,7 +349,6 @@ button { -webkit-font-smoothing: antialiased; }
   /* DUR steps out; the other eight cells keep their order. */
   .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(0, 1fr) 96px 44px 30px 44px 20px; column-gap: 7px; }
   .recording-table__header > :nth-child(5), .recording-row > :nth-child(5) { display: none; }
-  .load-more { width: calc(100% - 36px); margin-inline: 18px; }
 }
 
 /* NOTES column (f1): the count chip plus the first note, which is what makes a

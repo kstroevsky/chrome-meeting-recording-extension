@@ -151,15 +151,15 @@ export class RecordingsView {
   /** Which toolbar is mounted, so it is only rebuilt when the kind changes. */
   private toolbarKind: 'search' | 'bulk' | null = null;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
+  /** Watches the end of the list and asks for the next page as it comes near. */
+  private moreObserver: IntersectionObserver | null = null;
 
   constructor(
     private readonly list: HTMLElement,
     private readonly empty: HTMLElement,
     private readonly error: HTMLElement,
-    private readonly loadMoreButton: HTMLButtonElement,
     private readonly callbacks: RecordingsViewCallbacks,
   ) {
-    this.loadMoreButton.addEventListener('click', () => this.callbacks.loadMore());
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
       if (this.confirmHost) return;
@@ -195,7 +195,8 @@ export class RecordingsView {
     this.destinationListbox?.destroy();
     this.destinationListbox = null;
     this.empty.hidden = this.entries.length > 0;
-    this.loadMoreButton.hidden = !this.hasMore;
+    this.moreObserver?.disconnect();
+    this.moreObserver = null;
 
     if (!this.toolbarHost) {
       this.toolbarHost = $('div', 'recordings-toolbar-host');
@@ -218,6 +219,7 @@ export class RecordingsView {
     this.tableHost!.replaceChildren(this.table(visible));
     const scroller = this.tableHost!.querySelector<HTMLElement>('.recording-table__scroll');
     if (scroller && scrollTop) scroller.scrollTop = scrollTop;
+    if (scroller) this.watchForMore(scroller);
     const openEntry = this.entries.find((entry) => entry.id === this.openId);
     // A redraw while a recording waits to open must not drop the notes it waits on.
     if (!openEntry && this.notesSection?.id !== this.pendingOpenId) this.notesSection = null;
@@ -391,8 +393,30 @@ export class RecordingsView {
         group.entries.forEach((entry) => scroll.append(this.row(entry)));
       }
     }
+    // The next page loads as this comes near, so there is nothing to press.
+    if (this.hasMore) {
+      const more = $('div', 'recording-table__more');
+      more.textContent = 'Loading more recordings…';
+      scroll.append(more);
+    }
     table.append(scroll);
     return table;
+  }
+
+  /**
+   * Loads the next page before the list runs out: once the end marker is within
+   * a screenful of view. A page that does not fill the list leaves the marker in
+   * view, so the next one follows straight away. Each redraw builds a new list
+   * and watches its marker afresh; the controller ignores asks while a page is
+   * already on its way.
+   */
+  private watchForMore(scroller: HTMLElement): void {
+    const marker = scroller.querySelector('.recording-table__more');
+    if (!marker || typeof IntersectionObserver === 'undefined') return;
+    this.moreObserver = new IntersectionObserver((seen) => {
+      if (seen.some((entry) => entry.isIntersecting)) this.callbacks.loadMore();
+    }, { root: scroller, rootMargin: '0px 0px 600px 0px' });
+    this.moreObserver.observe(marker);
   }
 
   private headerButton(label: string, key: 'name' | 'duration' | 'notes' | 'size' | 'time', right = false): HTMLButtonElement {
