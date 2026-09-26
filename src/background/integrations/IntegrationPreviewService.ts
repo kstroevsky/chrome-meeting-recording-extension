@@ -7,8 +7,9 @@ import type {
   IntegrationDataPolicy,
   IntegrationEventKind,
   IntegrationReadiness,
-  IntegrationReadinessPending,
+  IntegrationReadinessEvaluation,
 } from '../../integrations/contracts';
+import { IntegrationReadinessEvaluator } from '../../integrations/IntegrationReadinessEvaluator';
 import { createIntegrationId } from '../../integrations/ids';
 import type { IntegrationPayloadMeasurement } from '../../integrations/payload';
 import type { IntegrationPayloadPreview } from '../../integrations/preview';
@@ -47,6 +48,7 @@ export type BuiltIntegrationSnapshot = IntegrationPayloadMeasurement & {
 /** Reads canonical library aggregates and produces a real serialized fixture without networking. */
 export class IntegrationPreviewService {
   private readonly now: () => number;
+  private readonly readinessEvaluator = new IntegrationReadinessEvaluator();
 
   constructor(private readonly deps: IntegrationPreviewDeps) {
     this.now = deps.now ?? Date.now;
@@ -85,6 +87,7 @@ export class IntegrationPreviewService {
     policy: IntegrationDataPolicy,
     envelope: IntegrationSnapshotEnvelope,
     currentSpeakerAliases: readonly IntegrationSpeakerAlias[] = [],
+    incompleteRelease: Extract<IntegrationReadiness['release'], 'manual' | 'timeout'> = 'manual',
   ): Promise<BuiltIntegrationSnapshot> {
     const normalizedPolicy = requirePreviewPolicy(policy);
     const [history, context, notations, transcript, analysisState] = await Promise.all([
@@ -97,7 +100,15 @@ export class IntegrationPreviewService {
     if (!history || history.deletedAt) throw new Error('Recording is unavailable');
     if (!context) throw new Error('Recording context is unavailable for this recording');
 
-    const readiness = previewReadiness(normalizedPolicy, history, transcript, analysisState);
+    const readinessEvaluation = this.readinessEvaluator.evaluate({
+      history,
+      ...(transcript ? { transcript } : {}),
+      ...(analysisState ? { analysis: analysisState } : {}),
+    }, normalizedPolicy);
+    const readiness: IntegrationReadiness = {
+      ...readinessEvaluation,
+      release: readinessEvaluation.complete ? 'complete' : incompleteRelease,
+    };
     const analysis = analysisProjection(analysisState);
     const pseudonyms = normalizedPolicy.transcript
       && normalizedPolicy.transcriptSpeakers === 'pseudonyms'
@@ -128,30 +139,24 @@ export class IntegrationPreviewService {
         : {}),
     };
   }
-}
 
-function previewReadiness(
-  policy: IntegrationDataPolicy,
-  history: RecordingHistoryEntry,
-  transcript: Transcript | undefined,
-  analysis: AnalysisExportState | undefined,
-) {
-  const pending: IntegrationReadinessPending[] = [];
-  if (policy.transcript && !transcript) pending.push('transcript');
-  if (policy.analysis && (!analysis || analysis.status === 'none' || analysis.status === 'analyzing')) {
-    pending.push('analysis');
+  async evaluateReadiness(
+    recordingId: string,
+    policy: IntegrationDataPolicy,
+  ): Promise<IntegrationReadinessEvaluation> {
+    const normalizedPolicy = requirePreviewPolicy(policy);
+    const [history, transcript, analysisState] = await Promise.all([
+      this.deps.getHistory(recordingId),
+      normalizedPolicy.transcript ? this.deps.getTranscript(recordingId) : Promise.resolve(undefined),
+      normalizedPolicy.analysis ? this.deps.getAnalysisState(recordingId) : Promise.resolve(undefined),
+    ]);
+    if (!history || history.deletedAt) throw new Error('Recording is unavailable');
+    return this.readinessEvaluator.evaluate({
+      history,
+      ...(transcript ? { transcript } : {}),
+      ...(analysisState ? { analysis: analysisState } : {}),
+    }, normalizedPolicy);
   }
-  if (policy.artifactMetadata && policy.artifactLinks && history.files.some((file) => (
-    file.delivery.status === 'pending'
-    && !file.locations.some((location) => location.kind === 'drive' && location.webViewLink)
-  ))) {
-    pending.push('artifact-delivery');
-  }
-  return {
-    complete: pending.length === 0,
-    release: pending.length ? 'manual' as const : 'complete' as const,
-    pending,
-  };
 }
 
 function analysisProjection(

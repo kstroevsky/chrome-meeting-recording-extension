@@ -80,6 +80,11 @@ export type IntegrationReadinessPending =
   | 'analysis'
   | 'artifact-delivery';
 
+export type IntegrationReadinessEvaluation = {
+  complete: boolean;
+  pending: IntegrationReadinessPending[];
+};
+
 export type IntegrationReadiness = {
   complete: boolean;
   release: 'complete' | 'timeout' | 'manual';
