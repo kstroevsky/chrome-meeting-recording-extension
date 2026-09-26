@@ -46,6 +46,12 @@ async function open(list: HTMLElement): Promise<void> {
   await flush();
 }
 
+/** Rows carry no remove button; removing starts from the recording's detail. */
+async function removeFromDetail(list: HTMLElement): Promise<void> {
+  if (!list.querySelector('.modal-button--remove')) await open(list);
+  list.querySelector<HTMLButtonElement>('.modal-button--remove')!.click();
+}
+
 describe('RecordingsView detail (f2, f17)', () => {
   afterEach(() => jest.useRealTimers());
 
@@ -57,14 +63,14 @@ describe('RecordingsView detail (f2, f17)', () => {
     const card = () => document.querySelector<HTMLElement>('.confirm-card')!;
 
     const quiet = jest.spyOn(window, 'confirm');
-    list.querySelector<HTMLButtonElement>('.recording-row__remove')!.click();
+    await removeFromDetail(list);
     expect(card().querySelector('.confirm-card__body')!.textContent).toContain('stays in Drive');
     card().querySelector<HTMLButtonElement>('.confirm-card__confirm')!.click();
     expect(callbacks.remove).toHaveBeenLastCalledWith('weekly', false);
     expect(quiet).not.toHaveBeenCalled();
     quiet.mockRestore();
 
-    list.querySelector<HTMLButtonElement>('.recording-row__remove')!.click();
+    await removeFromDetail(list);
     const box = card().querySelector<HTMLInputElement>('.confirm-card__checkbox')!;
     expect(box.checked).toBe(false);
     box.click();
@@ -161,7 +167,7 @@ describe('RecordingsView detail (f2, f17)', () => {
     view.setNoteSummaries({ weekly: { count: 2, search: '', firstAtMs: 48_000, firstText: 'Q3 target changed' } });
     view.render([entry()]);
 
-    list.querySelector<HTMLButtonElement>('.recording-row__remove')!.click();
+    await removeFromDetail(list);
     const card = document.querySelector('.confirm-card')!;
     expect(card.textContent).toContain('Remove “Weekly sync” from history?');
     expect(card.textContent).toContain('The 2 notes and the transcript are deleted with it.');
@@ -171,7 +177,7 @@ describe('RecordingsView detail (f2, f17)', () => {
     expect(document.querySelector('.confirm-card')).toBeNull();
     expect(callbacks.remove).not.toHaveBeenCalled();
 
-    list.querySelector<HTMLButtonElement>('.recording-row__remove')!.click();
+    await removeFromDetail(list);
     document.querySelector<HTMLButtonElement>('.confirm-card__confirm')!.click();
     expect(callbacks.remove).toHaveBeenCalledWith('weekly', false);
   });

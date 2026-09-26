@@ -29,10 +29,29 @@ flowchart LR
 
 The background creates a pending history record before local download or detached Drive work starts. It then advances that same record as download settlement, Drive-upload updates, crash recovery, local fallback, or Drive metadata rename outcomes arrive. `RecordingHistoryService` owns those transitions; the page never tries to infer a file's availability from an upload tab. A Drive rename is delegated through the offscreen token/data plane; if a later PATCH fails, completed changes are rolled back, and a rare incomplete rollback synchronizes history to the names Drive actually reports.
 
+## Folder column, sorting, and row actions
+
+`FOLDER` sits right after `NAME` and shows where a recording is filed as a tag:
+its Drive destination (from `driveFolderPresetId`, named from the current
+presets), or else the Downloads folder it was written into (`localFolderName`).
+The default destination, `Rest`, is not a choice anyone made, so it shows no tag.
+Clicking a tag lists only that folder (matched by name, so a Drive destination
+and a Downloads folder of the same name are one folder); a chip beside the
+search says which, and clicking it, the tag again, or Escape shows every folder.
+
+Every sortable header reverses on a second click, and starts in the order people
+expect: newest, A–Z, longest, largest, most notes. A value nobody knows (a
+duration never read, a size never recorded) sorts last in either direction, and
+ties fall back to newest first. The group label says the order, for example
+`SORTED BY SIZE · SMALLEST FIRST`.
+
+Rows carry no remove button: removing is in the recording's detail and in the
+bulk toolbar.
+
 ## Notes column (ADR-0005)
 
-The table carries one 170px `NOTES` column **between `NAME` and `DUR`** (design
-`f1`). Each cell is a gold count chip plus the first note as a preview — that
+The table carries one `NOTES` column **between `FOLDER` and `DUR`** (design
+`f1`; 136px since the `FOLDER` column joined it). Each cell is a gold count chip plus the first note as a preview — that
 preview is what makes a row worth opening. A recording with no notes shows a
 dash, so the column never pads itself. The header reads in the accent colour in
 both themes; it sorts like the other columns.
