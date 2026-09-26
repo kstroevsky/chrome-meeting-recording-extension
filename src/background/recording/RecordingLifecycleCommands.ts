@@ -76,12 +76,6 @@ export class RecordingLifecycleCommands {
     this.deps.session.markStopping(interruption);
     await this.deps.session.flush();
     snapshot = this.deps.session.getSnapshot();
-    await finishRecordingContext(
-      this.deps.recordingContexts,
-      historyId,
-      snapshot,
-      this.deps.L.warn,
-    );
     this.deps.L.log('Stopping recording:', reason);
     return this.finishKeptStop(
       historyId,
@@ -144,6 +138,11 @@ export class RecordingLifecycleCommands {
       .catch((error) => this.deps.L.warn('Could not finish transcript capture:', error));
     await this.deps.notations?.closeOpenSpans(historyId, finalization.durationMs)
       .catch((error) => this.deps.L.warn('Could not close open notations:', error));
+    // Stamped last: the end is what tells integrations the recording is done,
+    // so its last captions and its notes must already be written. Here rather
+    // than at the stop request, a service-worker restart mid-stop stamps it too.
+    const { recordingContexts, session, L } = this.deps;
+    await finishRecordingContext(recordingContexts, historyId, session.getSnapshot(), L.warn);
     this.deps.session.markBackgroundFinalized(historyId);
     await this.deps.session.flush();
   }

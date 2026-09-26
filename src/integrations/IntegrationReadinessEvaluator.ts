@@ -24,7 +24,10 @@ export class IntegrationReadinessEvaluator {
     policy: IntegrationDataPolicy,
   ): IntegrationReadinessEvaluation {
     const pending: IntegrationReadinessPending[] = [];
-    if (policy.transcript && !source.transcript) pending.push('transcript');
+    // A transcript is never waited for. Captions are written by the time the
+    // recording is finished, so none now usually means none will come; one that
+    // arrives later (imported, or transcribed after the call) goes out as an
+    // update, like any other change.
     if (
       policy.analysis
       && (!source.analysis || source.analysis.status === 'none' || source.analysis.status === 'analyzing')

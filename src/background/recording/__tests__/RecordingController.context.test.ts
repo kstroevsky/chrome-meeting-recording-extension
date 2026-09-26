@@ -132,4 +132,24 @@ describe('RecordingController recording context lifecycle', () => {
     await controller.discard();
     expect(contexts.remove).toHaveBeenCalledWith(discardedId);
   });
+
+  it('stamps the end only after the last captions and open notes are written', async () => {
+    // The end is what tells integrations a recording is done: stamped earlier,
+    // the first event would miss the final caption batch and carry open notes.
+    const order: string[] = [];
+    const ordered = new RecordingController({
+      L: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
+      offscreen: offscreen as unknown as OffscreenManager,
+      session,
+      recordingContexts: contexts as never,
+      transcriptCapture: { finish: jest.fn(async () => { order.push('captions'); }) } as never,
+      notations: { closeOpenSpans: jest.fn(async () => { order.push('notes'); return []; }) } as never,
+    });
+    contexts.finish.mockImplementation(async () => { order.push('end'); });
+    controller = ordered;
+    await start();
+    session.applyOffscreenPhase({ phase: 'recording', epoch: session.getSnapshot().epoch });
+    await ordered.stop();
+    expect(order).toEqual(['captions', 'notes', 'end']);
+  });
 });
