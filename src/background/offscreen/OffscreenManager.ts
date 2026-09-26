@@ -6,6 +6,7 @@
  * preserves the background-facing API.
  */
 import { hasOffscreenDocument } from '../../platform/chrome/offscreen';
+import { getRuntimeUrl } from '../../platform/chrome/runtime';
 import type { AnalysisJob } from '../../shared/analysis/job';
 import type { AnalysisProvenance } from '../../shared/analysis/provenance';
 import type { AnalysisConfig } from '../../shared/analysis/types';
@@ -28,6 +29,7 @@ import {
   type OffscreenUploadListener,
 } from './OffscreenEventRouter';
 import { OffscreenHost } from './OffscreenHost';
+import { isTrustedOffscreenSender } from './offscreenSender';
 
 const L = makeLogger('background');
 
@@ -88,7 +90,15 @@ export class OffscreenManager {
     this.events.onAnalysisResult = listener;
   }
 
-  attachPort(port: chrome.runtime.Port): void {
+  /** Adopts the offscreen runtime's Port, refusing any peer that is not it. */
+  attachPort(port: chrome.runtime.Port): boolean {
+    if (!isTrustedOffscreenSender(port.sender, getRuntimeUrl('offscreen.html'), this.host.recorderTab)) {
+      L.warn('Refused an offscreen connection from an untrusted sender', port.sender?.url, port.sender?.tab?.id);
+      try {
+        port.disconnect();
+      } catch {}
+      return false;
+    }
     L.log('Offscreen connected');
     this.connection.attach(
       port,
@@ -99,6 +109,7 @@ export class OffscreenManager {
       },
       () => this.host.isTransitioning(),
     );
+    return true;
   }
 
   hydratePhase(phase: RecordingPhase): void {
