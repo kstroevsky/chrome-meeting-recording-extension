@@ -121,8 +121,13 @@ export class IntegrationEventPlanner {
       }
 
       const effectivePolicy = intersectIntegrationPolicy(intent.allowedPolicy, destination.dataPolicy);
-      const readiness = await this.deps.snapshots.evaluateReadiness(recordingId, effectivePolicy);
-      if (!readiness.complete) {
+      // Only the first send waits for pending data. Once a destination has the
+      // recording, each change goes out as it lands; the data still pending is
+      // named in the readiness block, and arrives as its own update.
+      const readiness = current?.readyCreated
+        ? undefined
+        : await this.deps.snapshots.evaluateReadiness(recordingId, effectivePolicy);
+      if (readiness && !readiness.complete) {
         const deadline = current?.readyDeadlineAt ?? (this.now() + this.readyTimeoutMs);
         if (deadline > this.now()) {
           const stream = current ?? createStream(destinationId, recordingId);

@@ -206,6 +206,35 @@ describe('IntegrationEventPlanner', () => {
     await expect(ctx.deliveries.listStream('destination_1', 'recording_1')).resolves.toHaveLength(2);
   });
 
+  it('waits only before the first send: a later change goes out at once, pending data and all', async () => {
+    const ctx = harness({ ...BASE_POLICY, analysis: true, userNote: true });
+    ctx.source.analysis = 'analyzing';
+    await ctx.seed();
+    await ctx.planner.consider('destination_1', 'recording_1');
+    ctx.setNow(1_100);
+    await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual(
+      expect.objectContaining({ kind: 'planned' }),
+    );
+
+    // Analysis is still running; the note change does not wait for it.
+    ctx.source.note = 'revised note';
+    ctx.setNow(1_150);
+    const changed = await ctx.planner.consider('destination_1', 'recording_1');
+    expect(changed).toEqual(expect.objectContaining({
+      kind: 'planned',
+      delivery: expect.objectContaining({
+        eventType: 'recording.updated.v1',
+        revision: 2,
+        readinessRelease: 'timeout',
+      }),
+    }));
+    if (changed.kind !== 'planned') throw new Error('expected a planned update');
+    expect(JSON.parse(changed.body).data.readiness).toEqual({ complete: false, release: 'timeout', pending: ['analysis'] });
+    await expect(ctx.streams.get('destination_1', 'recording_1')).resolves.toEqual(
+      expect.not.objectContaining({ readyDeadlineAt: expect.any(Number) }),
+    );
+  });
+
   it('creates no revision when the destination-visible projection is unchanged', async () => {
     const ctx = harness(BASE_POLICY);
     await ctx.seed();
