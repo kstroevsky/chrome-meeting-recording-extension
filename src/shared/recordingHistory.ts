@@ -112,7 +112,7 @@ export type RecordingHistoryMessage =
   | { type: 'LIST_RECORDING_HISTORY'; cursor?: RecordingHistoryCursor }
   | { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string }
   | { type: 'SET_RECORDING_HISTORY_NOTE'; id: string; note: string }
-  | { type: 'REMOVE_RECORDING_HISTORY'; id: string }
+  | { type: 'REMOVE_RECORDING_HISTORY'; id: string; deleteFiles?: boolean }
   | { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
 /**
@@ -390,7 +390,9 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
     return typeof message.id === 'string' && message.id.length > 0 && typeof message.note === 'string';
   }
   if (message.type === 'REMOVE_RECORDING_HISTORY') {
-    return typeof message.id === 'string' && message.id.length > 0;
+    // `deleteFiles` deletes files: only an explicit boolean may ask for that.
+    return typeof message.id === 'string' && message.id.length > 0
+      && (message.deleteFiles === undefined || typeof message.deleteFiles === 'boolean');
   }
   return message.type === 'OPEN_RECORDING_HISTORY_FILE'
     && typeof message.recordingId === 'string' && message.recordingId.length > 0

@@ -913,3 +913,7 @@ button { -webkit-font-smoothing: antialiased; }
 .note-editor__footer-side { display: inline-flex; align-items: center; gap: 12px; }
 .note-editor__count { color: var(--muted); font: 10px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .06em; }
 .note-editor__done { padding: 0 14px; border: 1px solid var(--border); background: var(--field); color: var(--body); }
+
+/* "Also delete its files" in the removal confirmation: off by default. */
+.confirm-card__option { display: flex; align-items: center; gap: 8px; margin: -4px 0 14px 42px; color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.confirm-card__checkbox { width: 14px; height: 14px; margin: 0; accent-color: var(--accent-dark); cursor: pointer; }

@@ -99,27 +99,31 @@ export class RecordingsController {
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
-  /** Asked for by the page's own confirmation dialog, so it asks nothing again. */
-  async remove(id: string) {
+  /** Called once the page's dialog (and, for files, the native check) said yes. */
+  async remove(id: string, deleteFiles = false) {
     try {
-      const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
+      const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id, ...(deleteFiles ? { deleteFiles } : {}) });
       if (!response.ok) throw new Error(response.error);
       if (response.removed) this.forget(id);
       this.render();
+      this.reportFileErrors(response.fileErrors);
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
-  async removeMany(ids: string[]) {
+  async removeMany(ids: string[], deleteFiles = false) {
     const uniqueIds = [...new Set(ids)].filter((id) => this.entries.some((entry) => entry.id === id));
     if (!uniqueIds.length) return;
+    const fileErrors: string[] = [];
     try {
       for (const id of uniqueIds) {
-        const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
+        const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id, ...(deleteFiles ? { deleteFiles } : {}) });
         if (!response.ok) throw new Error(response.error);
         if (response.removed) this.forget(id);
+        fileErrors.push(...(response.fileErrors ?? []));
       }
       this.render();
-    } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
+      this.reportFileErrors(fileErrors);
+    } catch (error) { this.render(); this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
   async openLocal(recordingId: string, fileId: string) {
@@ -257,6 +261,11 @@ export class RecordingsController {
     } finally {
       this.loadingMore = false;
     }
+  }
+
+  /** Removal succeeded; a file that could not be deleted is still said, not hidden. */
+  private reportFileErrors(errors: string[] | undefined) {
+    if (errors?.length) this.view.showError(`Removed, but ${errors.length} file${errors.length === 1 ? '' : 's'} could not be deleted — ${errors.join('; ')}`);
   }
 
   private forget(id: string) {

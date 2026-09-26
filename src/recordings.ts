@@ -31,8 +31,8 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
   const view = new RecordingsView(list, empty, error, loadMore, {
     rename: (id, name) => void controller.rename(id, name),
     note: (id, note) => void controller.setNote(id, note),
-    remove: (id) => void controller.remove(id),
-    removeMany: (ids) => void controller.removeMany(ids),
+    remove: (id, deleteFiles) => void controller.remove(id, deleteFiles),
+    removeMany: (ids, deleteFiles) => void controller.removeMany(ids, deleteFiles),
     openLocal: (recordingId, fileId) => void controller.openLocal(recordingId, fileId),
     play: (recordingId) => void controller.play(recordingId),
     fileTo: (recordingId, presetId) => void controller.fileTo(recordingId, presetId),

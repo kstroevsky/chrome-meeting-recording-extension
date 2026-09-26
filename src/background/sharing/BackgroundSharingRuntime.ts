@@ -55,6 +55,19 @@ export class BackgroundSharingRuntime {
     if (!response?.ok) throw new Error(response?.error || 'Could not revoke share');
   }
 
+  /**
+   * Ends every live share that includes this recording, before its files are
+   * deleted: a share is served from those Drive files, so leaving it would leave
+   * a link that no longer plays. Returns how many shares were ended.
+   */
+  async revokeSharesOf(recordingId: string): Promise<number> {
+    const live = (await this.publications.list()).filter((publication) =>
+      publication.sourceRecordingIds.includes(recordingId)
+      && publication.status !== 'revoked' && publication.status !== 'failed');
+    for (const publication of live) await this.revoke(publication.id);
+    return live.length;
+  }
+
   async delete(shareId: string): Promise<void> {
     await this.offscreen.ensureReady();
     const response = await this.offscreen.rpc<{ ok: true } | RpcFailure>({

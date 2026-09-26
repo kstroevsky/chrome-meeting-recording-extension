@@ -18,6 +18,7 @@ import { checkIcon, cloudIcon, diskIcon, editIcon } from './recordingsIcons';
 import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
+import { fileDeletionFinalCheck, fileDeletionWarning } from './fileDeletion';
 import { RecordingNotesSection, type RecordingNotesSectionActions } from './RecordingNotesSection';
 import { NoteEditor, type NoteEditorDeps } from './NoteEditor';
 import { ShareDialog, type QueuedShare, type ShareProgressReporter } from './ShareDialog';
@@ -27,8 +28,9 @@ import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
 export type RecordingsViewCallbacks = {
   rename: (id: string, name: string) => void;
   note: (id: string, note: string) => void;
-  remove: (id: string) => void;
-  removeMany: (ids: string[]) => void;
+  /** `deleteFiles`: also delete the recording's Drive and Downloads files. */
+  remove: (id: string, deleteFiles?: boolean) => void;
+  removeMany: (ids: string[], deleteFiles?: boolean) => void;
   openLocal: (recordingId: string, fileId: string) => void;
   fileTo: (recordingId: string, presetId: string | null) => void;
   play: (recordingId: string) => void;
@@ -724,22 +726,37 @@ export class RecordingsView {
     const stays = entry.files.some((file) => file.destination === 'drive')
       ? `The video file${entry.files.length === 1 ? '' : 's'} ${entry.files.length === 1 ? 'stays' : 'stay'} in Drive.`
       : 'The files stay in your Downloads folder.';
-    return this.askConfirm(`Remove “${entry.name}” from history?`, `${goes} ${stays}`, () => {
+    return this.askConfirm(`Remove “${entry.name}” from history?`, `${goes} ${stays}`, (deleteFiles) => {
       if (this.openId === entry.id) this.closeDetail();
-      this.callbacks.remove(entry.id);
-    });
+      this.callbacks.remove(entry.id, deleteFiles);
+    }, { label: 'Also delete its files', body: `${goes} ${fileDeletionWarning([entry])}`, finalCheck: fileDeletionFinalCheck([entry]) });
   }
 
   private confirmRemoveMany(ids: string[]): Promise<boolean> {
     if (!ids.length) return Promise.resolve(false);
+    const goes = 'Their notes and transcripts are deleted with them.';
+    const entries = this.entries.filter((entry) => ids.includes(entry.id));
     return this.askConfirm(
       `Remove ${ids.length} recording${ids.length === 1 ? '' : 's'} from history?`,
-      'Their notes and transcripts are deleted with them. The files stay in Drive and Downloads.',
-      () => { this.selected.clear(); this.redraw(); this.callbacks.removeMany(ids); },
+      `${goes} The files stay in Drive and Downloads.`,
+      (deleteFiles) => { this.selected.clear(); this.redraw(); this.callbacks.removeMany(ids, deleteFiles); },
+      { label: 'Also delete their files', body: `${goes} ${fileDeletionWarning(entries)}`, finalCheck: fileDeletionFinalCheck(entries) },
     );
   }
 
-  private askConfirm(title: string, body: string, onConfirm: () => void): Promise<boolean> {
+  /**
+   * The page's own confirmation. `option` adds the "also delete files" choice,
+   * unticked: ticking it swaps the body for what will actually be deleted and
+   * renames the button — and then Remove asks once more, natively, because
+   * deleting files is the one step that cannot be taken back. Declining that
+   * keeps this dialog open: nothing has been closed, cleared or removed.
+   */
+  private askConfirm(
+    title: string,
+    body: string,
+    onConfirm: (optionChecked: boolean) => void,
+    option?: { label: string; body: string; finalCheck: string },
+  ): Promise<boolean> {
     this.confirmHost?.remove();
     return new Promise((resolve) => {
       const overlay = $('div', 'confirm-overlay');
@@ -757,13 +774,27 @@ export class RecordingsView {
       const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'confirm-card__cancel'; cancel.textContent = 'Cancel';
       const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'confirm-card__confirm'; confirm.textContent = 'Remove';
       actions.append(cancel, confirm);
-      card.append(head, actions);
+      card.append(head);
+      let optionChecked = false;
+      if (option) {
+        const row = document.createElement('label'); row.className = 'confirm-card__option';
+        const box = document.createElement('input'); box.type = 'checkbox'; box.className = 'confirm-card__checkbox';
+        const label = $('span'); label.textContent = option.label;
+        row.append(box, label);
+        box.addEventListener('change', () => {
+          optionChecked = box.checked;
+          text.textContent = optionChecked ? option.body : body;
+          confirm.textContent = optionChecked ? 'Remove and delete files' : 'Remove';
+        });
+        card.append(row);
+      }
+      card.append(actions);
       overlay.append(card);
       const done = (confirmed: boolean) => {
         overlay.remove();
         if (this.confirmHost === overlay) this.confirmHost = null;
         document.removeEventListener('keydown', onKey, true);
-        if (confirmed) onConfirm();
+        if (confirmed) onConfirm(optionChecked);
         resolve(confirmed);
       };
       const onKey = (event: KeyboardEvent) => {
@@ -771,7 +802,10 @@ export class RecordingsView {
       };
       document.addEventListener('keydown', onKey, true);
       cancel.addEventListener('click', () => done(false));
-      confirm.addEventListener('click', () => done(true));
+      confirm.addEventListener('click', () => {
+        if (optionChecked && option && !window.confirm(option.finalCheck)) return;
+        done(true);
+      });
       overlay.addEventListener('click', (event) => { if (event.target === overlay) done(false); });
       this.confirmHost = overlay;
       document.body.append(overlay);
