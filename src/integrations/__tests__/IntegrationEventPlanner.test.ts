@@ -4,6 +4,7 @@ import type { IntegrationDataPolicy, IntegrationReadiness } from '../contracts';
 import { IntegrationDeliveryRepository } from '../IntegrationDeliveryRepository';
 import { IntegrationDestinationRepository } from '../IntegrationDestinationRepository';
 import { IntegrationEventPlanner } from '../IntegrationEventPlanner';
+import { IntegrationReadinessScheduler } from '../IntegrationReadinessScheduler';
 import { IntegrationRoutingRepository } from '../IntegrationRoutingRepository';
 import { IntegrationStreamRepository } from '../IntegrationStreamRepository';
 import { IntegrationUnitOfWork } from '../IntegrationUnitOfWork';
@@ -19,6 +20,8 @@ type Source = {
   finalized: boolean;
   note?: string;
   analysis: 'none' | 'analyzing' | 'completed' | 'failed';
+  /** Measures the built snapshot past the payload cap, as a very long transcript would. */
+  oversized?: boolean;
 };
 
 function harness(policy: IntegrationDataPolicy, start = 1_000) {
@@ -78,7 +81,7 @@ function harness(policy: IntegrationDataPolicy, start = 1_000) {
       });
       return {
         body,
-        totalBytes: utf8ByteLength(body),
+        totalBytes: source.oversized ? 3 * 1024 * 1024 : utf8ByteLength(body),
         transcriptBytes: 0,
         otherBytes: utf8ByteLength(body),
         readiness,
@@ -128,6 +131,7 @@ function harness(policy: IntegrationDataPolicy, start = 1_000) {
   return {
     source,
     planner,
+    snapshots,
     streams,
     deliveries,
     destinations,
@@ -275,5 +279,60 @@ describe('IntegrationEventPlanner', () => {
     await expect(ctx.streams.get('destination_1', 'recording_1')).resolves.toEqual(
       expect.not.objectContaining({ readyDeadlineAt: expect.any(Number) }),
     );
+  });
+
+  it('parks an oversized automatic snapshot for Retry instead of rebuilding it on every wake-up', async () => {
+    const ctx = harness({ ...BASE_POLICY, analysis: true });
+    ctx.source.analysis = 'analyzing';
+    await ctx.seed();
+    await ctx.planner.consider('destination_1', 'recording_1');
+    ctx.source.oversized = true;
+    ctx.setNow(1_100);
+
+    const parked = await ctx.planner.consider('destination_1', 'recording_1');
+    expect(parked).toEqual({ kind: 'action-required', delivery: expect.objectContaining({
+      state: 'action-required',
+      lastErrorCode: 'payload-too-large',
+      readinessRelease: 'timeout',
+      revision: 1,
+    }) });
+    if (parked.kind !== 'action-required') throw new Error('expected a parked delivery');
+    expect(parked.delivery.nextAttemptAt).toBeUndefined();
+    // The deadline is spent, so nothing wakes this stream again on its own.
+    await expect(ctx.streams.get('destination_1', 'recording_1')).resolves.toEqual(
+      expect.not.objectContaining({ readyDeadlineAt: expect.any(Number) }),
+    );
+
+    const alarms: number[] = [];
+    const scheduler = new IntegrationReadinessScheduler({
+      streams: ctx.streams,
+      consider: async (destinationId, recordingId) => { await ctx.planner.consider(destinationId, recordingId); },
+      createAlarm: async (_name, info) => { alarms.push(info.when!); },
+      getAlarm: async () => undefined,
+      clearAlarm: async () => true,
+      now: () => 1_100,
+    });
+    await scheduler.runDue();
+    expect(alarms).toEqual([]);
+
+    // Later data is a new attempt, parked the same way; unchanged data is none.
+    ctx.source.analysis = 'completed';
+    await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual(
+      expect.objectContaining({ kind: 'action-required' }),
+    );
+    await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual({ kind: 'noop' });
+    await expect(ctx.deliveries.listStream('destination_1', 'recording_1')).resolves.toEqual([
+      expect.objectContaining({ revision: 1, state: 'action-required' }),
+      expect.objectContaining({ revision: 2, state: 'action-required' }),
+    ]);
+  });
+
+  it('still refuses an oversized manual send outright', async () => {
+    const ctx = harness(BASE_POLICY);
+    await ctx.seed();
+    ctx.source.oversized = true;
+    const destination = (await ctx.destinations.get('destination_1'))!;
+    await expect(ctx.planner.planManual(destination, 'recording_1')).rejects.toThrow(/limit is/);
+    expect(await ctx.deliveries.list()).toHaveLength(0);
   });
 });
