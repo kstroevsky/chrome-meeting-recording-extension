@@ -17,13 +17,28 @@ export function downloadFile(options: chrome.downloads.DownloadOptions): Promise
 /**
  * Deletes a downloaded file from disk. Permanent: Chrome does not move it to
  * the system trash. Chrome keeps the download in its list, marked as deleted.
+ *
+ * Only a download this extension itself saved is ever deleted. The id comes
+ * from the library entry, and `chrome.downloads` can delete *any* file in the
+ * profile's download list, so a stale or corrupted id must never reach one of
+ * the user's own files. A file already gone from disk counts as deleted.
  */
 export function removeDownloadedFile(downloadId: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    chrome.downloads.removeFile(downloadId, () => {
+    chrome.downloads.search({ id: downloadId }, (items) => {
       const error = chrome.runtime.lastError?.message;
       if (error) return reject(new Error(error));
-      resolve();
+      const item = items?.[0];
+      if (!item) return reject(new Error('no longer in Chrome\'s download list; nothing was deleted'));
+      if (item.byExtensionId !== chrome.runtime.id) {
+        return reject(new Error('not saved by this extension; left untouched'));
+      }
+      if (item.exists === false) return resolve();
+      chrome.downloads.removeFile(downloadId, () => {
+        const removeError = chrome.runtime.lastError?.message;
+        if (removeError) return reject(new Error(removeError));
+        resolve();
+      });
     });
   });
 }

@@ -7,7 +7,7 @@ import {
 } from '../tabs';
 import { addAlarmListener, clearAlarm, createAlarm, getAlarm } from '../alarms';
 import { addCommandListener } from '../commands';
-import { downloadFile } from '../downloads';
+import { downloadFile, removeDownloadedFile } from '../downloads';
 import { getRuntimeId, getRuntimeUrl, reloadRuntime } from '../runtime';
 import {
   getAllLocalStorageValues,
@@ -186,6 +186,47 @@ describe('platform/chrome/downloads', () => {
       setLastError(undefined);
     });
     await expect(downloadFile({ url: 'blob:1', filename: 'tab.webm' })).rejects.toThrow('Download blocked');
+  });
+});
+
+describe('platform/chrome/downloads removeDownloadedFile', () => {
+  const item = (overrides: Partial<chrome.downloads.DownloadItem>) => ({
+    id: 7,
+    byExtensionId: chrome.runtime.id,
+    exists: true,
+    ...overrides,
+  }) as chrome.downloads.DownloadItem;
+
+  beforeEach(() => {
+    (chrome.downloads as any).search = jest.fn();
+    (chrome.downloads as any).removeFile = jest.fn((_id: number, cb: () => void) => cb());
+  });
+
+  it('deletes a file this extension downloaded', async () => {
+    (chrome.downloads.search as jest.Mock).mockImplementation((_q: any, cb: any) => cb([item({})]));
+    await expect(removeDownloadedFile(7)).resolves.toBeUndefined();
+    expect(chrome.downloads.removeFile).toHaveBeenCalledWith(7, expect.any(Function));
+  });
+
+  it.each([
+    ['another extension', { byExtensionId: 'someone-else' }],
+    ['the user', { byExtensionId: undefined }],
+  ])('never deletes a file downloaded by %s', async (_who, overrides) => {
+    (chrome.downloads.search as jest.Mock).mockImplementation((_q: any, cb: any) => cb([item(overrides)]));
+    await expect(removeDownloadedFile(7)).rejects.toThrow('not saved by this extension');
+    expect(chrome.downloads.removeFile).not.toHaveBeenCalled();
+  });
+
+  it('treats a file already missing from disk as deleted, without touching disk', async () => {
+    (chrome.downloads.search as jest.Mock).mockImplementation((_q: any, cb: any) => cb([item({ exists: false })]));
+    await expect(removeDownloadedFile(7)).resolves.toBeUndefined();
+    expect(chrome.downloads.removeFile).not.toHaveBeenCalled();
+  });
+
+  it('reports an id Chrome no longer knows instead of deleting anything', async () => {
+    (chrome.downloads.search as jest.Mock).mockImplementation((_q: any, cb: any) => cb([]));
+    await expect(removeDownloadedFile(7)).rejects.toThrow("no longer in Chrome's download list");
+    expect(chrome.downloads.removeFile).not.toHaveBeenCalled();
   });
 });
 
