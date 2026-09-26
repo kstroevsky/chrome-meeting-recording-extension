@@ -34,16 +34,20 @@ function harness() {
   };
   const snapshots = {
     build: jest.fn(async (_recordingId: string, policy: IntegrationDataPolicy, envelope: any) => {
+      const readiness = { complete: true, release: 'complete' as const, pending: [] };
+      const recording = {
+        id: envelope.externalRecordingId,
+        title: canonical.title,
+        startedAt: '2026-09-26T10:00:00.000Z',
+        source: { kind: 'tab' },
+        ...(policy.userNote ? { note: canonical.note } : {}),
+        ...(policy.transcript ? { transcript: canonical.transcript } : {}),
+      };
       const body = JSON.stringify({
         id: envelope.eventId,
         type: envelope.eventKind,
         time: envelope.eventTime,
-        revision: envelope.revision,
-        recording: {
-          title: canonical.title,
-          ...(policy.userNote ? { note: canonical.note } : {}),
-          ...(policy.transcript ? { transcript: canonical.transcript } : {}),
-        },
+        data: { revision: envelope.revision, readiness, recording },
       });
       const totalBytes = new TextEncoder().encode(body).byteLength;
       return {
@@ -51,7 +55,7 @@ function harness() {
         totalBytes,
         transcriptBytes: policy.transcript ? canonical.transcript.length : 0,
         otherBytes: totalBytes,
-        readiness: { complete: true, release: 'complete' as const, pending: [] },
+        readiness,
       };
     }),
   };
@@ -134,6 +138,7 @@ function harness() {
       eventTime,
       connectionVersion: destination.connectionVersion,
       allowedPolicy: { ...allowedPolicy },
+      readinessRelease: 'complete',
       state: 'pending',
       attemptCount: 0,
       nextAttemptAt: now,

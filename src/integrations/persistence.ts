@@ -1,4 +1,4 @@
-import type { IntegrationDataPolicy, IntegrationEventKind } from './contracts';
+import type { IntegrationDataPolicy, IntegrationEventKind, IntegrationReadiness } from './contracts';
 import { normalizeIntegrationDataPolicy } from './policy';
 
 export type IntegrationRoutingDefault = 'manual' | 'auto' | 'review';
@@ -59,6 +59,7 @@ export type IntegrationStream = {
   readyCreated: boolean;
   everAttempted: boolean;
   lastPlannedProjectionHash?: string;
+  readyDeadlineAt?: number;
   speakerAliases?: IntegrationSpeakerAlias[];
 };
 
@@ -88,6 +89,8 @@ export type IntegrationDelivery = {
    * automatically reconstructed.
    */
   allowedPolicy?: IntegrationDataPolicy;
+  /** Release reason used to reconstruct this exact logical snapshot. */
+  readinessRelease?: IntegrationReadiness['release'];
   state: IntegrationDeliveryState;
   attemptCount: number;
   nextAttemptAt?: number;
@@ -163,9 +166,11 @@ export function normalizeIntegrationStream(value: unknown): IntegrationStream | 
   const externalRecordingId = text(value.externalRecordingId);
   const nextRevision = positiveInteger(value.nextRevision);
   const lastPlannedProjectionHash = optionalText(value.lastPlannedProjectionHash);
+  const readyDeadlineAt = optionalTimestamp(value.readyDeadlineAt);
   const speakerAliases = normalizeSpeakerAliases(value.speakerAliases);
   if (!destinationId || !recordingId || !externalRecordingId || nextRevision == null) return undefined;
   if (typeof value.readyCreated !== 'boolean' || typeof value.everAttempted !== 'boolean') return undefined;
+  if (value.readyDeadlineAt != null && readyDeadlineAt == null) return undefined;
   if (value.speakerAliases != null && !speakerAliases) return undefined;
   return {
     destinationId,
@@ -175,6 +180,7 @@ export function normalizeIntegrationStream(value: unknown): IntegrationStream | 
     readyCreated: value.readyCreated,
     everAttempted: value.everAttempted,
     ...(lastPlannedProjectionHash ? { lastPlannedProjectionHash } : {}),
+    ...(readyDeadlineAt != null ? { readyDeadlineAt } : {}),
     ...(speakerAliases?.length ? { speakerAliases } : {}),
   };
 }
@@ -211,6 +217,9 @@ export function normalizeIntegrationDelivery(value: unknown): IntegrationDeliver
   const allowedPolicy = value.allowedPolicy == null
     ? undefined
     : normalizeIntegrationDataPolicy(value.allowedPolicy);
+  const readinessRelease = isReadinessRelease(value.readinessRelease)
+    ? value.readinessRelease
+    : undefined;
   const attemptCount = nonNegativeInteger(value.attemptCount);
   const createdAt = timestamp(value.createdAt);
   const updatedAt = timestamp(value.updatedAt);
@@ -218,6 +227,7 @@ export function normalizeIntegrationDelivery(value: unknown): IntegrationDeliver
   if (!isEventKind(value.eventType) || !isDeliveryState(value.state)) return undefined;
   if (revision == null || eventTime == null || connectionVersion == null || attemptCount == null) return undefined;
   if (value.allowedPolicy != null && !allowedPolicy) return undefined;
+  if (value.readinessRelease != null && !readinessRelease) return undefined;
   if (createdAt == null || updatedAt == null) return undefined;
   const nextAttemptAt = optionalTimestamp(value.nextAttemptAt);
   const lastStatus = optionalHttpStatus(value.lastStatus);
@@ -242,6 +252,7 @@ export function normalizeIntegrationDelivery(value: unknown): IntegrationDeliver
     eventTime,
     connectionVersion,
     ...(allowedPolicy ? { allowedPolicy } : {}),
+    ...(readinessRelease ? { readinessRelease } : {}),
     state: value.state,
     attemptCount,
     ...(nextAttemptAt != null ? { nextAttemptAt } : {}),
@@ -339,6 +350,10 @@ function isEventKind(value: unknown): value is IntegrationEventKind {
     || value === 'recording.updated.v1'
     || value === 'recording.deleted.v1'
     || value === 'integration.test.v1';
+}
+
+function isReadinessRelease(value: unknown): value is IntegrationReadiness['release'] {
+  return value === 'complete' || value === 'timeout' || value === 'manual';
 }
 
 function isDeliveryState(value: unknown): value is IntegrationDeliveryState {

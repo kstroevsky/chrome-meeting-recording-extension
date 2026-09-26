@@ -14,6 +14,7 @@ import type {
   IntegrationStream,
 } from './persistence';
 import { intersectIntegrationPolicy } from './policy';
+import { integrationProjectionHash } from './IntegrationProjectionFingerprint';
 import {
   classifyHttpFailure,
   INTEGRATION_MAX_AUTOMATIC_ATTEMPTS,
@@ -57,6 +58,7 @@ type DispatcherDeps = {
       policy: IntegrationDataPolicy,
       envelope: SnapshotEnvelope,
       currentSpeakerAliases?: readonly IntegrationSpeakerAlias[],
+      incompleteRelease?: 'manual' | 'timeout',
     ): Promise<BuiltSnapshot>;
   };
   unitOfWork: {
@@ -268,6 +270,9 @@ export class IntegrationDispatcher {
           revision,
         },
         stream.speakerAliases,
+        delivery.readinessRelease === 'manual' || delivery.readinessRelease == null
+          ? 'manual'
+          : 'timeout',
       );
       assertIntegrationPayloadWithinLimit(snapshot, INTEGRATION_MAX_PAYLOAD_BYTES);
     } catch (error) {
@@ -294,6 +299,7 @@ export class IntegrationDispatcher {
       eventTime: now,
       connectionVersion: destination.connectionVersion,
       allowedPolicy: { ...delivery.allowedPolicy! },
+      readinessRelease: snapshot.readiness.release,
       state: 'pending',
       attemptCount: 0,
       nextAttemptAt: now,
@@ -315,10 +321,12 @@ export class IntegrationDispatcher {
       nextRevision: revision + 1,
       readyCreated: true,
       everAttempted: true,
+      lastPlannedProjectionHash: await integrationProjectionHash(snapshot.body),
       ...((snapshot.speakerAliases?.length || stream.speakerAliases?.length)
         ? { speakerAliases: snapshot.speakerAliases ?? stream.speakerAliases }
         : {}),
     };
+    delete nextStream.readyDeadlineAt;
     await this.deps.unitOfWork.supersedeDelivery(superseded, replacement, nextStream);
     await this.stateChanged();
     return { delivery: replacement, body: snapshot.body };
@@ -346,6 +354,9 @@ export class IntegrationDispatcher {
         revision: delivery.revision,
       },
       stream.speakerAliases,
+      delivery.readinessRelease === 'manual' || delivery.readinessRelease == null
+        ? 'manual'
+        : 'timeout',
     );
   }
 

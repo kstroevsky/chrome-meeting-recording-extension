@@ -65,6 +65,7 @@ describe('integration persistence repositories', () => {
       readyCreated: true,
       everAttempted: true,
       lastPlannedProjectionHash: 'projection-hash',
+      readyDeadlineAt: 40,
     });
     await streams.put({
       destinationId: 'destination_analyzer',
@@ -85,6 +86,7 @@ describe('integration persistence repositories', () => {
       eventTime: 20,
       connectionVersion: 1,
       allowedPolicy: DATA_POLICY,
+      readinessRelease: 'timeout',
       state: 'retrying',
       attemptCount: 1,
       nextAttemptAt: 30,
@@ -113,14 +115,16 @@ describe('integration persistence repositories', () => {
       destinations: [expect.objectContaining({ destinationId: 'destination_crm', state: 'needs-review' })],
     }));
     await expect(restartedStreams.get('destination_crm', 'recording:internal')).resolves.toEqual(
-      expect.objectContaining({ externalRecordingId: 'recording_external_crm' }),
+      expect.objectContaining({ externalRecordingId: 'recording_external_crm', readyDeadlineAt: 40 }),
     );
     await expect(restartedStreams.get('destination_analyzer', 'recording:internal')).resolves.toEqual(
       expect.objectContaining({ externalRecordingId: 'recording_external_analyzer' }),
     );
     await expect(restartedDeliveries.listStream('destination_crm', 'recording:internal')).resolves.toEqual([
-      expect.not.objectContaining({ body: expect.anything() }),
+      expect.objectContaining({ readinessRelease: 'timeout' }),
     ]);
+    expect((await restartedDeliveries.listStream('destination_crm', 'recording:internal'))[0])
+      .not.toHaveProperty('body');
   });
 
   it('rejects delivery state that cannot be safely reconstructed', async () => {

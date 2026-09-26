@@ -1,39 +1,22 @@
-import type { IntegrationDataPolicy } from './contracts';
 import { createIntegrationId } from './ids';
 import { buildIntegrationTestPayload } from './IntegrationTestEvent';
+import type { IntegrationPlanResult } from './IntegrationEventPlanner';
 import {
   parseCreateIntegrationDestinationInput,
   type CreateIntegrationDestinationInput,
   type CreatedIntegrationDestination,
   type IntegrationConnectionTestResult,
 } from './management';
-import {
-  assertIntegrationPayloadWithinLimit,
-  INTEGRATION_MAX_PAYLOAD_BYTES,
-} from './payload';
 import type {
   IntegrationDelivery,
   IntegrationDestination,
   IntegrationRequestAuth,
   IntegrationSecret,
-  IntegrationSpeakerAlias,
-  IntegrationStream,
 } from './persistence';
-import { sha256Hex } from './serialization';
 import { createStandardWebhookSecret } from './webhook/StandardWebhookSigner';
 import { normalizeWebhookEndpoint } from './webhook/WebhookEndpoint';
 import { normalizeWebhookApiKeyHeader, type ResolvedWebhookRequestAuth } from './webhook/WebhookAuth';
 import type { WebhookTransportResult } from './webhook/WebhookTransport';
-
-type SnapshotEnvelope = {
-  eventTypePrefix: string;
-  eventKind: 'recording.ready.v1' | 'recording.updated.v1';
-  eventId: string;
-  eventTime: number;
-  producerId: string;
-  externalRecordingId: string;
-  revision: number;
-};
 
 type CoordinatorDeps = {
   destinations: {
@@ -43,32 +26,15 @@ type CoordinatorDeps = {
   secrets: {
     get(id: string): Promise<IntegrationSecret | undefined>;
   };
-  streams: {
-    get(destinationId: string, recordingId: string): Promise<IntegrationStream | undefined>;
-  };
   deliveries: {
-    put(delivery: IntegrationDelivery): Promise<void>;
     list(): Promise<IntegrationDelivery[]>;
-  };
-  snapshots: {
-    build(
-      recordingId: string,
-      policy: IntegrationDataPolicy,
-      envelope: SnapshotEnvelope,
-      currentSpeakerAliases?: readonly IntegrationSpeakerAlias[],
-    ): Promise<{
-      body: string;
-      totalBytes: number;
-      transcriptBytes: number;
-      otherBytes: number;
-      readiness: { complete: boolean; release: 'complete' | 'timeout' | 'manual'; pending: string[] };
-      speakerAliases?: IntegrationSpeakerAlias[];
-    }>;
   };
   unitOfWork: {
     createDestination(destination: IntegrationDestination, secrets: IntegrationSecret[]): Promise<void>;
-    planDelivery(delivery: IntegrationDelivery, stream: IntegrationStream): Promise<void>;
     deleteDestination(destination: IntegrationDestination, updatedAt: number): Promise<void>;
+  };
+  planner: {
+    planManual(destination: IntegrationDestination, recordingId: string): Promise<IntegrationPlanResult>;
   };
   dispatcher: {
     dispatch(deliveryId: string, preparedBody?: string): Promise<IntegrationDelivery>;
@@ -196,100 +162,14 @@ export class IntegrationCoordinator {
     const destination = await this.requireDestination(destinationId);
     if (!destination.enabled) throw new Error('Integration destination is disabled');
     await this.assertDestinationPermission(destination);
-    const current = await this.deps.streams.get(destination.id, recordingId);
-    const externalRecordingId = current?.externalRecordingId ?? createIntegrationId('recording');
-    const revision = current?.nextRevision ?? 1;
-    const eventKind = current?.readyCreated ? 'recording.updated.v1' : 'recording.ready.v1';
-    const eventId = createIntegrationId('event');
-    const eventTime = this.now();
-    const snapshot = await this.deps.snapshots.build(
-      recordingId,
-      destination.dataPolicy,
-      {
-        eventTypePrefix: this.deps.eventTypePrefix,
-        eventKind,
-        eventId,
-        eventTime,
-        producerId: destination.producerId,
-        externalRecordingId,
-        revision,
-      },
-      current?.speakerAliases,
-    );
-    assertIntegrationPayloadWithinLimit(snapshot, INTEGRATION_MAX_PAYLOAD_BYTES);
-    const delivery = await this.planDelivery({
-      destination,
-      current,
-      recordingId,
-      externalRecordingId,
-      revision,
-      eventId,
-      eventKind,
-      eventTime,
-      body: snapshot.body,
-      totalBytes: snapshot.totalBytes,
-      transcriptBytes: snapshot.transcriptBytes,
-      speakerAliases: snapshot.speakerAliases,
-    });
-    return await this.deps.dispatcher.dispatch(delivery.id, snapshot.body);
+    const planned = await this.deps.planner.planManual(destination, recordingId);
+    if (planned.kind !== 'planned') throw new Error('Manual integration send was not planned');
+    return await this.deps.dispatcher.dispatch(planned.delivery.id, planned.body);
   }
 
   async listDeliveries(): Promise<IntegrationDelivery[]> {
     const rows = await this.deps.deliveries.list();
     return rows.sort((left, right) => right.updatedAt - left.updatedAt);
-  }
-
-  private async planDelivery(input: {
-    destination: IntegrationDestination;
-    current?: IntegrationStream;
-    recordingId: string;
-    externalRecordingId: string;
-    revision: number;
-    eventId: string;
-    eventKind: 'recording.ready.v1' | 'recording.updated.v1';
-    eventTime: number;
-    body: string;
-    totalBytes: number;
-    transcriptBytes: number;
-    speakerAliases?: IntegrationSpeakerAlias[];
-  }): Promise<IntegrationDelivery> {
-    const createdAt = this.now();
-    const delivery: IntegrationDelivery = {
-      id: createIntegrationId('delivery'),
-      destinationId: input.destination.id,
-      recordingId: input.recordingId,
-      externalRecordingId: input.externalRecordingId,
-      eventId: input.eventId,
-      eventType: input.eventKind,
-      revision: input.revision,
-      eventTime: input.eventTime,
-      connectionVersion: input.destination.connectionVersion,
-      allowedPolicy: { ...input.destination.dataPolicy },
-      state: 'pending',
-      attemptCount: 0,
-      nextAttemptAt: createdAt,
-      bodyHash: await sha256Hex(input.body),
-      totalBytes: input.totalBytes,
-      transcriptBytes: input.transcriptBytes,
-      createdAt,
-      updatedAt: createdAt,
-    };
-    const stream: IntegrationStream = {
-      destinationId: input.destination.id,
-      recordingId: input.recordingId,
-      externalRecordingId: input.externalRecordingId,
-      nextRevision: input.revision + 1,
-      readyCreated: true,
-      everAttempted: true,
-      ...(input.current?.lastPlannedProjectionHash
-        ? { lastPlannedProjectionHash: input.current.lastPlannedProjectionHash }
-        : {}),
-      ...((input.speakerAliases?.length || input.current?.speakerAliases?.length)
-        ? { speakerAliases: input.speakerAliases ?? input.current?.speakerAliases }
-        : {}),
-    };
-    await this.deps.unitOfWork.planDelivery(delivery, stream);
-    return delivery;
   }
 
   private prepareRequestAuth(
