@@ -4,6 +4,7 @@ import { IntegrationDestinationRepository } from '../IntegrationDestinationRepos
 import { IntegrationDeliveryRepository } from '../IntegrationDeliveryRepository';
 import { IntegrationSecretRepository } from '../IntegrationSecretRepository';
 import { CONSERVATIVE_INTEGRATION_POLICY } from '../policy';
+import { openIntegrationDatabase } from '../IntegrationDatabase';
 
 function seedVersion1(factory: IDBFactory): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -126,5 +127,50 @@ describe('meeting-integrations migration', () => {
     const migrated = await deliveries.get('delivery_legacy');
     expect(migrated?.allowedPolicy).toBeUndefined();
     expect(migrated?.nextAttemptAt).toBeUndefined();
+  });
+});
+
+describe('an integration database other builds have touched', () => {
+  const seed = (factory: IDBFactory, version: number, stores: string[]) => new Promise<void>((resolve, reject) => {
+    const request = factory.open('meeting-integrations', version);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      for (const store of stores) {
+        if (store === 'deliveries') {
+          const deliveries = database.createObjectStore('deliveries', { keyPath: 'id' });
+          deliveries.createIndex('streamRevision', ['destinationId', 'recordingId', 'revision'], { unique: true });
+          deliveries.createIndex('nextAttemptAt', 'nextAttemptAt');
+        } else if (store === 'streams') {
+          database.createObjectStore('streams', { keyPath: ['destinationId', 'recordingId'] });
+        } else {
+          database.createObjectStore(store, { keyPath: store === 'routingIntents' ? 'recordingId' : 'id' });
+        }
+      }
+      if (stores.includes('destinations')) {
+        request.transaction!.objectStore('destinations').put({ id: 'kept', name: 'Kept CRM' });
+      }
+    };
+    request.onsuccess = () => { request.result.close(); resolve(); };
+    request.onerror = () => reject(request.error);
+  });
+
+  it('opens one a newer build upgraded, instead of failing with a VersionError', async () => {
+    const factory = new IDBFactory();
+    await seed(factory, 7, ['destinations', 'secrets', 'routingIntents', 'streams', 'deliveries']);
+    const database = await openIntegrationDatabase(factory);
+    expect(database.version).toBe(7);
+  });
+
+  it('adds a store another branch left out, keeping what is there', async () => {
+    const factory = new IDBFactory();
+    await seed(factory, 7, ['destinations', 'secrets', 'streams', 'deliveries']);
+    const database = await openIntegrationDatabase(factory);
+    expect(database.version).toBe(8);
+    expect(database.objectStoreNames.contains('routingIntents')).toBe(true);
+    const kept = await new Promise((resolve) => {
+      const request = database.transaction('destinations', 'readonly').objectStore('destinations').get('kept');
+      request.onsuccess = () => resolve(request.result);
+    });
+    expect(kept).toEqual({ id: 'kept', name: 'Kept CRM' });
   });
 });

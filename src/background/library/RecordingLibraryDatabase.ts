@@ -94,7 +94,10 @@ export function openRecordingHistoryDatabase(factory?: IDBFactory): Promise<IDBD
 
 /** Every store and index this build reads, whichever build created them. */
 function isSatisfied(database: IDBDatabase): boolean {
-  if (!hasStores(database, [RECORDINGS_STORE, NOTATIONS_STORE, TRANSCRIPTS_STORE, ANALYSES_STORE])) return false;
+  // Every store `upgrade` creates belongs here: one left out is one a profile
+  // from another branch can lack while this build opens it as-is.
+  const stores = [RECORDINGS_STORE, RECORDING_CONTEXTS_STORE, NOTATIONS_STORE, TRANSCRIPTS_STORE, ANALYSES_STORE, ANALYSIS_OUTCOMES_STORE];
+  if (!hasStores(database, stores)) return false;
   const indexes = database.transaction(RECORDINGS_STORE, 'readonly').objectStore(RECORDINGS_STORE).indexNames;
   return indexes.contains(CREATED_AT_ID_INDEX) && indexes.contains(ACTIVE_CREATED_AT_ID_INDEX);
 }
