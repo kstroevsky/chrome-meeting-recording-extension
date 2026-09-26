@@ -38,6 +38,12 @@ export class RecordingHistoryRepository implements RecordingHistoryRepositoryPor
       const cursorKey = options.cursor ? [options.cursor.createdAt, options.cursor.id] : undefined;
       const request = index.openCursor(cursorKey ? IDBKeyRange.upperBound(cursorKey, true) : null, 'prev');
       const entries: RecordingHistoryEntry[] = [];
+      // The active index holds live rows only, so its size is the library's.
+      let total: number | undefined;
+      if (!options.cursor) {
+        const counting = index.count();
+        counting.onsuccess = () => { total = counting.result; };
+      }
       let settled = false;
       const fail = (error: unknown) => {
         if (settled) return;
@@ -62,6 +68,7 @@ export class RecordingHistoryRepository implements RecordingHistoryRepositoryPor
         resolve({
           entries: pageEntries,
           ...(hasMore && last ? { nextCursor: { createdAt: last.createdAt, id: last.id } } : {}),
+          ...(total != null ? { total } : {}),
         });
       };
       transaction.onerror = () => fail(transaction.error ?? new Error('Could not read recording history'));

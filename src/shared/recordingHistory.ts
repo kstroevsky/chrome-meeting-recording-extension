@@ -101,6 +101,11 @@ export type RecordingHistoryCursor = { createdAt: number; id: string };
 export type RecordingHistoryPage = {
   entries: RecordingHistoryEntry[];
   nextCursor?: RecordingHistoryCursor;
+  /**
+   * How many recordings the whole library holds — not this page. Only on the
+   * first page, which is the one callers show a count beside.
+   */
+  total?: number;
 };
 
 export type RecordingHistoryMessage =

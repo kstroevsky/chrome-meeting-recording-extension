@@ -123,3 +123,24 @@ describe('a library a newer build has already upgraded', () => {
     expect((await repository.get('therapy-session'))?.note).toBe('kept');
   });
 });
+
+describe('the library size on the first page', () => {
+  it('counts the whole library, never deleted rows, and only on the first page', async () => {
+    const factory = new IDBFactory();
+    const repository = new RecordingHistoryRepository(factory);
+    const row = (id: string, createdAt: number, deletedAt?: number) => ({
+      id, name: id, createdAt, storageMode: 'local' as const, status: 'complete' as const,
+      files: [{ id: `${id}:tab`, stream: 'tab' as const, filename: `${id}.webm`, mimeType: 'video/webm', locations: [],
+        delivery: { requested: 'local' as const, status: 'downloaded' as const }, destination: 'local' as const, status: 'available' as const }],
+      ...(deletedAt ? { deletedAt } : {}),
+    });
+    for (let i = 1; i <= 3; i++) await repository.update(`r${i}`, () => row(`r${i}`, i));
+    await repository.update('gone', () => row('gone', 9, 10));
+
+    const first = await repository.listPage({ limit: 2 });
+    expect(first.entries.map((entry) => entry.id)).toEqual(['r3', 'r2']);
+    expect(first.total).toBe(3);
+    const second = await repository.listPage({ limit: 2, cursor: first.nextCursor });
+    expect(second.total).toBeUndefined();
+  });
+});
