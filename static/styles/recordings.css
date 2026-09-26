@@ -198,10 +198,10 @@ button { -webkit-font-smoothing: antialiased; }
 .recordings-list { min-height: 0; }
 
 .recordings-toolbar { display: flex; align-items: center; gap: 14px; min-height: 65px; padding: 14px 28px; border-bottom: 1px solid var(--divider); }
-.recording-search { width: 100%; height: 36px; border: 0; border-radius: 6px; outline: 0; background: var(--field); color: var(--ink); font: 400 12px/1 'IBM Plex Mono', monospace; padding: 0 12px; transition: var(--hover-transition); }
+.recording-search { flex: 1 1 0; width: 100%; min-width: 160px; height: 36px; border: 0; border-radius: 6px; outline: 0; background: var(--field); color: var(--ink); font: 400 12px/1 'IBM Plex Mono', monospace; padding: 0 12px; transition: var(--hover-transition); }
 .recording-search::placeholder { color: var(--faint); opacity: 1; }
 .recording-search:focus { box-shadow: 0 0 0 1px var(--detail), 0 0 0 4px color-mix(in srgb, var(--detail) 16%, transparent); }
-.recordings-count { flex: 0 0 auto; color: var(--muted); font: 400 10.5px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; white-space: nowrap; }
+.recordings-count { overflow: hidden; flex: 0 1 auto; min-width: 0; color: var(--muted); font: 400 10.5px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; text-overflow: ellipsis; white-space: nowrap; }
 
 .bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 11px 28px; background: var(--ink); }
 .bulk-toolbar__count { color: var(--surface); font: 600 11px/1 'IBM Plex Mono', monospace; letter-spacing: .08em; }
@@ -274,13 +274,26 @@ button { -webkit-font-smoothing: antialiased; }
 .shared-card__button:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
 
 .recording-table { overflow: hidden; }
-.recording-table__header, .recording-row { display: grid; grid-template-columns: 18px 8px minmax(0, 1fr) 170px 50px 44px 30px 44px 20px; align-items: center; column-gap: 10px; }
+.recording-table__header, .recording-row { display: grid; grid-template-columns: 18px 8px minmax(0, 1fr) 88px 136px 50px 44px 30px 44px; align-items: center; column-gap: 9px; }
 .recording-table__header { overflow: hidden; scrollbar-gutter: stable; min-height: 34px; padding: 8px 28px; border-bottom: 1px solid var(--border); background: var(--raised); }
 .table-header-button { display: inline-flex; align-items: center; gap: 3px; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--faint); cursor: pointer; font: 600 9px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; padding: 0; text-align: left; }
 .table-header-button--right { justify-content: flex-end; text-align: right; }
 .table-header-button--active { color: var(--detail); }
 .table-header-button__arrow { font-size: 10px; letter-spacing: 0; }
 .table-header-text { color: var(--faint); font: 600 9px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; text-align: center; }
+.table-header-text--left { text-align: left; }
+/* A recording's folder, as a tag that filters the list to that folder. */
+.recording-row__folder-cell { display: flex; min-width: 0; }
+.recording-row__folder { overflow: hidden; max-width: 100%; height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: 11px; background: var(--field); color: var(--body); cursor: pointer; font: 500 10.5px/20px 'IBM Plex Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.recording-row__folder:hover { border-color: var(--detail); color: var(--ink); }
+.recording-row__folder--active { border-color: var(--detail); background: color-mix(in srgb, var(--detail) 14%, var(--surface)); color: var(--ink); }
+.recording-row__folder:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
+.recordings-folder-filter { display: inline-flex; flex: 0 0 auto; }
+.folder-filter-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 180px; height: 28px; padding: 0 9px 0 11px; border: 1px solid var(--detail); border-radius: 14px; background: color-mix(in srgb, var(--detail) 12%, var(--surface)); color: var(--ink); cursor: pointer; font: 500 10.5px/1 'IBM Plex Mono', monospace; }
+.folder-filter-chip__label { overflow: hidden; max-width: 140px; text-overflow: ellipsis; white-space: nowrap; }
+.folder-filter-chip__clear { color: var(--muted); font-size: 13px; line-height: 1; }
+.folder-filter-chip:hover .folder-filter-chip__clear { color: var(--accent-dark); }
+.folder-filter-chip:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
 .selection-box { width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; border: 1.5px solid color-mix(in srgb, var(--muted) 48%, var(--border)); border-radius: 5px; background: transparent; color: #fff; cursor: pointer; padding: 0; transition: var(--hover-transition); }
 .selection-box:hover { border-color: var(--accent); }
 .selection-box:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
@@ -304,8 +317,6 @@ button { -webkit-font-smoothing: antialiased; }
 .recording-row__time { font-size: 11px; }
 .destination-icon { width: 15px; height: 15px; display: block; color: var(--drive-icon); justify-self: center; }
 .destination-icon--local { width: 14px; height: 14px; color: var(--local-icon); }
-.recording-row__remove { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; justify-self: end; border: 0; border-radius: 6px; background: transparent; color: color-mix(in srgb, var(--muted) 56%, transparent); cursor: pointer; font: 400 14px/1 'IBM Plex Mono', monospace; padding: 0; transition: var(--hover-transition); }
-.recording-row__remove:hover { background: var(--border); color: var(--accent-dark); }
 .recording-no-results { padding: 48px 0; color: var(--faint); font: 500 11px/1.5 'IBM Plex Mono', monospace; letter-spacing: .1em; text-align: center; }
 .recording-table__more { padding: 18px 0 6px; color: var(--faint); font: 500 10.5px/1.5 'IBM Plex Mono', monospace; letter-spacing: .1em; text-align: center; text-transform: uppercase; }
 
@@ -347,8 +358,8 @@ button { -webkit-font-smoothing: antialiased; }
   .recordings-header, .recordings-toolbar, .bulk-toolbar, .recording-table__header { padding-inline: 18px; }
   .recording-table__scroll { padding-inline: 18px; }
   /* DUR steps out; the other eight cells keep their order. */
-  .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(0, 1fr) 96px 44px 30px 44px 20px; column-gap: 7px; }
-  .recording-table__header > :nth-child(5), .recording-row > :nth-child(5) { display: none; }
+  .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(0, 1fr) 72px 96px 44px 30px 44px; column-gap: 7px; }
+  .recording-table__header > :nth-child(6), .recording-row > :nth-child(6) { display: none; }
 }
 
 /* NOTES column (f1): the count chip plus the first note, which is what makes a
