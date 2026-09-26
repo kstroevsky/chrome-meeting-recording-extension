@@ -8,7 +8,7 @@
 .grow-div { height: 1px; margin: 0; background: var(--divider); }
 .native-select { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
 
-.select-trigger { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 132px; gap: 7px; padding: 6px 0 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: var(--hover-transition); }
+.select-trigger { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: 500 13px 'Space Grotesk', sans-serif; text-align: right; cursor: pointer; transition: var(--hover-transition); }
 .select-trigger::after { content: ''; width: 9px; height: 6px; flex: 0 0 auto; background: var(--ink-4); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .select-trigger:hover,
 .select-trigger:focus-visible,
@@ -27,12 +27,22 @@
 .select-options button:focus-visible { background: var(--secondary-hover); color: var(--ink); outline: 0; }
 .select-divider { display: block; height: 1px; margin: 4px 8px; background: var(--divider); }
 .select-options .select-add { color: var(--ink-3); }
+/* A setup row's trigger pads both sides evenly, so its hover/open pill frames
+   the label; pulling it (and its menu) 8px outward keeps the resting label and
+   chevron flush with the row edge. */
+.grow .select-trigger { margin-right: -8px; }
+.grow .select-options { right: -8px; }
 
-.capture-summary { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 52px; padding: 0; border: 0; border-top: 1px solid var(--divider); background: transparent; color: var(--ink-2); font-family: inherit; text-align: left; cursor: pointer; }
+.capture-summary { position: relative; isolation: isolate; display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 52px; padding: 0; border: 0; border-top: 1px solid var(--divider); background: transparent; color: var(--ink-2); font-family: inherit; text-align: left; cursor: pointer; }
 .capture-summary strong { display: block; font-size: 13px; font-weight: 500; }
 .capture-summary small { display: block; margin-top: 2px; color: var(--ink-3); font: 600 9.5px 'IBM Plex Mono', monospace; letter-spacing: .055em; }
 .capture-chevron { width: 11px; height: 7px; flex: 0 0 auto; color: var(--warn-label); transition: transform 140ms ease-out; }
 .capture-summary[aria-expanded='true'] .capture-chevron { transform: rotate(180deg); }
+/* The row's hover is the recordings list's wash (f1), so it answers the pointer like every other row. */
+.capture-summary::before { position: absolute; z-index: -1; inset: 3px -8px; border-radius: 6px; background: transparent; content: ''; transition: var(--hover-transition); }
+.capture-summary:hover::before,
+.capture-summary:focus-visible::before { background: var(--secondary-hover); }
+.capture-summary:focus-visible { outline: 0; }
 #capture-details { padding-left: 12px; border-top: 1px solid var(--divider); }
 .grow-detail { min-height: 46px; }
 
@@ -40,14 +50,18 @@
 .cam-toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .cam-pill { display: inline-flex; height: 26px; gap: 0; padding: 2px; border-radius: 6px; background: var(--tile); font-family: 'IBM Plex Mono', monospace; }
 .cam-pill-off,
-.cam-pill-text { min-width: 42px; padding: 4px 10px; border-radius: 4px; color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; text-align: center; }
+.cam-pill-text { min-width: 42px; padding: 4px 10px; border-radius: 4px; color: var(--ink-3); font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .04em; text-align: center; transition: var(--hover-transition); }
+/* The half a click would switch to lifts on hover; the chosen half stays put. */
+.cam-toggle:hover input:checked ~ .cam-pill .cam-pill-off,
+.cam-toggle:hover input:not(:checked) ~ .cam-pill .cam-pill-text { background: var(--control-bg-strong); color: var(--ink-2); }
 .cam-toggle input:checked ~ .cam-pill .cam-pill-text,
 .cam-toggle input:not(:checked) ~ .cam-pill .cam-pill-off { background: var(--ink); color: var(--surface); font-weight: 600; }
 .cam-toggle input:focus-visible ~ .cam-pill { outline: 2px solid var(--focus); outline-offset: 2px; }
 .segmented { display: flex; width: 136px; padding: 2px; border-radius: 6px; background: var(--tile); }
 .seg { position: relative; flex: 1; cursor: pointer; }
 .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
-.seg span { display: block; padding: 4px 0; border-radius: 6px; color: var(--ink-meta); font: 500 11px 'IBM Plex Mono', monospace; letter-spacing: .03em; text-align: center; }
+.seg span { display: block; padding: 4px 0; border-radius: 6px; color: var(--ink-meta); font: 500 11px 'IBM Plex Mono', monospace; letter-spacing: .03em; text-align: center; transition: var(--hover-transition); }
+.seg:hover input:not(:checked) + span { background: var(--control-bg-strong); color: var(--ink-2); }
 .seg input:checked + span { background: var(--ink); color: var(--surface); font-weight: 600; }
 .seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
 .cam-warn { display: flex; align-items: center; gap: 6px; margin: 9px 0 0; }

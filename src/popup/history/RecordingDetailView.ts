@@ -361,7 +361,14 @@ export class RecordingDetailView {
     if (this.current?.kind === 'upload') {
       return this.current.job.folderWebViewLink ?? this.current.job.files.find((file) => file.webViewLink)?.webViewLink;
     }
-    return this.current?.entry.files.find((file) => file.destination === 'drive' && file.webViewLink)?.webViewLink;
+    // The recording's folder, as for an upload: the first file with a link is
+    // whichever stream happened to be listed first (often the camera).
+    const entry = this.current?.entry;
+    if (!entry) return undefined;
+    if (entry.folderWebViewLink) return entry.folderWebViewLink;
+    if (entry.driveFolderId) return `https://drive.google.com/drive/folders/${encodeURIComponent(entry.driveFolderId)}`;
+    // A recording from before per-recording folders has only its files.
+    return entry.files.find((file) => file.destination === 'drive' && file.webViewLink)?.webViewLink;
   }
 
   /** Once the background finalizes a job, replace its progress view with durable history. */
