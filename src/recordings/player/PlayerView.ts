@@ -27,6 +27,12 @@ const ENTER_FULLSCREEN_ICON = '<svg width="13" height="13" viewBox="0 0 14 14" f
 const LEAVE_FULLSCREEN_ICON = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2v3H2M9 2v3h3M5 12V9H2M9 12V9h3"/></svg>';
 const PENCIL_ICON = '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 const TICK_ICON = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.8 5.2L4 7.4l4.2-4.6"/></svg>';
+/** How long a play/pause request waits for the media to report it before the bloom lapses. */
+const FLASH_WINDOW_MS = 1_000;
+// Eight teeth round a hub: rays alone read as brightness, not settings.
+const GEAR_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M6.54 3.22L6.72 1.42A6.7 6.7 0 0 1 9.28 1.42L9.46 3.22A5 5 0 0 1 10.35 3.59L11.75 2.45A6.7 6.7 0 0 1 13.55 4.25L12.41 5.65A5 5 0 0 1 12.78 6.54L14.58 6.72A6.7 6.7 0 0 1 14.58 9.28L12.78 9.46A5 5 0 0 1 12.41 10.35L13.55 11.75A6.7 6.7 0 0 1 11.75 13.55L10.35 12.41A5 5 0 0 1 9.46 12.78L9.28 14.58A6.7 6.7 0 0 1 6.72 14.58L6.54 12.78A5 5 0 0 1 5.65 12.41L4.25 13.55A6.7 6.7 0 0 1 2.45 11.75L3.59 10.35A5 5 0 0 1 3.22 9.46L1.42 9.28A6.7 6.7 0 0 1 1.42 6.72L3.22 6.54A5 5 0 0 1 3.59 5.65L2.45 4.25A6.7 6.7 0 0 1 4.25 2.45L5.65 3.59A5 5 0 0 1 6.54 3.22Z"/><circle cx="8" cy="8" r="2.1"/></svg>';
+const PLAY_GLYPH = '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M3 1.8l7 4.2-7 4.2z"/></svg>';
+const PAUSE_GLYPH = '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><rect x="2" y="1.5" width="3" height="9" rx="1"/><rect x="7" y="1.5" width="3" height="9" rx="1"/></svg>';
 const SEARCH_ICON = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="5.2" cy="5.2" r="3.4"/><path d="M7.8 7.8l2.4 2.4"/></svg>';
 
 /**
@@ -99,6 +105,9 @@ export class PlayerView {
   private readonly settingsButton = document.createElement('button');
   private readonly settingsMenu = $('div', 'player__menu player__menu--settings');
   private readonly help = $('div', 'player__help');
+  /** The centre bloom a click on the picture leaves behind (YouTube's language). */
+  private readonly flash = $('span', 'player__flash');
+  private flashArmedAt = -Infinity;
   /** The picture and, when there is a transcript, the rail beside it (f10). */
   private readonly body = $('div', 'player__body');
   private readonly rail = $('aside', 'player__rail');
@@ -198,7 +207,15 @@ export class PlayerView {
     this.video.setAttribute('playsinline', '');
     this.video.preload = 'metadata';
     this.pictureTitle.append(this.pictureName, this.pictureDate);
-    this.stage.append(this.video, this.auxiliaries, $('span', 'player__scrim'), this.pictureTitle);
+    this.flash.setAttribute('aria-hidden', 'true');
+    this.stage.append(this.video, this.auxiliaries, $('span', 'player__scrim'), this.pictureTitle, this.flash);
+    // The picture itself plays and pauses. A click that closes an open menu only
+    // closes it (the overlay handles that), as a click outside a menu should.
+    this.video.addEventListener('click', () => {
+      if (this.popoverOpen) return;
+      this.armPlayFlash();
+      this.callbacks.togglePlay();
+    });
 
     const scrub = $('div', 'player__scrub');
     const hit = $('span', 'player__hit');
@@ -242,7 +259,7 @@ export class PlayerView {
     this.settingsButton.className = 'player__icon player__icon--on-picture'; this.settingsButton.type = 'button';
     this.settingsButton.title = 'Skip step and speed';
     this.settingsButton.setAttribute('aria-label', 'Playback settings');
-    this.settingsButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.8M8 12.6v1.8M14.4 8h-1.8M3.4 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8L3.5 3.5"/></svg>';
+    this.settingsButton.innerHTML = GEAR_ICON;
     this.settingsButton.addEventListener('click', (event) => {
       event.stopPropagation();
       this.togglePopover(this.settingsMenu);
@@ -297,6 +314,10 @@ export class PlayerView {
     const opening = menu.hidden;
     this.closePopovers();
     menu.hidden = !opening;
+  }
+
+  private get popoverOpen(): boolean {
+    return [this.filesMenu, this.topicsMenu, this.volumeMenu, this.settingsMenu].some((menu) => !menu.hidden);
   }
 
   closePopovers(): void {
@@ -995,9 +1016,24 @@ export class PlayerView {
   setPlaying(playing: boolean): void {
     this.playButton.title = playing ? 'Pause' : 'Play';
     this.playButton.setAttribute('aria-label', this.playButton.title);
-    this.playButton.innerHTML = playing
-      ? '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="1.5" width="3" height="9" rx="1"/><rect x="7" y="1.5" width="3" height="9" rx="1"/></svg>'
-      : '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M3 1.8l7 4.2-7 4.2z"/></svg>';
+    this.playButton.innerHTML = playing ? PAUSE_GLYPH : PLAY_GLYPH;
+    // Only a change the user asked for blooms; autoplay and the end of the file pass quietly.
+    if (performance.now() - this.flashArmedAt < FLASH_WINDOW_MS) {
+      this.flashArmedAt = -Infinity;
+      this.flash.innerHTML = playing ? PLAY_GLYPH : PAUSE_GLYPH;
+      this.flash.classList.remove('player__flash--on');
+      void this.flash.offsetWidth; // restarts the animation on a quick second click
+      this.flash.classList.add('player__flash--on');
+    }
+  }
+
+  /**
+   * The next play or pause the media reports came from the user, so the picture
+   * answers it with the centre bloom. Armed rather than drawn at once: the icon
+   * shows the state playback actually reached, not the one a click asked for.
+   */
+  armPlayFlash(): void {
+    this.flashArmedAt = performance.now();
   }
 
   /**

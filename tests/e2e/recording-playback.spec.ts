@@ -229,6 +229,31 @@ test.describe('recording playback (integration)', () => {
       await page.keyboard.press('m');
       expect(await video.evaluate((el: HTMLVideoElement) => el.muted)).toBe(false);
 
+      // A shortcut pressed after clicking a control does not ring that control;
+      // Tab brings rings back for keyboard navigation.
+      const focusRing = () => page.evaluate(() => {
+        const style = getComputedStyle(document.activeElement as HTMLElement);
+        return style.boxShadow !== 'none' || style.outlineStyle !== 'none';
+      });
+      const settings = page.locator('.player__controls [aria-label="Playback settings"]');
+      await settings.click();
+      await page.keyboard.press('m');
+      await page.keyboard.press('m');
+      await expect(settings).toBeFocused();
+      expect(await focusRing()).toBe(false);
+      await settings.click();
+      await page.keyboard.press('Tab');
+      expect(await focusRing()).toBe(true);
+
+      // The picture plays and pauses, and blooms the state it reached.
+      await video.evaluate((el: HTMLVideoElement) => { el.pause(); el.currentTime = 0; });
+      await video.click();
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(false);
+      await expect(page.locator('.player__flash--on svg path')).toHaveCount(1);
+      await video.click();
+      await expect.poll(async () => await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
+      await expect(page.locator('.player__flash--on svg rect')).toHaveCount(2);
+
       // Escape closes when not in fullscreen.
       await page.keyboard.press('Escape');
       await expect(page.locator('.player')).toHaveCount(0);

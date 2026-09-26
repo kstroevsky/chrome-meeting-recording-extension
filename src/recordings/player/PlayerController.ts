@@ -130,7 +130,7 @@ export class PlayerController {
   private async dispatch(action: PlayerAction): Promise<void> {
     const video = this.view.video;
     switch (action.kind) {
-      case 'play-pause': return void this.togglePlay();
+      case 'play-pause': { this.view.armPlayFlash(); return void this.togglePlay(); }
       case 'skip': return this.seek((video.currentTime + action.seconds) * 1000);
       case 'speed': return this.applySpeed(nextSpeed(this.speed, action.direction));
       case 'volume': {

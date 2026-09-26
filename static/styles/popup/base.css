@@ -209,6 +209,10 @@ select { font: inherit; }
 /* Anything that reacts to the pointer eases into its hover. `:where` keeps this
    at zero specificity, so a rule that animates transform or size still wins. */
 :where(button, a, input, select, textarea, [role='button'], [role='option'], [tabindex]) { transition: var(--hover-transition); }
+/* Rings are for the keyboard: hidden after a pointer press until focus moves by
+   key (ui/focusSource.ts), so a key pressed after a click does not ring it. */
+:root[data-focus-source='pointer'] :focus-visible:not(input:not([type='checkbox'], [type='radio']), textarea, [contenteditable]) { outline: none; }
+:root[data-focus-source='pointer'] :is(.cam-toggle input:focus-visible ~ .cam-pill, .seg input:focus-visible + span) { outline: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 /* Sticky so the wordmark, the menu and the upload-return control stay reachable
