@@ -135,7 +135,7 @@ describe('RecordingsView detail (f2, f17)', () => {
 
     list.querySelector<HTMLButtonElement>('.recording-row__remove')!.click();
     document.querySelector<HTMLButtonElement>('.confirm-card__confirm')!.click();
-    expect(callbacks.remove).toHaveBeenCalledWith('weekly');
+    expect(callbacks.remove).toHaveBeenCalledWith('weekly', false);
   });
 
   it('arms a note delete in its row and only writes it once the undo window passes', async () => {

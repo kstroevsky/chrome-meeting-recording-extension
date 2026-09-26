@@ -113,7 +113,8 @@ export type PopupDismissInterruption = { type: 'DISMISS_INTERRUPTION' };
 export type PopupListRecordingHistory = { type: 'LIST_RECORDING_HISTORY'; cursor?: RecordingHistoryCursor };
 export type PopupRenameRecordingHistory = { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string };
 export type PopupSetRecordingHistoryNote = { type: 'SET_RECORDING_HISTORY_NOTE'; id: string; note: string };
-export type PopupRemoveRecordingHistory = { type: 'REMOVE_RECORDING_HISTORY'; id: string };
+/** `deleteFiles` also trashes its Drive files and deletes its Downloads files, ending any share first. */
+export type PopupRemoveRecordingHistory = { type: 'REMOVE_RECORDING_HISTORY'; id: string; deleteFiles?: boolean };
 export type PopupOpenRecordingHistoryFile = { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
 /** Stamps a notation at the live recording position (ADR-0005). Targets the active run. */
@@ -275,7 +276,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupSkipRecordingNaming ? CommandResult :
   T extends PopupDismissInterruption ? { session: RecordingStatusView } :
   T extends PopupSetRecordingHistoryNote ? { ok: true; entry?: RecordingHistoryEntry } | { ok: false; error: string } :
-  T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean } | { ok: false; error: string } :
+  T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean; filesDeleted?: number; fileErrors?: string[]; sharesEnded?: number } | { ok: false; error: string } :
   T extends PopupOpenRecordingHistoryFile ? { ok: true } | { ok: false; error: string } :
   T extends PopupMarkNotation ? NotationResult :
   T extends PopupEndNotation ? NotationResult :

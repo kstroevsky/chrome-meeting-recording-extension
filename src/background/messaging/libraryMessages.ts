@@ -1,5 +1,7 @@
 import type { PopupToBg } from '../../shared/protocol';
 import { toStatusView } from '../../shared/recording';
+import { createRecordingFileDeletionPorts } from '../drive/recordingFileDeletionPorts';
+import { deleteRecordingFiles } from '../library/history/RecordingFileDeletion';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 export async function handleLibraryMessage(
@@ -44,7 +46,19 @@ export async function handleLibraryMessage(
   }
   if (msg.type === 'REMOVE_RECORDING_HISTORY') {
     if (!history) throw new Error('Recording history is unavailable');
-    sendResponse({ ok: true, removed: await history.remove(msg.id) });
+    if (!msg.deleteFiles) {
+      sendResponse({ ok: true, removed: await history.remove(msg.id) });
+      return true;
+    }
+    const entry = await history.get(msg.id);
+    // The share goes first: it is served from these files. If it cannot be
+    // ended, nothing is removed or deleted.
+    const sharesEnded = entry && deps.sharing ? await deps.sharing.revokeSharesOf(msg.id) : 0;
+    const removed = await history.remove(msg.id);
+    const files = removed && entry
+      ? await deleteRecordingFiles(entry, createRecordingFileDeletionPorts())
+      : { deleted: 0, errors: [] };
+    sendResponse({ ok: true, removed, filesDeleted: files.deleted, fileErrors: files.errors, sharesEnded });
     return true;
   }
   if (msg.type === 'OPEN_RECORDING_HISTORY_FILE') {
