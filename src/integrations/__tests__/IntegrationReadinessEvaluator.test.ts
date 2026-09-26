@@ -40,8 +40,16 @@ describe('IntegrationReadinessEvaluator', () => {
       artifactLinks: true,
     })).toEqual({
       complete: false,
-      pending: ['transcript', 'analysis', 'artifact-delivery'],
+      pending: ['analysis', 'artifact-delivery'],
     });
+  });
+
+  it('never waits for a transcript: a later one is an update, not a reason to hold the first send', () => {
+    expect(evaluator.evaluate({ history: history() }, {
+      ...CONSERVATIVE_INTEGRATION_POLICY,
+      metadata: true,
+      transcript: true,
+    })).toEqual({ complete: true, pending: [] });
   });
 
   it.each(['completed', 'failed', 'canceled', 'unsupported', 'stale'] as const)(

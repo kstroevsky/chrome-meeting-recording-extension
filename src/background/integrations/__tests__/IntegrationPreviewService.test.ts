@@ -160,7 +160,7 @@ describe('IntegrationPreviewService', () => {
     expect(preview.readiness).toEqual({
       complete: false,
       release: 'manual',
-      pending: ['transcript', 'analysis'],
+      pending: ['analysis'],
     });
     expect(JSON.parse(preview.body).data.recording).not.toHaveProperty('transcript');
     expect(JSON.parse(preview.body).data.recording).not.toHaveProperty('analysis');
