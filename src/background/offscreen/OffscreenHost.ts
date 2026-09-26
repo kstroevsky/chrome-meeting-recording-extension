@@ -35,6 +35,11 @@ export class OffscreenHost {
     return this.recorderTabId != null;
   }
 
+  /** The tab the background opened as the recorder runtime, when it knows it. */
+  get recorderTab(): number | null {
+    return this.recorderTabId;
+  }
+
   async ensureReady(): Promise<void> {
     if (this.connection.currentPort && this.connection.isReady) return;
     const readyPromise = this.connection.getOrCreateReadyPromise();
