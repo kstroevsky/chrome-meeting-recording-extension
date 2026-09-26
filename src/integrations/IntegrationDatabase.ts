@@ -1,3 +1,5 @@
+import { hasStores, openAdditiveDatabase } from '../shared/storage/openAdditiveDatabase';
+
 const DATABASE_NAME = 'meeting-integrations';
 /**
  * v1 held destination credentials; v2 added routing/outbox state; v3 fences
@@ -22,19 +24,20 @@ export function openIntegrationDatabase(factory?: IDBFactory): Promise<IDBDataba
   const cached = connections.get(resolved);
   if (cached) return cached;
 
-  const opening = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = resolved.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => upgrade(request.result, request.transaction!);
-    request.onsuccess = () => {
-      const database = request.result;
-      database.onversionchange = () => {
-        database.close();
-        if (connections.get(resolved) === tracked) connections.delete(resolved);
-      };
-      resolve(database);
+  // Additive, so a build from any branch opens a profile any other build has
+  // touched — see openAdditiveDatabase.
+  const opening = openAdditiveDatabase(resolved, {
+    name: DATABASE_NAME,
+    version: DATABASE_VERSION,
+    upgrade,
+    isSatisfied,
+    blockedError: () => new Error('Integration database upgrade is blocked by another extension context'),
+  }).then((database) => {
+    database.onversionchange = () => {
+      database.close();
+      if (connections.get(resolved) === tracked) connections.delete(resolved);
     };
-    request.onerror = () => reject(request.error ?? new Error('Could not open integration database'));
-    request.onblocked = () => reject(new Error('Integration database upgrade is blocked by another extension context'));
+    return database;
   });
   const tracked = opening.catch((error) => {
     if (connections.get(resolved) === tracked) connections.delete(resolved);
@@ -42,6 +45,20 @@ export function openIntegrationDatabase(factory?: IDBFactory): Promise<IDBDataba
   });
   connections.set(resolved, tracked);
   return tracked;
+}
+
+/** Every store and index this build reads — all that `upgrade` creates. */
+function isSatisfied(database: IDBDatabase): boolean {
+  const stores = [
+    INTEGRATION_DESTINATIONS_STORE,
+    INTEGRATION_SECRETS_STORE,
+    INTEGRATION_ROUTING_INTENTS_STORE,
+    INTEGRATION_STREAMS_STORE,
+    INTEGRATION_DELIVERIES_STORE,
+  ];
+  if (!hasStores(database, stores)) return false;
+  const indexes = database.transaction(INTEGRATION_DELIVERIES_STORE, 'readonly').objectStore(INTEGRATION_DELIVERIES_STORE).indexNames;
+  return indexes.contains(DELIVERY_STREAM_REVISION_INDEX) && indexes.contains(DELIVERY_NEXT_ATTEMPT_INDEX);
 }
 
 function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {

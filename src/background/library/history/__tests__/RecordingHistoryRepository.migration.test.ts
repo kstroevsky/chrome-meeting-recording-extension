@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { RecordingHistoryRepository } from '../RecordingHistoryRepository';
+import { openRecordingHistoryDatabase } from '../../RecordingLibraryDatabase';
 
 function seedVersion2(factory: IDBFactory): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -144,5 +145,36 @@ describe('the library size on the first page', () => {
     expect(first.total).toBe(3);
     const second = await repository.listPage({ limit: 2, cursor: first.nextCursor });
     expect(second.total).toBeUndefined();
+  });
+});
+
+describe('a library another branch took further without this branch’s stores', () => {
+  it('adds the stores this build needs instead of opening it as it is', async () => {
+    const factory = new IDBFactory();
+    // Version 9 from some other branch: the stores it knew, not recordingContexts or analysisOutcomes.
+    await new Promise<void>((resolve, reject) => {
+      const request = factory.open('recording-history', 9);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        const recordings = database.createObjectStore('recordings', { keyPath: 'id' });
+        recordings.createIndex('createdAtId', ['createdAt', 'id'], { unique: true });
+        recordings.createIndex('activeCreatedAtId', ['activeCreatedAt', 'id'], { unique: true });
+        for (const store of ['notations', 'transcripts', 'analyses']) database.createObjectStore(store, { keyPath: 'recordingId' });
+        recordings.put({
+          id: 'kept', name: 'Kept', createdAt: 5, activeCreatedAt: 5, storageMode: 'drive', status: 'complete',
+          files: [{ id: 'kept:tab', stream: 'tab', filename: 'kept.webm', destination: 'drive', status: 'available' }],
+        });
+      };
+      request.onsuccess = () => { request.result.close(); resolve(); };
+      request.onerror = () => reject(request.error);
+    });
+
+    const page = await new RecordingHistoryRepository(factory).listPage();
+    expect(page.entries.map((entry) => entry.id)).toEqual(['kept']);
+
+    const database = await openRecordingHistoryDatabase(factory);
+    expect(database.version).toBe(10);
+    expect(database.objectStoreNames.contains('recordingContexts')).toBe(true);
+    expect(database.objectStoreNames.contains('analysisOutcomes')).toBe(true);
   });
 });
