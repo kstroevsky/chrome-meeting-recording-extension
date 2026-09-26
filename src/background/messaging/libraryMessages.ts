@@ -1,4 +1,5 @@
 import type { PopupToBg } from '../../shared/protocol';
+import { normalizeDriveSyncChoice } from '../../shared/driveSync';
 import { toStatusView } from '../../shared/recording';
 import { createRecordingFileDeletionPorts } from '../drive/recordingFileDeletionPorts';
 import { deleteRecordingFiles } from '../library/history/RecordingFileDeletion';
@@ -59,6 +60,12 @@ export async function handleLibraryMessage(
       ? await deleteRecordingFiles(entry, createRecordingFileDeletionPorts())
       : { deleted: 0, errors: [] };
     sendResponse({ ok: true, removed, filesDeleted: files.deleted, fileErrors: files.errors, sharesEnded });
+    return true;
+  }
+  if (msg.type === 'SYNC_DRIVE_PLAN' || msg.type === 'SYNC_DRIVE_APPLY') {
+    if (!deps.driveLibrary) throw new Error('Google Drive sync is unavailable');
+    if (msg.type === 'SYNC_DRIVE_PLAN') sendResponse({ ok: true, plan: await deps.driveLibrary.sync.plan() });
+    else sendResponse({ ok: true, result: await deps.driveLibrary.sync.apply(normalizeDriveSyncChoice(msg.choice)) });
     return true;
   }
   if (msg.type === 'OPEN_RECORDING_HISTORY_FILE') {

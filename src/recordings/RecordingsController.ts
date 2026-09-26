@@ -1,6 +1,7 @@
 import { createExternalTab } from '../platform/chrome/tabs';
 import { loadExtensionSettingsFromStorage } from '../shared/settings';
 import { sendToBackground } from '../shared/messages';
+import { openDriveSyncDialog } from './DriveSyncDialog';
 import { PlayerController } from './player/PlayerController';
 import { createPlaybackTrackResolver } from './player/playbackSource';
 import type { PlayerStatus } from './player/PlayerView';
@@ -260,6 +261,25 @@ export class RecordingsController {
       this.view.showError(error instanceof Error ? error.message : String(error));
     } finally {
       this.loadingMore = false;
+    }
+  }
+
+  /** "Sync with Drive": the dialog previews and applies; the list is re-read after. */
+  async syncDrive() {
+    const result = await openDriveSyncDialog({
+      plan: async () => {
+        const response = await sendToBackground({ type: 'SYNC_DRIVE_PLAN' });
+        if (!response.ok) throw new Error(response.error);
+        return response.plan;
+      },
+      apply: async (choice) => {
+        const response = await sendToBackground({ type: 'SYNC_DRIVE_APPLY', choice });
+        if (!response.ok) throw new Error(response.error);
+        return response.result;
+      },
+    });
+    if (result) {
+      try { await this.refresh(); } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
     }
   }
 

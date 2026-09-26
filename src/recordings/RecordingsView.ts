@@ -31,6 +31,8 @@ export type RecordingsViewCallbacks = {
   /** `deleteFiles`: also delete the recording's Drive and Downloads files. */
   remove: (id: string, deleteFiles?: boolean) => void;
   removeMany: (ids: string[], deleteFiles?: boolean) => void;
+  /** "Sync with Drive": check Drive, preview, apply what the user chooses. */
+  syncDrive?: () => void;
   openLocal: (recordingId: string, fileId: string) => void;
   fileTo: (recordingId: string, presetId: string | null) => void;
   play: (recordingId: string) => void;
@@ -286,6 +288,15 @@ export class RecordingsView {
       }, SEARCH_REPAINT_MS);
     });
     toolbar.append(search, $('span', 'recordings-count'));
+    if (this.callbacks.syncDrive) {
+      const sync = document.createElement('button');
+      sync.type = 'button';
+      sync.className = 'bulk-button bulk-button--ghost recordings-sync';
+      sync.textContent = 'Sync with Drive';
+      sync.title = 'Compare the library with your Google Drive folders';
+      sync.addEventListener('click', () => this.callbacks.syncDrive?.());
+      toolbar.append(sync);
+    }
     return toolbar;
   }
 
