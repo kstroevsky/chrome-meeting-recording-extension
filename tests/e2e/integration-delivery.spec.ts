@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { IntegrationDataPolicy } from '../../src/integrations/contracts';
 import type { IntegrationDelivery, IntegrationDestination } from '../../src/integrations/persistence';
+import { ANALYSIS_E2E_GATE_CHANNEL } from '../../src/shared/e2e';
 import {
   closeHarness,
   findMockMeetTabId,
@@ -33,6 +34,8 @@ const METADATA_POLICY: IntegrationDataPolicy = {
   transcriptSpeakers: 'omit',
 };
 const NOTE_POLICY: IntegrationDataPolicy = { ...METADATA_POLICY, userNote: true };
+const ANALYSIS_POLICY: IntegrationDataPolicy = { ...METADATA_POLICY, analysis: true };
+const ANALYSIS_NOTE_POLICY: IntegrationDataPolicy = { ...ANALYSIS_POLICY, userNote: true };
 
 type CreatedDestination = {
   destination: IntegrationDestination;
@@ -313,6 +316,132 @@ test.describe('durable integration delivery @integration-e2e', () => {
       if (harness) await closeHarness(harness).catch(() => {});
     }
   });
+
+  test('recovers readiness deadlines and versions only destination-visible changes', async ({}, testInfo) => {
+    test.setTimeout(150_000);
+    let harness: ExtensionHarness | null = null;
+    let receiver: IntegrationReceiver | null = null;
+    try {
+      receiver = await startIntegrationReceiver(testInfo.outputPath('readiness-receiver'));
+      const extensionPath = await prepareIntegrationExtension(testInfo.outputPath('readiness-extension'));
+      harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), {
+        extensionPath,
+        ignoreHTTPSErrors: true,
+      });
+
+      const exported = await createDestination(
+        harness.controlPage,
+        receiver.url('/readiness-exported-note'),
+        'Readiness exported note',
+        ANALYSIS_NOTE_POLICY,
+      );
+      const hidden = await createDestination(
+        harness.controlPage,
+        receiver.url('/readiness-hidden-note'),
+        'Readiness hidden note',
+        ANALYSIS_POLICY,
+      );
+
+      const meet = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: 'opfs',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local',
+        micMode: 'off',
+        recordSelfVideo: false,
+      });
+      const { epoch, historyId, startedAt } = await activeRecordingIdentity(harness.controlPage);
+      await harness.controlPage.waitForTimeout(2_000);
+      await seedTranscript(harness.controlPage, epoch, startedAt, 48);
+      await harness.controlPage.waitForTimeout(500);
+      await armAnalysisGate(harness.controlPage);
+      await stopRecording(harness.controlPage);
+      await waitForAnalysisPaused(harness.controlPage);
+
+      // Phase 8 will own creation of these routing intents. Phase 7 consumes the
+      // durable shape, so the E2E seeds only that boundary and then exercises the
+      // real planner/scheduler/dispatcher pipeline from this point onward.
+      await selectAutomaticRouting(harness.controlPage, historyId, [exported.destination, hidden.destination]);
+      await setRecordingNote(harness.controlPage, historyId, 'phase 7 initial note');
+      await waitForReadinessDeadline(harness.controlPage, exported.destination.id, historyId);
+      await waitForReadinessDeadline(harness.controlPage, hidden.destination.id, historyId);
+      expect(receiver.requests('/readiness-exported-note')).toHaveLength(0);
+      expect(receiver.requests('/readiness-hidden-note')).toHaveLength(0);
+
+      // Make the durable deadlines overdue without touching Chrome alarms, then
+      // kill only the MV3 worker. Startup reconciliation must treat IndexedDB as
+      // authoritative and emit the partial ready snapshots after the worker wakes.
+      await forceReadinessDue(harness.controlPage, exported.destination.id, historyId);
+      await forceReadinessDue(harness.controlPage, hidden.destination.id, historyId);
+      await restartServiceWorker(harness.controlPage);
+      await listDeliveries(harness.controlPage); // wakes the new worker if Chrome has not already done so
+
+      const exportedTimeout = (await waitForRequestCount(receiver, '/readiness-exported-note', 1, 30_000))[0];
+      const hiddenTimeout = (await waitForRequestCount(receiver, '/readiness-hidden-note', 1, 30_000))[0];
+      for (const request of [exportedTimeout, hiddenTimeout]) {
+        const event = parsedEvent(request);
+        expect(event.type).toMatch(/\.recording\.ready\.v1$/);
+        expect(event.data.revision).toBe(1);
+        expect(event.data.readiness).toEqual({
+          complete: false,
+          release: 'timeout',
+          pending: ['analysis'],
+        });
+        expect(event.data.recording.analysis).toEqual({ status: 'analyzing' });
+      }
+      expect(eventNote(exportedTimeout)).toBe('phase 7 initial note');
+      expect(eventNote(hiddenTimeout)).toBeUndefined();
+
+      // The real mock analysis pipeline completes after the timeout release. Its
+      // durable analysis commit calls integrations.consider(), creating revision 2.
+      await releaseAnalysisGate(harness.controlPage);
+      const exportedCompleted = (await waitForRequestCount(receiver, '/readiness-exported-note', 2, 30_000))[1];
+      const hiddenCompleted = (await waitForRequestCount(receiver, '/readiness-hidden-note', 2, 30_000))[1];
+      for (const [timedOut, completed] of [
+        [exportedTimeout, exportedCompleted],
+        [hiddenTimeout, hiddenCompleted],
+      ] as const) {
+        const event = parsedEvent(completed);
+        expect(event.type).toMatch(/\.recording\.updated\.v1$/);
+        expect(event.data.revision).toBe(2);
+        expect(event.data.readiness).toEqual({ complete: true, release: 'complete', pending: [] });
+        expect(event.data.recording.analysis?.status).toBe('completed');
+        expect(event.data.recording.analysis?.topics?.length).toBeGreaterThan(0);
+        expect(header(completed, 'webhook-id')).not.toBe(header(timedOut, 'webhook-id'));
+      }
+
+      // A callback with an unchanged projection is a no-op for both streams.
+      await setRecordingNote(harness.controlPage, historyId, 'phase 7 initial note');
+      await harness.controlPage.waitForTimeout(1_000);
+      expect(receiver.requests('/readiness-exported-note')).toHaveLength(2);
+      expect(receiver.requests('/readiness-hidden-note')).toHaveLength(2);
+
+      // The exported note creates a higher full-state revision only for the
+      // destination whose policy includes notes. The hidden-note stream stays put.
+      await setRecordingNote(harness.controlPage, historyId, 'phase 7 revised note');
+      const exportedUpdated = (await waitForRequestCount(receiver, '/readiness-exported-note', 3, 30_000))[2];
+      expect(parsedEvent(exportedUpdated).type).toMatch(/\.recording\.updated\.v1$/);
+      expect(eventRevision(exportedUpdated)).toBe(3);
+      expect(eventNote(exportedUpdated)).toBe('phase 7 revised note');
+      expect(header(exportedUpdated, 'webhook-id')).not.toBe(header(exportedCompleted, 'webhook-id'));
+      await harness.controlPage.waitForTimeout(1_000);
+      expect(receiver.requests('/readiness-hidden-note')).toHaveLength(2);
+
+      const exportedRows = await listDestinationDeliveries(harness.controlPage, exported.destination.id);
+      const hiddenRows = await listDestinationDeliveries(harness.controlPage, hidden.destination.id);
+      expect(exportedRows.map((delivery) => delivery.revision).sort()).toEqual([1, 2, 3]);
+      expect(hiddenRows.map((delivery) => delivery.revision).sort()).toEqual([1, 2]);
+      expect(exportedRows.every((delivery) => delivery.state === 'delivered')).toBe(true);
+      expect(hiddenRows.every((delivery) => delivery.state === 'delivered')).toBe(true);
+    } finally {
+      await receiver?.stop().catch(() => {});
+      if (harness) await closeHarness(harness).catch(() => {});
+    }
+  });
 });
 
 async function prepareIntegrationExtension(destination: string): Promise<string> {
@@ -371,6 +500,108 @@ async function createRecording(
   const created = (await listRecordings(harness.controlPage)).find((entry) => !before.has(entry.id) && entry.available);
   if (!created) throw new Error('Could not resolve newly created integration recording');
   return created.id;
+}
+
+async function activeRecordingIdentity(
+  page: Page,
+): Promise<{ epoch: number; historyId: string; startedAt: number }> {
+  const identity = await page.evaluate(async () => {
+    const stored = await chrome.storage.session.get('recordingSession');
+    const session = (stored as any)?.recordingSession;
+    return {
+      epoch: session?.epoch as number,
+      historyId: session?.historyId as string,
+      startedAt: session?.runningSince as number,
+    };
+  });
+  if (!identity.historyId || identity.epoch == null || identity.startedAt == null) {
+    throw new Error('No active recording session to seed against');
+  }
+  return identity;
+}
+
+async function seedTranscript(
+  page: Page,
+  epoch: number,
+  startedAt: number,
+  count: number,
+): Promise<void> {
+  await page.evaluate(async ({ epoch, startedAt, count }) => {
+    const subjects = [
+      'the redis connection pool keeps saturating under load and the timeout is too aggressive for it',
+      'flights to berlin are cheapest midweek and the hotel near the office still has rooms available',
+      'the frontend candidate answered the system design question better than anyone interviewed so far',
+    ];
+    const utterances = Array.from({ length: count }, (_, index) => ({
+      startWallMs: startedAt + Math.floor((index / count) * 1_500),
+      endWallMs: startedAt + Math.floor((index / count) * 1_500),
+      speaker: index % 2 ? 'Ada' : 'Grace',
+      text: `${subjects[Math.floor(index / 16) % subjects.length]} number ${index}`,
+    }));
+    await chrome.runtime.sendMessage({ type: 'TRANSCRIPT_UTTERANCES', runId: epoch, utterances });
+  }, { epoch, startedAt, count });
+}
+
+async function armAnalysisGate(page: Page): Promise<void> {
+  await page.evaluate((channelName) => new Promise<void>((resolve, reject) => {
+    const prior = (globalThis as any).__integrationAnalysisE2EGate;
+    prior?.channel?.close?.();
+
+    const channel = new BroadcastChannel(channelName);
+    const state = {
+      channel,
+      paused: false,
+      pausedWaiters: [] as Array<() => void>,
+    };
+    (globalThis as any).__integrationAnalysisE2EGate = state;
+    const timer = setTimeout(() => reject(new Error('Analysis E2E gate did not arm')), 10_000);
+    channel.onmessage = (event) => {
+      const message = event.data as { type?: string } | null;
+      if (message?.type === 'armed') {
+        clearTimeout(timer);
+        resolve();
+      }
+      if (message?.type === 'paused') {
+        state.paused = true;
+        for (const waiter of state.pausedWaiters.splice(0)) waiter();
+      }
+    };
+    channel.postMessage({ type: 'arm' });
+  }), ANALYSIS_E2E_GATE_CHANNEL);
+}
+
+async function waitForAnalysisPaused(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const state = (globalThis as any).__integrationAnalysisE2EGate as {
+      paused: boolean;
+      pausedWaiters: Array<() => void>;
+    } | undefined;
+    if (!state) {
+      reject(new Error('Analysis E2E gate is not armed'));
+      return;
+    }
+    if (state.paused) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => reject(new Error('Analysis job never reached the E2E gate')), 30_000);
+    state.pausedWaiters.push(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  }));
+}
+
+async function releaseAnalysisGate(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const state = (globalThis as any).__integrationAnalysisE2EGate as {
+      channel?: BroadcastChannel;
+      paused?: boolean;
+    } | undefined;
+    if (!state?.channel) throw new Error('Analysis E2E gate is not armed');
+    state.paused = false;
+    state.channel.postMessage({ type: 'release' });
+  });
 }
 
 async function listRecordings(page: Page): Promise<Array<{ id: string; available: boolean }>> {
@@ -451,6 +682,132 @@ async function waitForRequestCount(
 ): Promise<IntegrationReceiverRequest[]> {
   await expect.poll(() => receiver.requests(pathname).length, { timeout }).toBeGreaterThanOrEqual(count);
   return receiver.requests(pathname);
+}
+
+async function selectAutomaticRouting(
+  page: Page,
+  recordingId: string,
+  destinations: readonly IntegrationDestination[],
+): Promise<void> {
+  await page.evaluate(async ({ recordingId, destinations }) => {
+    const database = await openIntegrationDatabaseForTest();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction('routingIntents', 'readwrite');
+      transaction.objectStore('routingIntents').put({
+        recordingId,
+        destinations: destinations.map((destination) => ({
+          destinationId: destination.id,
+          mode: 'auto',
+          state: 'selected',
+          allowedPolicy: destination.dataPolicy,
+          connectionVersion: destination.connectionVersion,
+        })),
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not seed integration routing intent'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Integration routing intent update aborted'));
+    });
+    database.close();
+
+    function openIntegrationDatabaseForTest(): Promise<IDBDatabase> {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('meeting-integrations');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error ?? new Error('Could not open integration database'));
+      });
+    }
+  }, {
+    recordingId,
+    destinations: destinations.map((destination) => ({
+      id: destination.id,
+      dataPolicy: destination.dataPolicy,
+      connectionVersion: destination.connectionVersion,
+    })),
+  });
+}
+
+async function waitForReadinessDeadline(
+  page: Page,
+  destinationId: string,
+  recordingId: string,
+): Promise<number> {
+  let deadline: number | undefined;
+  await expect.poll(async () => {
+    deadline = await readReadinessDeadline(page, destinationId, recordingId);
+    return deadline;
+  }, { timeout: 15_000 }).toBeGreaterThan(Date.now());
+  return deadline!;
+}
+
+async function readReadinessDeadline(
+  page: Page,
+  destinationId: string,
+  recordingId: string,
+): Promise<number | undefined> {
+  return page.evaluate(async ({ destinationId, recordingId }) => {
+    const database = await openIntegrationDatabaseForTest();
+    const value = await new Promise<any>((resolve, reject) => {
+      const request = database.transaction('streams', 'readonly')
+        .objectStore('streams')
+        .get([destinationId, recordingId]);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error('Could not read integration stream'));
+    });
+    database.close();
+    return typeof value?.readyDeadlineAt === 'number' ? value.readyDeadlineAt : undefined;
+
+    function openIntegrationDatabaseForTest(): Promise<IDBDatabase> {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('meeting-integrations');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error ?? new Error('Could not open integration database'));
+      });
+    }
+  }, { destinationId, recordingId });
+}
+
+async function forceReadinessDue(page: Page, destinationId: string, recordingId: string): Promise<void> {
+  await page.evaluate(async ({ destinationId, recordingId }) => {
+    const database = await openIntegrationDatabaseForTest();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction('streams', 'readwrite');
+      const store = transaction.objectStore('streams');
+      const request = store.get([destinationId, recordingId]);
+      request.onsuccess = () => {
+        if (!request.result) {
+          transaction.abort();
+          reject(new Error(`Missing integration stream ${destinationId}/${recordingId}`));
+          return;
+        }
+        store.put({ ...request.result, readyDeadlineAt: Date.now() - 1 });
+      };
+      request.onerror = () => reject(request.error ?? new Error('Could not read integration stream'));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not update integration stream'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Integration stream update aborted'));
+    });
+    database.close();
+
+    function openIntegrationDatabaseForTest(): Promise<IDBDatabase> {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('meeting-integrations');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error ?? new Error('Could not open integration database'));
+      });
+    }
+  }, { destinationId, recordingId });
+}
+
+async function restartServiceWorker(page: Page): Promise<void> {
+  const session = await page.context().newCDPSession(page);
+  await session.send('ServiceWorker.enable' as never);
+  await session.send('ServiceWorker.stopAllWorkers' as never);
+  await expect.poll(async () => {
+    const { targetInfos } = await session.send('Target.getTargets' as never) as {
+      targetInfos: Array<{ type: string }>;
+    };
+    return targetInfos.some((target) => target.type === 'service_worker');
+  }, { timeout: 5_000 }).toBe(false);
 }
 
 async function forceDeliveryDue(page: Page, deliveryId: string): Promise<void> {
