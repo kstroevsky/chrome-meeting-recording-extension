@@ -22,6 +22,8 @@ const SUBJECTS: Record<string, number> = { redis: 0, berlin: 90, hiring: 180 };
 
 /** What the control plane captured at enqueue; the manager must hand it back. */
 const PROVENANCE = {
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: 2,
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: 'rev',

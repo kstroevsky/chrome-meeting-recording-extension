@@ -15,6 +15,7 @@ export type AnalysisResultCommitterDeps = {
   isRecordingDeleted: (historyId: string) => Promise<boolean>;
   isPurged: (historyId: string) => boolean;
   fallbackProvenance: (jobId: string) => AnalysisProvenance | undefined;
+  reconcile: (historyId: string) => Promise<unknown>;
   settle: (job: AnalysisJob) => void;
   now?: () => number;
 };
@@ -49,7 +50,21 @@ export class AnalysisResultCommitter {
 
     const provenance = fromWireProvenance(wireProvenance)
       ?? this.deps.fallbackProvenance(job.id)
-      ?? this.deps.analyses.provenanceForNewRun();
+      ?? undefined;
+
+    if (!provenance) {
+      L.warn('Discarding an analysis result without input provenance', job.historyId, job.id);
+      this.deps.settle(job);
+      void this.deps.reconcile(job.historyId);
+      return;
+    }
+
+    if (!await this.deps.analyses.isCurrentTranscript(job.historyId, provenance)) {
+      L.log(`Discarding analysis ${job.id}: its transcript revision is no longer current`);
+      this.deps.settle(job);
+      void this.deps.reconcile(job.historyId);
+      return;
+    }
 
     try {
       await this.deps.analyses.save(job.historyId, result, provenance, this.deps.now?.(), job);
@@ -72,9 +87,18 @@ export class AnalysisResultCommitter {
       return;
     }
 
-    // Deletion can race the write, so fence once more before acknowledging.
+    // Deletion and transcript replacement can both race the write. Re-check
+    // after persistence so a commit that landed between the pre-write fence and
+    // save cannot strand the newer transcript without a follow-up analysis.
     if (await this.deps.isRecordingDeleted(job.historyId)) {
       await this.deps.analyses.removeAll(job.historyId).catch(() => {});
+      this.deps.settle(job);
+      return;
+    }
+    if (!await this.deps.analyses.isCurrentTranscript(job.historyId, provenance)) {
+      this.deps.settle(job);
+      void this.deps.reconcile(job.historyId);
+      return;
     }
     this.deps.settle(job);
   }

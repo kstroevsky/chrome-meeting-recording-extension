@@ -39,34 +39,51 @@ export function createLibraryRuntime({
   onIntegrationChanged,
 }: LibraryRuntimeDeps) {
   const historyRepository = new RecordingHistoryRepository();
-  const recordingContexts = new RecordingContextService(
-    new RecordingContextRepository(),
+  const recordingContexts = new RecordingContextService(new RecordingContextRepository(), onIntegrationChanged);
+  const notations = new RecordingNotationService(new RecordingNotationRepository(), onIntegrationChanged);
+  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository(), undefined, onIntegrationChanged);
+  const analyses = new RecordingAnalysisService(
+    new RecordingAnalysisRepository(),
+    () => {
+      const model = packagedModel();
+      return {
+        pipelineVersion: PIPELINE_VERSION,
+        embeddingModel: model.id,
+        embeddingModelRevision: model.revision,
+        embeddingDimensions: 384,
+        embeddingDtype: model.dtype,
+        configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
+      };
+    },
+    async (recordingId) => {
+      const transcript = await transcripts.getSnapshot(recordingId);
+      return transcript
+        ? { revision: transcript.revision, contentHash: transcript.contentHash }
+        : undefined;
+    },
     onIntegrationChanged,
   );
-  const notations = new RecordingNotationService(new RecordingNotationRepository(), onIntegrationChanged);
-  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository(), onIntegrationChanged);
-  const analyses = new RecordingAnalysisService(new RecordingAnalysisRepository(), () => {
-    const model = packagedModel();
-    return {
-      pipelineVersion: PIPELINE_VERSION,
-      embeddingModel: model.id,
-      embeddingModelRevision: model.revision,
-      embeddingDimensions: 384,
-      embeddingDtype: model.dtype,
-      configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
-    };
-  }, onIntegrationChanged);
 
   const analysisCoordinator = new RecordingAnalysisCoordinator({
     dataPlane: offscreen,
     analyses,
-    readTranscript: (historyId) => transcripts.get(historyId),
+    readTranscript: (historyId) => transcripts.getSnapshot(historyId),
     // Absence is not deletion: history delivery and analysis completion settle independently.
     isRecordingDeleted: async (historyId) => Boolean(
       (await historyRepository.get(historyId))?.deletedAt,
     ),
+    isRecordingFinalized: async (historyId) => {
+      const entry = await historyRepository.get(historyId);
+      return Boolean(entry && !entry.deletedAt && entry.status !== 'saving');
+    },
     config: () => CANDIDATE_ANALYSIS_CONFIG,
     onSettled: onAnalysisSettled,
+  });
+  transcripts.setCommitListener(async (historyId) => {
+    const result = await analysisCoordinator.ensureCurrentAnalysis(historyId);
+    if (!result.ok && result.reason === 'failed') {
+      logger.warn(`Could not reconcile topic analysis for ${historyId}:`, result.error ?? 'unknown failure');
+    }
   });
 
   const history = new RecordingHistoryService(

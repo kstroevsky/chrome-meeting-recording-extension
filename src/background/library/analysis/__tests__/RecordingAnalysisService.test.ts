@@ -5,6 +5,8 @@ import { normalizeStoredAnalysis, type StoredAnalysis } from '../../../../shared
 import type { RecordingAnalysisOutcome } from '../RecordingAnalysisOutcome';
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: PIPELINE_VERSION,
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: '761b726d',

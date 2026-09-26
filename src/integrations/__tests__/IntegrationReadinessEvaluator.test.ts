@@ -44,6 +44,14 @@ describe('IntegrationReadinessEvaluator', () => {
     });
   });
 
+  it('waits for analysis of an older transcript revision, which is re-run', () => {
+    expect(evaluator.evaluate({ history: history(), analysis: { status: 'stale' } }, {
+      ...CONSERVATIVE_INTEGRATION_POLICY,
+      metadata: true,
+      analysis: true,
+    })).toEqual({ complete: false, pending: ['analysis'] });
+  });
+
   it('never waits for a transcript: a later one is an update, not a reason to hold the first send', () => {
     expect(evaluator.evaluate({ history: history() }, {
       ...CONSERVATIVE_INTEGRATION_POLICY,
@@ -52,7 +60,7 @@ describe('IntegrationReadinessEvaluator', () => {
     })).toEqual({ complete: true, pending: [] });
   });
 
-  it.each(['completed', 'failed', 'canceled', 'unsupported', 'stale'] as const)(
+  it.each(['completed', 'failed', 'canceled', 'unsupported'] as const)(
     'treats %s analysis as terminal',
     (status) => {
       expect(evaluator.evaluate({

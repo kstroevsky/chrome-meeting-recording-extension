@@ -11,6 +11,8 @@ const v = (...values: number[]) => Float32Array.from(values);
 
 const analysis = (over: Partial<StoredAnalysis> = {}): StoredAnalysis => ({
   provenance: {
+    transcriptRevision: 1,
+    transcriptHash: 'transcript-hash-1',
     pipelineVersion: PIPELINE_VERSION,
     embeddingModel: 'Xenova/multilingual-e5-small',
     embeddingModelRevision: '761b726d',

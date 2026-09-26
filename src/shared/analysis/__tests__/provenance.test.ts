@@ -16,6 +16,8 @@ const CONFIG: AnalysisConfig = {
 };
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: PIPELINE_VERSION,
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: 'abc1234',
@@ -66,6 +68,11 @@ describe('hashAnalysisConfig', () => {
 describe('isStale', () => {
   it('accepts a result computed under identical conditions', () => {
     expect(isStale(provenance(), provenance())).toBe(false);
+  });
+
+  it('rejects a result from a different transcript revision or content', () => {
+    expect(isStale(provenance({ transcriptRevision: 2 }), provenance())).toBe(true);
+    expect(isStale(provenance({ transcriptHash: 'transcript-hash-2' }), provenance())).toBe(true);
   });
 
   it('rejects a result from an earlier pipeline', () => {

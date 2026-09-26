@@ -1,17 +1,15 @@
 /**
- * @file background/library/analysis/RecordingAnalysisService.ts
- *
- * Owns every analysis transition, and decides when a stored one still counts.
- *
- * The interesting behaviour here is not storage, it is **staleness**. Four of
- * the scoring terms are provisional, every §9 value is still a candidate rather
- * than a frozen contract, and the embedding model and its quantization may
- * change. A stored analysis is therefore only meaningful alongside the
- * conditions that produced it, and this is the layer that compares them.
+ * Owns analysis transitions and decides whether stored output still matches
+ * the current transcript, pipeline, model, and configuration.
  */
 
 import type { AnalysisJob, AnalysisJobStatus } from '../../../shared/analysis/job';
-import { isStale, type AnalysisProvenance } from '../../../shared/analysis/provenance';
+import {
+  isStale,
+  type AnalysisEnvironmentProvenance,
+  type AnalysisProvenance,
+} from '../../../shared/analysis/provenance';
+import type { TranscriptIdentity } from '../../../shared/transcriptIdentity';
 import {
   summarize,
   toTopicSummary,
@@ -42,7 +40,8 @@ export class RecordingAnalysisService {
   constructor(
     private readonly repository: RecordingAnalysisRepositoryPort,
     /** The conditions a fresh run would use; compared against what is stored. */
-    private readonly currentProvenance: () => AnalysisProvenance,
+    private readonly currentEnvironment: () => AnalysisEnvironmentProvenance | AnalysisProvenance,
+    private readonly readTranscriptIdentity?: (recordingId: string) => Promise<TranscriptIdentity | undefined>,
     private readonly onChanged?: (recordingId: string) => void,
   ) {}
 
@@ -56,14 +55,14 @@ export class RecordingAnalysisService {
   async get(recordingId: string): Promise<StoredAnalysis | undefined> {
     const stored = await this.repository.get(recordingId);
     if (!stored) return undefined;
-    return isStale(stored.provenance, this.currentProvenance()) ? undefined : stored;
+    return await this.isCurrent(recordingId, stored.provenance) ? stored : undefined;
   }
 
   /** What a surface should render, including *why* there is nothing to render. */
   async state(recordingId: string): Promise<AnalysisState> {
     const stored = await this.repository.get(recordingId);
     if (!stored) return { status: 'none' };
-    if (isStale(stored.provenance, this.currentProvenance())) return { status: 'stale' };
+    if (!await this.isCurrent(recordingId, stored.provenance)) return { status: 'stale' };
     return { status: 'ready', summary: summarize(stored) };
   }
 
@@ -77,7 +76,7 @@ export class RecordingAnalysisService {
    */
   async exportState(recordingId: string): Promise<AnalysisExportState> {
     const { analysis, outcome } = await this.repository.getSnapshot(recordingId);
-    if (analysis && !isStale(analysis.provenance, this.currentProvenance())) {
+    if (analysis && await this.isCurrent(recordingId, analysis.provenance)) {
       return { status: 'completed', result: analysis };
     }
 
@@ -145,8 +144,31 @@ export class RecordingAnalysisService {
    * carried with the job, so what is stored describes the run that actually
    * produced those vectors.
    */
-  provenanceForNewRun(): AnalysisProvenance {
-    return this.currentProvenance();
+  provenanceForNewRun(transcript?: TranscriptIdentity): AnalysisProvenance {
+    const environment = this.currentEnvironment();
+    const input = transcript ?? identityFromProvenance(environment);
+    if (!input) throw new Error('Transcript identity is required to start analysis');
+    return {
+      ...environment,
+      transcriptRevision: input.revision,
+      transcriptHash: input.contentHash,
+    };
+  }
+
+  async isCurrent(recordingId: string, provenance: AnalysisProvenance): Promise<boolean> {
+    const transcript = await this.currentTranscriptIdentity(recordingId);
+    if (!transcript) return false;
+    return !isStale(provenance, this.provenanceForNewRun(transcript));
+  }
+
+  /** Checks only transcript identity; other provenance may legitimately become stale mid-run. */
+  async isCurrentTranscript(recordingId: string, provenance: AnalysisProvenance): Promise<boolean> {
+    const transcript = await this.currentTranscriptIdentity(recordingId);
+    return Boolean(
+      transcript
+      && provenance.transcriptRevision === transcript.revision
+      && provenance.transcriptHash === transcript.contentHash,
+    );
   }
 
   /**
@@ -193,11 +215,10 @@ export class RecordingAnalysisService {
    * does not wait for.
    */
   async topicSummaries(recordingIds: string[]): Promise<Record<string, RecordingTopicSummary>> {
-    const current = this.currentProvenance();
     const summaries: Record<string, RecordingTopicSummary> = {};
     for (const recordingId of recordingIds) {
       const stored = await this.repository.get(recordingId);
-      if (!stored || isStale(stored.provenance, current)) continue;
+      if (!stored || !await this.isCurrent(recordingId, stored.provenance)) continue;
       summaries[recordingId] = toTopicSummary(stored);
     }
     return summaries;
@@ -207,4 +228,22 @@ export class RecordingAnalysisService {
   async removeAll(recordingId: string): Promise<void> {
     await this.repository.removeAll(recordingId);
   }
+
+  private async currentTranscriptIdentity(recordingId: string): Promise<TranscriptIdentity | undefined> {
+    return this.readTranscriptIdentity
+      ? await this.readTranscriptIdentity(recordingId)
+      : identityFromProvenance(this.currentEnvironment());
+  }
+}
+
+function identityFromProvenance(
+  value: AnalysisEnvironmentProvenance | AnalysisProvenance,
+): TranscriptIdentity | undefined {
+  const candidate = value as Partial<AnalysisProvenance>;
+  return typeof candidate.transcriptRevision === 'number'
+    && candidate.transcriptRevision > 0
+    && typeof candidate.transcriptHash === 'string'
+    && candidate.transcriptHash
+    ? { revision: candidate.transcriptRevision, contentHash: candidate.transcriptHash }
+    : undefined;
 }

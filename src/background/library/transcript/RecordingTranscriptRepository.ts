@@ -15,17 +15,33 @@
  */
 
 import { normalizeTranscript, type Transcript } from '../../../shared/transcript';
+import {
+  TRANSCRIPT_SCHEMA_VERSION,
+  type TranscriptSnapshot,
+} from '../../../shared/transcriptIdentity';
 import { TRANSCRIPTS_STORE as STORE_NAME, openRecordingHistoryDatabase } from '../RecordingLibraryDatabase';
 
 export type RecordingTranscriptMutation = (current: Transcript | undefined) => Transcript | undefined;
 
 export interface RecordingTranscriptRepositoryPort {
-  get(recordingId: string): Promise<Transcript | undefined>;
-  update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<Transcript | undefined>;
+  get(recordingId: string): Promise<TranscriptSnapshot | undefined>;
+  update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<TranscriptSnapshot | undefined>;
+  cacheContentHash(recordingId: string, revision: number, contentHash: string): Promise<void>;
+  listRecordingIds(limit: number, after?: string): Promise<{
+    recordingIds: string[];
+    nextCursor?: string;
+  }>;
   remove(recordingId: string): Promise<void>;
 }
 
-type StoredTranscript = Transcript & { recordingId: string; updatedAt: number };
+type DurableTranscript = {
+  recordingId: string;
+  schemaVersion: typeof TRANSCRIPT_SCHEMA_VERSION;
+  revision: number;
+  contentHash?: string;
+  committedAt: number;
+  transcript: Transcript;
+};
 
 export class RecordingTranscriptRepository implements RecordingTranscriptRepositoryPort {
   constructor(
@@ -33,7 +49,7 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
     private readonly now: () => number = () => Date.now(),
   ) {}
 
-  async get(recordingId: string): Promise<Transcript | undefined> {
+  async get(recordingId: string): Promise<TranscriptSnapshot | undefined> {
     const database = await this.open();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readonly');
@@ -47,13 +63,13 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
    * Read-modify-write in a single `readwrite` transaction. A throwing mutator
    * aborts the transaction and rejects rather than committing a partial write.
    */
-  async update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<Transcript | undefined> {
+  async update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<TranscriptSnapshot | undefined> {
     const database = await this.open();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
       const request = store.get(recordingId);
-      let result: Transcript | undefined;
+      let result: TranscriptSnapshot | undefined;
       let settled = false;
       const fail = (error: unknown) => {
         if (settled) return;
@@ -63,14 +79,31 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
       request.onerror = () => fail(request.error ?? new Error('Could not read recording transcript'));
       request.onsuccess = () => {
         try {
-          // Normalize on the way back out too: the mutator's result is durable
-          // data, so it goes through the same decode as anything read from disk.
-          const next = normalizeTranscript(mutate(readStored(request.result)));
-          result = next;
+          const current = readStored(request.result);
+          const next = normalizeTranscript(mutate(current?.transcript));
           if (next && next.segments.length) {
-            store.put({ recordingId, ...next, updatedAt: this.now() } satisfies StoredTranscript);
+            if (current && sameTranscript(current.transcript, next)) {
+              result = current;
+              return;
+            }
+            const committedAt = this.now();
+            result = {
+              schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+              revision: (current?.revision ?? 0) + 1,
+              contentHash: '',
+              committedAt,
+              transcript: next,
+            };
+            store.put({
+              recordingId,
+              schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+              revision: result.revision,
+              committedAt,
+              transcript: next,
+            } satisfies DurableTranscript);
           } else {
             // A transcript with no words is a deletion, not an empty row to read.
+            result = undefined;
             store.delete(recordingId);
           }
         } catch (error) {
@@ -81,10 +114,64 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
       transaction.oncomplete = () => {
         if (settled) return;
         settled = true;
-        resolve(result && result.segments.length ? result : undefined);
+        resolve(result);
       };
       transaction.onerror = () => fail(transaction.error ?? new Error('Could not write recording transcript'));
       transaction.onabort = () => fail(transaction.error ?? new Error('Recording transcript write aborted'));
+    });
+  }
+
+  /** Caches a derived hash only if the transcript revision is still the same. */
+  async cacheContentHash(recordingId: string, revision: number, contentHash: string): Promise<void> {
+    const database = await this.open();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(recordingId);
+      request.onerror = () => reject(request.error ?? new Error('Could not read recording transcript'));
+      request.onsuccess = () => {
+        const current = readStored(request.result);
+        if (!current || current.revision !== revision || current.contentHash === contentHash) return;
+        store.put({
+          recordingId,
+          schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+          revision: current.revision,
+          contentHash,
+          committedAt: current.committedAt,
+          transcript: current.transcript,
+        } satisfies DurableTranscript);
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not cache transcript hash'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Transcript hash write aborted'));
+    });
+  }
+
+  async listRecordingIds(limit: number, after?: string): Promise<{
+    recordingIds: string[];
+    nextCursor?: string;
+  }> {
+    if (limit <= 0) return { recordingIds: [] };
+    const database = await this.open();
+    return await new Promise((resolve, reject) => {
+      const ids: string[] = [];
+      const transaction = database.transaction(STORE_NAME, 'readonly');
+      const range = after ? IDBKeyRange.lowerBound(after, true) : undefined;
+      const request = transaction.objectStore(STORE_NAME).openKeyCursor(range);
+      request.onerror = () => reject(request.error ?? new Error('Could not list recording transcripts'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve({ recordingIds: ids });
+          return;
+        }
+        if (ids.length >= limit) {
+          resolve({ recordingIds: ids, nextCursor: ids[ids.length - 1] });
+          return;
+        }
+        if (typeof cursor.primaryKey === 'string') ids.push(cursor.primaryKey);
+        cursor.continue();
+      };
     });
   }
 
@@ -104,7 +191,49 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
   }
 }
 
-function readStored(value: unknown): Transcript | undefined {
-  const transcript = normalizeTranscript(value);
-  return transcript && transcript.segments.length ? transcript : undefined;
+function readStored(value: unknown): TranscriptSnapshot | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  const nested = normalizeTranscript(candidate.transcript);
+  if (nested?.segments.length) {
+    const revision = finitePositiveInteger(candidate.revision) ?? 1;
+    const committedAt = finiteNonNegative(candidate.committedAt) ?? finiteNonNegative(candidate.updatedAt) ?? 0;
+    return {
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      revision,
+      contentHash: typeof candidate.contentHash === 'string' ? candidate.contentHash : '',
+      committedAt,
+      transcript: nested,
+    };
+  }
+
+  // Legacy v5-v8 rows flattened the Transcript fields into the store row.
+  const legacy = normalizeTranscript(value);
+  if (!legacy?.segments.length) return undefined;
+  return {
+    schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+    revision: 1,
+    contentHash: '',
+    committedAt: finiteNonNegative(candidate.updatedAt) ?? 0,
+    transcript: legacy,
+  };
+}
+
+function finiteNonNegative(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function finitePositiveInteger(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) > 0 ? value as number : undefined;
+}
+
+function sameTranscript(left: Transcript, right: Transcript): boolean {
+  if (left.source !== right.source || left.segments.length !== right.segments.length) return false;
+  return left.segments.every((segment, index) => {
+    const other = right.segments[index];
+    return segment.tStartMs === other.tStartMs
+      && segment.tEndMs === other.tEndMs
+      && segment.speaker === other.speaker
+      && segment.text === other.text;
+  });
 }

@@ -1,5 +1,7 @@
 import type { IntegrationDataPolicy } from '../../../integrations/contracts';
 import type { RecordingHistoryEntry } from '../../../shared/recordingHistory';
+import type { Transcript } from '../../../shared/transcript';
+import { TRANSCRIPT_SCHEMA_VERSION, type TranscriptSnapshot } from '../../../shared/transcriptIdentity';
 import { utf8ByteLength } from '../../../integrations/serialization';
 import { IntegrationPreviewService } from '../IntegrationPreviewService';
 
@@ -37,6 +39,20 @@ function history(): RecordingHistoryEntry {
   };
 }
 
+function transcriptSnapshot(
+  transcript: Transcript,
+  revision = 1,
+  contentHash = `transcript-hash-${revision}`,
+): TranscriptSnapshot {
+  return {
+    schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+    revision,
+    contentHash,
+    committedAt: 1_000 + revision,
+    transcript,
+  };
+}
+
 describe('IntegrationPreviewService', () => {
   it('builds the receiver fixture through the production serializer without leaking local ids', async () => {
     const service = new IntegrationPreviewService({
@@ -48,7 +64,7 @@ describe('IntegrationPreviewService', () => {
         source: { kind: 'meeting', provider: 'google-meet', meetingId: 'secret-meeting' },
       }),
       listNotations: async () => [{ id: 'notation:private', tStartMs: 2_000, text: 'Important' }],
-      getTranscript: async () => ({
+      getTranscriptSnapshot: async () => transcriptSnapshot({
         source: 'meet-captions',
         segments: [
           { tStartMs: 0, tEndMs: 1_000, speaker: 'Alice Private', text: 'Hello' },
@@ -93,7 +109,7 @@ describe('IntegrationPreviewService', () => {
         source: { kind: 'meeting' },
       }),
       listNotations: async () => [],
-      getTranscript: async () => transcript,
+      getTranscriptSnapshot: async () => transcriptSnapshot(transcript),
       getAnalysisState: async () => ({ status: 'none' }),
     });
     const first = await service.build('recording:internal-secret', POLICY, {
@@ -145,7 +161,7 @@ describe('IntegrationPreviewService', () => {
         source: { kind: 'tab' },
       }),
       listNotations: async () => [],
-      getTranscript: async () => undefined,
+      getTranscriptSnapshot: async () => undefined,
       getAnalysisState: async () => ({ status: 'none' }),
       now: () => 30_000,
     });
@@ -171,7 +187,7 @@ describe('IntegrationPreviewService', () => {
       getHistory: async () => history(),
       getContext: async () => undefined,
       listNotations: async () => [],
-      getTranscript: async () => undefined,
+      getTranscriptSnapshot: async () => undefined,
       getAnalysisState: async () => ({ status: 'none' }),
     });
 
@@ -188,7 +204,7 @@ describe('IntegrationPreviewService', () => {
         source: { kind: 'tab' },
       }),
       listNotations: async () => [],
-      getTranscript: async () => undefined,
+      getTranscriptSnapshot: async () => undefined,
       getAnalysisState: async () => ({ status: 'failed', error: 'analysis backend unavailable' }),
       now: () => 30_000,
     });
@@ -207,7 +223,7 @@ describe('IntegrationPreviewService', () => {
     });
   });
 
-  it('maps stale analysis to explicit terminal unsupported state', async () => {
+  it('keeps stale analysis pending and omits it from the snapshot', async () => {
     const service = new IntegrationPreviewService({
       getHistory: async () => history(),
       getContext: async () => ({
@@ -216,7 +232,7 @@ describe('IntegrationPreviewService', () => {
         source: { kind: 'tab' },
       }),
       listNotations: async () => [],
-      getTranscript: async () => undefined,
+      getTranscriptSnapshot: async () => undefined,
       getAnalysisState: async () => ({ status: 'stale', error: 'Stored analysis is stale.' }),
       now: () => 30_000,
     });
@@ -228,10 +244,151 @@ describe('IntegrationPreviewService', () => {
       artifactMetadata: false,
     });
 
-    expect(preview.readiness.pending).toEqual([]);
-    expect(JSON.parse(preview.body).data.recording.analysis).toEqual({
-      status: 'unsupported',
-      error: 'Stored analysis is stale.',
+    expect(preview.readiness.pending).toEqual(['analysis']);
+    expect(JSON.parse(preview.body).data.recording).not.toHaveProperty('analysis');
+  });
+
+  it('never combines a transcript with completed analysis from another transcript hash', async () => {
+    const transcript = {
+      source: 'meet-captions' as const,
+      segments: [{ tStartMs: 0, tEndMs: 1_000, speaker: 'Ada', text: 'revision B' }],
+    };
+    const service = new IntegrationPreviewService({
+      getHistory: async () => history(),
+      getContext: async () => ({
+        recordingId: 'recording:internal-secret',
+        startedAt: 10_000,
+        source: { kind: 'tab' },
+      }),
+      listNotations: async () => [],
+      getTranscriptSnapshot: async () => transcriptSnapshot(transcript, 2, 'hash-of-revision-b'),
+      getAnalysisState: async () => ({
+        status: 'completed',
+        result: {
+          provenance: {
+            transcriptRevision: 1,
+            transcriptHash: 'hash-of-revision-a',
+            pipelineVersion: 2,
+            embeddingModel: 'test-model',
+            embeddingModelRevision: 'test-revision',
+            embeddingDimensions: 2,
+            embeddingDtype: 'q8',
+            configHash: 'test-config',
+          },
+          segments: [],
+          topics: [],
+          utteranceCount: 0,
+          completedAt: 20_000,
+        },
+      }),
+      now: () => 30_000,
     });
+
+    const preview = await service.preview('recording:internal-secret', {
+      ...POLICY,
+      transcript: true,
+      analysis: true,
+      artifactMetadata: false,
+    });
+    const projected = JSON.parse(preview.body).data.recording;
+
+    expect(preview.readiness.pending).toEqual(['analysis']);
+    expect(projected.transcript.segments).toHaveLength(1);
+    expect(projected).not.toHaveProperty('analysis');
+  });
+
+  it('keeps completed analysis when analysis is exported without transcript content', async () => {
+    const transcript = {
+      source: 'meet-captions' as const,
+      segments: [{ tStartMs: 0, tEndMs: 1_000, speaker: 'Ada', text: 'current transcript' }],
+    };
+    const service = new IntegrationPreviewService({
+      getHistory: async () => history(),
+      getContext: async () => ({
+        recordingId: 'recording:internal-secret',
+        startedAt: 10_000,
+        source: { kind: 'tab' },
+      }),
+      listNotations: async () => [],
+      getTranscriptSnapshot: async () => transcriptSnapshot(transcript, 3, 'hash-current'),
+      getAnalysisState: async () => ({
+        status: 'completed',
+        result: {
+          provenance: {
+            transcriptRevision: 3,
+            transcriptHash: 'hash-current',
+            pipelineVersion: 2,
+            embeddingModel: 'test-model',
+            embeddingModelRevision: 'test-revision',
+            embeddingDimensions: 2,
+            embeddingDtype: 'q8',
+            configHash: 'test-config',
+          },
+          segments: [],
+          topics: [],
+          utteranceCount: 0,
+          completedAt: 20_000,
+        },
+      }),
+      now: () => 30_000,
+    });
+
+    const preview = await service.preview('recording:internal-secret', {
+      ...POLICY,
+      transcript: false,
+      analysis: true,
+      artifactMetadata: false,
+    });
+    const projected = JSON.parse(preview.body).data.recording;
+
+    expect(preview.readiness.pending).toEqual([]);
+    expect(projected).not.toHaveProperty('transcript');
+    expect(projected.analysis.status).toBe('completed');
+  });
+
+  it('rejects completed analysis from another revision even when the content hash matches', async () => {
+    const transcript = {
+      source: 'meet-captions' as const,
+      segments: [{ tStartMs: 0, tEndMs: 1_000, text: 'same content after replacement' }],
+    };
+    const service = new IntegrationPreviewService({
+      getHistory: async () => history(),
+      getContext: async () => ({
+        recordingId: 'recording:internal-secret',
+        startedAt: 10_000,
+        source: { kind: 'tab' },
+      }),
+      listNotations: async () => [],
+      getTranscriptSnapshot: async () => transcriptSnapshot(transcript, 4, 'same-hash'),
+      getAnalysisState: async () => ({
+        status: 'completed',
+        result: {
+          provenance: {
+            transcriptRevision: 2,
+            transcriptHash: 'same-hash',
+            pipelineVersion: 2,
+            embeddingModel: 'test-model',
+            embeddingModelRevision: 'test-revision',
+            embeddingDimensions: 2,
+            embeddingDtype: 'q8',
+            configHash: 'test-config',
+          },
+          segments: [],
+          topics: [],
+          utteranceCount: 0,
+          completedAt: 20_000,
+        },
+      }),
+    });
+
+    const preview = await service.preview('recording:internal-secret', {
+      ...POLICY,
+      transcript: true,
+      analysis: true,
+      artifactMetadata: false,
+    });
+
+    expect(preview.readiness.pending).toEqual(['analysis']);
+    expect(JSON.parse(preview.body).data.recording).not.toHaveProperty('analysis');
   });
 });

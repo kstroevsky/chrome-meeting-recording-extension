@@ -20,17 +20,39 @@ import {
   type TranscriptSource,
 } from '../../../shared/transcript';
 import type { TranscriptStatus } from '../../../shared/playback';
+import { hashTranscript, type TranscriptSnapshot } from '../../../shared/transcriptIdentity';
 import type { RecordingTranscriptRepositoryPort } from './RecordingTranscriptRepository';
+
+type TranscriptCommitListener = (recordingId: string, snapshot: TranscriptSnapshot) => void | Promise<void>;
 
 /** Owns every transcript transition for a recording, keyed by its history id. */
 export class RecordingTranscriptService {
+  private onCommitted?: TranscriptCommitListener;
+
   constructor(
     private readonly repository: RecordingTranscriptRepositoryPort,
+    onCommitted?: TranscriptCommitListener,
+    /** Any change to the stored transcript; integrations re-read the recording. */
     private readonly onChanged?: (recordingId: string) => void,
-  ) {}
+  ) {
+    this.onCommitted = onCommitted;
+  }
+
+  setCommitListener(listener: TranscriptCommitListener): void {
+    this.onCommitted = listener;
+  }
 
   async get(recordingId: string): Promise<Transcript | undefined> {
-    return await this.repository.get(recordingId);
+    return (await this.getSnapshot(recordingId))?.transcript;
+  }
+
+  async getSnapshot(recordingId: string): Promise<TranscriptSnapshot | undefined> {
+    const stored = await this.repository.get(recordingId);
+    if (!stored) return undefined;
+    if (stored.contentHash) return stored;
+    const contentHash = await hashTranscript(stored.transcript);
+    await this.repository.cacheContentHash(recordingId, stored.revision, contentHash).catch(() => {});
+    return { ...stored, contentHash };
   }
 
   /**
@@ -43,8 +65,7 @@ export class RecordingTranscriptService {
    * player branches on data rather than on a feature flag.
    */
   async status(recordingId: string): Promise<TranscriptStatus> {
-    const transcript = await this.repository.get(recordingId);
-    return transcript ? 'ready' : 'none';
+    return await this.repository.get(recordingId) ? 'ready' : 'none';
   }
 
   /**
@@ -92,9 +113,43 @@ export class RecordingTranscriptService {
     return added;
   }
 
+  /** Replaces the canonical transcript and announces the committed revision. */
+  async replace(recordingId: string, transcript: Transcript): Promise<TranscriptSnapshot> {
+    if (transcript.segments.length > MAX_TRANSCRIPT_SEGMENTS) {
+      throw new Error(`A transcript cannot hold more than ${MAX_TRANSCRIPT_SEGMENTS} segments`);
+    }
+    const stored = await this.repository.update(recordingId, () => transcript);
+    if (!stored) throw new Error('A committed transcript must contain at least one segment');
+    const snapshot = await this.requireHash(recordingId, stored);
+    this.onChanged?.(recordingId);
+    await this.onCommitted?.(recordingId, snapshot);
+    return snapshot;
+  }
+
+  /** Announces that the current transcript is complete enough for derived work. */
+  async commit(recordingId: string): Promise<TranscriptSnapshot | undefined> {
+    const snapshot = await this.getSnapshot(recordingId);
+    if (snapshot) await this.onCommitted?.(recordingId, snapshot);
+    return snapshot;
+  }
+
+  async listRecordingIds(limit: number, after?: string): Promise<{
+    recordingIds: string[];
+    nextCursor?: string;
+  }> {
+    return await this.repository.listRecordingIds(limit, after);
+  }
+
   /** Drops a recording's transcript — a discarded run, or a deleted entry. */
   async removeAll(recordingId: string): Promise<void> {
     await this.repository.remove(recordingId);
+  }
+
+  private async requireHash(recordingId: string, stored: TranscriptSnapshot): Promise<TranscriptSnapshot> {
+    if (stored.contentHash) return stored;
+    const contentHash = await hashTranscript(stored.transcript);
+    await this.repository.cacheContentHash(recordingId, stored.revision, contentHash).catch(() => {});
+    return { ...stored, contentHash };
   }
 }
 

@@ -14,6 +14,8 @@ const JOB: AnalysisJob = {
 };
 
 const PROVENANCE: AnalysisProvenance = {
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: 2,
   embeddingModel: 'model',
   embeddingModelRevision: 'revision',
@@ -47,6 +49,7 @@ function analyses(overrides: Record<string, unknown> = {}): RecordingAnalysisSer
     save: jest.fn().mockResolvedValue(undefined),
     removeAll: jest.fn().mockResolvedValue(undefined),
     provenanceForNewRun: jest.fn(() => PROVENANCE),
+    isCurrentTranscript: jest.fn().mockResolvedValue(true),
     ...overrides,
   } as unknown as RecordingAnalysisService;
 }
@@ -63,11 +66,12 @@ describe('AnalysisResultCommitter', () => {
       isRecordingDeleted: jest.fn().mockResolvedValue(false),
       isPurged: () => false,
       fallbackProvenance: () => PROVENANCE,
+      reconcile: jest.fn().mockResolvedValue(undefined),
       settle,
     });
 
     const commit = committer.commit(JOB, WIRE);
-    await Promise.resolve();
+    await new Promise(process.nextTick);
 
     expect(save).toHaveBeenCalledTimes(1);
     expect(settle).not.toHaveBeenCalled();
@@ -85,6 +89,7 @@ describe('AnalysisResultCommitter', () => {
       isRecordingDeleted: jest.fn().mockResolvedValue(false),
       isPurged: () => false,
       fallbackProvenance: () => PROVENANCE,
+      reconcile: jest.fn().mockResolvedValue(undefined),
       settle,
     });
 

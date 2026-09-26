@@ -1,5 +1,6 @@
 import { listLibraryFiles } from '../../offscreen/storage/opfsLayout';
 import { reloadRuntime } from '../../platform/chrome/runtime';
+import { getLocalStorageValues, setLocalStorageValues } from '../../platform/chrome/storage';
 import { makeLogger } from '../../shared/logger';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
 import { DriveLibraryCoordinator } from '../drive/DriveLibraryCoordinator';
@@ -28,6 +29,9 @@ import { BackgroundReadiness } from './BackgroundReadiness';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 import { BackgroundIntegrationRuntime } from '../integrations/BackgroundIntegrationRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
+
+const ANALYSIS_RECONCILIATION_CURSOR_KEY = 'analysisReconciliationCursor:v1';
+const ANALYSIS_RECONCILIATION_BATCH = 25;
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
@@ -61,24 +65,15 @@ export function createBackgroundRuntime() {
     getHistory: (recordingId) => library.historyRepository.get(recordingId),
     getContext: (recordingId) => library.recordingContexts.get(recordingId),
     listNotations: (recordingId) => library.notations.list(recordingId),
-    getTranscript: (recordingId) => library.transcripts.get(recordingId),
+    getTranscriptSnapshot: (recordingId) => library.transcripts.getSnapshot(recordingId),
     getAnalysisState: (recordingId) => library.analyses.exportState(recordingId),
   });
   notifyIntegrationChanged = (recordingId) => {
     void integrations.consider(recordingId)
       .catch((error) => logger.warn('Integration recording consideration deferred:', error));
   };
-  wireAnalysisRuntime({
-    offscreen,
-    analysisCoordinator: library.analysisCoordinator,
-    criticalWork,
-    logger,
-  });
-  const driveLibrary = new DriveLibraryCoordinator(
-    library.historyRepository,
-    library.history,
-    logger,
-  );
+  wireAnalysisRuntime({ offscreen, analysisCoordinator: library.analysisCoordinator, criticalWork, logger });
+  const driveLibrary = new DriveLibraryCoordinator(library.historyRepository, library.history, logger);
   const transcriptCapture = createTranscriptCapture(session, library.transcripts, logger);
 
   let sessionHydrated = false;
@@ -198,6 +193,20 @@ export function createBackgroundRuntime() {
       });
       await sharing.resumeIfPending().catch((error) => logger.warn('Pending sharing recovery deferred:', error));
       await integrations.reconcile().catch((error) => logger.warn('Integration delivery recovery deferred:', error));
+      try {
+        const stored = await getLocalStorageValues(ANALYSIS_RECONCILIATION_CURSOR_KEY);
+        const rawCursor = stored[ANALYSIS_RECONCILIATION_CURSOR_KEY];
+        const cursor = typeof rawCursor === 'string' && rawCursor ? rawCursor : undefined;
+        const page = await library.transcripts.listRecordingIds(ANALYSIS_RECONCILIATION_BATCH, cursor);
+        await library.analysisCoordinator.reconcile(page.recordingIds);
+        if (page.nextCursor) {
+          await setLocalStorageValues({ [ANALYSIS_RECONCILIATION_CURSOR_KEY]: page.nextCursor });
+        } else {
+          await setLocalStorageValues({ [ANALYSIS_RECONCILIATION_CURSOR_KEY]: '' });
+        }
+      } catch (error) {
+        logger.warn('Analysis reconciliation deferred:', error);
+      }
     } catch (error) {
       if (!sessionHydrated) readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);

@@ -26,7 +26,7 @@ import type { WireAnalysis } from '../../../shared/analysis/storedAnalysis';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisProvenance } from '../../../shared/analysis/provenance';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
-import type { Transcript } from '../../../shared/transcript';
+import type { TranscriptSnapshot } from '../../../shared/transcriptIdentity';
 import type { RecordingAnalysisService } from './RecordingAnalysisService';
 import { AnalysisResultCommitter } from './AnalysisResultCommitter';
 
@@ -37,7 +37,7 @@ export interface AnalysisDataPlane {
   ensureReady(): Promise<void>;
   analyzeTranscript(
     historyId: string,
-    transcript: Transcript['segments'],
+    transcript: TranscriptSnapshot['transcript']['segments'],
     config: AnalysisConfig,
     provenance: AnalysisProvenance,
   ): Promise<{ ok: boolean; jobId?: string; error?: string }>;
@@ -48,8 +48,8 @@ export interface AnalysisDataPlane {
 export type RecordingAnalysisCoordinatorDeps = {
   dataPlane: AnalysisDataPlane;
   analyses: RecordingAnalysisService;
-  /** Reads a recording's persisted transcript; `undefined` when it has none. */
-  readTranscript: (historyId: string) => Promise<Transcript | undefined>;
+  /** Reads one immutable persisted transcript snapshot; `undefined` when it has none. */
+  readTranscript: (historyId: string) => Promise<TranscriptSnapshot | undefined>;
   /**
    * Whether the recording has been **tombstoned** — the durable deletion fence.
    *
@@ -59,6 +59,8 @@ export type RecordingAnalysisCoordinatorDeps = {
    * drop those results.
    */
   isRecordingDeleted: (historyId: string) => Promise<boolean>;
+  /** True only after the recording has a durable finalized history row. */
+  isRecordingFinalized?: (historyId: string) => Promise<boolean>;
   /** The §9 values a run should use. Injected so a later settings surface can supply them. */
   config: () => AnalysisConfig;
   /** Notified whenever a job moves, for the surface. */
@@ -87,6 +89,8 @@ export class RecordingAnalysisCoordinator {
   private readonly running = new Map<string, string>();
   /** Covers the async enqueue window before a durable offscreen job id exists. */
   private readonly pending = new Set<string>();
+  /** A transcript commit that arrived while this recording was already busy. */
+  private readonly reconcileAfterSettle = new Set<string>();
   /**
    * Recordings purged by this worker instance — a fast path only. The durable
    * fence is {@link RecordingAnalysisCoordinatorDeps.isRecordingDeleted}.
@@ -106,6 +110,7 @@ export class RecordingAnalysisCoordinator {
       isRecordingDeleted: deps.isRecordingDeleted,
       isPurged: (historyId) => this.purged.has(historyId),
       fallbackProvenance: (jobId) => this.provenanceByJob.get(jobId),
+      reconcile: (historyId) => this.ensureCurrentAnalysis(historyId),
       settle: (job) => this.settle(job),
       now: deps.now,
     });
@@ -126,12 +131,8 @@ export class RecordingAnalysisCoordinator {
     this.pending.add(historyId);
     const startedAt = this.deps.now?.() ?? Date.now();
     try {
-      if (!options.force && await this.deps.analyses.get(historyId)) {
-        return { ok: false, reason: 'already-analyzed' };
-      }
-
       const transcript = await this.deps.readTranscript(historyId);
-      if (!transcript?.segments.length) {
+      if (!transcript?.transcript.segments.length) {
         await this.recordPreJobTerminalOutcome(
           historyId,
           'unsupported',
@@ -141,12 +142,16 @@ export class RecordingAnalysisCoordinator {
         return { ok: false, reason: 'no-transcript' };
       }
 
+      if (!options.force && await this.deps.analyses.get(historyId)) {
+        return { ok: false, reason: 'already-analyzed' };
+      }
+
       this.purged.delete(historyId);
-      const provenance = this.deps.analyses.provenanceForNewRun();
+      const provenance = this.deps.analyses.provenanceForNewRun(transcript);
       await this.deps.dataPlane.ensureReady();
       const response = await this.deps.dataPlane.analyzeTranscript(
         historyId,
-        transcript.segments,
+        transcript.transcript.segments,
         this.deps.config(),
         provenance,
       );
@@ -204,6 +209,16 @@ export class RecordingAnalysisCoordinator {
   async handleJobState(job: AnalysisJob): Promise<void> {
     const lost = job.status === 'failed' && job.lostResult === true;
     const durableStatus = job.status === 'completed' || lost ? 'analyzing' : job.status;
+
+    // Replayed state can arrive during bootstrap. Mark the in-memory hold before
+    // the first await so startup reconciliation cannot enqueue a duplicate job
+    // while the durable outcome write is still in flight.
+    if (job.status === 'analyzing' || job.status === 'completed') {
+      this.running.set(job.historyId, job.id);
+    } else if (lost && this.running.get(job.historyId) === job.id) {
+      this.running.delete(job.historyId);
+    }
+
     await this.deps.analyses.recordJobOutcome(
       job,
       durableStatus,
@@ -211,13 +226,7 @@ export class RecordingAnalysisCoordinator {
       this.deps.now?.(),
     );
 
-    if (job.status === 'analyzing' || job.status === 'completed') {
-      this.running.set(job.historyId, job.id);
-    } else if (lost) {
-      // Release the dead job's hold so the replacement can start, but do **not**
-      // acknowledge it yet — see `recoverLostResult`.
-      if (this.running.get(job.historyId) === job.id) this.running.delete(job.historyId);
-    } else {
+    if (job.status !== 'analyzing' && job.status !== 'completed' && !lost) {
       this.settle(job);
     }
     this.deps.onJobChanged?.(job);
@@ -276,6 +285,30 @@ export class RecordingAnalysisCoordinator {
     await this.resultCommitter.commit(job, wire, wireProvenance);
   }
 
+  /** Idempotently makes the recording's derived analysis match its current transcript. */
+  async ensureCurrentAnalysis(historyId: string): Promise<AnalysisStartResult> {
+    const result = await this.analyze(historyId);
+    if (!result.ok && result.reason === 'busy') this.reconcileAfterSettle.add(historyId);
+    else this.reconcileAfterSettle.delete(historyId);
+    return result;
+  }
+
+  /**
+   * Bounded startup recovery for transcript commits whose fast-path notification
+   * was lost. Unlike an explicit commit, recovery ignores transcripts whose
+   * recording is not finalized yet: those can belong to a live capture that was
+   * merely interrupted by a service-worker restart.
+   */
+  async reconcile(recordingIds: string[]): Promise<void> {
+    for (const historyId of recordingIds) {
+      if (this.deps.isRecordingFinalized && !await this.deps.isRecordingFinalized(historyId)) continue;
+      const result = await this.ensureCurrentAnalysis(historyId);
+      if (!result.ok && result.reason === 'failed') {
+        L.warn('Could not reconcile recording analysis', historyId, result.error ?? 'unknown failure');
+      }
+    }
+  }
+
   private async recordPreJobTerminalOutcome(
     historyId: string,
     status: 'failed' | 'unsupported',
@@ -306,5 +339,8 @@ export class RecordingAnalysisCoordinator {
     this.provenanceByJob.delete(job.id);
     this.deps.dataPlane.acknowledgeAnalysisState(job.id);
     this.deps.onSettled?.();
+    if (this.reconcileAfterSettle.delete(job.historyId)) {
+      void this.ensureCurrentAnalysis(job.historyId);
+    }
   }
 }

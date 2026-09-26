@@ -2,21 +2,54 @@ import { RecordingTranscriptCapture } from '../RecordingTranscriptCapture';
 import { RecordingTranscriptService } from '../RecordingTranscriptService';
 import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../RecordingTranscriptRepository';
 import { normalizeTranscript, type CaptionUtterance, type Transcript } from '../../../../shared/transcript';
+import { TRANSCRIPT_SCHEMA_VERSION, type TranscriptSnapshot } from '../../../../shared/transcriptIdentity';
 import { RecordingSession } from '../../../recording/session/RecordingSession';
 import type { RecordingRunConfig } from '../../../../shared/recording';
 
 function fakeRepository() {
   const rows = new Map<string, Transcript>();
+  const revisions = new Map<string, number>();
+  const snapshots = (recordingId: string): TranscriptSnapshot | undefined => {
+    const transcript = rows.get(recordingId);
+    if (!transcript) return undefined;
+    const revision = revisions.get(recordingId) ?? 1;
+    return {
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      revision,
+      contentHash: `hash:${recordingId}:${revision}`,
+      committedAt: revision,
+      transcript,
+    };
+  };
   const port: RecordingTranscriptRepositoryPort & { rows: Map<string, Transcript> } = {
     rows,
-    async get(recordingId) { return rows.get(recordingId); },
+    async get(recordingId) { return snapshots(recordingId); },
     async update(recordingId: string, mutate: RecordingTranscriptMutation) {
       const next = normalizeTranscript(mutate(rows.get(recordingId)));
-      if (next && next.segments.length) rows.set(recordingId, next);
-      else rows.delete(recordingId);
-      return next;
+      if (next && next.segments.length) {
+        rows.set(recordingId, next);
+        revisions.set(recordingId, (revisions.get(recordingId) ?? 0) + 1);
+      } else {
+        rows.delete(recordingId);
+        revisions.delete(recordingId);
+      }
+      return snapshots(recordingId);
     },
-    async remove(recordingId) { rows.delete(recordingId); },
+    async cacheContentHash() {},
+    async listRecordingIds(limit, after) {
+      const ids = [...rows.keys()].sort().filter((id) => !after || id > after);
+      const recordingIds = ids.slice(0, limit);
+      return {
+        recordingIds,
+        ...(ids.length > limit && recordingIds.length
+          ? { nextCursor: recordingIds[recordingIds.length - 1] }
+          : {}),
+      };
+    },
+    async remove(recordingId) {
+      rows.delete(recordingId);
+      revisions.delete(recordingId);
+    },
   };
   return port;
 }

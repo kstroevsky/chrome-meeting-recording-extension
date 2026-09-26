@@ -3,7 +3,9 @@ import { IDBFactory } from 'fake-indexeddb';
 
 import { RecordingTranscriptRepository } from '../RecordingTranscriptRepository';
 import { RecordingNotationRepository } from '../../notations/RecordingNotationRepository';
+import { openRecordingHistoryDatabase, TRANSCRIPTS_STORE } from '../../RecordingLibraryDatabase';
 import type { Transcript, TranscriptSegment } from '../../../../shared/transcript';
+import { TRANSCRIPT_SCHEMA_VERSION } from '../../../../shared/transcriptIdentity';
 
 const segment = (tStartMs: number, text: string, speaker = 'Ada'): TranscriptSegment =>
   ({ tStartMs, tEndMs: tStartMs + 500, speaker, text });
@@ -26,9 +28,11 @@ describe('RecordingTranscriptRepository', () => {
 
   it('writes and reads back a transcript', async () => {
     await repository.update('rec:1', () => transcript([segment(0, 'first'), segment(1_000, 'second')]));
-    await expect(repository.get('rec:1')).resolves.toEqual(
-      transcript([segment(0, 'first'), segment(1_000, 'second')]),
-    );
+    await expect(repository.get('rec:1')).resolves.toMatchObject({
+      revision: 1,
+      committedAt: 1_000,
+      transcript: transcript([segment(0, 'first'), segment(1_000, 'second')]),
+    });
   });
 
   it('normalizes the mutator result on the way to disk', async () => {
@@ -43,12 +47,14 @@ describe('RecordingTranscriptRepository', () => {
       ] as TranscriptSegment[],
     }));
 
-    await expect(repository.get('rec:1')).resolves.toEqual({
-      source: 'meet-captions',
-      segments: [
-        { tStartMs: 10, tEndMs: 20, text: 'earlier' },
-        { tStartMs: 900, tEndMs: 950, text: 'later' },
-      ],
+    await expect(repository.get('rec:1')).resolves.toMatchObject({
+      transcript: {
+        source: 'meet-captions',
+        segments: [
+          { tStartMs: 10, tEndMs: 20, text: 'earlier' },
+          { tStartMs: 900, tEndMs: 950, text: 'later' },
+        ],
+      },
     });
   });
 
@@ -66,13 +72,13 @@ describe('RecordingTranscriptRepository', () => {
     ]);
 
     const stored = await repository.get('rec:1');
-    expect(stored?.segments.map((s) => s.text)).toEqual(['a', 'b', 'c']);
+    expect(stored?.transcript.segments.map((s) => s.text)).toEqual(['a', 'b', 'c']);
   });
 
   it('aborts without writing when the mutator throws', async () => {
     await repository.update('rec:1', () => transcript([segment(0, 'kept')]));
     await expect(repository.update('rec:1', () => { throw new Error('nope'); })).rejects.toThrow('nope');
-    await expect(repository.get('rec:1')).resolves.toEqual(transcript([segment(0, 'kept')]));
+    await expect(repository.get('rec:1')).resolves.toMatchObject({ transcript: transcript([segment(0, 'kept')]) });
   });
 
   it('removes a transcript', async () => {
@@ -110,7 +116,7 @@ describe('RecordingTranscriptRepository', () => {
     // First touch through the app opens at v5 and runs the upgrade.
     await repository.update('rec:legacy', () => transcript([segment(0, 'new words')]));
 
-    await expect(repository.get('rec:legacy')).resolves.toEqual(transcript([segment(0, 'new words')]));
+    await expect(repository.get('rec:legacy')).resolves.toMatchObject({ transcript: transcript([segment(0, 'new words')]) });
     await expect(new RecordingNotationRepository(factory, () => 1_000).list('rec:legacy'))
       .resolves.toEqual([{ id: 'notation:1', tStartMs: 5, text: 'kept' }]);
   });
@@ -121,6 +127,72 @@ describe('RecordingTranscriptRepository', () => {
     await repository.update('rec:1', () => transcript([segment(0, 'words')]));
 
     await expect(notations.list('rec:1')).resolves.toHaveLength(1);
-    await expect(repository.get('rec:1')).resolves.toEqual(transcript([segment(0, 'words')]));
+    await expect(repository.get('rec:1')).resolves.toMatchObject({ transcript: transcript([segment(0, 'words')]) });
+  });
+
+  it('increments revisions only when transcript content changes', async () => {
+    const first = await repository.update('rec:1', () => transcript([segment(0, 'same')]));
+    const duplicate = await repository.update('rec:1', (current) => current);
+    const changed = await repository.update('rec:1', (current) => transcript([
+      ...(current?.segments ?? []),
+      segment(1_000, 'new'),
+    ]));
+
+    expect(first?.revision).toBe(1);
+    expect(duplicate?.revision).toBe(1);
+    expect(changed?.revision).toBe(2);
+  });
+
+  it('lazily migrates a legacy flattened transcript when its hash is cached', async () => {
+    const legacyTranscript = transcript([segment(0, 'legacy words')]);
+    const database = await openRecordingHistoryDatabase(factory);
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(TRANSCRIPTS_STORE, 'readwrite');
+      transaction.objectStore(TRANSCRIPTS_STORE).put({
+        recordingId: 'rec:legacy-flat',
+        ...legacyTranscript,
+        updatedAt: 77,
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+
+    await expect(repository.get('rec:legacy-flat')).resolves.toMatchObject({
+      revision: 1,
+      contentHash: '',
+      committedAt: 77,
+      transcript: legacyTranscript,
+    });
+    await repository.cacheContentHash('rec:legacy-flat', 1, 'sha256:legacy');
+
+    const raw = await new Promise<any>((resolve, reject) => {
+      const transaction = database.transaction(TRANSCRIPTS_STORE, 'readonly');
+      const request = transaction.objectStore(TRANSCRIPTS_STORE).get('rec:legacy-flat');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    expect(raw).toEqual({
+      recordingId: 'rec:legacy-flat',
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      revision: 1,
+      contentHash: 'sha256:legacy',
+      committedAt: 77,
+      transcript: legacyTranscript,
+    });
+  });
+
+  it('pages recording ids so bounded reconciliation can progress across startups', async () => {
+    for (const id of ['rec:c', 'rec:a', 'rec:b']) {
+      await repository.update(id, () => transcript([segment(0, id)]));
+    }
+
+    await expect(repository.listRecordingIds(2)).resolves.toEqual({
+      recordingIds: ['rec:a', 'rec:b'],
+      nextCursor: 'rec:b',
+    });
+    await expect(repository.listRecordingIds(2, 'rec:b')).resolves.toEqual({
+      recordingIds: ['rec:c'],
+    });
   });
 });

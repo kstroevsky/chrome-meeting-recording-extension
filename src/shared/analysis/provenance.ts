@@ -44,7 +44,7 @@ export type EmbeddingDtype = 'fp32' | 'fp16' | 'q8' | 'int8' | 'uint8' | 'q4' | 
  */
 export const PIPELINE_VERSION = 2;
 
-export type AnalysisProvenance = {
+export type AnalysisEnvironmentProvenance = {
   pipelineVersion: number;
   /** The model's identity, e.g. its Hugging Face repo id. */
   embeddingModel: string;
@@ -90,6 +90,11 @@ export type AnalysisProvenance = {
   embeddingDevice?: 'webgpu' | 'wasm';
 };
 
+export type AnalysisProvenance = AnalysisEnvironmentProvenance & {
+  transcriptRevision: number;
+  transcriptHash: string;
+};
+
 /**
  * A stable digest of the output-affecting configuration a run used.
  *
@@ -107,7 +112,9 @@ export function hashAnalysisConfig(config: AnalysisConfig): string {
 
 /** Whether an analysis was produced under different conditions than these. */
 export function isStale(stored: AnalysisProvenance, current: AnalysisProvenance): boolean {
-  return stored.pipelineVersion !== current.pipelineVersion
+  return stored.transcriptRevision !== current.transcriptRevision
+    || stored.transcriptHash !== current.transcriptHash
+    || stored.pipelineVersion !== current.pipelineVersion
     || stored.embeddingModel !== current.embeddingModel
     || stored.embeddingModelRevision !== current.embeddingModelRevision
     || stored.embeddingDimensions !== current.embeddingDimensions

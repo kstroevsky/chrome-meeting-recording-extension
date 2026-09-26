@@ -7,9 +7,12 @@ import type { StoredAnalysis } from '../../../../shared/analysis/storedAnalysis'
 import type { AnalysisJob } from '../../../../shared/analysis/job';
 import type { RecordingAnalysisOutcome } from '../RecordingAnalysisOutcome';
 import type { Transcript } from '../../../../shared/transcript';
+import { TRANSCRIPT_SCHEMA_VERSION, type TranscriptSnapshot } from '../../../../shared/transcriptIdentity';
 import type { ConversationSegment, Topic } from '../../../../shared/analysis/types';
 
 const PROVENANCE: AnalysisProvenance = {
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: PIPELINE_VERSION,
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: 'rev',
@@ -56,8 +59,11 @@ function harness(options: {
   analyzeAnswer?: { ok: boolean; jobId?: string; error?: string };
   ensureReadyThrows?: Error;
   saveThrows?: Error | (() => Error | undefined);
+  afterSave?: () => void;
+  putOutcomeGate?: Promise<void>;
   /** Answers the deletion fence; defaults to reading `tombstones`. */
   isRecordingDeleted?: (historyId: string) => Promise<boolean>;
+  isRecordingFinalized?: (historyId: string) => Promise<boolean>;
 } = {}) {
   // Durable state: survives a "service-worker restart" (a fresh coordinator).
   const rows = new Map<string, StoredAnalysis>();
@@ -65,6 +71,15 @@ function harness(options: {
   const tombstones = new Set<string>();
   /** Mutable "conditions right now", so a test can change them mid-run. */
   const current = { provenance: PROVENANCE };
+  const transcriptState: { snapshot: TranscriptSnapshot | undefined } = {
+    snapshot: options.transcript ? {
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      revision: PROVENANCE.transcriptRevision,
+      contentHash: PROVENANCE.transcriptHash,
+      committedAt: 1,
+      transcript: options.transcript,
+    } : undefined,
+  };
   if (options.stored) rows.set('rec_1', options.stored);
 
   const calls: { analyze: unknown[]; cancel: string[]; ack: string[] } = { analyze: [], cancel: [], ack: [] };
@@ -90,18 +105,25 @@ function harness(options: {
         if (failure) throw failure;
         rows.set(id, analysis);
       },
-      putOutcome: async (id, outcome) => { outcomes.set(id, outcome); },
+      putOutcome: async (id, outcome) => {
+        await options.putOutcomeGate;
+        outcomes.set(id, outcome);
+      },
       putCompleted: async (id, analysis, outcome) => {
         const failure = typeof options.saveThrows === 'function' ? options.saveThrows() : options.saveThrows;
         if (failure) throw failure;
         rows.set(id, analysis);
         outcomes.set(id, outcome);
+        options.afterSave?.();
         return true;
       },
       remove: async (id) => { rows.delete(id); },
       removeAll: async (id) => { rows.delete(id); outcomes.delete(id); },
     },
     () => current.provenance,
+    async () => transcriptState.snapshot
+      ? { revision: transcriptState.snapshot.revision, contentHash: transcriptState.snapshot.contentHash }
+      : undefined,
   );
 
   const changed: AnalysisJob[] = [];
@@ -113,8 +135,9 @@ function harness(options: {
   const freshCoordinator = () => new RecordingAnalysisCoordinator({
     dataPlane,
     analyses,
-    readTranscript: async () => options.transcript,
+    readTranscript: async () => transcriptState.snapshot,
     isRecordingDeleted: options.isRecordingDeleted ?? (async (id) => tombstones.has(id)),
+    ...(options.isRecordingFinalized ? { isRecordingFinalized: options.isRecordingFinalized } : {}),
     config: () => CANDIDATE_ANALYSIS_CONFIG,
     onJobChanged: (job) => changed.push(job),
     onSettled: () => { settled.push(Date.now()); },
@@ -122,7 +145,19 @@ function harness(options: {
   });
   const coordinator = freshCoordinator();
 
-  return { coordinator, freshCoordinator, calls, rows, outcomes, tombstones, changed, settled, current, analyses };
+  return {
+    coordinator,
+    freshCoordinator,
+    calls,
+    rows,
+    outcomes,
+    tombstones,
+    changed,
+    settled,
+    current,
+    transcriptState,
+    analyses,
+  };
 }
 
 describe('RecordingAnalysisCoordinator', () => {
@@ -278,6 +313,17 @@ describe('RecordingAnalysisCoordinator', () => {
     await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
   });
 
+  it('locks replayed work before its durable outcome write finishes', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = harness({ transcript: TRANSCRIPT, putOutcomeGate: gate });
+
+    const replay = h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
+    await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
+    release();
+    await replay;
+  });
+
   it('ignores a terminal state for a job it is no longer tracking', async () => {
     const h = harness({ transcript: TRANSCRIPT });
     await h.coordinator.analyze('rec_1');
@@ -288,7 +334,7 @@ describe('RecordingAnalysisCoordinator', () => {
 
   it('stores a delivered result and only then acknowledges it', async () => {
     const h = harness({ transcript: TRANSCRIPT });
-    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
 
     const stored = h.rows.get('rec_1')!;
     expect(stored.topics).toHaveLength(1);
@@ -304,7 +350,7 @@ describe('RecordingAnalysisCoordinator', () => {
   it('holds the acknowledgement when a transient storage failure could clear', async () => {
     const aborted = Object.assign(new Error('transaction aborted'), { name: 'AbortError' });
     const h = harness({ transcript: TRANSCRIPT, saveThrows: aborted });
-    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
 
     expect(h.rows.has('rec_1')).toBe(false);
     expect(h.calls.ack).toEqual([]);
@@ -313,7 +359,7 @@ describe('RecordingAnalysisCoordinator', () => {
   it('gives up and acknowledges when storage is full, rather than retrying forever', async () => {
     const full = Object.assign(new Error('the quota has been exceeded'), { name: 'QuotaExceededError' });
     const h = harness({ transcript: TRANSCRIPT, saveThrows: full });
-    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
 
     expect(h.rows.has('rec_1')).toBe(false);
     // Retrying cannot make space, and holding would pin the vectors in the
@@ -324,7 +370,7 @@ describe('RecordingAnalysisCoordinator', () => {
   it('treats the Firefox spelling of a full disk the same way', async () => {
     const full = Object.assign(new Error('quota reached'), { name: 'NS_ERROR_DOM_QUOTA_REACHED' });
     const h = harness({ transcript: TRANSCRIPT, saveThrows: full });
-    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
 
     expect(h.calls.ack).toEqual(['ana_1']);
   });
@@ -376,12 +422,13 @@ describe('RecordingAnalysisCoordinator', () => {
       expect((await h.analyses.state('rec_1')).status).toBe('stale');
     });
 
-    it('falls back to current conditions for a job it no longer remembers', async () => {
-      // A service-worker restart loses the in-memory map; falling back to
-      // current conditions is what the old code always did, so no worse.
+    it('does not guess provenance for a result whose enqueue state was lost', async () => {
       const h = harness({ transcript: TRANSCRIPT });
       await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
-      expect(h.rows.get('rec_1')!.provenance).toEqual(PROVENANCE);
+      expect(h.rows.has('rec_1')).toBe(false);
+      expect(h.calls.ack).toEqual(['ana_1']);
+      await new Promise(process.nextTick);
+      expect(h.calls.analyze).toHaveLength(1);
     });
   });
 
@@ -478,7 +525,7 @@ describe('RecordingAnalysisCoordinator', () => {
       // Delivery and analysis settle independently, so "no row" is an
       // ordinary state for a short recording — not a deletion.
       const h = harness({ transcript: TRANSCRIPT });
-      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
       expect(h.rows.has('rec_1')).toBe(true);
     });
 
@@ -486,7 +533,7 @@ describe('RecordingAnalysisCoordinator', () => {
       // Deleted after the pre-write check, before the write landed.
       let checks = 0;
       const h = harness({ transcript: TRANSCRIPT, isRecordingDeleted: async () => (checks += 1) > 1 });
-      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
+      await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
 
       expect(h.rows.has('rec_1')).toBe(false);
       expect(h.calls.ack).toEqual(['ana_1']);
@@ -505,11 +552,102 @@ describe('RecordingAnalysisCoordinator', () => {
       expect(h.rows.get('rec_1')!.provenance).toEqual(atRunTime);
     });
 
-    it('falls back when the provenance that came back cannot be read', async () => {
+    it('falls back to enqueue-time provenance when returned provenance cannot be read', async () => {
       const h = harness({ transcript: TRANSCRIPT });
+      await h.coordinator.analyze('rec_1');
       await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), { configHash: 42 });
       expect(h.rows.get('rec_1')!.provenance).toEqual(PROVENANCE);
     });
+  });
+
+  it('never stores a result for a transcript revision that was replaced while it ran', async () => {
+    const h = harness({ transcript: TRANSCRIPT });
+    await h.coordinator.analyze('rec_1');
+
+    h.transcriptState.snapshot = {
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      revision: 2,
+      contentHash: 'transcript-hash-2',
+      committedAt: 2,
+      transcript: {
+        source: 'stt',
+        segments: [{ tStartMs: 0, tEndMs: 2_000, text: 'replacement transcript' }],
+      },
+    };
+
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
+
+    expect(h.rows.has('rec_1')).toBe(false);
+    expect(h.calls.ack).toEqual(['ana_1']);
+    await new Promise(process.nextTick);
+    expect(h.calls.analyze).toHaveLength(2);
+    expect(h.calls.analyze[1]).toMatchObject({
+      provenance: { transcriptRevision: 2, transcriptHash: 'transcript-hash-2' },
+    });
+  });
+
+  it('reconciles a transcript commit that arrived while the previous job was busy', async () => {
+    const h = harness({ transcript: TRANSCRIPT });
+    await h.coordinator.analyze('rec_1');
+    h.transcriptState.snapshot = {
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      revision: 2,
+      contentHash: 'transcript-hash-2',
+      committedAt: 2,
+      transcript: {
+        source: 'stt',
+        segments: [{ tStartMs: 0, tEndMs: 2_000, text: 'new transcript' }],
+      },
+    };
+
+    await expect(h.coordinator.ensureCurrentAnalysis('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
+    await h.coordinator.handleJobState({ ...JOB, status: 'failed', error: 'old run failed' });
+    await new Promise(process.nextTick);
+
+    expect(h.calls.analyze).toHaveLength(2);
+    expect(h.calls.analyze[1]).toMatchObject({
+      provenance: { transcriptRevision: 2, transcriptHash: 'transcript-hash-2' },
+    });
+  });
+
+  it('rechecks transcript identity after persistence closes the pre-save race', async () => {
+    let h!: ReturnType<typeof harness>;
+    h = harness({
+      transcript: TRANSCRIPT,
+      afterSave: () => {
+        h.transcriptState.snapshot = {
+          schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+          revision: 2,
+          contentHash: 'transcript-hash-2',
+          committedAt: 2,
+          transcript: {
+            source: 'stt',
+            segments: [{ tStartMs: 0, tEndMs: 2_000, text: 'replacement during save' }],
+          },
+        };
+      },
+    });
+
+    await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT), PROVENANCE);
+    await new Promise(process.nextTick);
+
+    await expect(h.analyses.get('rec_1')).resolves.toBeUndefined();
+    expect(h.calls.analyze).toHaveLength(1);
+    expect(h.calls.analyze[0]).toMatchObject({
+      provenance: { transcriptRevision: 2, transcriptHash: 'transcript-hash-2' },
+    });
+  });
+
+  it('startup reconciliation skips live transcripts and starts finalized ones', async () => {
+    let finalized = false;
+    const h = harness({ transcript: TRANSCRIPT, isRecordingFinalized: async () => finalized });
+
+    await h.coordinator.reconcile(['rec_1']);
+    expect(h.calls.analyze).toEqual([]);
+
+    finalized = true;
+    await h.coordinator.reconcile(['rec_1']);
+    expect(h.calls.analyze).toHaveLength(1);
   });
 
   describe('a result lost with its offscreen document', () => {
