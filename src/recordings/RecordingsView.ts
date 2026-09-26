@@ -122,6 +122,7 @@ export class RecordingsView {
   }
   private openId: string | null = null;
   private destinations: DriveFolderPreset[] = [];
+  private total: number | undefined;
   /** The open modal's picker, torn down with the modal so its listeners go too. */
   private destinationListbox: ListboxSelect | null = null;
   private editingId: string | null = null;
@@ -171,9 +172,10 @@ export class RecordingsView {
     });
   }
 
-  render(entries: RecordingHistoryEntry[], hasMore = false) {
+  render(entries: RecordingHistoryEntry[], hasMore = false, total?: number) {
     this.entries = entries;
     this.hasMore = hasMore;
+    this.total = total;
     const validIds = new Set(entries.map((entry) => entry.id));
     this.selected = new Set([...this.selected].filter((id) => validIds.has(id)));
     if (this.openId && !validIds.has(this.openId)) this.openId = null;
@@ -206,7 +208,12 @@ export class RecordingsView {
 
     const visible = this.visibleEntries();
     this.syncToolbar(visible.length);
+    // The table is rebuilt on every redraw — opening a recording included — so
+    // its scroll position has to be carried across, or the list jumps to the top.
+    const scrollTop = this.tableHost!.querySelector<HTMLElement>('.recording-table__scroll')?.scrollTop ?? 0;
     this.tableHost!.replaceChildren(this.table(visible));
+    const scroller = this.tableHost!.querySelector<HTMLElement>('.recording-table__scroll');
+    if (scroller && scrollTop) scroller.scrollTop = scrollTop;
     const openEntry = this.entries.find((entry) => entry.id === this.openId);
     // A redraw while a recording waits to open must not drop the notes it waits on.
     if (!openEntry && this.notesSection?.id !== this.pendingOpenId) this.notesSection = null;
@@ -233,7 +240,8 @@ export class RecordingsView {
     // and saying where the match came from is the point of the split below (f2).
     total.textContent = this.query.trim()
       ? `${visibleCount} OF ${this.entries.length} · IN NAMES, NOTES AND TOPICS`
-      : `${visibleCount} RECORDING${visibleCount === 1 ? '' : 'S'}`;
+      // Not the page: the library, which may hold more than has loaded.
+      : `${this.total ?? visibleCount} RECORDING${(this.total ?? visibleCount) === 1 ? '' : 'S'}`;
   }
 
   private visibleEntries(): RecordingHistoryEntry[] {

@@ -50,6 +50,18 @@ async function open(list: HTMLElement): Promise<void> {
 describe('RecordingsView detail (f2, f17)', () => {
   afterEach(() => jest.useRealTimers());
 
+  it('keeps the list where it was scrolled when a recording opens', async () => {
+    const { view, list } = mount();
+    view.render(Array.from({ length: 30 }, (_, i) => entry(`rec-${i}`, `Recording ${i}`)));
+    list.querySelector<HTMLElement>('.recording-table__scroll')!.scrollTop = 420;
+
+    list.querySelectorAll<HTMLElement>('.recording-row')[20].click();
+    await flush();
+
+    expect(list.querySelector('.recording-detail')).not.toBeNull();
+    expect(list.querySelector<HTMLElement>('.recording-table__scroll')!.scrollTop).toBe(420);
+  });
+
   it('rows carry no play control; watching starts from the detail (f2)', async () => {
     const { view, list, callbacks } = mount();
     view.render([entry()]);

@@ -270,7 +270,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupDismissUploadJob ? { session: RecordingStatusView } :
   T extends PopupRetryUploadJob ? CommandResult :
   T extends PopupCancelUploadJob ? CommandResult :
-  T extends PopupListRecordingHistory ? { ok: true; entries: RecordingHistoryEntry[]; nextCursor?: RecordingHistoryCursor } | { ok: false; error: string } :
+  T extends PopupListRecordingHistory ? { ok: true; entries: RecordingHistoryEntry[]; nextCursor?: RecordingHistoryCursor; total?: number } | { ok: false; error: string } :
   T extends PopupRenameRecordingHistory ? { ok: true; entry?: RecordingHistoryEntry; session?: RecordingStatusView } | { ok: false; error: string } :
   T extends PopupSkipRecordingNaming ? CommandResult :
   T extends PopupDismissInterruption ? { session: RecordingStatusView } :

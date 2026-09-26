@@ -19,6 +19,8 @@ export class RecordingsController {
   private player: PlayerController | null = null;
   private entries: RecordingHistoryEntry[] = [];
   private nextCursor: RecordingHistoryCursor | undefined;
+  /** The whole library's size; `entries` is only what has been paged in. */
+  private total: number | undefined;
   private loadingMore = false;
   constructor(
     private readonly view: RecordingsView,
@@ -97,12 +99,12 @@ export class RecordingsController {
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
+  /** Asked for by the page's own confirmation dialog, so it asks nothing again. */
   async remove(id: string) {
-    if (!confirm('Remove this item from recording history? Its in-extension playback copy is deleted; your downloaded and Google Drive files are not.')) return;
     try {
       const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
       if (!response.ok) throw new Error(response.error);
-      if (response.removed) this.entries = this.entries.filter((entry) => entry.id !== id);
+      if (response.removed) this.forget(id);
       this.render();
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
@@ -110,12 +112,11 @@ export class RecordingsController {
   async removeMany(ids: string[]) {
     const uniqueIds = [...new Set(ids)].filter((id) => this.entries.some((entry) => entry.id === id));
     if (!uniqueIds.length) return;
-    if (!confirm(`Remove ${uniqueIds.length} item${uniqueIds.length === 1 ? '' : 's'} from recording history? Their in-extension playback copies are deleted; your downloaded and Google Drive files are not.`)) return;
     try {
       for (const id of uniqueIds) {
         const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
         if (!response.ok) throw new Error(response.error);
-        if (response.removed) this.entries = this.entries.filter((entry) => entry.id !== id);
+        if (response.removed) this.forget(id);
       }
       this.render();
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
@@ -231,6 +232,7 @@ export class RecordingsController {
     if (!response.ok) throw new Error(response.error);
     this.entries = response.entries;
     this.nextCursor = response.nextCursor;
+    this.total = response.total;
     this.view.showError();
     this.render();
     void this.refreshNoteSummaries();
@@ -257,8 +259,13 @@ export class RecordingsController {
     }
   }
 
+  private forget(id: string) {
+    this.entries = this.entries.filter((entry) => entry.id !== id);
+    if (this.total != null) this.total = Math.max(0, this.total - 1);
+  }
+
   private render() {
-    this.view.render(this.entries, this.nextCursor != null);
+    this.view.render(this.entries, this.nextCursor != null, this.total);
   }
 
   /**
