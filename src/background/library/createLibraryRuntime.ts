@@ -27,6 +27,7 @@ type LibraryRuntimeDeps = {
   playbackLeases: PlaybackLeaseManager;
   logger: Logger;
   onAnalysisSettled?: () => void;
+  onIntegrationChanged?: (recordingId: string) => void;
 };
 
 /** Constructs durable library aggregates and wires their offscreen analysis boundary. */
@@ -35,11 +36,15 @@ export function createLibraryRuntime({
   playbackLeases,
   logger,
   onAnalysisSettled,
+  onIntegrationChanged,
 }: LibraryRuntimeDeps) {
   const historyRepository = new RecordingHistoryRepository();
-  const recordingContexts = new RecordingContextService(new RecordingContextRepository());
-  const notations = new RecordingNotationService(new RecordingNotationRepository());
-  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository());
+  const recordingContexts = new RecordingContextService(
+    new RecordingContextRepository(),
+    onIntegrationChanged,
+  );
+  const notations = new RecordingNotationService(new RecordingNotationRepository(), onIntegrationChanged);
+  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository(), onIntegrationChanged);
   const analyses = new RecordingAnalysisService(new RecordingAnalysisRepository(), () => {
     const model = packagedModel();
     return {
@@ -50,7 +55,7 @@ export function createLibraryRuntime({
       embeddingDtype: model.dtype,
       configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
     };
-  });
+  }, onIntegrationChanged);
 
   const analysisCoordinator = new RecordingAnalysisCoordinator({
     dataPlane: offscreen,
@@ -92,6 +97,7 @@ export function createLibraryRuntime({
       await playbackLeases.deleteOrDefer(historyId, keys);
     },
     logger.warn,
+    onIntegrationChanged,
   );
 
   const playback = new RecordingPlaybackService({

@@ -43,6 +43,7 @@ export class RecordingAnalysisService {
     private readonly repository: RecordingAnalysisRepositoryPort,
     /** The conditions a fresh run would use; compared against what is stored. */
     private readonly currentProvenance: () => AnalysisProvenance,
+    private readonly onChanged?: (recordingId: string) => void,
   ) {}
 
   /**
@@ -118,6 +119,7 @@ export class RecordingAnalysisService {
       ...(error ? { error } : {}),
     };
     await this.repository.putOutcome(job.historyId, outcome);
+    this.onChanged?.(job.historyId);
   }
 
   /** Persists a terminal attempt that ended before the data plane created a job. */
@@ -135,6 +137,7 @@ export class RecordingAnalysisService {
       ...(error ? { error } : {}),
     };
     await this.repository.putOutcome(recordingId, outcome);
+    this.onChanged?.(recordingId);
   }
 
   /**
@@ -174,6 +177,7 @@ export class RecordingAnalysisService {
       updatedAt: now,
     };
     await this.repository.putCompleted(recordingId, analysis, outcome);
+    this.onChanged?.(recordingId);
     return analysis;
   }
 
