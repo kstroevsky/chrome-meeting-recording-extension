@@ -14,7 +14,8 @@ export async function handlePlaybackMessage(
   sendResponse: RuntimeSendResponse,
   deps: MessageHandlersDeps,
 ): Promise<boolean> {
-  const { driveArtifacts, driveAuthLease, history, playback, playbackLeases } = deps;
+  const { driveAuthLease, history, playback, playbackLeases } = deps;
+  const driveArtifacts = deps.driveLibrary?.artifacts;
 
   if (msg.type === 'GET_RECORDING_PLAYBACK_MANIFEST') {
     if (!playback) throw new Error('Playback is unavailable');

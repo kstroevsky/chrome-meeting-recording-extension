@@ -4,7 +4,9 @@ import { DRIVE_DEFAULT_DESTINATION_NAME } from '../../shared/settings';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../../shared/recordingHistory';
 import { DriveDestinationImporter } from './DriveDestinationImporter';
 import { DriveFolderBackfill } from './DriveFolderBackfill';
+import { DriveLibrarySync } from './DriveLibrarySync';
 import { listDriveChildren } from './driveListing';
+import { createDriveSyncPorts } from './driveSyncPorts';
 import { DriveArtifactResolver } from './DriveArtifactResolver';
 import { DriveDestinationFiler } from './DriveDestinationFiler';
 import { DriveRootFolder } from './DriveRootFolder';
@@ -28,6 +30,7 @@ export class DriveLibraryCoordinator {
   readonly artifacts: DriveArtifactResolver;
   readonly importer: DriveDestinationImporter;
   readonly folderBackfill: DriveFolderBackfill;
+  readonly sync: DriveLibrarySync;
 
   private readonly folders: DriveDestinationFiler;
   private readonly rootFolder: DriveRootFolder;
@@ -116,6 +119,14 @@ export class DriveLibraryCoordinator {
         return status === 200 && !body?.trashed ? (body?.parents ?? null) : null;
       },
       history: historyRepository,
+      log: logger.log,
+    });
+    this.sync = new DriveLibrarySync({
+      ...createDriveSyncPorts(),
+      findFolder: this.folderPorts.findFolder,
+      listChildren: listDriveChildren,
+      history: historyRepository,
+      backfill: this.folderBackfill,
       log: logger.log,
     });
   }

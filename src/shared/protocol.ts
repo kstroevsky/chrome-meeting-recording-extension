@@ -5,6 +5,7 @@
  * extension.
  */
 
+import type { DriveSyncChoice, DriveSyncPlan, DriveSyncResult } from './driveSync';
 import type { MeetingProviderInfo } from './provider';
 import type { RecordingNotation, RecordingNotationSummary } from './notations';
 import type { RecorderRuntimeSettingsSnapshot } from './settings';
@@ -125,6 +126,10 @@ export type PopupListActiveNotations = { type: 'LIST_ACTIVE_NOTATIONS' };
 export type PopupUpdateActiveNotation = { type: 'UPDATE_ACTIVE_NOTATION'; id: string; text: string };
 export type PopupRemoveActiveNotation = { type: 'REMOVE_ACTIVE_NOTATION'; id: string };
 export type PopupListRecordingNotations = { type: 'LIST_RECORDING_NOTATIONS'; recordingId: string };
+/** "Sync with Drive": a preview of what differs. Writes nothing. */
+export type PopupSyncDrivePlan = { type: 'SYNC_DRIVE_PLAN' };
+/** "Sync with Drive": do what the user chose from the preview. */
+export type PopupSyncDriveApply = { type: 'SYNC_DRIVE_APPLY'; choice: DriveSyncChoice };
 /** Files a finished recording into one of the user's destinations; null unfiles it. */
 export type PopupFileRecordingToDestination = {
   type: 'FILE_RECORDING_TO_DESTINATION';
@@ -236,6 +241,8 @@ export type PopupToBg =
   | PopupListRecordingNotations
   | PopupGetPlaybackManifest
   | PopupFileRecordingToDestination
+  | PopupSyncDrivePlan
+  | PopupSyncDriveApply
   | PopupGetStorageUsage
   | SettingsRenameDriveRootFolder
   | PopupListUnsavedRecordings
@@ -296,6 +303,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupFileRecordingToDestination ? { ok: true } | { ok: false; error: string } :
+  T extends PopupSyncDrivePlan ? { ok: true; plan: DriveSyncPlan } | { ok: false; error: string } :
+  T extends PopupSyncDriveApply ? { ok: true; result: DriveSyncResult } | { ok: false; error: string } :
   T extends PopupGetPlaybackManifest ?
     { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :
   T extends PopupPreparePlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :

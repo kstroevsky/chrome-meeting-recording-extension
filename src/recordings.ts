@@ -33,6 +33,7 @@ if (list && empty && error && loadMore instanceof HTMLButtonElement) {
     note: (id, note) => void controller.setNote(id, note),
     remove: (id, deleteFiles) => void controller.remove(id, deleteFiles),
     removeMany: (ids, deleteFiles) => void controller.removeMany(ids, deleteFiles),
+    syncDrive: () => void controller.syncDrive(),
     openLocal: (recordingId, fileId) => void controller.openLocal(recordingId, fileId),
     play: (recordingId) => void controller.play(recordingId),
     fileTo: (recordingId, presetId) => void controller.fileTo(recordingId, presetId),

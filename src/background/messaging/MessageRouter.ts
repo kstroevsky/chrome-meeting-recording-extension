@@ -51,6 +51,8 @@ export const POPUP_ROUTE_OWNERS = {
   RENAME_RECORDING_HISTORY: 'library',
   SET_RECORDING_HISTORY_NOTE: 'library',
   REMOVE_RECORDING_HISTORY: 'library',
+  SYNC_DRIVE_PLAN: 'library',
+  SYNC_DRIVE_APPLY: 'library',
   OPEN_RECORDING_HISTORY_FILE: 'library',
   MARK_NOTATION: 'recording',
   END_NOTATION: 'recording',
