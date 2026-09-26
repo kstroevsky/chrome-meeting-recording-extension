@@ -14,6 +14,7 @@ import { IntegrationReadinessScheduler } from '../../integrations/IntegrationRea
 import { IntegrationRoutingRepository } from '../../integrations/IntegrationRoutingRepository';
 import { IntegrationSecretRepository } from '../../integrations/IntegrationSecretRepository';
 import { IntegrationStreamRepository } from '../../integrations/IntegrationStreamRepository';
+import { KeyedCoalescer } from '../../integrations/KeyedCoalescer';
 import { IntegrationUnitOfWork } from '../../integrations/IntegrationUnitOfWork';
 import { IntegrationScheduler } from '../../integrations/IntegrationScheduler';
 import type { CreateIntegrationDestinationInput } from '../../integrations/management';
@@ -40,6 +41,8 @@ export class BackgroundIntegrationRuntime {
   private readonly readinessScheduler: IntegrationReadinessScheduler;
   private readonly planner: IntegrationEventPlanner;
   private readonly routing: IntegrationRoutingRepository;
+  /** Upload progress and captions notify in bursts; each recording is considered once at a time. */
+  private readonly considerations = new KeyedCoalescer((recordingId) => this.considerRecording(recordingId));
 
   constructor(private readonly readers: CanonicalRecordingReaders, factory?: IDBFactory) {
     this.previewService = new IntegrationPreviewService(readers);
@@ -153,7 +156,11 @@ export class BackgroundIntegrationRuntime {
     return this.dispatcher.retry(deliveryId);
   }
 
-  async consider(recordingId: string): Promise<void> {
+  consider(recordingId: string): Promise<void> {
+    return this.considerations.request(recordingId);
+  }
+
+  private async considerRecording(recordingId: string): Promise<void> {
     const intent = await this.routing.get(recordingId);
     if (!intent) return;
     const results = await Promise.allSettled(
