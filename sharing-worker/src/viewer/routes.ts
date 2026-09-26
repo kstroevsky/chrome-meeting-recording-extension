@@ -7,10 +7,10 @@ import {
 } from '../auth/capability';
 import { sha256Base64Url } from '../auth/crypto';
 import {
-  MAX_MEDIA_RESPONSE_BYTES,
   cacheMediaRange,
   getCachedMedia,
   mediaCacheKey,
+  mediaCacheWindow,
 } from '../cache/mediaCache';
 import { fetchDriveRevisionRange } from '../drive/DriveClient';
 import { parseRange } from '../http/range';
@@ -118,6 +118,8 @@ async function serveMedia(
 ): Promise<Response> {
   const session = await requireViewerSession(request, env);
   if (session instanceof Response) return session;
+  const limited = await enforceViewerMediaRate(request, env, session);
+  if (limited) return limited;
 
   const track = await env.SHARING_DB.prepare(
     `SELECT t.share_id, t.recording_id, t.track_id, t.mime_type, t.bytes, t.object_key,
@@ -142,8 +144,12 @@ async function serveMedia(
   }
 
   if (track.asset_id && track.drive_file_id && track.revision_id) {
-    const cacheKey = mediaCacheKey(track.asset_id, track.revision_id, served.start, served.end);
-    const cached = await getCachedMedia(env, cacheKey);
+    const window = mediaCacheWindow(served.start, track.bytes);
+    const cacheKey = mediaCacheKey(track.asset_id, track.revision_id, window.start, window.end);
+    const cached = await getCachedMedia(env, cacheKey, Date.now(), {
+      offset: served.start - window.start,
+      length: served.end - served.start + 1,
+    });
     if (cached) {
       return new Response(cached.body, { status: partial ? 206 : 200, headers });
     }
@@ -169,6 +175,11 @@ async function serveMedia(
       return json({ code: 'MEDIA_ORIGIN_INVALID_RESPONSE' }, 502, { 'cache-control': 'no-store' });
     }
 
+    // Only a whole window is cached, so every cached object is one of the
+    // asset's fixed windows; any smaller range is served but not stored.
+    if (served.start !== window.start || served.end !== window.end) {
+      return new Response(origin.body, { status: partial ? 206 : 200, headers });
+    }
     const [viewerBody, cacheBody] = origin.body.tee();
     if (ctx) {
       ctx.waitUntil(cacheMediaRange(env, {
@@ -194,7 +205,13 @@ async function serveMedia(
   return new Response(legacy.body, { status: partial ? 206 : 200, headers });
 }
 
-function boundedMediaRange(
+/**
+ * The range actually served: what was asked for, cut at the end of the cache
+ * window it starts in. That also caps a response at one window (8 MiB). A
+ * player that seeks mid-window gets the rest of that window, then asks for the
+ * next one from its aligned start — which is what makes the next one cacheable.
+ */
+export function boundedMediaRange(
   requested: { start: number; end: number } | null,
   total: number,
 ): { start: number; end: number } {
@@ -202,8 +219,25 @@ function boundedMediaRange(
   const requestedEnd = requested?.end ?? Math.max(0, total - 1);
   return {
     start,
-    end: Math.min(requestedEnd, start + MAX_MEDIA_RESPONSE_BYTES - 1),
+    end: Math.min(requestedEnd, mediaCacheWindow(start, total).end),
   };
+}
+
+/**
+ * Anyone holding a share link can request media, and every uncached request is
+ * a Drive read on the one service account every share uses. Limited per share
+ * and client address, so one viewer cannot spend the Drive quota for all.
+ */
+async function enforceViewerMediaRate(
+  request: Request,
+  env: Env,
+  session: ViewerSession,
+): Promise<Response | null> {
+  const limiter = env.VIEWER_MEDIA_RATE_LIMITER;
+  if (!limiter) return null;
+  const client = request.headers.get('cf-connecting-ip') ?? 'unknown';
+  const { success } = await limiter.limit({ key: `${session.shareId}:${client}` });
+  return success ? null : json({ code: 'VIEWER_RATE_LIMITED' }, 429, { 'retry-after': '60' });
 }
 
 function mediaHeaders(

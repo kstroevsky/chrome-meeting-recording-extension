@@ -561,6 +561,65 @@ describe('sharing worker vertical slice', () => {
     expect(refreshed!.expires_at - refreshed!.cached_at).toBe(30 * 60 * 60 * 1000);
   });
 
+  it('serves a partial range from the cached window without another Drive read', async () => {
+    const { cookie } = await createActiveViewer();
+    const media = (range: string) => new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { headers: { cookie, range } },
+    );
+
+    const ctx = createExecutionContext();
+    await (await worker.fetch(media('bytes=0-5'), env, ctx)).arrayBuffer();
+    await waitOnExecutionContext(ctx);
+    expect(driveMediaRequests).toBe(1);
+
+    const partial = await worker.fetch(media('bytes=2-4'), env);
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get('content-range')).toBe('bytes 2-4/6');
+    expect(Array.from(new Uint8Array(await partial.arrayBuffer()))).toEqual([30, 40, 50]);
+    expect(driveMediaRequests).toBe(1);
+  });
+
+  it('caches only whole aligned windows, so arbitrary ranges cannot mint cache entries', async () => {
+    const { cookie } = await createActiveViewer();
+    for (const range of ['bytes=1-5', 'bytes=2-3', 'bytes=0-4', 'bytes=3-']) {
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(new Request(
+        `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+        { headers: { cookie, range } },
+      ), env, ctx);
+      expect(response.status).toBe(206);
+      await response.arrayBuffer();
+      await waitOnExecutionContext(ctx);
+    }
+    expect(driveMediaRequests).toBe(4);
+    expect(await rowCount('media_cache_entries')).toBe(0);
+  });
+
+  it('rate-limits media per share and client address', async () => {
+    const { cookie } = await createActiveViewer();
+    const keys: string[] = [];
+    const limitedEnv = {
+      ...env,
+      VIEWER_MEDIA_RATE_LIMITER: {
+        limit: async ({ key }: { key: string }) => {
+          keys.push(key);
+          return { success: false };
+        },
+      },
+    } as Env;
+
+    const media = await worker.fetch(new Request(
+      `${origin}/media/recordings/public-recording-id/tracks/tab-track`,
+      { headers: { cookie, range: 'bytes=0-5', 'cf-connecting-ip': '203.0.113.9' } },
+    ), limitedEnv);
+    expect(media.status).toBe(429);
+    expect(media.headers.get('retry-after')).toBe('60');
+    expect(await media.json()).toEqual({ code: 'VIEWER_RATE_LIMITED' });
+    expect(keys).toEqual(['share-owner-id:203.0.113.9']);
+    expect(driveMediaRequests).toBe(0);
+  });
+
   it('deletes publication metadata and exact cache objects without deleting Drive media', async () => {
     await putManifest();
     await registerOrigin();
@@ -1019,7 +1078,7 @@ async function completeCleanup(claim: CleanupClaim): Promise<void> {
   expect(response.status).toBe(204);
 }
 
-async function rowCount(table: 'shares' | 'media_assets' | 'drive_cleanup_candidates'): Promise<number> {
+async function rowCount(table: 'shares' | 'media_assets' | 'drive_cleanup_candidates' | 'media_cache_entries'): Promise<number> {
   const row = await env.SHARING_DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`)
     .first<{ count: number }>();
   return row?.count ?? 0;

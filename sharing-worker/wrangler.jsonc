@@ -41,6 +41,13 @@
       "bucket_name": "recording-extension-sharing-media-dev"
     }
   ],
+  "ratelimits": [
+    {
+      "name": "VIEWER_MEDIA_RATE_LIMITER",
+      "namespace_id": "20260926",
+      "simple": { "limit": 240, "period": 60 }
+    }
+  ],
   "env": {
     "staging": {
       "name": "recording-extension-sharing-staging",
@@ -75,6 +82,13 @@
         {
           "binding": "SHARING_MEDIA",
           "bucket_name": "recording-extension-sharing-media-staging"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "VIEWER_MEDIA_RATE_LIMITER",
+          "namespace_id": "20260927",
+          "simple": { "limit": 240, "period": 60 }
         }
       ]
     },
@@ -111,6 +125,13 @@
         {
           "binding": "SHARING_MEDIA",
           "bucket_name": "recording-extension-sharing-media"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "VIEWER_MEDIA_RATE_LIMITER",
+          "namespace_id": "20260928",
+          "simple": { "limit": 240, "period": 60 }
         }
       ]
     }

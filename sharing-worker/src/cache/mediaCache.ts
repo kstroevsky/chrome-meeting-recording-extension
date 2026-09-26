@@ -15,6 +15,23 @@ export type MediaCacheEntry = {
   expires_at: number;
 };
 
+/**
+ * Media is cached in fixed windows aligned to this size, so the keys an asset
+ * can ever occupy are bounded by its length. Caching whatever range a viewer
+ * happened to ask for let one viewer mint unlimited distinct keys — each one a
+ * Drive fetch and a PUT against the shared daily budget.
+ */
+export const MEDIA_CACHE_WINDOW_BYTES = MAX_MEDIA_RESPONSE_BYTES;
+
+/** The aligned cache window holding byte `start` of an asset `total` bytes long. */
+export function mediaCacheWindow(start: number, total: number): { start: number; end: number } {
+  const windowStart = start - (start % MEDIA_CACHE_WINDOW_BYTES);
+  return {
+    start: windowStart,
+    end: Math.min(windowStart + MEDIA_CACHE_WINDOW_BYTES - 1, total - 1),
+  };
+}
+
 export function mediaCacheKey(
   assetId: string,
   revisionId: string,
@@ -26,18 +43,20 @@ export function mediaCacheKey(
 
 /**
  * One D1 lookup followed by at most one R2 GetObject. Missing/expired cache
- * state simply falls through to Drive.
+ * state simply falls through to Drive. `range` reads part of a cached window,
+ * relative to the window's first byte.
  */
 export async function getCachedMedia(
   env: Env,
   cacheKey: string,
   now = Date.now(),
+  range?: { offset: number; length: number },
 ): Promise<R2ObjectBody | null> {
   const entry = await env.SHARING_DB.prepare(
     'SELECT cache_key, asset_id, bytes, cached_at, expires_at FROM media_cache_entries WHERE cache_key = ?',
   ).bind(cacheKey).first<MediaCacheEntry>();
   if (!entry || entry.expires_at <= now) return null;
-  return await env.SHARING_MEDIA.get(cacheKey);
+  return await env.SHARING_MEDIA.get(cacheKey, range ? { range } : undefined);
 }
 
 /**
