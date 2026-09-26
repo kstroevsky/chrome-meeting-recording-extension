@@ -25,7 +25,7 @@ Provision it as follows:
 2. Create one service account, for example `recording-share-reader@<sharing-project>.iam.gserviceaccount.com`.
 3. Do not enable domain-wide delegation.
 4. Do not grant the service account a user folder or broad Drive share. The extension grants `reader` permission separately on each published media file.
-5. Set `GOOGLE_DRIVE_READER_EMAIL` in each Worker environment to that exact service-account email.
+5. Set `GOOGLE_DRIVE_READER_EMAIL` in each Worker environment to that exact service-account email, and set the same value when building the extension (environment or `.env`). The build pins it: the extension grants Drive `reader` only to a `…@<project>.iam.gserviceaccount.com` address, and only to the pinned one when a build sets it, so a compromised or misconfigured Worker cannot redirect grants to another account. A build with `SHARING_SERVICE_ORIGIN` but no pinned email warns and enforces only the service-account shape.
 6. Create a service-account private key and store it only as the Worker secret `GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY`.
 
 The Worker mints short-lived Google access tokens with the `drive.readonly` scope. Its private key is never stored in D1. The extension keeps the user's Google token locally and uses it for OPFS→Drive uploads, revision pinning, and permission grant/removal.
@@ -96,7 +96,26 @@ A new published track is ready only after all of these are true:
 - the sharing-reader service account has an explicit file-level `reader` permission;
 - size and MIME type match the public track; checksum is checked when supplied;
 - the Worker can independently read metadata for that exact revision with its service account;
-- D1 `media_assets` points at that file id + revision id.
+- D1 `media_assets` points at that file id + revision id;
+- the file is bound to the publishing owner in `drive_file_owners`.
+
+### Drive file owner binding
+
+The one service account can read every owner's published files, so its successful read proves nothing about ownership. Each Drive file id is therefore bound to the first owner who registers it (`drive_file_owners`, migration `0007`). A registration by any other owner is refused with `DRIVE_ORIGIN_UNREADABLE` — the same answer as a file the reader cannot see, so the response does not reveal that someone else published it. The same owner may register the same file into further shares.
+
+Cleanup liveness is owner-scoped too: only the candidate owner's own live shares keep a reader permission or revision pin alive, and a cleanup candidate for a file bound to another owner is discarded rather than leased. Without this, another owner's share referencing the file would suppress the rightful owner's cleanup and keep the file readable after they revoked it.
+
+Migration `0007` backfills bindings from existing `media_assets`, earliest registration first. Before this binding existed, one owner could register another owner's exact revision into their own share. List any file that existing registrations tie to more than one owner, and review each as a possible past misuse:
+
+```sql
+SELECT a.drive_file_id, GROUP_CONCAT(DISTINCT s.owner_id) AS owners
+  FROM media_assets AS a
+  JOIN shares AS s ON s.id = a.share_id
+ GROUP BY a.drive_file_id
+HAVING COUNT(DISTINCT s.owner_id) > 1;
+```
+
+A binding is kept after its shares are gone for `REVOKED_RETENTION_SECONDS` and for as long as any cleanup candidate or lease still names the file, because the reader permission may still be in place until the owner's extension removes it. The hourly cleanup then forgets it.
 
 For a Drive-backed private recording, publication reuses the existing file. For an OPFS-only recording, the extension first performs a resumable upload to the user's Drive. No new publication path uploads media directly to R2.
 
@@ -114,6 +133,8 @@ maximum media response       8 MiB
 ```
 
 Expiration is fixed. Cache hits never extend `expiresAt`.
+
+The cache holds only whole windows aligned to the 8 MiB response cap (`mediaCacheWindow`), so an asset can occupy at most `ceil(bytes / 8 MiB)` cache keys no matter which ranges viewers request. A response never crosses a window boundary: a mid-window seek is served to the end of its window, and the player's next request starts aligned. Any range inside a cached window is served from it with one ranged R2 read; a range that is not a whole window is streamed from Drive without being cached. Caching whatever range was requested instead lets a single viewer mint unlimited keys, each a Drive read and a PUT against the shared daily budget.
 
 Playback behavior is:
 
@@ -141,7 +162,8 @@ Media playback should remain read-heavy:
 - viewer authorization uses signed sessions plus indexed share reads;
 - `HEAD` media requests use D1 metadata and must not fetch Drive bytes;
 - one cache miss performs at most one Drive media fetch, capped at 8 MiB;
-- do not add bucket scans or separate R2 `HeadObject` calls to the playback path.
+- do not add bucket scans or separate R2 `HeadObject` calls to the playback path;
+- media requests are rate-limited per share and client address by the `VIEWER_MEDIA_RATE_LIMITER` binding (240 requests per 60 s in every environment), because every uncached request spends the Drive quota of the one service account all shares use. Over the limit a viewer gets `429 VIEWER_RATE_LIMITED` with `Retry-After: 60`.
 
 The existing owner admission controls still apply: mutation rate, share count, manifest/track limits, and configured aggregate byte admission. `MAX_OWNER_STORED_BYTES` is admission accounting; durable new-media bytes are stored in the user's Drive rather than developer-owned R2.
 
@@ -174,7 +196,8 @@ The hourly scheduled handler also processes lifecycle retention:
 
 - stale `draft`/remote `uploading` shares older than `STALE_DRAFT_TTL_SECONDS` (default 7 days);
 - revoked shares older than `REVOKED_RETENTION_SECONDS` (default 30 days);
-- old owner rate-limit rows.
+- old owner rate-limit rows;
+- Drive file owner bindings nothing refers to any more (see "Drive file owner binding").
 
 For Drive-origin shares, this cleanup removes D1 media assets and their R2 cache entries while retaining any generated `drive_cleanup_candidates` until owner-side Drive cleanup completes. Legacy tracks without `media_asset_id` may still have permanent R2 objects; those are deleted by the migration-compatible cleanup path. Unfinished legacy multipart rows are also abortable during cleanup.
 
