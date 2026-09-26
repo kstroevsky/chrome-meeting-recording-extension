@@ -67,6 +67,10 @@ describe('recording history durable-data boundaries', () => {
     expect(normalizeRecordingHistoryEntry({ id: 'x', files: [] })).toBeUndefined();
     expect(isRecordingHistoryMessage({ type: 'LIST_RECORDING_HISTORY', cursor: { createdAt: 'now', id: 'x' } })).toBe(false);
     expect(isRecordingHistoryMessage({ type: 'LIST_RECORDING_HISTORY', cursor: { createdAt: 1, id: 'x' } })).toBe(true);
+    expect(isRecordingHistoryMessage({ type: 'REMOVE_RECORDING_HISTORY', id: 'x', deleteFiles: true })).toBe(true);
+    expect(isRecordingHistoryMessage({ type: 'REMOVE_RECORDING_HISTORY', id: 'x' })).toBe(true);
+    // Deleting files needs an explicit boolean — not a truthy anything.
+    expect(isRecordingHistoryMessage({ type: 'REMOVE_RECORDING_HISTORY', id: 'x', deleteFiles: 'yes' })).toBe(false);
     expect(isRecordingHistoryMessage({ type: 'SET_RECORDING_HISTORY_NOTE', id: 'x', note: 'Follow up' })).toBe(true);
     expect(isRecordingHistoryMessage({ type: 'SET_RECORDING_HISTORY_NOTE', id: 'x', note: 1 })).toBe(false);
   });

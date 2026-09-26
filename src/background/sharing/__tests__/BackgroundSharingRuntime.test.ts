@@ -43,4 +43,20 @@ describe('BackgroundSharingRuntime', () => {
 
     expect(ensureReady).not.toHaveBeenCalled();
   });
+
+  it('ends only the live shares that include a recording', async () => {
+    const store = createSharePublicationStore();
+    const put = (id: string, status: SharePublication['status'], sourceRecordingIds: string[]) =>
+      store.put({ ...publication(status), id, manifest: { ...publication(status).manifest, id }, sourceRecordingIds });
+    await put('with-it', 'active', ['r1', 'r2']);
+    await put('uploading-it', 'uploading', ['r1']);
+    await put('already-revoked', 'revoked', ['r1']);
+    await put('never-published', 'failed', ['r1']);
+    await put('other', 'active', ['r2']);
+    const rpc = jest.fn(async (_message: { shareId: string }) => ({ ok: true }));
+    const runtime = new BackgroundSharingRuntime({ ensureReady: jest.fn(async () => {}), rpc } as unknown as OffscreenManager);
+
+    expect(await runtime.revokeSharesOf('r1')).toBe(2);
+    expect(rpc.mock.calls.map(([message]) => message.shareId).sort()).toEqual(['uploading-it', 'with-it']);
+  });
 });

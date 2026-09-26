@@ -50,6 +50,45 @@ async function open(list: HTMLElement): Promise<void> {
 describe('RecordingsView detail (f2, f17)', () => {
   afterEach(() => jest.useRealTimers());
 
+  it('removes from the library only, unless "also delete its files" is ticked', async () => {
+    const { view, list, callbacks } = mount();
+    const onDrive = entry();
+    onDrive.files = [{ ...onDrive.files[0], driveFileId: 'drive-tab', locations: [{ kind: 'drive', fileId: 'drive-tab' }] }];
+    view.render([onDrive]);
+    const card = () => document.querySelector<HTMLElement>('.confirm-card')!;
+
+    const quiet = jest.spyOn(window, 'confirm');
+    list.querySelector<HTMLButtonElement>('.recording-row__remove')!.click();
+    expect(card().querySelector('.confirm-card__body')!.textContent).toContain('stays in Drive');
+    card().querySelector<HTMLButtonElement>('.confirm-card__confirm')!.click();
+    expect(callbacks.remove).toHaveBeenLastCalledWith('weekly', false);
+    expect(quiet).not.toHaveBeenCalled();
+    quiet.mockRestore();
+
+    list.querySelector<HTMLButtonElement>('.recording-row__remove')!.click();
+    const box = card().querySelector<HTMLInputElement>('.confirm-card__checkbox')!;
+    expect(box.checked).toBe(false);
+    box.click();
+    expect(card().querySelector('.confirm-card__body')!.textContent)
+      .toContain('1 file goes to the Google Drive trash (recoverable for 30 days).');
+    expect(card().querySelector('.confirm-card__body')!.textContent).toContain('the share ends');
+    expect(card().querySelector('.confirm-card__confirm')!.textContent).toBe('Remove and delete files');
+
+    // Deleting files asks once more, natively. Declining keeps the dialog open
+    // and removes nothing; accepting goes ahead.
+    const nativeConfirm = jest.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    card().querySelector<HTMLButtonElement>('.confirm-card__confirm')!.click();
+    expect(nativeConfirm).toHaveBeenLastCalledWith(expect.stringContaining('move 1 file to the Google Drive trash'));
+    expect(callbacks.remove).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.confirm-card')).not.toBeNull();
+
+    card().querySelector<HTMLButtonElement>('.confirm-card__confirm')!.click();
+    expect(callbacks.remove).toHaveBeenLastCalledWith('weekly', true);
+    expect(document.querySelector('.confirm-card')).toBeNull();
+    expect(nativeConfirm).toHaveBeenCalledTimes(2);
+    nativeConfirm.mockRestore();
+  });
+
   it('keeps the list where it was scrolled when a recording opens', async () => {
     const { view, list } = mount();
     view.render(Array.from({ length: 30 }, (_, i) => entry(`rec-${i}`, `Recording ${i}`)));
