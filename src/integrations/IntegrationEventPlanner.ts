@@ -7,6 +7,7 @@ import { createIntegrationId } from './ids';
 import {
   assertIntegrationPayloadWithinLimit,
   INTEGRATION_MAX_PAYLOAD_BYTES,
+  IntegrationPayloadTooLargeError,
 } from './payload';
 import type {
   IntegrationDelivery,
@@ -71,7 +72,9 @@ type PlannerDeps = {
 export type IntegrationPlanResult =
   | { kind: 'noop' }
   | { kind: 'wait'; readyDeadlineAt: number }
-  | { kind: 'planned'; delivery: IntegrationDelivery; body: string };
+  | { kind: 'planned'; delivery: IntegrationDelivery; body: string }
+  /** Planned but not sendable as built (too large); parked for the user's Retry. */
+  | { kind: 'action-required'; delivery: IntegrationDelivery };
 
 /** Owns revision decisions above the durable delivery/dispatcher boundary. */
 export class IntegrationEventPlanner {
@@ -171,7 +174,16 @@ export class IntegrationEventPlanner {
       stream.speakerAliases,
       input.incompleteRelease,
     );
-    assertIntegrationPayloadWithinLimit(snapshot, INTEGRATION_MAX_PAYLOAD_BYTES);
+    let oversized = false;
+    try {
+      assertIntegrationPayloadWithinLimit(snapshot, INTEGRATION_MAX_PAYLOAD_BYTES);
+    } catch (error) {
+      // A manual send tells the person at once. An automatic one parks the
+      // snapshot where Retry can reach it: thrown, it kept a passed deadline
+      // and was rebuilt on every wake-up (ADR-0008 §40: no blind retries).
+      if (!(error instanceof IntegrationPayloadTooLargeError) || !input.compareProjection) throw error;
+      oversized = true;
+    }
     const projectionHash = await integrationProjectionHash(snapshot.body);
     if (input.compareProjection && stream.lastPlannedProjectionHash === projectionHash) {
       if (stream.readyDeadlineAt != null) {
@@ -193,9 +205,9 @@ export class IntegrationEventPlanner {
       connectionVersion: input.destination.connectionVersion,
       allowedPolicy: { ...input.allowedPolicy },
       readinessRelease: snapshot.readiness.release,
-      state: 'pending',
+      state: oversized ? 'action-required' : 'pending',
       attemptCount: 0,
-      nextAttemptAt: eventTime,
+      ...(oversized ? { lastErrorCode: 'payload-too-large' } : { nextAttemptAt: eventTime }),
       bodyHash: await sha256Hex(snapshot.body),
       totalBytes: snapshot.totalBytes,
       transcriptBytes: snapshot.transcriptBytes,
@@ -215,6 +227,7 @@ export class IntegrationEventPlanner {
         : {}),
     };
     await this.deps.unitOfWork.planDelivery(delivery, nextStream);
+    if (oversized) return { kind: 'action-required', delivery };
     return { kind: 'planned', delivery, body: snapshot.body };
   }
 
