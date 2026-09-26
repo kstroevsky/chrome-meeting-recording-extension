@@ -16,6 +16,8 @@ button, input, select { font: inherit; }
 textarea { font: inherit; }
 button { border: 0; cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--focus); }
+/* Rings are for the keyboard: hidden after a pointer press until focus moves by key (ui/focusSource.ts). */
+:root[data-focus-source='pointer'] :is(button, input[type='checkbox'], input[type='radio'], input[type='range']):focus-visible { box-shadow: none; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; margin: -1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 .settings-console { width: min(620px, calc(100% - 32px)); margin: 48px auto; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 1px 2px rgba(44, 36, 28, .06), 0 10px 22px -12px rgba(44, 36, 28, .4); }

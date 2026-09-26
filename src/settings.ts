@@ -11,10 +11,12 @@
 
 import { SettingsController, type SettingsElements } from './settings/SettingsController';
 import { initializeExtensionTheme } from './shared/theme';
+import { trackFocusSource } from './ui/focusSource';
 import { IntegrationPreviewController } from './settings/IntegrationPreviewController';
 import { IntegrationSettingsController } from './settings/IntegrationSettingsController';
 
 initializeExtensionTheme();
+trackFocusSource();
 
 const el: SettingsElements = {
   anonymousDiagnostics: document.getElementById('anonymous-diagnostics') as HTMLInputElement | null,

@@ -10,10 +10,13 @@ import { createPopupController } from './popup/popupBootstrap';
 import { wirePopupShell } from './popup/popupShell';
 import { isDevBuild } from './shared/build';
 import { initializeExtensionTheme } from './shared/theme';
+import { trackFocusSource } from './ui/focusSource';
 
 const previewStoryId = __POPUP_GALLERY_BUILD__ && isDevBuild()
   ? new URLSearchParams(location.search).get('popupPreview')
   : null;
+
+trackFocusSource();
 
 if (previewStoryId) {
   // Gallery iframes load the real popup document. They replace only external

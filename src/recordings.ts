@@ -6,6 +6,7 @@ import { sendToBackground } from './shared/messages';
 import type { RecordingNotation } from './shared/notations';
 import type { PopupListRecordingNotations, PopupRemoveRecordingNotation, PopupUpdateRecordingNotation } from './shared/protocol';
 import { sharingServiceOrigin } from './sharing/config';
+import { trackFocusSource } from './ui/focusSource';
 
 /** One recording's notes, read or rewritten through the background's keyed commands. */
 async function readNotations(
@@ -17,6 +18,7 @@ async function readNotations(
 }
 
 initializeExtensionTheme();
+trackFocusSource();
 
 const get = (id: string) => document.getElementById(id);
 const list = get('recordings-list');
