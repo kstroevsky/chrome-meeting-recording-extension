@@ -45,7 +45,7 @@ async function seed(page: Page): Promise<void> {
   });
 }
 
-test('the recordings table sorts both ways and filters by folder tag', async ({}, testInfo) => {
+test('the recordings table sorts both ways, filters by folder tag, and holds still on select', async ({}, testInfo) => {
   const harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo));
   try {
     await seed(harness.controlPage);
@@ -54,6 +54,16 @@ test('the recordings table sorts both ways and filters by folder tag', async ({}
     const names = page.locator('.recording-row__name-text');
     await expect(names).toHaveCount(4);
     await expect(page.locator('.recording-row__remove')).toHaveCount(0);
+
+    // Selecting swaps the search toolbar for the bulk one; nothing below may move.
+    const headerTop = () => page.locator('.recording-table__header').evaluate((element) => element.getBoundingClientRect().top);
+    const top = await headerTop();
+    await page.locator('.recording-row .selection-box').first().click();
+    await expect(page.locator('.bulk-toolbar')).toBeVisible();
+    expect(await headerTop()).toBe(top);
+    await page.locator('.recording-row .selection-box').first().click();
+    await expect(page.locator('.bulk-toolbar')).toHaveCount(0);
+    expect(await headerTop()).toBe(top);
 
     const header = (label: string) => page.locator('.table-header-button', { hasText: label });
     await header('DUR').click();

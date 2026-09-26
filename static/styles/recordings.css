@@ -178,6 +178,12 @@
    at zero specificity, so a rule that animates transform or size still wins. */
 :where(button, a, input, select, textarea, [role='button'], [role='option'], [tabindex]) { transition: var(--hover-transition); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation-duration: .01ms !important; } }
+/* Rings are for the keyboard. After a pointer press they stay off until focus
+   moves by key (ui/focusSource.ts), so a shortcut pressed after a click does
+   not ring the control that was clicked. Text fields keep their :focus style. */
+:root[data-focus-source='pointer'] { --ring: none; --ring-danger: none; --ring-picture: none; }
+:root[data-focus-source='pointer'] :focus-visible:not(input, textarea, [contenteditable]) { outline: none; }
+:root[data-focus-source='pointer'] .player-overlay:fullscreen .player__rail-hide:focus-visible { box-shadow: none; }
 body { min-width: 700px; min-height: 100vh; margin: 0; background: var(--surface); color: var(--body); font-family: 'Space Grotesk', system-ui, sans-serif; }
 button, input, textarea { font: inherit; }
 button { -webkit-font-smoothing: antialiased; }
@@ -203,7 +209,8 @@ button { -webkit-font-smoothing: antialiased; }
 .recording-search:focus { box-shadow: 0 0 0 1px var(--detail), 0 0 0 4px color-mix(in srgb, var(--detail) 16%, transparent); }
 .recordings-count { overflow: hidden; flex: 0 1 auto; min-width: 0; color: var(--muted); font: 400 10.5px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; text-overflow: ellipsis; white-space: nowrap; }
 
-.bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 11px 28px; background: var(--ink); }
+/* Same height as the search toolbar it replaces, so selecting a row moves nothing below it. */
+.bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 65px; padding: 11px 28px; background: var(--ink); }
 .bulk-toolbar__count { color: var(--surface); font: 600 11px/1 'IBM Plex Mono', monospace; letter-spacing: .08em; }
 .bulk-toolbar__actions { display: flex; align-items: center; gap: 8px; }
 .bulk-button { height: 30px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; padding: 0 13px; transition: var(--hover-transition); }
@@ -466,6 +473,12 @@ button { -webkit-font-smoothing: antialiased; }
 .player__icon--on-picture:hover { background: rgba(250, 248, 244, .18); }
 .player__play:focus-visible, .player__icon:focus-visible, .player__close:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
 .player__icon--on-picture:focus-visible { box-shadow: var(--ring-picture); }
+/* The picture answers a click on it (YouTube's language): the state it reached
+   blooms in the centre and fades. Never in the way — it takes no pointer. */
+.player__flash { position: absolute; z-index: 2; top: 50%; left: 50%; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; background: rgba(10, 9, 8, .55); color: #f2ede3; opacity: 0; pointer-events: none; }
+.player__flash svg { width: 22px; height: 22px; }
+.player__flash--on { animation: player-flash 700ms ease-out both; }
+@keyframes player-flash { from { opacity: 1; transform: scale(.85); } 35% { opacity: .95; } to { opacity: 0; transform: scale(1.3); } }
 .player__selfcam { position: absolute; top: 12px; right: 12px; width: 104px; height: 59px; border-radius: 6px; object-fit: cover; background: #241f19; border: 1px solid rgba(250, 248, 244, .16); }
 .player__selfcam[hidden] { display: none; }
 
@@ -484,8 +497,10 @@ button { -webkit-font-smoothing: antialiased; }
 .player__popover--up .player__menu { top: auto; bottom: calc(100% + 6px); }
 .player__file { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
 .player__file:hover { background: var(--field); }
-.player__file-check { width: 13px; height: 13px; flex-shrink: 0; border: 1.5px solid var(--border-strong, var(--border)); border-radius: 4px; }
+.player__file-check { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; flex-shrink: 0; border: 1.5px solid var(--border-strong, var(--border)); border-radius: 4px; transition: var(--hover-transition); }
+/* A dot punched in the menu's own colour, so a ticked box reads as a checkbox, not a swatch. */
 .player__file--on .player__file-check { border-color: var(--detail); background: var(--detail); }
+.player__file--on .player__file-check::after { width: 5px; height: 5px; border-radius: 50%; background: var(--surface); content: ''; }
 .player__file-label { flex: 1; font-size: 12.5px; color: var(--body); }
 .player__file-format { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: .12em; color: var(--faint); }
 .player__menu--topics { min-width: 260px; max-height: 320px; overflow-y: auto; }
