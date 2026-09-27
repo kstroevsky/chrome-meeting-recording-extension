@@ -27,12 +27,15 @@ import { UploadStatePersistence } from './UploadStatePersistence';
 import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
+import {
+  ANALYSIS_RECONCILIATION_ALARM,
+  ANALYSIS_RECONCILIATION_CURSOR_KEY,
+  AnalysisReconciliationScheduler,
+} from './AnalysisReconciliationScheduler';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 import { BackgroundIntegrationRuntime } from '../integrations/BackgroundIntegrationRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
 
-const ANALYSIS_RECONCILIATION_CURSOR_KEY = 'analysisReconciliationCursor:v1';
-const ANALYSIS_RECONCILIATION_BATCH = 25;
 const ANALYSIS_RETRY_ALARM = 'analysis-retry:v1';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
@@ -69,6 +72,20 @@ export function createBackgroundRuntime() {
     onAnalysisSettled: () => criticalWork.sync(),
     scheduleAnalysisWake,
     onIntegrationChanged: (recordingId) => notifyIntegrationChanged(recordingId),
+  });
+  const analysisReconciliation = new AnalysisReconciliationScheduler({
+    listRecordingIds: (limit, after) => library.transcripts.listRecordingIds(limit, after),
+    reconcile: (recordingIds) => library.analysisCoordinator.reconcile(recordingIds),
+    readCursor: async () => {
+      const stored = await getLocalStorageValues(ANALYSIS_RECONCILIATION_CURSOR_KEY);
+      const value = stored[ANALYSIS_RECONCILIATION_CURSOR_KEY];
+      return typeof value === 'string' && value ? value : undefined;
+    },
+    writeCursor: (cursor) => setLocalStorageValues({
+      [ANALYSIS_RECONCILIATION_CURSOR_KEY]: cursor ?? '',
+    }),
+    createAlarm,
+    getAlarm,
   });
   const integrations = new BackgroundIntegrationRuntime({
     listHistory: () => library.history.list(),
@@ -204,16 +221,7 @@ export function createBackgroundRuntime() {
       await sharing.resumeIfPending().catch((error) => logger.warn('Pending sharing recovery deferred:', error));
       await integrations.reconcile().catch((error) => logger.warn('Integration delivery recovery deferred:', error));
       try {
-        const stored = await getLocalStorageValues(ANALYSIS_RECONCILIATION_CURSOR_KEY);
-        const rawCursor = stored[ANALYSIS_RECONCILIATION_CURSOR_KEY];
-        const cursor = typeof rawCursor === 'string' && rawCursor ? rawCursor : undefined;
-        const page = await library.transcripts.listRecordingIds(ANALYSIS_RECONCILIATION_BATCH, cursor);
-        await library.analysisCoordinator.reconcile(page.recordingIds);
-        if (page.nextCursor) {
-          await setLocalStorageValues({ [ANALYSIS_RECONCILIATION_CURSOR_KEY]: page.nextCursor });
-        } else {
-          await setLocalStorageValues({ [ANALYSIS_RECONCILIATION_CURSOR_KEY]: '' });
-        }
+        await analysisReconciliation.runSlice();
       } catch (error) {
         logger.warn('Analysis reconciliation deferred:', error);
       }
@@ -238,6 +246,10 @@ export function createBackgroundRuntime() {
       if (alarm.name === ANALYSIS_RETRY_ALARM) {
         void library.analysisCoordinator.dispatchDue()
           .catch((error) => logger.warn('Analysis retry wake failed:', error));
+      }
+      if (alarm.name === ANALYSIS_RECONCILIATION_ALARM) {
+        void analysisReconciliation.runSlice()
+          .catch((error) => logger.warn('Analysis reconciliation wake failed:', error));
       }
     },
     handleConnect: (port: chrome.runtime.Port) => {

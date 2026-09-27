@@ -208,15 +208,8 @@ export class RecordingAnalysisCoordinator {
   }
 
   async ensureCurrentAnalysis(historyId: string): Promise<AnalysisStartResult> {
-    if (await this.deps.analyses.get(historyId)) return { ok: false, reason: 'already-analyzed' };
-    const transcript = await this.deps.requestAnalysis(historyId);
-    if (!transcript?.transcript.segments.length) return { ok: false, reason: 'no-transcript' };
-    const work = await this.deps.work.get(historyId);
-    if (work?.disposition === 'satisfied') {
-      await this.deps.requestAnalysis(historyId, { force: true });
-    } else if (work?.disposition === 'canceled' || work?.disposition === 'unsupported') {
-      return { ok: false, reason: 'failed', ...(work.error ? { error: work.error } : {}) };
-    }
+    const settled = await this.ensureDesiredAnalysis(historyId);
+    if (settled) return settled;
     return await this.dispatchRecording(historyId);
   }
 
@@ -224,12 +217,38 @@ export class RecordingAnalysisCoordinator {
   async reconcile(recordingIds: string[]): Promise<void> {
     for (const historyId of recordingIds) {
       if (this.deps.isRecordingFinalized && !await this.deps.isRecordingFinalized(historyId)) continue;
-      const result = await this.ensureCurrentAnalysis(historyId);
-      if (!result.ok && result.reason === 'failed' && result.error) {
+      // Reconciliation only repairs durable desired state here. Dispatching is
+      // global and bounded below, so a 25-recording repair page cannot enqueue
+      // 25 whole transcripts into the offscreen document at once.
+      const result = await this.ensureDesiredAnalysis(historyId);
+      if (result && !result.ok && result.reason === 'failed' && result.error) {
         L.warn('Could not reconcile recording analysis', historyId, result.error);
       }
     }
     await this.dispatchDue();
+  }
+
+  /**
+   * Ensures current durable desired work exists without claiming it.
+   *
+   * `undefined` means the row is eligible for the bounded dispatcher. A result
+   * means there is intentionally nothing to dispatch right now.
+   */
+  private async ensureDesiredAnalysis(historyId: string): Promise<AnalysisStartResult | undefined> {
+    if (await this.deps.analyses.get(historyId)) return { ok: false, reason: 'already-analyzed' };
+    const transcript = await this.deps.requestAnalysis(historyId);
+    if (!transcript?.transcript.segments.length) return { ok: false, reason: 'no-transcript' };
+    const work = await this.deps.work.get(historyId);
+    if (!work) return { ok: false, reason: 'failed', error: 'Desired analysis work was not persisted' };
+    if (work.disposition === 'satisfied') {
+      const renewed = await this.deps.requestAnalysis(historyId, { force: true });
+      if (!renewed) return { ok: false, reason: 'failed', error: 'Could not renew analysis work' };
+      return undefined;
+    }
+    if (work.disposition === 'canceled' || work.disposition === 'unsupported') {
+      return { ok: false, reason: 'failed', ...(work.error ? { error: work.error } : {}) };
+    }
+    return undefined;
   }
 
   private async dispatchRecording(historyId: string): Promise<AnalysisStartResult> {

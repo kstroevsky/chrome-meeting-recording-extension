@@ -443,6 +443,19 @@ describe('RecordingAnalysisCoordinator durable dispatch', () => {
     expect(h.calls.analyze).toHaveLength(1);
   });
 
+  it('repairs a reconciliation page but dispatches only the global bounded batch', async () => {
+    const h = harness();
+    for (let index = 1; index <= 6; index += 1) {
+      await h.transcripts.replace(`rec:${index}`, TRANSCRIPT);
+    }
+
+    await h.coordinator.reconcile(['rec:1', 'rec:2', 'rec:3', 'rec:4', 'rec:5', 'rec:6']);
+
+    expect(h.calls.analyze).toHaveLength(4);
+    await expect(h.work.get('rec:5')).resolves.toMatchObject({ disposition: 'pending' });
+    await expect(h.work.get('rec:6')).resolves.toMatchObject({ disposition: 'pending' });
+  });
+
   it('legacy terminal outbox rows are acknowledged and converted into current durable work', async () => {
     const h = harness();
     await h.transcripts.replace('rec:1', TRANSCRIPT);
