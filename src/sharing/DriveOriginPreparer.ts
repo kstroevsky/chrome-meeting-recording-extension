@@ -292,6 +292,22 @@ export class DriveOriginPreparer {
         metadata = await this.getFileMetadata(job.driveFileId);
         reusableRegistryOrigin = undefined;
       }
+      if (!job.createdDriveCopy
+        && metadata.mimeType !== track.published.mimeType
+        && (job.bytes == null || job.bytes === metadata.size)) {
+        // The recorder's own file carries a different label than the snapshot
+        // names — a microphone uploaded as video/webm, or recorded before its
+        // history learned it is audio. Same size, so the same bytes: publish
+        // from a copy labelled as the snapshot says (the Worker requires an
+        // exact match) and leave the owner's file untouched. An upload session
+        // left from an interrupted attempt belongs to this copy and resumes.
+        job.driveFileId = undefined;
+        job.revisionId = undefined;
+        job.permissionId = undefined;
+        job.createdDriveCopy = true;
+        job.driveFileId = await this.ensureDriveCopy(job);
+        metadata = await this.getFileMetadata(job.driveFileId);
+      }
       if (!metadata.canDownload) throw new Error('Drive file cannot be downloaded by the sharing reader');
       if (job.bytes != null && job.bytes !== metadata.size) {
         throw new Error(`Share source size changed: expected ${job.bytes}, got ${metadata.size}`);

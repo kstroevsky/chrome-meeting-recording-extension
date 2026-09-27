@@ -225,6 +225,97 @@ describe('DriveOriginPreparer', () => {
     ]);
   });
 
+  it('publishes from a correctly labelled copy when the recorder\'s Drive file names another type', async () => {
+    // The screenshot bug: the recorder uploaded the microphone as audio/webm,
+    // while the snapshot (from history) named video/webm. The Worker needs an
+    // exact match, so the snapshot's type must be what Drive serves.
+    const store = new ShareUploadStore(memoryArea());
+    const bytes = new Blob(['abcdef']);
+    const source = jest.fn(async () => ({ size: bytes.size, read: async (start: number, end: number) => bytes.slice(start, end) }));
+    const service = api();
+    const touchedOwnerFile: string[] = [];
+    let uploadType: string | null = null;
+    let uploadBody: { mimeType?: string } = {};
+    const fetcher = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/drive/v3/files/drive-file-1?fields=')) {
+        return json({ ...driveMetadata('drive-file-1'), mimeType: 'audio/webm' });
+      }
+      if (url.includes('/drive/v3/files/drive-file-1/')) {
+        touchedOwnerFile.push(`${method} ${url}`);
+        throw new Error('The owner\'s own file must be left untouched');
+      }
+      if (url.includes('/upload/drive/v3/files?uploadType=resumable') && method === 'POST') {
+        uploadType = new Headers(init?.headers).get('x-upload-content-type');
+        uploadBody = JSON.parse(String(init?.body));
+        return json({}, 200, { location: 'https://upload.example/copy-session' });
+      }
+      if (url === 'https://upload.example/copy-session' && method === 'PUT') {
+        return json({ id: 'drive-copy-1' }, 200);
+      }
+      if (url.includes('/drive/v3/files/drive-copy-1?fields=')) {
+        return json(driveMetadata('drive-copy-1'));
+      }
+      if (url.includes('/drive/v3/files/drive-copy-1/revisions/revision-1?fields=') && method === 'PATCH') {
+        return json({ id: 'revision-1', keepForever: true });
+      }
+      if (url.includes('/drive/v3/files/drive-copy-1/permissions?fields=permissions') && method === 'GET') {
+        return json({ permissions: [] });
+      }
+      if (url.includes('/drive/v3/files/drive-copy-1/permissions?fields=id') && method === 'POST') {
+        return json({ id: 'permission-1' }, 201);
+      }
+      throw new Error(`Unexpected Drive request: ${method} ${url}`);
+    });
+    const preparer = new DriveOriginPreparer({
+      store,
+      source,
+      api: service,
+      getDriveToken: async () => 'owner-token',
+      fetch: fetcher as typeof fetch,
+      sleep: async () => {},
+    });
+
+    const [origin] = await preparer.prepare('share-1', [plan({ kind: 'drive', fileId: 'drive-file-1' })]);
+
+    expect(origin).toEqual(expect.objectContaining({
+      fileId: 'drive-copy-1',
+      mimeType: 'video/webm',
+      createdDriveCopy: true,
+    }));
+    expect(uploadType).toBe('video/webm');
+    expect(uploadBody.mimeType).toBe('video/webm');
+    expect(touchedOwnerFile).toEqual([]);
+    expect(service.registerDriveOrigin).toHaveBeenCalledWith(expect.objectContaining({
+      fileId: 'drive-copy-1',
+      mimeType: 'video/webm',
+    }));
+  });
+
+  it('still refuses a Drive file whose size changed, instead of copying it', async () => {
+    const store = new ShareUploadStore(memoryArea());
+    const source = jest.fn();
+    const fetcher = jest.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/drive/v3/files/drive-file-1?fields=')) {
+        return json({ ...driveMetadata('drive-file-1'), size: '9', mimeType: 'audio/webm' });
+      }
+      throw new Error(`Unexpected Drive request: ${String(input)}`);
+    });
+    const preparer = new DriveOriginPreparer({
+      store,
+      source,
+      api: api(),
+      getDriveToken: async () => 'owner-token',
+      fetch: fetcher as typeof fetch,
+      sleep: async () => {},
+    });
+
+    await expect(preparer.prepare('share-1', [plan({ kind: 'drive', fileId: 'drive-file-1' })]))
+      .rejects.toThrow('Share source size changed: expected 6, got 9');
+    expect(source).not.toHaveBeenCalled();
+  });
+
   it('resumes an OPFS-to-Drive upload from the server-confirmed offset', async () => {
     const store = new ShareUploadStore(memoryArea());
     const sessionUri = 'https://upload.example/session-1';

@@ -390,6 +390,52 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
     }
   });
 
+  test('publishes a Drive file labelled differently from the recording through one correctly labelled copy', async ({}, testInfo) => {
+    // A microphone an older build uploaded as video/webm (a retry re-reads it
+    // from OPFS without a type) is audio/webm to the library. The Worker needs
+    // the snapshot's type exactly, so only that file is copied; the rest reuse.
+    test.setTimeout(90_000);
+    let harness: ExtensionHarness | null = null;
+    let worker: SharingWorkerHarness | null = null;
+    try {
+      resetDriveSimulatorSharingState();
+      harness = await launchExtensionHarness(testInfo.outputPath.bind(testInfo), { ignoreHTTPSErrors: true });
+      const driveStats = await installDriveSimulator(harness.context, 'fast');
+      worker = await startSharingWorker(harness.extensionId, testInfo.outputPath('sharing-worker-mislabelled-state'));
+      const meet = await openMockMeetPage(harness.context);
+      const meetTabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, { recordingMode: 'opfs', micMode: 'separate', recordSelfVideo: false });
+      await startRecording(harness.controlPage, meetTabId, {
+        storageMode: 'local', micMode: 'separate', recordSelfVideo: false,
+      });
+      await meet.waitForTimeout(2_000);
+      await stopRecording(harness.controlPage);
+
+      const page = await openRecordings(harness);
+      const driveSources = await rewriteFirstRecordingAsDrive(page);
+      expect(driveSources.map((source) => source.stream)).toContain('mic');
+      for (const source of driveSources) {
+        setDriveMediaContent(source.fileId, Buffer.from(source.base64, 'base64'), `${source.stream}.webm`, 'video/webm');
+      }
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      const sessionsBefore = driveStats.sessionsCreated;
+      await queueFirstRecording(page, false);
+
+      await expect.poll(async () => {
+        const snapshot = await listShares(page);
+        const newest = [...snapshot.local].sort((a: any, b: any) => b.createdAt - a.createdAt)[0];
+        if (newest?.status === 'failed') throw new Error(`Drive publication failed: ${newest.error || 'unknown error'}`);
+        return newest?.status;
+      }, { timeout: 20_000 }).toMatch(/preparing-origin|uploading|finalizing|active/);
+      await expect.poll(async () => (await worker!.state()).shares[0]?.status, { timeout: 60_000 }).toBe('active');
+      expect(driveStats.sessionsCreated).toBe(sessionsBefore + 1);
+      expect((await worker.state()).mediaAssets).toHaveLength(driveSources.length);
+    } finally {
+      await worker?.stop().catch(() => {});
+      if (harness) await closeHarness(harness).catch(() => {});
+    }
+  });
+
   test('reuses one OPFS Drive origin across shares and cleans it only after the last share', async ({}, testInfo) => {
     test.setTimeout(120_000);
     let harness: ExtensionHarness | null = null;
