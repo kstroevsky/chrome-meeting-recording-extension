@@ -1,5 +1,6 @@
 import { listLibraryFiles } from '../../offscreen/storage/opfsLayout';
 import { reloadRuntime } from '../../platform/chrome/runtime';
+import { createAlarm, getAlarm } from '../../platform/chrome/alarms';
 import { getLocalStorageValues, setLocalStorageValues } from '../../platform/chrome/storage';
 import { makeLogger } from '../../shared/logger';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
@@ -32,6 +33,7 @@ import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
 
 const ANALYSIS_RECONCILIATION_CURSOR_KEY = 'analysisReconciliationCursor:v1';
 const ANALYSIS_RECONCILIATION_BATCH = 25;
+const ANALYSIS_RETRY_ALARM = 'analysis-retry:v1';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
@@ -51,6 +53,13 @@ export function createBackgroundRuntime() {
     logger,
   });
   const { playbackLeases, driveAuthLease } = createPlaybackSupportRuntime(logger);
+  const scheduleAnalysisWake = (when: number) => {
+    void (async () => {
+      const existing = await getAlarm(ANALYSIS_RETRY_ALARM);
+      if (existing?.scheduledTime != null && existing.scheduledTime <= when) return;
+      await createAlarm(ANALYSIS_RETRY_ALARM, { when });
+    })().catch((error) => logger.warn('Could not schedule analysis retry:', error));
+  };
 
   let notifyIntegrationChanged: (recordingId: string) => void = () => {};
   const library = createLibraryRuntime({
@@ -58,6 +67,7 @@ export function createBackgroundRuntime() {
     playbackLeases,
     logger,
     onAnalysisSettled: () => criticalWork.sync(),
+    scheduleAnalysisWake,
     onIntegrationChanged: (recordingId) => notifyIntegrationChanged(recordingId),
   });
   const integrations = new BackgroundIntegrationRuntime({
@@ -225,6 +235,10 @@ export function createBackgroundRuntime() {
     handleAlarm: (alarm: chrome.alarms.Alarm) => {
       localDelivery.handleAlarm(alarm);
       integrations.handleAlarm(alarm);
+      if (alarm.name === ANALYSIS_RETRY_ALARM) {
+        void library.analysisCoordinator.dispatchDue()
+          .catch((error) => logger.warn('Analysis retry wake failed:', error));
+      }
     },
     handleConnect: (port: chrome.runtime.Port) => {
       if (port.name === 'offscreen') offscreen.attachPort(port);

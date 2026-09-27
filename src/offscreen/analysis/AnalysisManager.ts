@@ -108,9 +108,13 @@ export class AnalysisManager {
     transcript: TranscriptSegment[],
     config: AnalysisConfig,
     provenance: AnalysisProvenance,
+    request?: { attemptToken: string; requestEpoch: number },
   ): string {
+    const id = request?.attemptToken ?? this.genId();
+    if (this.tasks.has(id) || this.undelivered.has(id)) return id;
     const job: AnalysisJob = {
-      id: this.genId(),
+      id,
+      ...(request ? { requestEpoch: request.requestEpoch } : {}),
       historyId,
       status: 'analyzing',
       progress: 0,

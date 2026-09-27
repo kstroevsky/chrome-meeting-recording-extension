@@ -28,6 +28,12 @@ describe('normalizeAnalysisJob', () => {
     expect(normalizeAnalysisJob(JSON.parse(JSON.stringify(JOB)))).toEqual(JOB);
   });
 
+  it('preserves a positive durable request epoch and ignores invalid legacy values', () => {
+    expect(normalizeAnalysisJob({ ...JOB, requestEpoch: 7 })?.requestEpoch).toBe(7);
+    expect(normalizeAnalysisJob({ ...JOB, requestEpoch: 0 })?.requestEpoch).toBeUndefined();
+    expect(normalizeAnalysisJob({ ...JOB, requestEpoch: 1.5 })?.requestEpoch).toBeUndefined();
+  });
+
   it('discards a row that could never be acknowledged', () => {
     expect(normalizeAnalysisJob(undefined)).toBeUndefined();
     expect(normalizeAnalysisJob('ana_1')).toBeUndefined();

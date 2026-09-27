@@ -583,6 +583,10 @@ export type BgToOffscreenRpc =
    */
   | RpcRequest<{
       type: 'OFFSCREEN_ANALYZE_TRANSCRIPT';
+      /** Caller-owned attempt identity; also becomes AnalysisJob.id. */
+      attemptToken: string;
+      /** Durable desired-work epoch fenced by the control plane. */
+      requestEpoch: number;
       historyId: string;
       transcript: import('./transcript').TranscriptSegment[];
       /** Every §9 value the run must use; see `shared/analysis/types`. */

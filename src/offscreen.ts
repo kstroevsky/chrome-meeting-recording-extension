@@ -249,8 +249,8 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     resolveUnsaved: (key, action, name, storageMode) => resolveUnsavedRecording(key, action, name, storageMode),
     cancelUpload: (jobId) => uploadManager.cancel(jobId),
     acknowledgeUploadState: (jobId) => uploadJobStateOutbox.remove(jobId),
-    analyzeTranscript: (historyId, transcript, config, provenance) =>
-      analysisManager.enqueue(historyId, transcript, config, provenance),
+    analyzeTranscript: (historyId, transcript, config, provenance, request) =>
+      analysisManager.enqueue(historyId, transcript, config, provenance, request),
     cancelAnalysis: (jobId) => analysisManager.cancel(jobId),
     listAnalysisWork: () => analysisManager.busyJobs().map((job) => job.id),
     // Durable row first, then the held result — see `acknowledgeAnalysisJob`.

@@ -17,7 +17,10 @@ import {
   type RecordingTopicSummary,
   type StoredAnalysis,
 } from '../../../shared/analysis/storedAnalysis';
-import type { RecordingAnalysisRepositoryPort } from './RecordingAnalysisRepository';
+import type {
+  AnalysisAttemptTransition,
+  RecordingAnalysisRepositoryPort,
+} from './RecordingAnalysisRepository';
 import type { RecordingAnalysisOutcome } from './RecordingAnalysisOutcome';
 
 /** Why a recording has no usable analysis, or that it has one. */
@@ -121,6 +124,26 @@ export class RecordingAnalysisService {
     this.onChanged?.(job.historyId);
   }
 
+  /** Persists state only if this job still owns the durable desired-work claim. */
+  async recordAttemptOutcome(
+    job: AnalysisJob,
+    status: AnalysisJobStatus = job.status,
+    error: string | undefined = job.error,
+    transition?: AnalysisAttemptTransition,
+    now: number = Date.now(),
+  ): Promise<boolean> {
+    const outcome: RecordingAnalysisOutcome = {
+      status,
+      jobId: job.id,
+      startedAt: job.startedAt,
+      updatedAt: now,
+      ...(error ? { error } : {}),
+    };
+    const committed = await this.repository.putAttemptOutcome(job.historyId, job, outcome, transition);
+    if (committed) this.onChanged?.(job.historyId);
+    return committed;
+  }
+
   /** Persists a terminal attempt that ended before the data plane created a job. */
   async recordTerminalOutcome(
     recordingId: string,
@@ -203,6 +226,42 @@ export class RecordingAnalysisService {
     await this.repository.putCompleted(recordingId, analysis, outcome);
     this.onChanged?.(recordingId);
     return analysis;
+  }
+
+  /** Publishes only if transcript, environment, epoch and attempt token still match. */
+  async saveAttempt(
+    recordingId: string,
+    result: Omit<StoredAnalysis, 'provenance' | 'completedAt'>,
+    provenance: AnalysisProvenance,
+    job: AnalysisJob,
+    now: number = Date.now(),
+  ): Promise<{ analysis: StoredAnalysis; committed: boolean }> {
+    const analysis: StoredAnalysis = { ...result, provenance, completedAt: now };
+    const outcome: RecordingAnalysisOutcome = {
+      status: 'completed',
+      jobId: job.id,
+      startedAt: job.startedAt,
+      updatedAt: now,
+    };
+    const committed = await this.repository.publishAttemptResult(
+      recordingId,
+      job,
+      analysis,
+      outcome,
+      provenance,
+    );
+    if (committed) this.onChanged?.(recordingId);
+    return { analysis, committed };
+  }
+
+  /** Cancels durable desired work before the data-plane cancellation is attempted. */
+  async cancelDesired(
+    recordingId: string,
+    now: number = Date.now(),
+  ): Promise<{ changed: boolean; attemptToken?: string }> {
+    const result = await this.repository.cancelDesired(recordingId, now);
+    if (result.changed) this.onChanged?.(recordingId);
+    return result;
   }
 
   /**

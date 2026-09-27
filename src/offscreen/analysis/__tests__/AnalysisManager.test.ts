@@ -22,6 +22,7 @@ const SUBJECTS: Record<string, number> = { redis: 0, berlin: 90, hiring: 180 };
 
 /** What the control plane captured at enqueue; the manager must hand it back. */
 const PROVENANCE = {
+  transcriptGeneration: 'generation-1',
   transcriptRevision: 1,
   transcriptHash: 'transcript-hash-1',
   pipelineVersion: 2,
@@ -130,6 +131,18 @@ async function settle(): Promise<void> {
 }
 
 describe('AnalysisManager', () => {
+  it('uses the caller-owned attempt id and request epoch, and deduplicates a replay', () => {
+    const h = harness();
+    const request = { attemptToken: 'attempt-42', requestEpoch: 9 };
+    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE, request);
+    const replayed = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE, request);
+
+    expect(id).toBe('attempt-42');
+    expect(replayed).toBe('attempt-42');
+    expect(h.reported[0]).toMatchObject({ id: 'attempt-42', requestEpoch: 9 });
+    expect(h.manager.activeJobs().filter((job) => job.id === 'attempt-42')).toHaveLength(1);
+  });
+
   it('reports an analyzing job before the engine has loaded', () => {
     const h = harness();
     const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);

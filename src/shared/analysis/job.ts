@@ -27,6 +27,8 @@ export type AnalysisJobStatus = 'analyzing' | 'completed' | 'failed' | 'canceled
 
 export type AnalysisJob = {
   id: string;
+  /** Durable desired-work epoch captured before this attempt was dispatched. */
+  requestEpoch?: number;
   /** The recording this analyses; the key its result is stored under. */
   historyId: string;
   status: AnalysisJobStatus;
@@ -87,6 +89,8 @@ export function normalizeAnalysisJob(value: unknown): AnalysisJob | undefined {
     progress: clampFraction(raw.progress),
     startedAt,
   };
+  const requestEpoch = positiveInt(raw.requestEpoch);
+  if (requestEpoch != null) job.requestEpoch = requestEpoch;
   const windowsTotal = nonNegativeInt(raw.windowsTotal);
   if (windowsTotal != null) job.windowsTotal = windowsTotal;
   const windowsEncoded = nonNegativeInt(raw.windowsEncoded);
@@ -114,4 +118,8 @@ function clampFraction(value: unknown): number {
 
 function nonNegativeInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+}
+
+function positiveInt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }

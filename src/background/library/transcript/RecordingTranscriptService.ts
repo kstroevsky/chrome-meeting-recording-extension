@@ -138,14 +138,23 @@ export class RecordingTranscriptService {
 
   /** Announces that the current transcript is complete enough for derived work. */
   async commit(recordingId: string): Promise<TranscriptSnapshot | undefined> {
+    const snapshot = await this.requestAnalysis(recordingId);
+    if (snapshot) await this.notifyCommitted(recordingId, snapshot);
+    return snapshot;
+  }
+
+  /** Durably requests analysis for the current exact transcript identity. */
+  async requestAnalysis(
+    recordingId: string,
+    options: { force?: boolean } = {},
+  ): Promise<TranscriptSnapshot | undefined> {
     const environment = this.currentAnalysisEnvironment?.();
     let snapshot = environment
-      ? await this.repository.requestCurrentAnalysis(recordingId, environment)
+      ? await this.repository.requestCurrentAnalysis(recordingId, environment, options)
       : await this.getSnapshot(recordingId);
     if (snapshot && !snapshot.contentHash) {
       snapshot = await this.requireHash(recordingId, snapshot);
     }
-    if (snapshot) await this.notifyCommitted(recordingId, snapshot);
     return snapshot;
   }
 

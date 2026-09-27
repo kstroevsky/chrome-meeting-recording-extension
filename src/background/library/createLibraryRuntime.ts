@@ -8,6 +8,7 @@ import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
 import { RecordingAnalysisCoordinator } from './analysis/RecordingAnalysisCoordinator';
 import { RecordingAnalysisRepository } from './analysis/RecordingAnalysisRepository';
 import { RecordingAnalysisService } from './analysis/RecordingAnalysisService';
+import { RecordingAnalysisWorkRepository } from './analysis/RecordingAnalysisWorkRepository';
 import { RecordingContextRepository } from './context/RecordingContextRepository';
 import { RecordingContextService } from './context/RecordingContextService';
 import { RecordingHistoryRepository } from './history/RecordingHistoryRepository';
@@ -27,6 +28,7 @@ type LibraryRuntimeDeps = {
   playbackLeases: PlaybackLeaseManager;
   logger: Logger;
   onAnalysisSettled?: () => void;
+  scheduleAnalysisWake?: (when: number) => void;
   onIntegrationChanged?: (recordingId: string) => void;
 };
 
@@ -36,6 +38,7 @@ export function createLibraryRuntime({
   playbackLeases,
   logger,
   onAnalysisSettled,
+  scheduleAnalysisWake,
   onIntegrationChanged,
 }: LibraryRuntimeDeps) {
   const historyRepository = new RecordingHistoryRepository();
@@ -73,26 +76,26 @@ export function createLibraryRuntime({
     },
     onIntegrationChanged,
   );
+  const analysisWork = new RecordingAnalysisWorkRepository();
 
   const analysisCoordinator = new RecordingAnalysisCoordinator({
     dataPlane: offscreen,
     analyses,
+    work: analysisWork,
     readTranscript: (historyId) => transcripts.getSnapshot(historyId),
-    // Absence is not deletion: history delivery and analysis completion settle independently.
-    isRecordingDeleted: async (historyId) => Boolean(
-      (await historyRepository.get(historyId))?.deletedAt,
-    ),
+    requestAnalysis: (historyId, options) => transcripts.requestAnalysis(historyId, options),
     isRecordingFinalized: async (historyId) => {
       const entry = await historyRepository.get(historyId);
       return Boolean(entry && !entry.deletedAt && entry.status !== 'saving');
     },
     config: () => CANDIDATE_ANALYSIS_CONFIG,
     onSettled: onAnalysisSettled,
+    scheduleWake: scheduleAnalysisWake,
   });
   transcripts.setCommitListener(async (historyId) => {
-    const result = await analysisCoordinator.ensureCurrentAnalysis(historyId);
+    const result = await analysisCoordinator.wake(historyId);
     if (!result.ok && result.reason === 'failed') {
-      logger.warn(`Could not reconcile topic analysis for ${historyId}:`, result.error ?? 'unknown failure');
+      logger.warn(`Could not dispatch topic analysis for ${historyId}:`, result.error ?? 'unknown failure');
     }
   });
 
@@ -141,6 +144,7 @@ export function createLibraryRuntime({
     notations,
     transcripts,
     analyses,
+    analysisWork,
     analysisCoordinator,
     playback,
   };

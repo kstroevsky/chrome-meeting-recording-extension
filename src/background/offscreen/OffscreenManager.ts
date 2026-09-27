@@ -195,6 +195,8 @@ export class OffscreenManager {
   }
 
   async analyzeTranscript(
+    attemptToken: string,
+    requestEpoch: number,
     historyId: string,
     transcript: TranscriptSegment[],
     config: AnalysisConfig,
@@ -202,6 +204,8 @@ export class OffscreenManager {
   ): Promise<{ ok: boolean; jobId?: string; error?: string }> {
     return this.rpc({
       type: 'OFFSCREEN_ANALYZE_TRANSCRIPT',
+      attemptToken,
+      requestEpoch,
       historyId,
       transcript,
       config,
