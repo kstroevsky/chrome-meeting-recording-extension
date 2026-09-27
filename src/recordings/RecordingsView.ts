@@ -55,7 +55,22 @@ const WARNING_ICON = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor"
 const PLAY_ICON = '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M3 1.8l7 4.2-7 4.2z"/></svg>';
 const PENCIL_ICON = '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 
-type Sort = 'time-desc' | 'time-asc' | 'name' | 'duration' | 'size' | 'notes';
+type SortKey = 'time' | 'name' | 'duration' | 'size' | 'notes';
+type SortDirection = 'asc' | 'desc';
+type Sort = { key: SortKey; dir: SortDirection };
+
+/** The order a column sorts in when first picked: newest, A–Z, longest, largest, most notes. */
+const FIRST_DIRECTION: Record<SortKey, SortDirection> = {
+  time: 'desc', name: 'asc', duration: 'desc', size: 'desc', notes: 'desc',
+};
+const SORT_NAMES: Record<Exclude<SortKey, 'time'>, { label: string; asc: string; desc: string }> = {
+  name: { label: 'NAME', asc: 'A–Z', desc: 'Z–A' },
+  duration: { label: 'DURATION', asc: 'SHORTEST FIRST', desc: 'LONGEST FIRST' },
+  size: { label: 'SIZE', asc: 'SMALLEST FIRST', desc: 'LARGEST FIRST' },
+  notes: { label: 'NOTES', asc: 'FEWEST FIRST', desc: 'MOST FIRST' },
+};
+
+const sameFolder = (left: string, right: string) => left.toLocaleLowerCase() === right.toLocaleLowerCase();
 
 const NOTE_CHIP_ICON = '<svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 1.7l2.8 2.8-8 8H3.5v-2.8l8-8z"/></svg>';
 
@@ -99,7 +114,9 @@ export class RecordingsView {
   private entries: RecordingHistoryEntry[] = [];
   private hasMore = false;
   private query = '';
-  private sort: Sort = 'time-desc';
+  private sort: Sort = { key: 'time', dir: 'desc' };
+  /** Only recordings filed in this folder are listed; set by clicking a folder tag. */
+  private folderFilter: string | null = null;
   private selected = new Set<string>();
   /** Note counts + searchable note text per recording (ADR-0005). */
   private noteSummaries: Record<string, RecordingNotationSummary> = {};
@@ -151,15 +168,15 @@ export class RecordingsView {
   /** Which toolbar is mounted, so it is only rebuilt when the kind changes. */
   private toolbarKind: 'search' | 'bulk' | null = null;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
+  /** Watches the end of the list and asks for the next page as it comes near. */
+  private moreObserver: IntersectionObserver | null = null;
 
   constructor(
     private readonly list: HTMLElement,
     private readonly empty: HTMLElement,
     private readonly error: HTMLElement,
-    private readonly loadMoreButton: HTMLButtonElement,
     private readonly callbacks: RecordingsViewCallbacks,
   ) {
-    this.loadMoreButton.addEventListener('click', () => this.callbacks.loadMore());
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
       if (this.confirmHost) return;
@@ -172,6 +189,8 @@ export class RecordingsView {
       } else if (this.selected.size) {
         this.selected.clear();
         this.redraw();
+      } else if (this.folderFilter) {
+        this.setFolderFilter(null);
       }
     });
   }
@@ -195,7 +214,8 @@ export class RecordingsView {
     this.destinationListbox?.destroy();
     this.destinationListbox = null;
     this.empty.hidden = this.entries.length > 0;
-    this.loadMoreButton.hidden = !this.hasMore;
+    this.moreObserver?.disconnect();
+    this.moreObserver = null;
 
     if (!this.toolbarHost) {
       this.toolbarHost = $('div', 'recordings-toolbar-host');
@@ -218,6 +238,7 @@ export class RecordingsView {
     this.tableHost!.replaceChildren(this.table(visible));
     const scroller = this.tableHost!.querySelector<HTMLElement>('.recording-table__scroll');
     if (scroller && scrollTop) scroller.scrollTop = scrollTop;
+    if (scroller) this.watchForMore(scroller);
     const openEntry = this.entries.find((entry) => entry.id === this.openId);
     // A redraw while a recording waits to open must not drop the notes it waits on.
     if (!openEntry && this.notesSection?.id !== this.pendingOpenId) this.notesSection = null;
@@ -234,7 +255,34 @@ export class RecordingsView {
       this.toolbarKind = kind;
       this.toolbarHost!.replaceChildren(kind === 'bulk' ? this.bulkToolbar() : this.searchToolbar());
     }
-    if (kind === 'search') this.updateSearchCount(visibleCount);
+    if (kind === 'search') {
+      this.updateFolderFilterChip();
+      this.updateSearchCount(visibleCount);
+    }
+  }
+
+  /** Says which folder the list is narrowed to, and undoes it in one click. */
+  private updateFolderFilterChip(): void {
+    const host = this.toolbarHost?.querySelector<HTMLElement>('.recordings-folder-filter');
+    if (!host) return;
+    host.hidden = !this.folderFilter;
+    if (!this.folderFilter) {
+      host.replaceChildren();
+      return;
+    }
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'folder-filter-chip';
+    chip.title = 'Show every folder';
+    chip.setAttribute('aria-label', `Showing only “${this.folderFilter}”. Show every folder`);
+    const label = $('span', 'folder-filter-chip__label');
+    label.textContent = this.folderFilter;
+    const clear = $('span', 'folder-filter-chip__clear');
+    clear.setAttribute('aria-hidden', 'true');
+    clear.textContent = '×';
+    chip.append(label, clear);
+    chip.addEventListener('click', () => this.setFolderFilter(null));
+    host.replaceChildren(chip);
   }
 
   private updateSearchCount(visibleCount: number): void {
@@ -244,27 +292,64 @@ export class RecordingsView {
     // and saying where the match came from is the point of the split below (f2).
     total.textContent = this.query.trim()
       ? `${visibleCount} OF ${this.entries.length} · IN NAMES, NOTES AND TOPICS`
-      // Not the page: the library, which may hold more than has loaded.
-      : `${this.total ?? visibleCount} RECORDING${(this.total ?? visibleCount) === 1 ? '' : 'S'}`;
+      // The folder chip beside it already says which folder.
+      : this.folderFilter
+        ? `${visibleCount} OF ${this.entries.length}`
+        // Not the page: the library, which may hold more than has loaded.
+        : `${this.total ?? visibleCount} RECORDING${(this.total ?? visibleCount) === 1 ? '' : 'S'}`;
   }
 
   private visibleEntries(): RecordingHistoryEntry[] {
     const query = this.query.trim().toLocaleLowerCase();
-    const filtered = this.entries.filter((entry) => !query
+    const folder = this.folderFilter;
+    const filtered = this.entries.filter((entry) => (!query
       // Topic keywords join the same haystack as the title and the notes, so
       // "redis" finds a call nobody thought to name after it (ADR-0007 §8).
       || `${entry.name} ${entry.note ?? ''} ${this.noteSummaries[entry.id]?.search ?? ''} ${this.topicSummaries[entry.id]?.search ?? ''}`
-        .toLocaleLowerCase().includes(query));
+        .toLocaleLowerCase().includes(query))
+      && (!folder || sameFolder(this.folderOf(entry) ?? '', folder)));
+    const { key, dir } = this.sort;
+    const valueOf = (entry: RecordingHistoryEntry): number | string | undefined => {
+      if (key === 'time') return entry.createdAt;
+      if (key === 'name') return entry.name;
+      if (key === 'duration') return durationOf(entry);
+      if (key === 'size') return sizeOf(entry) || undefined; // shown as "—": unknown, not small
+      return this.noteSummaries[entry.id]?.count ?? 0;
+    };
     return [...filtered].sort((left, right) => {
-      if (this.sort === 'time-desc') return right.createdAt - left.createdAt;
-      if (this.sort === 'time-asc') return left.createdAt - right.createdAt;
-      if (this.sort === 'name') return left.name.localeCompare(right.name);
-      if (this.sort === 'notes') {
-        return (this.noteSummaries[right.id]?.count ?? 0) - (this.noteSummaries[left.id]?.count ?? 0);
+      const a = valueOf(left);
+      const b = valueOf(right);
+      // A value nobody knows (a duration never read, a size never recorded) sorts last either way.
+      if (a == null || b == null) {
+        if (a != null) return -1;
+        if (b != null) return 1;
+      } else {
+        const ascending = typeof a === 'string' && typeof b === 'string'
+          ? a.localeCompare(b)
+          : Number(a) - Number(b);
+        if (ascending) return dir === 'asc' ? ascending : -ascending;
       }
-      if (this.sort === 'duration') return (durationOf(right) ?? -1) - (durationOf(left) ?? -1);
-      return sizeOf(right) - sizeOf(left);
+      return right.createdAt - left.createdAt;
     });
+  }
+
+  /**
+   * The folder a recording is filed in, as the user named it: its Drive
+   * destination, or else the Downloads folder it was written into. The default
+   * destination is not a choice anyone made, so it is not shown.
+   */
+  private folderOf(entry: RecordingHistoryEntry): string | undefined {
+    const name = (entry.driveFolderPresetId
+      ? this.destinations.find((preset) => preset.id === entry.driveFolderPresetId)?.name
+      : undefined) ?? entry.localFolderName;
+    const trimmed = name?.trim();
+    if (!trimmed || sameFolder(trimmed, DRIVE_DEFAULT_DESTINATION_NAME)) return undefined;
+    return trimmed;
+  }
+
+  private setFolderFilter(folder: string | null): void {
+    this.folderFilter = folder;
+    this.redraw();
   }
 
   private searchToolbar(): HTMLElement {
@@ -287,7 +372,7 @@ export class RecordingsView {
         this.redraw();
       }, SEARCH_REPAINT_MS);
     });
-    toolbar.append(search, $('span', 'recordings-count'));
+    toolbar.append(search, $('span', 'recordings-folder-filter'), $('span', 'recordings-count'));
     if (this.callbacks.syncDrive) {
       const sync = document.createElement('button');
       sync.type = 'button';
@@ -370,15 +455,19 @@ export class RecordingsView {
       else entries.forEach((entry) => this.selected.add(entry.id));
       this.redraw();
     });
-    header.append(master, $('span'), this.headerButton('NAME', 'name'), this.headerButton('NOTES', 'notes'), this.headerButton('DUR', 'duration', true), this.headerButton('SIZE', 'size', true));
+    const folder = $('span', 'table-header-text table-header-text--left'); folder.textContent = 'FOLDER';
+    header.append(master, $('span'), this.headerButton('NAME', 'name'), folder, this.headerButton('NOTES', 'notes'), this.headerButton('DUR', 'duration', true), this.headerButton('SIZE', 'size', true));
     const destination = $('span', 'table-header-text'); destination.textContent = 'DEST';
-    header.append(destination, this.headerButton('TIME', 'time', true), $('span'));
+    header.append(destination, this.headerButton('TIME', 'time', true));
     table.append(header);
 
     const scroll = $('div', 'recording-table__scroll');
     if (!entries.length) {
       const empty = $('div', 'recording-no-results');
-      empty.textContent = `NO RECORDINGS MATCH “${this.query.toUpperCase()}”`;
+      const folderName = this.folderFilter?.toLocaleUpperCase();
+      empty.textContent = this.query.trim()
+        ? `NO RECORDINGS MATCH “${this.query.toUpperCase()}”${folderName ? ` IN “${folderName}”` : ''}`
+        : `NO RECORDINGS IN “${folderName ?? ''}”`;
       scroll.append(empty);
     } else {
       for (const group of this.groups(entries)) {
@@ -391,25 +480,50 @@ export class RecordingsView {
         group.entries.forEach((entry) => scroll.append(this.row(entry)));
       }
     }
+    // The next page loads as this comes near, so there is nothing to press.
+    if (this.hasMore) {
+      const more = $('div', 'recording-table__more');
+      more.textContent = 'Loading more recordings…';
+      scroll.append(more);
+    }
     table.append(scroll);
     return table;
   }
 
-  private headerButton(label: string, key: 'name' | 'duration' | 'notes' | 'size' | 'time', right = false): HTMLButtonElement {
-    const active = (key === 'time' && this.sort.startsWith('time')) || this.sort === key;
+  /**
+   * Loads the next page before the list runs out: once the end marker is within
+   * a screenful of view. A page that does not fill the list leaves the marker in
+   * view, so the next one follows straight away. Each redraw builds a new list
+   * and watches its marker afresh; the controller ignores asks while a page is
+   * already on its way.
+   */
+  private watchForMore(scroller: HTMLElement): void {
+    const marker = scroller.querySelector('.recording-table__more');
+    if (!marker || typeof IntersectionObserver === 'undefined') return;
+    this.moreObserver = new IntersectionObserver((seen) => {
+      if (seen.some((entry) => entry.isIntersecting)) this.callbacks.loadMore();
+    }, { root: scroller, rootMargin: '0px 0px 600px 0px' });
+    this.moreObserver.observe(marker);
+  }
+
+  /** Picks a column to sort by; picking the sorted column again reverses it. */
+  private headerButton(label: string, key: SortKey, right = false): HTMLButtonElement {
+    const active = this.sort.key === key;
     const button = document.createElement('button');
     button.className = `table-header-button${right ? ' table-header-button--right' : ''}${active ? ' table-header-button--active' : ''}${key === 'notes' ? ' table-header-button--notes' : ''}`;
     button.type = 'button';
     button.textContent = label;
+    button.title = active ? 'Reverse the order' : `Sort by ${label.toLocaleLowerCase()}`;
     if (active) {
       const arrow = $('span', 'table-header-button__arrow');
-      arrow.textContent = this.sort === 'time-asc' ? '▴' : '▾';
+      arrow.textContent = this.sort.dir === 'asc' ? '▴' : '▾';
+      arrow.setAttribute('aria-label', this.sort.dir === 'asc' ? 'ascending' : 'descending');
       button.append(arrow);
     }
     button.addEventListener('click', () => {
-      this.sort = key === 'time'
-        ? (this.sort === 'time-desc' ? 'time-asc' : 'time-desc')
-        : key;
+      this.sort = active
+        ? { key, dir: this.sort.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: FIRST_DIRECTION[key] };
       this.redraw();
     });
     return button;
@@ -432,12 +546,9 @@ export class RecordingsView {
         ...(inName.length ? [{ label: 'MATCHED IN NAME', entries: inName, plain: true as const }] : []),
       ];
     }
-    if (!this.sort.startsWith('time')) {
-      const labels: Record<Exclude<Sort, 'time-desc' | 'time-asc'>, string> = {
-        name: 'SORTED BY NAME', duration: 'SORTED BY DURATION', notes: 'SORTED BY NOTES', size: 'SORTED BY SIZE',
-      };
-      const sort = this.sort as Exclude<Sort, 'time-desc' | 'time-asc'>;
-      return [{ label: `${labels[sort]} · ${entries.length}`, entries }];
+    if (this.sort.key !== 'time') {
+      const named = SORT_NAMES[this.sort.key];
+      return [{ label: `SORTED BY ${named.label} · ${named[this.sort.dir]} · ${entries.length}`, entries }];
     }
     const groups: Array<{ label: string; entries: RecordingHistoryEntry[] }> = [];
     for (const entry of entries) {
@@ -498,12 +609,31 @@ export class RecordingsView {
     const destination = onDrive ? cloudIcon() : onLocal ? diskIcon() : $('span');
     destination.setAttribute('title', onDrive && onLocal ? 'Google Drive + local disk' : onDrive ? 'Google Drive' : 'Local disk');
     const time = $('span', 'recording-row__meta recording-row__time'); time.textContent = formatTime(entry.createdAt);
-    // Watching starts from the recording's detail, which says what is being watched (f2).
-    const remove = document.createElement('button');
-    remove.className = 'recording-row__remove'; remove.type = 'button'; remove.title = 'Remove from history'; remove.setAttribute('aria-label', `Remove ${entry.name} from history`); remove.textContent = '×';
-    remove.addEventListener('click', (event) => { event.stopPropagation(); void this.confirmRemove(entry); });
-    row.append(box, dot, name, notes, duration, size, destination, time, remove);
+    // Removing lives in the detail and the bulk toolbar; the row keeps to what it says.
+    row.append(box, dot, name, this.folderTag(entry), notes, duration, size, destination, time);
     return row;
+  }
+
+  /** The recording's folder as a tag; clicking it lists only that folder (again: all). */
+  private folderTag(entry: RecordingHistoryEntry): HTMLElement {
+    const cell = $('span', 'recording-row__folder-cell');
+    const folder = this.folderOf(entry);
+    if (!folder) return cell;
+    const active = this.folderFilter != null && sameFolder(folder, this.folderFilter);
+    const tag = document.createElement('button');
+    tag.type = 'button';
+    tag.className = `recording-row__folder${active ? ' recording-row__folder--active' : ''}`;
+    tag.textContent = folder;
+    tag.title = active ? `Showing only “${folder}” — click to show every folder` : `Show only “${folder}”`;
+    tag.setAttribute('aria-pressed', String(active));
+    tag.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.setFolderFilter(active ? null : folder);
+    });
+    // Enter and Space press the tag, not the row it sits in.
+    tag.addEventListener('keydown', (event) => event.stopPropagation());
+    cell.append(tag);
+    return cell;
   }
 
   /**
@@ -539,7 +669,8 @@ export class RecordingsView {
 
   setDestinations(destinations: DriveFolderPreset[]): void {
     this.destinations = destinations;
-    if (this.openId) this.redraw();
+    // Folder tags are named from these, so the table is redrawn too.
+    if (this.entries.length) this.redraw();
   }
 
   private selectionBox(selected: boolean, label: string): HTMLButtonElement {

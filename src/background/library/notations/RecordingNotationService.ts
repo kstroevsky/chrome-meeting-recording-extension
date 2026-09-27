@@ -22,7 +22,10 @@ export type RecordingNotationPatch = { tStartMs?: number; tEndMs?: number; text?
 
 /** Owns every notation transition for a recording, keyed by its history id. */
 export class RecordingNotationService {
-  constructor(private readonly repository: RecordingNotationRepositoryPort) {}
+  constructor(
+    private readonly repository: RecordingNotationRepositoryPort,
+    private readonly onChanged?: (recordingId: string) => void,
+  ) {}
 
   async list(recordingId: string): Promise<RecordingNotation[]> {
     return await this.repository.list(recordingId);
@@ -63,12 +66,13 @@ export class RecordingNotationService {
       }
       return sortRecordingNotations([...current, created]);
     });
+    this.onChanged?.(recordingId);
     return created;
   }
 
   /** Patches an existing notation. Only the supplied fields change. */
   async update(recordingId: string, id: string, patch: RecordingNotationPatch): Promise<RecordingNotation[]> {
-    return await this.repository.update(recordingId, (current) => {
+    const updated = await this.repository.update(recordingId, (current) => {
       const existing = current.find((notation) => notation.id === id);
       if (!existing) throw new Error(`Unknown notation: ${id}`);
 
@@ -82,6 +86,8 @@ export class RecordingNotationService {
 
       return sortRecordingNotations(current.map((notation) => (notation.id === id ? next : notation)));
     });
+    this.onChanged?.(recordingId);
+    return updated;
   }
 
   /**
@@ -102,6 +108,7 @@ export class RecordingNotationService {
       result = { ...existing, tEndMs: end, endedBy: 'user' };
       return current.map((notation) => (notation.id === id ? result! : notation));
     });
+    this.onChanged?.(recordingId);
     return result!;
   }
 
@@ -115,7 +122,7 @@ export class RecordingNotationService {
    */
   async closeOpenSpans(recordingId: string, tEndMs: number, endedBy: NotationEndedBy = 'auto'): Promise<RecordingNotation[]> {
     const end = requireOffset(tEndMs, 'end');
-    return await this.repository.update(recordingId, (current) => {
+    const updated = await this.repository.update(recordingId, (current) => {
       if (!current.some((notation) => notation.tEndMs == null)) return current;
       return current.map((notation) => (
         notation.tEndMs == null
@@ -125,14 +132,18 @@ export class RecordingNotationService {
           : notation
       ));
     });
+    this.onChanged?.(recordingId);
+    return updated;
   }
 
   async remove(recordingId: string, id: string): Promise<RecordingNotation[]> {
-    return await this.repository.update(recordingId, (current) => {
+    const updated = await this.repository.update(recordingId, (current) => {
       const next = current.filter((notation) => notation.id !== id);
       if (next.length === current.length) throw new Error(`Unknown notation: ${id}`);
       return next;
     });
+    this.onChanged?.(recordingId);
+    return updated;
   }
 
   /** Drops every notation for a recording — a discarded run, or a deleted entry. */

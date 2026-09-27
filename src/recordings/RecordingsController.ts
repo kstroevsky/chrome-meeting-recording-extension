@@ -2,6 +2,7 @@ import { createExternalTab } from '../platform/chrome/tabs';
 import { loadExtensionSettingsFromStorage } from '../shared/settings';
 import { sendToBackground } from '../shared/messages';
 import { openDriveSyncDialog } from './DriveSyncDialog';
+import { openRemovalProgress } from './RemovalProgressDialog';
 import { PlayerController } from './player/PlayerController';
 import { createPlaybackTrackResolver } from './player/playbackSource';
 import type { PlayerStatus } from './player/PlayerView';
@@ -111,20 +112,42 @@ export class RecordingsController {
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
+  /**
+   * Removes the recordings one at a time, from this page, showing progress in
+   * a dialog. A failure is reported and the run goes on; "Stop" ends it after
+   * the recording in progress. Each row leaves the list as its removal lands.
+   */
   async removeMany(ids: string[], deleteFiles = false) {
-    const uniqueIds = [...new Set(ids)].filter((id) => this.entries.some((entry) => entry.id === id));
-    if (!uniqueIds.length) return;
-    const fileErrors: string[] = [];
+    const targets = [...new Set(ids)]
+      .map((id) => this.entries.find((entry) => entry.id === id))
+      .filter((entry): entry is RecordingHistoryEntry => entry != null);
+    if (!targets.length) return;
+    this.view.showError();
+    const progress = openRemovalProgress(targets.length, deleteFiles);
     try {
-      for (const id of uniqueIds) {
-        const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id, ...(deleteFiles ? { deleteFiles } : {}) });
-        if (!response.ok) throw new Error(response.error);
-        if (response.removed) this.forget(id);
-        fileErrors.push(...(response.fileErrors ?? []));
+      for (const [index, target] of targets.entries()) {
+        if (progress.stopRequested) break;
+        progress.start(target.name, index);
+        try {
+          const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id: target.id, ...(deleteFiles ? { deleteFiles } : {}) });
+          if (!response.ok) throw new Error(response.error);
+          // `removed: false` means it was already gone; either way it is out of the library.
+          this.forget(target.id);
+          progress.removed(target.name, response.fileErrors, response.filesDeleted);
+        } catch (error) {
+          progress.failed(target.name, error instanceof Error ? error.message : String(error));
+        }
+        this.render();
       }
+    } finally {
+      const summary = progress.finish();
       this.render();
-      this.reportFileErrors(fileErrors);
-    } catch (error) { this.render(); this.view.showError(error instanceof Error ? error.message : String(error)); }
+      const problems = [
+        summary.failed ? `${summary.failed} recording${summary.failed === 1 ? '' : 's'} could not be removed` : '',
+        summary.fileErrors ? `${summary.fileErrors} file${summary.fileErrors === 1 ? '' : 's'} could not be deleted` : '',
+      ].filter(Boolean);
+      if (problems.length) this.view.showError(`${problems.join('; ')}.`);
+    }
   }
 
   async openLocal(recordingId: string, fileId: string) {

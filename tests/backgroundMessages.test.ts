@@ -1,3 +1,6 @@
+/** The popup, as Chrome identifies it: privileged requests are accepted only from extension pages. */
+const POPUP_SENDER = { url: 'chrome-extension://mock-id/popup.html' } as chrome.runtime.MessageSender;
+
 describe('background runtime system messages', () => {
   beforeEach(() => {
     jest.resetModules();
@@ -48,7 +51,7 @@ describe('background runtime system messages', () => {
     const listener = await importBackgroundWith(offscreenInstance);
 
     const response = await new Promise<any>((resolve) => {
-      listener({ type: 'DISCARD_RECORDING' }, {}, resolve);
+      listener({ type: 'DISCARD_RECORDING' }, POPUP_SENDER, resolve);
     });
 
     expect(response).toEqual(expect.objectContaining({
@@ -79,7 +82,7 @@ describe('background runtime system messages', () => {
     );
 
     const response = await new Promise<any>((resolve) => {
-      listener({ type: 'GET_DRIVE_TOKEN' }, {}, resolve);
+      listener({ type: 'GET_DRIVE_TOKEN' }, POPUP_SENDER, resolve);
     });
 
     expect(response).toEqual({ ok: false, error: 'no token' });
@@ -92,7 +95,7 @@ describe('background runtime system messages', () => {
     );
 
     const response = await new Promise<any>((resolve) => {
-      listener({ type: 'GET_DRIVE_TOKEN' }, {}, resolve);
+      listener({ type: 'GET_DRIVE_TOKEN' }, POPUP_SENDER, resolve);
     });
 
     expect(response).toEqual({ ok: false, error: 'network down' });
@@ -102,7 +105,7 @@ describe('background runtime system messages', () => {
     const listener = await importBackgroundWith(makeOffscreenInstance());
 
     const response = await new Promise<any>((resolve) => {
-      listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve);
+      listener({ type: 'GET_RECORDING_STATUS' }, POPUP_SENDER, resolve);
     });
 
     expect(response.session).toEqual(expect.objectContaining({ phase: 'idle', runConfig: null }));
@@ -113,7 +116,7 @@ describe('background runtime system messages', () => {
     const listener = await importBackgroundWith(offscreenInstance);
 
     const response = await new Promise<any>((resolve) => {
-      listener({ type: 'STOP_RECORDING' }, {}, resolve);
+      listener({ type: 'STOP_RECORDING' }, POPUP_SENDER, resolve);
     });
 
     expect(response).toEqual(

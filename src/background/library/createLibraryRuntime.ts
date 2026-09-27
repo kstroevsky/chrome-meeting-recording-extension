@@ -8,6 +8,8 @@ import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
 import { RecordingAnalysisCoordinator } from './analysis/RecordingAnalysisCoordinator';
 import { RecordingAnalysisRepository } from './analysis/RecordingAnalysisRepository';
 import { RecordingAnalysisService } from './analysis/RecordingAnalysisService';
+import { RecordingContextRepository } from './context/RecordingContextRepository';
+import { RecordingContextService } from './context/RecordingContextService';
 import { RecordingHistoryRepository } from './history/RecordingHistoryRepository';
 import { RecordingHistoryService } from './history/RecordingHistoryService';
 import { RecordingNotationRepository } from './notations/RecordingNotationRepository';
@@ -25,6 +27,7 @@ type LibraryRuntimeDeps = {
   playbackLeases: PlaybackLeaseManager;
   logger: Logger;
   onAnalysisSettled?: () => void;
+  onIntegrationChanged?: (recordingId: string) => void;
 };
 
 /** Constructs durable library aggregates and wires their offscreen analysis boundary. */
@@ -33,10 +36,15 @@ export function createLibraryRuntime({
   playbackLeases,
   logger,
   onAnalysisSettled,
+  onIntegrationChanged,
 }: LibraryRuntimeDeps) {
   const historyRepository = new RecordingHistoryRepository();
-  const notations = new RecordingNotationService(new RecordingNotationRepository());
-  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository());
+  const recordingContexts = new RecordingContextService(
+    new RecordingContextRepository(),
+    onIntegrationChanged,
+  );
+  const notations = new RecordingNotationService(new RecordingNotationRepository(), onIntegrationChanged);
+  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository(), onIntegrationChanged);
   const analyses = new RecordingAnalysisService(new RecordingAnalysisRepository(), () => {
     const model = packagedModel();
     return {
@@ -47,7 +55,7 @@ export function createLibraryRuntime({
       embeddingDtype: model.dtype,
       configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
     };
-  });
+  }, onIntegrationChanged);
 
   const analysisCoordinator = new RecordingAnalysisCoordinator({
     dataPlane: offscreen,
@@ -71,11 +79,12 @@ export function createLibraryRuntime({
     },
     async (id) => {
       const cleanup = await Promise.allSettled([
+        recordingContexts.remove(id),
         notations.removeAll(id),
         transcripts.removeAll(id),
         analysisCoordinator.purge(id),
       ]);
-      const labels = ['notations', 'transcript', 'analysis'];
+      const labels = ['recording context', 'notations', 'transcript', 'analysis'];
       let failed = false;
       cleanup.forEach((result, index) => {
         if (result.status === 'fulfilled') return;
@@ -88,6 +97,7 @@ export function createLibraryRuntime({
       await playbackLeases.deleteOrDefer(historyId, keys);
     },
     logger.warn,
+    onIntegrationChanged,
   );
 
   const playback = new RecordingPlaybackService({
@@ -100,6 +110,7 @@ export function createLibraryRuntime({
   return {
     historyRepository,
     history,
+    recordingContexts,
     notations,
     transcripts,
     analyses,

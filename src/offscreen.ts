@@ -53,6 +53,14 @@ import { TelemetryAccumulator, type TelemetrySink } from './shared/telemetry';
 import { sharingServiceOrigin } from './sharing/config';
 import { createShareRuntime } from './sharing/ShareRuntime';
 
+// The recording runtime only ever runs as the offscreen document or the top
+// frame of the recorder tab. Framed inside anything else it would take over the
+// background's recording Port and run crash recovery beside the real runtime,
+// so it stops here, before any of that starts.
+if (window.top !== window) {
+  throw new Error('The offscreen runtime refuses to run inside a frame');
+}
+
 const L = makeLogger('offscreen');
 const RUNTIME_SAMPLE_INTERVAL_MS = 2_000;
 const PRODUCTION_RUNTIME_SAMPLE_INTERVAL_MS = 10_000;

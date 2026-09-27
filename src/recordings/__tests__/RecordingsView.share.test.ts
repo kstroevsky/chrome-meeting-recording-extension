@@ -49,8 +49,7 @@ function mount(share: RecordingsViewCallbacks['share'], revokeShare?: Recordings
   const list = document.createElement('div');
   const empty = document.createElement('div');
   const error = document.createElement('div');
-  const loadMore = document.createElement('button');
-  document.body.replaceChildren(list, empty, error, loadMore);
+  document.body.replaceChildren(list, empty, error);
   const callbacks = {
     rename: jest.fn(), note: jest.fn(), remove: jest.fn(), removeMany: jest.fn(),
     openLocal: jest.fn(), fileTo: jest.fn(), play: jest.fn(), loadMore: jest.fn(),
@@ -58,7 +57,7 @@ function mount(share: RecordingsViewCallbacks['share'], revokeShare?: Recordings
     shareSnapshot: jest.fn(async () => activeSnapshot()),
     revokeShare,
   } as unknown as RecordingsViewCallbacks;
-  const view = new RecordingsView(list, empty, error, loadMore, callbacks);
+  const view = new RecordingsView(list, empty, error, callbacks);
   view.render([entry()]);
   return { list };
 }

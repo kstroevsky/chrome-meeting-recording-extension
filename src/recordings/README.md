@@ -29,10 +29,29 @@ flowchart LR
 
 The background creates a pending history record before local download or detached Drive work starts. It then advances that same record as download settlement, Drive-upload updates, crash recovery, local fallback, or Drive metadata rename outcomes arrive. `RecordingHistoryService` owns those transitions; the page never tries to infer a file's availability from an upload tab. A Drive rename is delegated through the offscreen token/data plane; if a later PATCH fails, completed changes are rolled back, and a rare incomplete rollback synchronizes history to the names Drive actually reports.
 
+## Folder column, sorting, and row actions
+
+`FOLDER` sits right after `NAME` and shows where a recording is filed as a tag:
+its Drive destination (from `driveFolderPresetId`, named from the current
+presets), or else the Downloads folder it was written into (`localFolderName`).
+The default destination, `Rest`, is not a choice anyone made, so it shows no tag.
+Clicking a tag lists only that folder (matched by name, so a Drive destination
+and a Downloads folder of the same name are one folder); a chip beside the
+search says which, and clicking it, the tag again, or Escape shows every folder.
+
+Every sortable header reverses on a second click, and starts in the order people
+expect: newest, A–Z, longest, largest, most notes. A value nobody knows (a
+duration never read, a size never recorded) sorts last in either direction, and
+ties fall back to newest first. The group label says the order, for example
+`SORTED BY SIZE · SMALLEST FIRST`.
+
+Rows carry no remove button: removing is in the recording's detail and in the
+bulk toolbar.
+
 ## Notes column (ADR-0005)
 
-The table carries one 170px `NOTES` column **between `NAME` and `DUR`** (design
-`f1`). Each cell is a gold count chip plus the first note as a preview — that
+The table carries one `NOTES` column **between `FOLDER` and `DUR`** (design
+`f1`; 136px since the `FOLDER` column joined it). Each cell is a gold count chip plus the first note as a preview — that
 preview is what makes a row worth opening. A recording with no notes shows a
 dash, so the column never pads itself. The header reads in the accent colour in
 both themes; it sorts like the other columns.
@@ -78,9 +97,9 @@ A recording's notes and transcript are delivered as WebVTT files beside the medi
 
 ## Pagination and reconciliation
 
-History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The first page also carries `total`, the library's size (counted on the active index, so tombstones never count); the page's `N RECORDINGS` and the popup's badge show it rather than the length of whatever has been paged in. The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make **Load more** scan every deleted record. `loadMore()` appends only entries not already present, so a repeated response cannot duplicate a card.
+History uses a stable `(createdAt, id)` cursor and a bounded page size (50 by default, at most 100). The first page also carries `total`, the library's size (counted on the active index, so tombstones never count); the page's `N RECORDINGS` and the popup's badge show it rather than the length of whatever has been paged in. The repository's IndexedDB v3 `activeCreatedAtId` index contains only visible entries, so retained soft-delete tombstones cannot make paging scan every deleted record. There is no Load more button: the list ends in a "Loading more recordings…" marker, and an `IntersectionObserver` rooted on the scrolling list calls `loadMore()` once that marker is within 600px of view. A page too short to fill the list leaves the marker in view, so the next one follows at once. `loadMore()` ignores calls while a page is in flight, and appends only entries not already present, so a repeated response cannot duplicate a card.
 
-Rename and delete update the rendered list from their command responses rather than reloading the first page. This preserves entries already loaded through **Load more** and avoids a stale first-page refresh overwriting the user's local page state.
+Rename and delete update the rendered list from their command responses rather than reloading the first page. This preserves entries already paged in and avoids a stale first-page refresh overwriting the user's local page state.
 
 ## Files
 

@@ -10,6 +10,8 @@ describe('OffscreenManager', () => {
     manager.releaseBufferedIngress();
     mockPort = {
       name: 'offscreen',
+      sender: { url: 'chrome-extension://mock-id/offscreen.html' },
+      disconnect: jest.fn(),
       onMessage: { addListener: jest.fn() },
       onDisconnect: { addListener: jest.fn() },
       postMessage: jest.fn(),
@@ -83,6 +85,7 @@ describe('OffscreenManager', () => {
     // The fresh document connects and reports the current version → ready resolves.
     const freshPort: any = {
       name: 'offscreen',
+      sender: { url: 'chrome-extension://mock-id/offscreen.html' },
       onMessage: { addListener: jest.fn() },
       onDisconnect: { addListener: jest.fn() },
       postMessage: jest.fn(),
@@ -125,6 +128,7 @@ describe('OffscreenManager', () => {
 
     const freshPort: any = {
       name: 'offscreen',
+      sender: { url: 'chrome-extension://mock-id/offscreen.html' },
       onMessage: { addListener: jest.fn() },
       onDisconnect: { addListener: jest.fn() },
       postMessage: jest.fn(),
@@ -177,7 +181,11 @@ describe('OffscreenManager', () => {
 
     const recorderTabPort: any = {
       name: 'offscreen',
-      sender: { tab: { id: 99 } },
+      sender: {
+        url: 'chrome-extension://mock-id/offscreen.html?runtime=tab',
+        frameId: 0,
+        tab: { id: 99 },
+      },
       onMessage: { addListener: jest.fn() },
       onDisconnect: { addListener: jest.fn() },
       postMessage: jest.fn(),
@@ -197,7 +205,11 @@ describe('OffscreenManager', () => {
 
     const recorderTabPort: any = {
       name: 'offscreen',
-      sender: { tab: { id: 99 } },
+      sender: {
+        url: 'chrome-extension://mock-id/offscreen.html?runtime=tab',
+        frameId: 0,
+        tab: { id: 99 },
+      },
       onMessage: { addListener: jest.fn() },
       onDisconnect: { addListener: jest.fn() },
       postMessage: jest.fn(),
@@ -258,6 +270,49 @@ describe('OffscreenManager', () => {
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
   });
 
+  it('refuses offscreen.html framed inside a web page and keeps the real port', () => {
+    manager.attachPort(mockPort);
+    const framed: any = {
+      name: 'offscreen',
+      sender: {
+        url: 'chrome-extension://mock-id/offscreen.html',
+        frameId: 4,
+        tab: { id: 7, url: 'https://attacker.example/' },
+      },
+      disconnect: jest.fn(),
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+    };
+
+    expect(manager.attachPort(framed)).toBe(false);
+    expect(framed.disconnect).toHaveBeenCalled();
+    expect(framed.onMessage.addListener).not.toHaveBeenCalled();
+    expect((manager as any).port).toBe(mockPort);
+  });
+
+  it('refuses a tab runtime other than the recorder tab the background opened', async () => {
+    (chrome.tabs.create as jest.Mock).mockResolvedValue({ id: 99 });
+    void manager.ensureRecorderTabReady().catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const stray: any = {
+      name: 'offscreen',
+      sender: {
+        url: 'chrome-extension://mock-id/offscreen.html?runtime=tab',
+        frameId: 0,
+        tab: { id: 12 },
+      },
+      disconnect: jest.fn(),
+      onMessage: { addListener: jest.fn() },
+      onDisconnect: { addListener: jest.fn() },
+      postMessage: jest.fn(),
+    };
+
+    expect(manager.attachPort(stray)).toBe(false);
+    expect(stray.disconnect).toHaveBeenCalled();
+  });
+
   it('ignores a late disconnect from a replaced port', () => {
     const oldPort = mockPort;
     manager.attachPort(oldPort);
@@ -265,6 +320,7 @@ describe('OffscreenManager', () => {
 
     const newPort: any = {
       name: 'offscreen',
+      sender: { url: 'chrome-extension://mock-id/offscreen.html' },
       onMessage: { addListener: jest.fn() },
       onDisconnect: { addListener: jest.fn() },
       postMessage: jest.fn(),

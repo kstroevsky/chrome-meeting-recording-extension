@@ -5,6 +5,7 @@ import { hashAnalysisConfig, PIPELINE_VERSION, type AnalysisProvenance } from '.
 import { toWireAnalysis, type WireAnalysis } from '../../../../shared/analysis/storedAnalysis';
 import type { StoredAnalysis } from '../../../../shared/analysis/storedAnalysis';
 import type { AnalysisJob } from '../../../../shared/analysis/job';
+import type { RecordingAnalysisOutcome } from '../RecordingAnalysisOutcome';
 import type { Transcript } from '../../../../shared/transcript';
 import type { ConversationSegment, Topic } from '../../../../shared/analysis/types';
 
@@ -60,6 +61,7 @@ function harness(options: {
 } = {}) {
   // Durable state: survives a "service-worker restart" (a fresh coordinator).
   const rows = new Map<string, StoredAnalysis>();
+  const outcomes = new Map<string, RecordingAnalysisOutcome>();
   const tombstones = new Set<string>();
   /** Mutable "conditions right now", so a test can change them mid-run. */
   const current = { provenance: PROVENANCE };
@@ -81,12 +83,23 @@ function harness(options: {
   const analyses = new RecordingAnalysisService(
     {
       get: async (id) => rows.get(id),
+      getOutcome: async (id) => outcomes.get(id),
+      getSnapshot: async (id) => ({ analysis: rows.get(id), outcome: outcomes.get(id) }),
       put: async (id, analysis) => {
         const failure = typeof options.saveThrows === 'function' ? options.saveThrows() : options.saveThrows;
         if (failure) throw failure;
         rows.set(id, analysis);
       },
+      putOutcome: async (id, outcome) => { outcomes.set(id, outcome); },
+      putCompleted: async (id, analysis, outcome) => {
+        const failure = typeof options.saveThrows === 'function' ? options.saveThrows() : options.saveThrows;
+        if (failure) throw failure;
+        rows.set(id, analysis);
+        outcomes.set(id, outcome);
+        return true;
+      },
       remove: async (id) => { rows.delete(id); },
+      removeAll: async (id) => { rows.delete(id); outcomes.delete(id); },
     },
     () => current.provenance,
   );
@@ -109,7 +122,7 @@ function harness(options: {
   });
   const coordinator = freshCoordinator();
 
-  return { coordinator, freshCoordinator, calls, rows, tombstones, changed, settled, current, analyses };
+  return { coordinator, freshCoordinator, calls, rows, outcomes, tombstones, changed, settled, current, analyses };
 }
 
 describe('RecordingAnalysisCoordinator', () => {
@@ -125,10 +138,21 @@ describe('RecordingAnalysisCoordinator', () => {
   });
 
   it('refuses a recording with no transcript, rather than starting an empty run', async () => {
-    await expect(harness({}).coordinator.analyze('rec_1'))
+    const missing = harness({});
+    await expect(missing.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'no-transcript' });
-    await expect(harness({ transcript: { source: 'meet-captions', segments: [] } }).coordinator.analyze('rec_1'))
+    await expect(missing.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+    });
+
+    const empty = harness({ transcript: { source: 'meet-captions', segments: [] } });
+    await expect(empty.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'no-transcript' });
+    await expect(empty.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'unsupported',
+      error: 'Analysis is unavailable because the recording has no transcript.',
+    });
   });
 
   it('does not recompute a current result (INC-03)', async () => {
@@ -183,12 +207,28 @@ describe('RecordingAnalysisCoordinator', () => {
     const h = harness({ transcript: TRANSCRIPT, analyzeAnswer: { ok: false, error: 'Topic analysis is unavailable' } });
     await expect(h.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'failed', error: 'Topic analysis is unavailable' });
+    await expect(h.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'failed',
+      error: 'Topic analysis is unavailable',
+    });
   });
 
   it('reports an offscreen document that will not come up', async () => {
     const h = harness({ transcript: TRANSCRIPT, ensureReadyThrows: new Error('Offscreen ready timed out') });
     await expect(h.coordinator.analyze('rec_1'))
       .resolves.toEqual({ ok: false, reason: 'failed', error: 'Offscreen ready timed out' });
+    await expect(h.analyses.exportState('rec_1')).resolves.toEqual({
+      status: 'failed',
+      error: 'Offscreen ready timed out',
+    });
+  });
+
+  it('does not overwrite a running durable outcome when a duplicate start is busy', async () => {
+    const h = harness({ transcript: TRANSCRIPT });
+    await h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
+
+    await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
+    await expect(h.analyses.exportState('rec_1')).resolves.toEqual({ status: 'analyzing' });
   });
 
   it('acknowledges a job that ended without a result, so its outbox row drains', async () => {
@@ -198,14 +238,15 @@ describe('RecordingAnalysisCoordinator', () => {
     // reconnect for the life of the profile.
     for (const status of ['failed', 'canceled', 'unsupported'] as const) {
       const h = harness({ transcript: TRANSCRIPT });
-      h.coordinator.handleJobState({ ...JOB, status, error: 'whatever' });
+      await h.coordinator.handleJobState({ ...JOB, status, error: 'whatever' });
       expect(h.calls.ack).toEqual(['ana_1']);
+      expect(h.outcomes.get('rec_1')).toMatchObject({ status, error: 'whatever' });
     }
   });
 
   it('does not acknowledge a completed job until its result is stored', async () => {
     const h = harness({ transcript: TRANSCRIPT });
-    h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+    await h.coordinator.handleJobState({ ...JOB, status: 'completed' });
 
     // `completed` defers to handleResult, which waits for the row to land.
     expect(h.calls.ack).toEqual([]);
@@ -213,17 +254,18 @@ describe('RecordingAnalysisCoordinator', () => {
     expect(h.calls.ack).toEqual(['ana_1']);
   });
 
-  it('does not acknowledge a job that is still running', () => {
+  it('does not acknowledge a job that is still running', async () => {
     const h = harness({ transcript: TRANSCRIPT });
-    h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
+    await h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
     expect(h.calls.ack).toEqual([]);
+    expect(h.outcomes.get('rec_1')).toMatchObject({ status: 'analyzing' });
   });
 
   it('releases the recording when a job ends without delivering anything', async () => {
     const h = harness({ transcript: TRANSCRIPT });
     await h.coordinator.analyze('rec_1');
 
-    h.coordinator.handleJobState({ ...JOB, status: 'failed', error: 'no backend' });
+    await h.coordinator.handleJobState({ ...JOB, status: 'failed', error: 'no backend' });
     expect(h.changed).toHaveLength(1);
 
     // A failed run must not leave the recording permanently un-analysable.
@@ -232,7 +274,7 @@ describe('RecordingAnalysisCoordinator', () => {
 
   it('keeps the recording locked while its job is still running', async () => {
     const h = harness({ transcript: TRANSCRIPT });
-    h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
+    await h.coordinator.handleJobState({ ...JOB, status: 'analyzing' });
     await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
   });
 
@@ -240,7 +282,7 @@ describe('RecordingAnalysisCoordinator', () => {
     const h = harness({ transcript: TRANSCRIPT });
     await h.coordinator.analyze('rec_1');
     // A replayed state for a superseded job must not unlock the current run.
-    h.coordinator.handleJobState({ ...JOB, id: 'ana_stale', status: 'canceled' });
+    await h.coordinator.handleJobState({ ...JOB, id: 'ana_stale', status: 'canceled' });
     await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
   });
 
@@ -291,7 +333,7 @@ describe('RecordingAnalysisCoordinator', () => {
     const full = Object.assign(new Error('full'), { name: 'QuotaExceededError' });
     const h = harness({ transcript: TRANSCRIPT, saveThrows: full });
     await h.coordinator.analyze('rec_1');
-    h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+    await h.coordinator.handleJobState({ ...JOB, status: 'completed' });
     await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
 
     // Nothing stored, nothing locked: a re-run is the recovery path.
@@ -384,7 +426,7 @@ describe('RecordingAnalysisCoordinator', () => {
       // delivery lags by seconds, "in between" is not small.
       const h = harness({ transcript: TRANSCRIPT });
       await h.coordinator.analyze('rec_1');
-      h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+      await h.coordinator.handleJobState({ ...JOB, status: 'completed' });
 
       await expect(h.coordinator.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
       expect(h.calls.analyze).toHaveLength(1);
@@ -393,7 +435,7 @@ describe('RecordingAnalysisCoordinator', () => {
     it('re-establishes the hold from a replayed completed state after a restart', async () => {
       const h = harness({ transcript: TRANSCRIPT });
       const restarted = h.freshCoordinator();
-      restarted.handleJobState({ ...JOB, status: 'completed' });
+      await restarted.handleJobState({ ...JOB, status: 'completed' });
 
       await expect(restarted.analyze('rec_1')).resolves.toEqual({ ok: false, reason: 'busy' });
     });
@@ -403,7 +445,7 @@ describe('RecordingAnalysisCoordinator', () => {
       const aborted = Object.assign(new Error('transaction aborted'), { name: 'AbortError' });
       const h = harness({ transcript: TRANSCRIPT, saveThrows: () => (failing ? aborted : undefined) });
       await h.coordinator.analyze('rec_1');
-      h.coordinator.handleJobState({ ...JOB, status: 'completed' });
+      await h.coordinator.handleJobState({ ...JOB, status: 'completed' });
 
       await h.coordinator.handleResult(JOB, toWireAnalysis(RESULT));
       // The result will be re-offered; starting another run now would be waste.
@@ -480,7 +522,7 @@ describe('RecordingAnalysisCoordinator', () => {
 
     it('analyses the recording again, and acknowledges only once that is queued', async () => {
       const h = harness({ transcript: TRANSCRIPT });
-      h.coordinator.handleJobState(LOST);
+      void h.coordinator.handleJobState(LOST);
 
       // The race this pins: acknowledging on arrival ends the job's claim on
       // the runtime while the replacement exists nowhere, so a deferred reload
@@ -496,7 +538,7 @@ describe('RecordingAnalysisCoordinator', () => {
       // The row is the recovery token: unacknowledged, it is replayed on the
       // next reconnect and tried again.
       const h = harness({ transcript: TRANSCRIPT, analyzeAnswer: { ok: false, error: 'offscreen is gone' } });
-      h.coordinator.handleJobState(LOST);
+      void h.coordinator.handleJobState(LOST);
       await new Promise(process.nextTick);
 
       expect(h.calls.ack).toEqual([]);
@@ -507,7 +549,7 @@ describe('RecordingAnalysisCoordinator', () => {
         transcript: TRANSCRIPT,
         stored: { ...RESULT, provenance: PROVENANCE, completedAt: 1 },
       });
-      h.coordinator.handleJobState(LOST);
+      void h.coordinator.handleJobState(LOST);
       await new Promise(process.nextTick);
 
       // Nothing to recover — someone stored one meanwhile.
@@ -517,7 +559,7 @@ describe('RecordingAnalysisCoordinator', () => {
 
     it('acknowledges when there is no transcript left to analyse', async () => {
       const h = harness({});
-      h.coordinator.handleJobState(LOST);
+      void h.coordinator.handleJobState(LOST);
       await new Promise(process.nextTick);
 
       expect(h.calls.ack).toEqual(['ana_1']);
@@ -525,7 +567,7 @@ describe('RecordingAnalysisCoordinator', () => {
 
     it('reports that work settled, which no session transition would', async () => {
       const h = harness({ transcript: TRANSCRIPT });
-      h.coordinator.handleJobState(LOST);
+      void h.coordinator.handleJobState(LOST);
       await new Promise(process.nextTick);
 
       expect(h.settled).toHaveLength(1);
@@ -533,7 +575,7 @@ describe('RecordingAnalysisCoordinator', () => {
 
     it('does not re-run an ordinary failure', async () => {
       const h = harness({ transcript: TRANSCRIPT });
-      h.coordinator.handleJobState({ ...JOB, status: 'failed', error: 'no backend' });
+      void h.coordinator.handleJobState({ ...JOB, status: 'failed', error: 'no backend' });
       await new Promise(process.nextTick);
       expect(h.calls.analyze).toEqual([]);
     });

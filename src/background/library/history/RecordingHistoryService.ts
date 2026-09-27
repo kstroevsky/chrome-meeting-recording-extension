@@ -39,6 +39,7 @@ export class RecordingHistoryService {
       historyId: string,
     ) => Promise<void>,
     private readonly warnCleanup: (message: string, error: unknown) => void = () => {},
+    private readonly onChanged?: (recordingId: string) => void,
   ) {
     this.delivery = new RecordingDelivery(repository, now);
     this.localDelivery = new LocalDeliveryHistory(repository);
@@ -59,7 +60,9 @@ export class RecordingHistoryService {
   }
 
   async rename(id: string, name: string): Promise<RecordingHistoryEntry | undefined> {
-    return this.renameCommands.rename(id, name);
+    const updated = await this.renameCommands.rename(id, name);
+    if (updated) this.onChanged?.(id);
+    return updated;
   }
 
   async setDuration(
@@ -73,6 +76,7 @@ export class RecordingHistoryService {
       if (!current || current.deletedAt) return current;
       return { ...current, durationMs };
     });
+    if (updated && !updated.deletedAt) this.onChanged?.(id);
     return updated?.deletedAt ? undefined : updated;
   }
 
@@ -87,6 +91,7 @@ export class RecordingHistoryService {
         ? { ...current, note: normalized }
         : { ...current, note: undefined };
     });
+    if (updated && !updated.deletedAt) this.onChanged?.(id);
     return updated?.deletedAt ? undefined : updated;
   }
 
@@ -121,14 +126,17 @@ export class RecordingHistoryService {
     storageMode: StorageMode,
   ): Promise<void> {
     await this.delivery.createPending(historyId, files, storageMode);
+    this.onChanged?.(historyId);
   }
 
   async applyUploadJob(job: UploadJob): Promise<void> {
     await this.delivery.applyUploadJob(job);
+    if (job.historyId) this.onChanged?.(job.historyId);
   }
 
   async applyTerminalUploadJob(job: UploadJob): Promise<void> {
     await this.delivery.applyTerminalUploadJob(job);
+    if (job.historyId) this.onChanged?.(job.historyId);
   }
 
   async localSaveSettled(
@@ -149,6 +157,7 @@ export class RecordingHistoryService {
       kind,
       retryable,
     );
+    this.onChanged?.(historyId);
   }
 
   async recordArtifactLocation(
@@ -157,6 +166,7 @@ export class RecordingHistoryService {
     location: ArtifactLocation,
   ): Promise<void> {
     await this.localDelivery.recordArtifactLocation(historyId, fileId, location);
+    this.onChanged?.(historyId);
   }
 
   async dropArtifactLocation(
@@ -165,6 +175,7 @@ export class RecordingHistoryService {
     key: string,
   ): Promise<void> {
     await this.localDelivery.dropArtifactLocation(historyId, fileId, key);
+    this.onChanged?.(historyId);
   }
 
   async setDriveDestination(historyId: string, presetId: string | null): Promise<void> {
