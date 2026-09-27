@@ -9,6 +9,7 @@ import {
   selectRepresentative,
   similarityToTopic,
   type Passage,
+  type ScoredPassage,
 } from '../importance';
 
 const at = (deg: number): Float32Array => {
@@ -106,6 +107,44 @@ describe('the individual terms', () => {
 describe('rankPassages', () => {
   const topic = { centroid: at(0), keywords: ['redis', 'pool'] };
 
+  const referenceRank = (
+    passages: Passage[],
+    context: typeof topic,
+  ): ScoredPassage[] => passages.map((candidate, index) => {
+    const signals = {
+      similarityToTopic: similarityToTopic(candidate, context.centroid),
+      novelty: novelty(candidate, passages.slice(0, index)),
+      keywordDistinctiveness: keywordDistinctiveness(candidate, context.keywords),
+      recurrence: recurrence(candidate, passages),
+      discourseSignal: discourseSignal(candidate),
+    };
+    return {
+      ...candidate,
+      ...signals,
+      importance: IMPORTANCE_WEIGHTS.similarityToTopic * signals.similarityToTopic
+        + IMPORTANCE_WEIGHTS.novelty * signals.novelty
+        + IMPORTANCE_WEIGHTS.keywordDistinctiveness * signals.keywordDistinctiveness
+        + IMPORTANCE_WEIGHTS.recurrence * signals.recurrence
+        + IMPORTANCE_WEIGHTS.discourseSignal * signals.discourseSignal,
+    };
+  });
+
+  const expectExactSignals = (actual: ScoredPassage[], expected: ScoredPassage[]) => {
+    expect(actual).toHaveLength(expected.length);
+    actual.forEach((candidate, index) => {
+      for (const key of [
+        'similarityToTopic',
+        'novelty',
+        'keywordDistinctiveness',
+        'recurrence',
+        'discourseSignal',
+        'importance',
+      ] as const) {
+        expect(Object.is(candidate[key], expected[index][key])).toBe(true);
+      }
+    });
+  };
+
   it('blends the five terms at the exact IMP-03 weights', () => {
     // One passage: squarely on topic, wholly novel, all keywords, no siblings
     // to recur against, and carrying a decision marker.
@@ -148,6 +187,63 @@ describe('rankPassages', () => {
 
   it('handles a topic with no passages', () => {
     expect(rankPassages([], topic)).toEqual([]);
+  });
+
+  it('preserves every ranking signal exactly while fusing pair comparisons', () => {
+    const fixtures: Passage[][] = [
+      [],
+      [passage(0, 'redis pool')],
+      [
+        passage(0, 'redis pool'),
+        passage(180, 'unrelated'),
+        passage(90, 'ми домовилися redis'),
+        passage(15, 'the problem is pool'),
+      ],
+      [
+        { id: 'duplicate', tStartMs: 0, tEndMs: 1, text: 'redis', embedding: at(0) },
+        { id: 'duplicate', tStartMs: 1, tEndMs: 2, text: 'redis again', embedding: at(5) },
+        { id: 'other', tStartMs: 2, tEndMs: 3, text: 'до речі pool', embedding: at(95) },
+      ],
+      [
+        { id: 'same', tStartMs: 0, tEndMs: 1, text: 'redis', embedding: at(0) },
+        { id: 'same', tStartMs: 1, tEndMs: 2, text: 'redis repeated', embedding: at(10) },
+        { id: 'same', tStartMs: 2, tEndMs: 3, text: 'redis repeated again', embedding: at(20) },
+      ],
+      [
+        { id: 'zero', tStartMs: 0, tEndMs: 1, text: '', embedding: Float32Array.from([0, 0, 0, 0]) },
+        { id: 'positive', tStartMs: 1, tEndMs: 2, text: 'redis', embedding: Float32Array.from([1, 2, 3, 4]) },
+        { id: 'mixed', tStartMs: 2, tEndMs: 3, text: 'проблема в тому', embedding: Float32Array.from([-1, 2, -3, 4]) },
+      ],
+    ];
+
+    for (const passages of fixtures) {
+      const width = passages[0]?.embedding.length ?? topic.centroid.length;
+      const context = {
+        centroid: width === topic.centroid.length
+          ? topic.centroid
+          : Float32Array.from({ length: width }, (_, i) => (i === 0 ? 1 : 0)),
+        keywords: topic.keywords,
+      };
+      expectExactSignals(rankPassages(passages, context), referenceRank(passages, context));
+    }
+  });
+
+  it('matches the reference traversal exactly for a long topic', () => {
+    const passages = Array.from({ length: 128 }, (_, index) => ({
+      id: index % 17 === 0 ? 'shared-id' : `p-${index}`,
+      tStartMs: index * 1_000,
+      tEndMs: index * 1_000 + 900,
+      text: index % 11 === 0 ? 'думаю, нам треба redis pool' : `meeting passage ${index}`,
+      embedding: Float32Array.from({ length: 32 }, (_, dimension) => (
+        Math.sin(index * 0.37 + dimension * 0.19)
+      )),
+    }));
+    const context = {
+      centroid: Float32Array.from({ length: 32 }, (_, dimension) => Math.cos(dimension * 0.23)),
+      keywords: ['redis', 'pool'],
+    };
+
+    expectExactSignals(rankPassages(passages, context), referenceRank(passages, context));
   });
 });
 
