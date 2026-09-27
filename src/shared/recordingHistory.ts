@@ -1,7 +1,7 @@
 import { recordingGroupName } from './recordingFilename';
 import type { RecordingStream, StorageMode } from './recording';
 import { isArtifactKind, type RecordingArtifactKind } from './recordingTypes';
-import { contentTypeForRecordingFilename } from './recordingFormats';
+import { contentTypeForRecordingFile, normalizeRecordingFileContentType } from './recordingFormats';
 
 /**
  * Where a logical artifact physically exists. A recording artifact is immutable
@@ -221,7 +221,7 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     stream,
     ...(isArtifactKind(candidate.kind) ? { kind: candidate.kind } : {}),
     filename,
-    mimeType: optionalString('mimeType') ?? contentTypeForRecordingFilename(filename),
+    mimeType: normalizeRecordingFileContentType(optionalString('mimeType'), filename, stream),
     ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),
     locations,
     delivery: normalizeArtifactDelivery(candidate.delivery, legacy, requested),
@@ -327,9 +327,10 @@ export function upsertArtifactLocation(locations: ArtifactLocation[], next: Arti
 export function pendingArtifactFields(
   filename: string,
   requested: StorageMode,
+  stream?: RecordingStream,
 ): Pick<RecordingHistoryFile, 'mimeType' | 'locations' | 'delivery'> {
   return {
-    mimeType: contentTypeForRecordingFilename(filename),
+    mimeType: contentTypeForRecordingFile(filename, stream),
     locations: [],
     delivery: { requested, status: 'pending' },
   };

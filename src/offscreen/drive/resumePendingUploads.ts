@@ -192,6 +192,7 @@ export function resumePendingDriveUploadsWithChrome(opts: {
         ...(entry.destinationFolderName ? { destinationFolderName: entry.destinationFolderName } : {}),
         recordingFolderName: entry.recordingFolderName,
         shared: { getUploadToken, folderResolver, log: opts.log },
+        stream: entry.stream,
       });
       return await target.upload(file);
     },

@@ -601,8 +601,9 @@ function createHandler(
 }
 
 /** Registers bytes a test wants `alt=media` to serve for one file id. */
-export function setDriveMediaContent(fileId: string, bytes: Buffer, name = fileId): void {
-  registerMedia(fileId, bytes, name);
+/** Seeds a Drive file as the recorder uploads it: a microphone is audio/webm, not video. */
+export function setDriveMediaContent(fileId: string, bytes: Buffer, name = fileId, mimeType?: string): void {
+  registerMedia(fileId, bytes, name, mimeType);
 }
 
 export async function installDriveSimulator(

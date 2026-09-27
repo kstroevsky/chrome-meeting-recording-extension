@@ -1,5 +1,7 @@
 import {
+  contentTypeForRecordingFile,
   contentTypeForRecordingFilename,
+  normalizeRecordingFileContentType,
   getRecordingFormatCapabilities,
   isWebmRecordingFilename,
   resolveCameraRecordingProfile,
@@ -53,5 +55,20 @@ describe('recording output formats', () => {
     expect(contentTypeForRecordingFilename('meeting-recording.webm')).toBe('video/webm');
     expect(isWebmRecordingFilename('meeting-recording.webm')).toBe(true);
     expect(isWebmRecordingFilename('meeting-recording.mp4')).toBe(false);
+  });
+
+  it('labels a microphone file as audio, which the name alone cannot tell', () => {
+    expect(contentTypeForRecordingFile('meeting-mic.webm', 'mic')).toBe('audio/webm');
+    expect(contentTypeForRecordingFile('meeting-mic.m4a', 'mic')).toBe('audio/mp4');
+    expect(contentTypeForRecordingFile('meeting-recording.webm', 'tab')).toBe('video/webm');
+    expect(contentTypeForRecordingFile('meeting-self-video.mp4', 'self-video')).toBe('video/mp4');
+    expect(contentTypeForRecordingFile('meeting-notes.vtt', 'mic')).toBe('text/vtt');
+  });
+
+  it('reads a stored microphone video/… type as the audio it is, and keeps every other stored type', () => {
+    expect(normalizeRecordingFileContentType('video/webm', 'meeting-mic.webm', 'mic')).toBe('audio/webm');
+    expect(normalizeRecordingFileContentType('audio/webm', 'meeting-mic.webm', 'mic')).toBe('audio/webm');
+    expect(normalizeRecordingFileContentType('video/webm', 'meeting-recording.webm', 'tab')).toBe('video/webm');
+    expect(normalizeRecordingFileContentType(undefined, 'meeting-mic.webm', 'mic')).toBe('audio/webm');
   });
 });

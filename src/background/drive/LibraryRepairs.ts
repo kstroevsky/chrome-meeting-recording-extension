@@ -13,7 +13,7 @@
  *   in the same Drive folder. The entry itself — id, notes, description — stays.
  */
 
-import { contentTypeForRecordingFilename } from '../../shared/recordingFormats';
+import { contentTypeForRecordingFile } from '../../shared/recordingFormats';
 import { readImportedRecordingFilename } from '../../shared/recordingFilename';
 import type { RecordingHistoryEntry, RecordingHistoryFile } from '../../shared/recordingHistory';
 import type { RecordingHistoryMutation } from '../library/history/RecordingHistoryRepository';
@@ -121,7 +121,7 @@ function pointAt(file: RecordingHistoryFile, video: DriveFileMetadata): Recordin
   return {
     ...rest,
     filename: video.name,
-    mimeType: contentTypeForRecordingFilename(video.name),
+    mimeType: contentTypeForRecordingFile(video.name, rest.stream),
     locations: [{ kind: 'drive', fileId: video.id, ...(video.webViewLink ? { webViewLink: video.webViewLink } : {}) }],
     delivery: { requested: 'drive', status: 'uploaded' },
     destination: 'drive',

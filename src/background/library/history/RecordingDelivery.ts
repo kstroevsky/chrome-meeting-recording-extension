@@ -34,7 +34,7 @@ export class RecordingDelivery {
         .filter((file) => !known.has(file.id))
         .map((file) => ({
           ...file,
-          ...pendingArtifactFields(file.filename, storageMode),
+          ...pendingArtifactFields(file.filename, storageMode, file.stream),
           destination: storageMode,
           status: 'pending' as const,
         }));
@@ -130,7 +130,7 @@ export class RecordingDelivery {
           stream: candidate.stream,
           kind: candidate.kind!,
           filename: candidate.filename,
-          ...pendingArtifactFields(candidate.filename, 'drive'),
+          ...pendingArtifactFields(candidate.filename, 'drive', candidate.stream),
           ...(candidate.status === 'uploaded' && candidate.driveFileId
             ? {
                 locations: [{

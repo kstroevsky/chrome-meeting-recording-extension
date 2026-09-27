@@ -358,7 +358,12 @@ test.describe('sharing vertical slice @sharing-e2e', () => {
       const page = await openRecordings(harness);
       const driveSources = await rewriteFirstRecordingAsDrive(page);
       for (const source of driveSources) {
-        setDriveMediaContent(source.fileId, Buffer.from(source.base64, 'base64'), `${source.stream}.webm`);
+        setDriveMediaContent(
+          source.fileId,
+          Buffer.from(source.base64, 'base64'),
+          `${source.stream}.webm`,
+          source.stream === 'mic' ? 'audio/webm' : 'video/webm',
+        );
       }
       await page.reload({ waitUntil: 'domcontentloaded' });
       const sessionsBefore = driveStats.sessionsCreated;

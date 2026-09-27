@@ -63,6 +63,24 @@ describe('importing the recordings already in a destination folder', () => {
     });
   });
 
+  it('records the type Drive serves, and labels a microphone as audio when Drive does not say', () => {
+    const folder = threeOf('folder-a', 'meet-sst-ttsy-zau-20260619T1517');
+    folder.files[2] = { ...folder.files[2], mimeType: 'video/mp4' };
+    const [entry] = planDestinationImport([folder], [], 'therapy', newId).create;
+    expect(entry.files.map((file) => [file.stream, file.mimeType])).toEqual([
+      ['tab', 'video/webm'],
+      ['mic', 'audio/webm'],
+      ['self-video', 'video/mp4'],
+    ]);
+  });
+
+  it('reads a microphone row stored as video/webm by older builds as the audio it is', () => {
+    const [legacy] = planDestinationImport([threeOf('folder-a', 'meet-sst-ttsy-zau-20260619T1517')], [], 'therapy', newId).create;
+    const stored = { ...legacy, files: legacy.files.map((file) => ({ ...file, mimeType: 'video/webm' })) };
+    expect(normalizeRecordingHistoryEntry(stored)!.files.map((file) => file.mimeType))
+      .toEqual(['video/webm', 'audio/webm', 'video/webm']);
+  });
+
   it('writes entries the library reads back unchanged, so none is silently dropped', () => {
     const plan = planDestinationImport([threeOf('folder-a', 'meet-sst-ttsy-zau-20260619T1517')], [], 'therapy', newId);
     expect(normalizeRecordingHistoryEntry(plan.create[0])).toEqual(plan.create[0]);

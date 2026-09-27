@@ -353,6 +353,7 @@ export class RecordingFinalizer {
           shared: { getUploadToken: sharedGetUploadToken, folderResolver, log: this.deps.log },
           onProgress: (uploaded) => { loadedPerFile[index] = uploaded; reportProgress(); },
           signal,
+          stream,
         });
 
         // Mark the upload as in-flight so a crash/power-off mid-upload is

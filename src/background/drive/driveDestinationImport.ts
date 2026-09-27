@@ -22,7 +22,7 @@
  */
 
 import { readImportedRecordingFilename } from '../../shared/recordingFilename';
-import { contentTypeForRecordingFilename } from '../../shared/recordingFormats';
+import { contentTypeForRecordingFile } from '../../shared/recordingFormats';
 import {
   recordingHistoryFileId,
   type RecordingHistoryEntry,
@@ -30,7 +30,7 @@ import {
 } from '../../shared/recordingHistory';
 import type { RecordingStream } from '../../shared/recordingTypes';
 
-export type DriveListedFile = { id: string; name: string; size?: string; webViewLink?: string };
+export type DriveListedFile = { id: string; name: string; size?: string; webViewLink?: string; mimeType?: string };
 export type DriveRecordingFolder = { id: string; name: string; files: DriveListedFile[] };
 
 export type DestinationImportPlan = {
@@ -117,7 +117,8 @@ export function planDestinationImport(
           id: recordingHistoryFileId(id, stream),
           stream,
           filename: file.name,
-          mimeType: contentTypeForRecordingFilename(file.name),
+          // Drive's own type: a share must name exactly what Drive serves.
+          mimeType: file.mimeType || contentTypeForRecordingFile(file.name, stream),
           locations: [{ kind: 'drive' as const, fileId: file.id, ...(file.webViewLink ? { webViewLink: file.webViewLink } : {}) }],
           delivery: { requested: 'drive' as const, status: 'uploaded' as const },
           destination: 'drive' as const,
