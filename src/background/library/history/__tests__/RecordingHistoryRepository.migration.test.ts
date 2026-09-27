@@ -79,3 +79,68 @@ describe('recording-history v2 migration', () => {
     database.close();
   });
 });
+
+describe('a library a newer build has already upgraded', () => {
+  /** The profile as an experimental build leaves it: a higher version, an extra store. */
+  function seedFromNewerBuild(factory: IDBFactory): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const request = factory.open('recording-history', 7);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        const recordings = database.createObjectStore('recordings', { keyPath: 'id' });
+        recordings.createIndex('createdAtId', ['createdAt', 'id'], { unique: true });
+        recordings.createIndex('activeCreatedAtId', ['activeCreatedAt', 'id'], { unique: true });
+        for (const store of ['notations', 'transcripts', 'analyses', 'recordingContexts']) {
+          database.createObjectStore(store, { keyPath: 'recordingId' });
+        }
+        recordings.put({
+          id: 'therapy-session',
+          name: 'Therapy session',
+          createdAt: 50,
+          activeCreatedAt: 50,
+          storageMode: 'drive',
+          status: 'complete',
+          files: [{ id: 'therapy-session:tab', stream: 'tab', filename: 'therapy.webm', destination: 'drive', status: 'available' }],
+        });
+      };
+      request.onsuccess = () => {
+        request.result.close();
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  it('still lists, reads and writes it instead of failing with a VersionError', async () => {
+    const factory = new IDBFactory();
+    await seedFromNewerBuild(factory);
+    const repository = new RecordingHistoryRepository(factory);
+
+    const page = await repository.listPage();
+    expect(page.entries.map((entry) => entry.id)).toEqual(['therapy-session']);
+
+    await repository.update('therapy-session', (current) => current && { ...current, note: 'kept' });
+    expect((await repository.get('therapy-session'))?.note).toBe('kept');
+  });
+});
+
+describe('the library size on the first page', () => {
+  it('counts the whole library, never deleted rows, and only on the first page', async () => {
+    const factory = new IDBFactory();
+    const repository = new RecordingHistoryRepository(factory);
+    const row = (id: string, createdAt: number, deletedAt?: number) => ({
+      id, name: id, createdAt, storageMode: 'local' as const, status: 'complete' as const,
+      files: [{ id: `${id}:tab`, stream: 'tab' as const, filename: `${id}.webm`, mimeType: 'video/webm', locations: [],
+        delivery: { requested: 'local' as const, status: 'downloaded' as const }, destination: 'local' as const, status: 'available' as const }],
+      ...(deletedAt ? { deletedAt } : {}),
+    });
+    for (let i = 1; i <= 3; i++) await repository.update(`r${i}`, () => row(`r${i}`, i));
+    await repository.update('gone', () => row('gone', 9, 10));
+
+    const first = await repository.listPage({ limit: 2 });
+    expect(first.entries.map((entry) => entry.id)).toEqual(['r3', 'r2']);
+    expect(first.total).toBe(3);
+    const second = await repository.listPage({ limit: 2, cursor: first.nextCursor });
+    expect(second.total).toBeUndefined();
+  });
+});

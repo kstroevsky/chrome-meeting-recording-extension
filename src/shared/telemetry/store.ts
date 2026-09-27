@@ -1,4 +1,5 @@
 import { TELEMETRY_MAX_BATCH_BYTES, type TelemetryBatchV1 } from './contracts';
+import { hasStores, openAdditiveDatabase } from '../storage/openAdditiveDatabase';
 
 const DB_NAME = 'recording-extension-telemetry-v1';
 const DB_VERSION = 1;
@@ -22,15 +23,14 @@ const encodedBytes = (value: unknown): number => new TextEncoder().encode(JSON.s
 
 export class TelemetryStore {
   private open(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
+    return openAdditiveDatabase(indexedDB, {
+      name: DB_NAME,
+      version: DB_VERSION,
+      upgrade: (db) => {
         if (!db.objectStoreNames.contains(OUTBOX)) db.createObjectStore(OUTBOX, { keyPath: 'batchId' });
         if (!db.objectStoreNames.contains(CHECKPOINTS)) db.createObjectStore(CHECKPOINTS, { keyPath: 'runId' });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error ?? new Error('Telemetry database open failed'));
+      },
+      isSatisfied: (db) => hasStores(db, [OUTBOX, CHECKPOINTS]),
     });
   }
 

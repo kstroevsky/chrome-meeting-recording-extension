@@ -6,15 +6,27 @@ import {
   type ViewerSession,
 } from '../auth/capability';
 import { sha256Base64Url } from '../auth/crypto';
+import {
+  cacheMediaRange,
+  getCachedMedia,
+  mediaCacheKey,
+  mediaCacheWindow,
+} from '../cache/mediaCache';
+import { fetchDriveRevisionRange } from '../drive/DriveClient';
 import { parseRange } from '../http/range';
 import { json } from '../http/responses';
-import { getShare, type ShareRow, type TrackRow } from '../shares/ShareRepository';
+import { getShare, type ShareRow } from '../shares/ShareRepository';
 import { viewerAppScript } from './appAsset';
 import { viewerShell } from './shell';
 
 const SESSION_COOKIE = '__Host-share_session';
 
-export async function routeViewerRequest(request: Request, env: Env, url: URL): Promise<Response | null> {
+export async function routeViewerRequest(
+  request: Request,
+  env: Env,
+  url: URL,
+  ctx?: ExecutionContext,
+): Promise<Response | null> {
   const capabilityMatch = /^\/s\/([^/]+)$/.exec(url.pathname);
   if (capabilityMatch && request.method === 'GET') {
     return openCapability(capabilityMatch[1], request, env);
@@ -42,7 +54,13 @@ export async function routeViewerRequest(request: Request, env: Env, url: URL): 
 
   const mediaMatch = /^\/media\/recordings\/([^/]+)\/tracks\/([^/]+)$/.exec(url.pathname);
   if (mediaMatch && (request.method === 'GET' || request.method === 'HEAD')) {
-    return serveMedia(decodeURIComponent(mediaMatch[1]), decodeURIComponent(mediaMatch[2]), request, env);
+    return serveMedia(
+      decodeURIComponent(mediaMatch[1]),
+      decodeURIComponent(mediaMatch[2]),
+      request,
+      env,
+      ctx,
+    );
   }
 
   return null;
@@ -75,41 +93,174 @@ async function openCapability(encodedCapability: string, request: Request, env: 
   return new Response(null, { status: 303, headers });
 }
 
-async function serveMedia(recordingId: string, trackId: string, request: Request, env: Env): Promise<Response> {
+type MediaTrackRow = {
+  share_id: string;
+  recording_id: string;
+  track_id: string;
+  mime_type: string;
+  bytes: number | null;
+  object_key: string;
+  media_asset_id: string | null;
+  status: 'pending' | 'uploading' | 'complete';
+  asset_id: string | null;
+  drive_file_id: string | null;
+  revision_id: string | null;
+  asset_bytes: number | null;
+  asset_mime_type: string | null;
+};
+
+async function serveMedia(
+  recordingId: string,
+  trackId: string,
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response> {
   const session = await requireViewerSession(request, env);
   if (session instanceof Response) return session;
+  const limited = await enforceViewerMediaRate(request, env, session);
+  if (limited) return limited;
 
   const track = await env.SHARING_DB.prepare(
-    `SELECT share_id, recording_id, track_id, mime_type, bytes, object_key, status
-       FROM share_tracks
-      WHERE share_id = ? AND recording_id = ? AND track_id = ? AND status = 'complete'`,
-  ).bind(session.shareId, recordingId, trackId).first<TrackRow>();
+    `SELECT t.share_id, t.recording_id, t.track_id, t.mime_type, t.bytes, t.object_key,
+            t.media_asset_id, t.status,
+            a.id AS asset_id, a.drive_file_id, a.revision_id,
+            a.bytes AS asset_bytes, a.mime_type AS asset_mime_type
+       FROM share_tracks AS t
+       LEFT JOIN media_assets AS a ON a.id = t.media_asset_id
+      WHERE t.share_id = ? AND t.recording_id = ? AND t.track_id = ? AND t.status = 'complete'`,
+  ).bind(session.shareId, recordingId, trackId).first<MediaTrackRow>();
   if (!track || track.bytes == null) return json({ code: 'TRACK_NOT_FOUND' }, 404);
 
-  const range = parseRange(request.headers.get('range'), track.bytes);
-  if (range === 'invalid') {
+  const requested = parseRange(request.headers.get('range'), track.bytes);
+  if (requested === 'invalid') {
     return new Response(null, { status: 416, headers: { 'content-range': `bytes */${track.bytes}` } });
   }
+  // An empty track has no byte to range over. Any Range header was already
+  // answered 416 above; without one it is simply an empty 200, and Drive has
+  // nothing to be asked for.
+  if (track.bytes === 0) {
+    return new Response(null, { status: 200, headers: mediaHeaders(track.mime_type, 0, 0, -1, false) });
+  }
+  const served = boundedMediaRange(requested, track.bytes);
+  const partial = requested != null || served.start !== 0 || served.end !== track.bytes - 1;
+  const headers = mediaHeaders(track.mime_type, track.bytes, served.start, served.end, partial);
+  if (request.method === 'HEAD') {
+    return new Response(null, { status: partial ? 206 : 200, headers });
+  }
 
-  const object = await env.SHARING_MEDIA.get(
-    track.object_key,
-    range ? { range: { offset: range.start, length: range.end - range.start + 1 } } : undefined,
-  );
-  if (!object) return json({ code: 'MEDIA_NOT_FOUND' }, 404);
+  if (track.asset_id && track.drive_file_id && track.revision_id) {
+    const window = mediaCacheWindow(served.start, track.bytes);
+    const cacheKey = mediaCacheKey(track.asset_id, track.revision_id, window.start, window.end);
+    const cached = await getCachedMedia(env, cacheKey, Date.now(), {
+      offset: served.start - window.start,
+      length: served.end - served.start + 1,
+    });
+    if (cached) {
+      return new Response(cached.body, { status: partial ? 206 : 200, headers });
+    }
 
+    const origin = await fetchDriveRevisionRange(
+      env,
+      track.drive_file_id,
+      track.revision_id,
+      served.start,
+      served.end,
+    );
+    if (origin.status === 403 || origin.status === 404) {
+      return json({ code: 'MEDIA_ORIGIN_UNAVAILABLE' }, 503, { 'cache-control': 'no-store' });
+    }
+    if (origin.status === 408 || origin.status === 429 || origin.status >= 500) {
+      return json(
+        { code: 'MEDIA_ORIGIN_TEMPORARILY_UNAVAILABLE' },
+        503,
+        { 'cache-control': 'no-store', 'retry-after': '5' },
+      );
+    }
+    if (origin.status !== 206 || !origin.body) {
+      return json({ code: 'MEDIA_ORIGIN_INVALID_RESPONSE' }, 502, { 'cache-control': 'no-store' });
+    }
+
+    // Only a whole window is cached, so every cached object is one of the
+    // asset's fixed windows; any smaller range is served but not stored.
+    if (served.start !== window.start || served.end !== window.end) {
+      return new Response(origin.body, { status: partial ? 206 : 200, headers });
+    }
+    const [viewerBody, cacheBody] = origin.body.tee();
+    if (ctx) {
+      ctx.waitUntil(cacheMediaRange(env, {
+        cacheKey,
+        assetId: track.asset_id,
+        body: cacheBody,
+        bytes: served.end - served.start + 1,
+      }).catch(() => {}));
+    } else {
+      // Unit/direct callers have no Worker lifetime context. Do not let cache
+      // completion delay playback; correctness always comes from Drive.
+      void cacheBody.cancel().catch(() => {});
+    }
+    return new Response(viewerBody, { status: partial ? 206 : 200, headers });
+  }
+
+  // Migration compatibility for shares published before Drive-origin media.
+  // New publications cannot reach the legacy multipart upload routes.
+  const legacy = await env.SHARING_MEDIA.get(track.object_key, {
+    range: { offset: served.start, length: served.end - served.start + 1 },
+  });
+  if (!legacy) return json({ code: 'MEDIA_NOT_FOUND' }, 404);
+  return new Response(legacy.body, { status: partial ? 206 : 200, headers });
+}
+
+/**
+ * The range actually served: what was asked for, cut at the end of the cache
+ * window it starts in. That also caps a response at one window (8 MiB). A
+ * player that seeks mid-window gets the rest of that window, then asks for the
+ * next one from its aligned start — which is what makes the next one cacheable.
+ */
+export function boundedMediaRange(
+  requested: { start: number; end: number } | null,
+  total: number,
+): { start: number; end: number } {
+  const start = requested?.start ?? 0;
+  const requestedEnd = requested?.end ?? Math.max(0, total - 1);
+  return {
+    start,
+    end: Math.min(requestedEnd, mediaCacheWindow(start, total).end),
+  };
+}
+
+/**
+ * Anyone holding a share link can request media, and every uncached request is
+ * a Drive read on the one service account every share uses. Limited per share
+ * and client address, so one viewer cannot spend the Drive quota for all.
+ */
+async function enforceViewerMediaRate(
+  request: Request,
+  env: Env,
+  session: ViewerSession,
+): Promise<Response | null> {
+  const limiter = env.VIEWER_MEDIA_RATE_LIMITER;
+  if (!limiter) return null;
+  const client = request.headers.get('cf-connecting-ip') ?? 'unknown';
+  const { success } = await limiter.limit({ key: `${session.shareId}:${client}` });
+  return success ? null : json({ code: 'VIEWER_RATE_LIMITED' }, 429, { 'retry-after': '60' });
+}
+
+function mediaHeaders(
+  mimeType: string,
+  total: number,
+  start: number,
+  end: number,
+  partial: boolean,
+): Headers {
   const headers = new Headers({
     'accept-ranges': 'bytes',
     'cache-control': 'private, no-store',
-    'content-type': track.mime_type,
-    'content-length': String(range ? range.end - range.start + 1 : track.bytes),
-    etag: object.httpEtag,
+    'content-type': mimeType,
+    'content-length': String(Math.max(0, end - start + 1)),
   });
-  if (range) headers.set('content-range', `bytes ${range.start}-${range.end}/${track.bytes}`);
-
-  return new Response(request.method === 'HEAD' ? null : object.body, {
-    status: range ? 206 : 200,
-    headers,
-  });
+  if (partial) headers.set('content-range', `bytes ${start}-${end}/${total}`);
+  return headers;
 }
 
 async function requireViewerSession(request: Request, env: Env): Promise<ViewerSession | Response> {

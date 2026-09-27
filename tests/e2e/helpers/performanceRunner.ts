@@ -177,9 +177,18 @@ function assertArtifact(
     expect(artifact.audioRmsDb).not.toBeNull();
     expect(artifact.audioPeakDb).not.toBeNull();
     expect(artifact.audioPeakDb).toBeLessThanOrEqual(1);
-    expect(artifact.silenceDurationSeconds).toBeLessThan(
-      Math.max(1.5, (artifact.durationSeconds ?? 0) * 0.98)
-    );
+    if (artifact.recordingStream === 'tab') {
+      // The mocked tab's only sound is the one-shot 0.5 s A/V marker (a
+      // periodic tone confused the drift detector), so a share-of-duration
+      // rule fails any recording longer than ~25 s. What this guards is a tab
+      // track that is silent throughout: the marker must be audible.
+      const audibleSeconds = (artifact.durationSeconds ?? 0) - artifact.silenceDurationSeconds;
+      expect(audibleSeconds).toBeGreaterThan(0.25);
+    } else {
+      expect(artifact.silenceDurationSeconds).toBeLessThan(
+        Math.max(1.5, (artifact.durationSeconds ?? 0) * 0.98)
+      );
+    }
   }
   if (artifact.recordingStream === 'mic') {
     expect(video).toBeUndefined();

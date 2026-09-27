@@ -55,6 +55,8 @@ export type HarnessLaunchOptions = {
   headless?: boolean;
   ignoreHTTPSErrors?: boolean;
   viewport?: { width: number; height: number };
+  /** Installs test-only routes before extension startup/recovery is observed. */
+  configureContext?: (context: BrowserContext) => Promise<void>;
 };
 
 export type RecordingSettings = {
@@ -135,6 +137,7 @@ export async function launchExtensionHarness(
       body: mockMeetHtml,
     })
   );
+  await options.configureContext?.(context);
 
   const extensionId = await waitForExtensionId(context);
   await context.grantPermissions(['camera', 'microphone'], {
@@ -188,6 +191,7 @@ export async function restartExtensionHarness(
     contentType: 'text/html; charset=utf-8',
     body: mockMeetHtml,
   }));
+  await options.configureContext?.(context);
   const extensionId = await waitForExtensionId(context);
   if (extensionId !== harness.extensionId) throw new Error('Extension id changed across browser restart');
   await context.grantPermissions(['camera', 'microphone'], {

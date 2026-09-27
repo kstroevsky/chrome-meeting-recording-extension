@@ -32,7 +32,10 @@ export async function createOwnerSession(request: Request, env: Env): Promise<Re
   } catch {
     return json({ code: 'OWNER_IDENTITY_UNAVAILABLE' }, 503);
   }
-  if (response.status === 401 || response.status === 403) {
+  // Google answers an invalid, expired, or revoked token with 400
+  // (`invalid_token`). It must surface as 401: that is what makes the extension
+  // fetch a fresh identity token, where a 503 would only be retried as-is.
+  if (response.status === 400 || response.status === 401 || response.status === 403) {
     return json({ code: 'OWNER_IDENTITY_INVALID' }, 401);
   }
   if (!response.ok) return json({ code: 'OWNER_IDENTITY_UNAVAILABLE' }, 503);

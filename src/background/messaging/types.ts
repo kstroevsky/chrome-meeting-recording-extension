@@ -1,4 +1,4 @@
-import type { DriveArtifactResolver } from '../drive/DriveArtifactResolver';
+import type { DriveLibraryCoordinator } from '../drive/DriveLibraryCoordinator';
 import type { RootRenameResult } from '../drive/DriveRootFolder';
 import type { RecordingAnalysisService } from '../library/analysis/RecordingAnalysisService';
 import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
@@ -32,7 +32,8 @@ export type MessageHandlersDeps = {
   transcriptCapture?: RecordingTranscriptCapture;
   playback?: RecordingPlaybackService;
   playbackLeases?: PlaybackLeaseManager;
-  driveArtifacts?: DriveArtifactResolver;
+  /** Drive-side library work: artifact checks, filing, sync. */
+  driveLibrary?: DriveLibraryCoordinator;
   fileToDestination?: (
     recordingId: string,
     presetId: string | null,

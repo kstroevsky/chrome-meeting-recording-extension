@@ -10,6 +10,7 @@ import {
   buildRecordingFilename,
   isRecordingFilename,
   parseRecordingFilename,
+  readImportedRecordingFilename,
   recordingGroupName,
   recordingStartedAtMs,
   recordingStreamOf,
@@ -79,5 +80,35 @@ describe('a recording filename', () => {
     expect(stripStreamSuffix('weekly-sync-recording.webm')).toBe('weekly-sync');
     expect(stripStreamSuffix('weekly-sync-self-video.mp4')).toBe('weekly-sync');
     expect(stripStreamSuffix('holiday-video.webm')).toBe('holiday-video.webm');
+  });
+});
+
+describe('reading a file found in Drive for import', () => {
+  it('reads everything the builder writes today', () => {
+    for (const slug of SLUGS) {
+      for (const stream of STREAMS) {
+        const filename = buildRecordingFilename(slug, stream, 'webm', AT);
+        expect(readImportedRecordingFilename(filename))
+          .toEqual({ stream, startedAtMs: AT.getTime(), label: recordingGroupName(filename) });
+      }
+    }
+  });
+
+  // Literals on purpose here: these are names older builds really left in Drive.
+  it('reads the names older builds wrote', () => {
+    expect(readImportedRecordingFilename('google-meet-sst-ttsy-zau-20260417T1618-mic (1).webm'))
+      .toEqual({ stream: 'mic', startedAtMs: Date.UTC(2026, 3, 17, 16, 18), label: 'google-meet-sst-ttsy-zau-20260417T1618' });
+    expect(readImportedRecordingFilename('meet-ofu-avkb-efm-20260702t162421-self-video.webm'))
+      .toEqual({ stream: 'self-video', startedAtMs: Date.UTC(2026, 6, 2, 16, 24, 21), label: 'meet-ofu-avkb-efm-20260702T162421' });
+    expect(readImportedRecordingFilename('google-meet-google-meet-20260402T153043Z-recording.webm'))
+      .toEqual({ stream: 'tab', startedAtMs: Date.UTC(2026, 3, 2, 15, 30, 43), label: 'google-meet-20260402T153043' });
+    expect(readImportedRecordingFilename('google-meet-self-video-google-meet-1773245064324.webm'))
+      .toEqual({ stream: 'self-video', startedAtMs: 1773245064324, label: 'google-meet-20260311T160424' });
+  });
+
+  it('reads nothing else, sidecars included', () => {
+    expect(readImportedRecordingFilename('chat-gpt-test-recording.webm')).toBeNull();
+    expect(readImportedRecordingFilename('meet-aeo-jyrw-bis-20260904T170207-notes.vtt')).toBeNull();
+    expect(readImportedRecordingFilename('holiday-video.webm')).toBeNull();
   });
 });

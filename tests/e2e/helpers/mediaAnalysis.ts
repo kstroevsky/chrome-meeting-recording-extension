@@ -153,6 +153,19 @@ export async function analyzeMediaArtifact(
     ])
     : null;
 
+  // The audio half of the A/V marker, looked for in the marker's own band. The
+  // mocked tab marker is an 880 Hz tone (RecorderCaptureE2EMock); with the
+  // microphone mixed into the tab track, the first full-band sound is the mic,
+  // which starts ~0.5 s before the marker and read as a ~500 ms "drift".
+  const markerAudioLog = video && audio
+    ? await runFilter(filePath, [
+      '-map',
+      '0:a:0',
+      '-af',
+      'bandpass=f=880:width_type=h:w=20,bandpass=f=880:width_type=h:w=20,silencedetect=n=-40dB:d=0.5',
+    ])
+    : null;
+
   if (video && videoLog == null) unavailable.push('video_filters');
   if (audio && audioLog == null) unavailable.push('audio_filters');
   const videoDuration = video?.durationSeconds;
@@ -164,9 +177,9 @@ export async function analyzeMediaArtifact(
   const visualMarkerSeconds = markerVideoLog
     ? firstMatch(markerVideoLog, /black_end:([0-9.]+)/)
     : null;
-  const audioMarkerSeconds = audioLog
-    ? firstMatch(audioLog, /silence_end: ([0-9.]+)/)
-    : null;
+  // Full band only as a fallback: the hardware marker is a 1 kHz tone.
+  const audioMarkerSeconds = (markerAudioLog ? firstMatch(markerAudioLog, /silence_end: ([0-9.]+)/) : null)
+    ?? (audioLog ? firstMatch(audioLog, /silence_end: ([0-9.]+)/) : null);
   const markerDriftMs = visualMarkerSeconds != null && audioMarkerSeconds != null
     ? Math.round(Math.abs(visualMarkerSeconds - audioMarkerSeconds) * 1000)
     : null;

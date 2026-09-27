@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 import type { PerfSettings } from '../../src/shared/perf';
 import type { MicMode } from '../../src/shared/recording';
@@ -164,6 +164,24 @@ const pairwiseInteractions = buildPairwiseCases([
     ],
   },
 ]);
+
+/**
+ * Diagnostics are per recording: the background resets them when the next one
+ * starts, so a finished run's snapshot is exactly that run's (71f60a4). Every
+ * run must therefore show one clean start/stop of its own.
+ */
+async function expectCleanRunSnapshot(controlPage: Page) {
+  const snapshot = await waitForPerfSnapshot(
+    controlPage,
+    (candidate) => candidate.summary.lifecycle.stopCompletedCount >= 1,
+    30_000
+  );
+  expect(snapshot.summary.lifecycle.startCompletedCount).toBe(1);
+  expect(snapshot.summary.lifecycle.stopCompletedCount).toBe(1);
+  expect(snapshot.summary.lifecycle.failureCount).toBe(0);
+  expect(snapshot.summary.lifecycle.activeTracks).toBe(0);
+  return snapshot;
+}
 
 test.describe('mock Meet performance E2E', () => {
   test('@perf-smoke 640x360@24 tab-only local recording', async ({}, testInfo) => {
@@ -428,25 +446,12 @@ test.describe('mock Meet performance E2E', () => {
           run + 1,
           60_000
         );
-        const snapshot = await waitForPerfSnapshot(
-          harness.controlPage,
-          (candidate) => candidate.summary.lifecycle.stopCompletedCount >= run + 1,
-          30_000
-        );
+        const snapshot = await expectCleanRunSnapshot(harness.controlPage);
         const latency = snapshot.summary.recorder.lastStartLatencyMsByStream.tab;
         expect(latency).toBeGreaterThanOrEqual(0);
         if (run === 0) coldStartLatencyMs = latency ?? null;
         else if (latency != null) measured.push(latency);
       }
-
-      const finalSnapshot = await waitForPerfSnapshot(
-        harness.controlPage,
-        (candidate) => candidate.summary.lifecycle.stopCompletedCount >= 6,
-        30_000
-      );
-      expect(finalSnapshot.summary.lifecycle.startCompletedCount).toBe(6);
-      expect(finalSnapshot.summary.lifecycle.activeTracks).toBe(0);
-      expect(finalSnapshot.summary.lifecycle.failureCount).toBe(0);
     } finally {
       await closeHarness(harness);
     }
@@ -497,16 +502,8 @@ test.describe('mock Meet performance E2E', () => {
           cycle + 1,
           60_000
         );
+        await expectCleanRunSnapshot(harness.controlPage);
       }
-      const snapshot = await waitForPerfSnapshot(
-        harness.controlPage,
-        (candidate) => candidate.summary.lifecycle.stopCompletedCount >= 20,
-        30_000
-      );
-      expect(snapshot.summary.lifecycle.startCompletedCount).toBe(20);
-      expect(snapshot.summary.lifecycle.stopCompletedCount).toBe(20);
-      expect(snapshot.summary.lifecycle.activeTracks).toBe(0);
-      expect(snapshot.summary.lifecycle.failureCount).toBe(0);
     } finally {
       await closeHarness(harness);
     }
@@ -540,6 +537,9 @@ test.describe('mock Meet performance E2E', () => {
         1,
         60_000
       );
+      const driveRun = await expectCleanRunSnapshot(harness.controlPage);
+      expect(drive.permanentFailures).toBeGreaterThan(0);
+      expect(driveRun.summary.upload.fallbackCount).toBe(1);
 
       await saveRecordingSettings(harness.controlPage, {
         recordingMode: 'opfs',
@@ -561,20 +561,11 @@ test.describe('mock Meet performance E2E', () => {
         60_000
       );
 
-      const snapshot = await waitForPerfSnapshot(
-        harness.controlPage,
-        (candidate) => candidate.summary.lifecycle.stopCompletedCount >= 2,
-        30_000
-      );
-      expect(drive.permanentFailures).toBeGreaterThan(0);
-      expect(snapshot.summary.upload.fallbackCount).toBe(1);
-      expect(snapshot.summary.lifecycle.startCompletedCount).toBe(2);
-      expect(snapshot.summary.lifecycle.stopCompletedCount).toBe(2);
-      expect(snapshot.summary.lifecycle.failureCount).toBe(0);
-      expect(snapshot.summary.lifecycle.activeTracks).toBe(0);
+      const localRun = await expectCleanRunSnapshot(harness.controlPage);
+      expect(localRun.summary.upload.fallbackCount).toBe(0);
 
       const reportPath = testInfo.outputPath('failure-recovery-snapshot.json');
-      await fs.writeFile(reportPath, JSON.stringify({ drive, snapshot }, null, 2));
+      await fs.writeFile(reportPath, JSON.stringify({ drive, driveRun, localRun }, null, 2));
       await testInfo.attach('failure-recovery-snapshot', {
         path: reportPath,
         contentType: 'application/json',

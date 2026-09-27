@@ -97,7 +97,7 @@ describe('createCachedTokenProvider', () => {
         authorization: 'Bearer token',
         'content-range': 'bytes 0-2/6',
       },
-      body: undefined,
+      bodyBase64: Buffer.from('abc').toString('base64'),
     });
     expect(response.status).toBe(308);
     expect(response.headers.get('Range')).toBe('bytes=0-2');

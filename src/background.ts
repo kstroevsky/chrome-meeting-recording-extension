@@ -8,11 +8,13 @@
  */
 
 import { createBackgroundRuntime } from './background/runtime/createBackgroundRuntime';
+import { exposeMaintenanceCommands } from './background/runtime/maintenanceCommands';
 import { registerRecordingAutoStop } from './background/recording/recordingAutoStop';
 import { registerRecordingCommands } from './background/recording/recordingCommands';
 import { addTabRemovedListener, addTabUpdatedListener } from './platform/chrome/tabs';
 
 const runtime = createBackgroundRuntime();
+exposeMaintenanceCommands(runtime.driveLibrary);
 
 /**
  * Exported for integration tests so they can await durable-state hydration
