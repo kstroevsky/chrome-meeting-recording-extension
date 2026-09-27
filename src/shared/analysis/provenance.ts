@@ -91,6 +91,7 @@ export type AnalysisEnvironmentProvenance = {
 };
 
 export type AnalysisProvenance = AnalysisEnvironmentProvenance & {
+  transcriptGeneration: string;
   transcriptRevision: number;
   transcriptHash: string;
 };
@@ -112,7 +113,8 @@ export function hashAnalysisConfig(config: AnalysisConfig): string {
 
 /** Whether an analysis was produced under different conditions than these. */
 export function isStale(stored: AnalysisProvenance, current: AnalysisProvenance): boolean {
-  return stored.transcriptRevision !== current.transcriptRevision
+  return stored.transcriptGeneration !== current.transcriptGeneration
+    || stored.transcriptRevision !== current.transcriptRevision
     || stored.transcriptHash !== current.transcriptHash
     || stored.pipelineVersion !== current.pipelineVersion
     || stored.embeddingModel !== current.embeddingModel

@@ -1,7 +1,11 @@
 import type { IntegrationDataPolicy } from '../../../integrations/contracts';
 import type { RecordingHistoryEntry } from '../../../shared/recordingHistory';
 import type { Transcript } from '../../../shared/transcript';
-import { TRANSCRIPT_SCHEMA_VERSION, type TranscriptSnapshot } from '../../../shared/transcriptIdentity';
+import {
+  TRANSCRIPT_CANONICALIZATION_VERSION,
+  TRANSCRIPT_SCHEMA_VERSION,
+  type TranscriptSnapshot,
+} from '../../../shared/transcriptIdentity';
 import { utf8ByteLength } from '../../../integrations/serialization';
 import { IntegrationPreviewService } from '../IntegrationPreviewService';
 
@@ -46,6 +50,8 @@ function transcriptSnapshot(
 ): TranscriptSnapshot {
   return {
     schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+    canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+    generation: `transcript-generation-${revision}`,
     revision,
     contentHash,
     committedAt: 1_000 + revision,
@@ -266,6 +272,7 @@ describe('IntegrationPreviewService', () => {
         status: 'completed',
         result: {
           provenance: {
+            transcriptGeneration: 'transcript-generation-1',
             transcriptRevision: 1,
             transcriptHash: 'hash-of-revision-a',
             pipelineVersion: 2,
@@ -315,6 +322,7 @@ describe('IntegrationPreviewService', () => {
         status: 'completed',
         result: {
           provenance: {
+            transcriptGeneration: 'transcript-generation-3',
             transcriptRevision: 3,
             transcriptHash: 'hash-current',
             pipelineVersion: 2,
@@ -364,6 +372,7 @@ describe('IntegrationPreviewService', () => {
         status: 'completed',
         result: {
           provenance: {
+            transcriptGeneration: 'transcript-generation-2',
             transcriptRevision: 2,
             transcriptHash: 'same-hash',
             pipelineVersion: 2,

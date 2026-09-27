@@ -16,6 +16,7 @@
 
 import { normalizeTranscript, type Transcript } from '../../../shared/transcript';
 import {
+  TRANSCRIPT_CANONICALIZATION_VERSION,
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptSnapshot,
 } from '../../../shared/transcriptIdentity';
@@ -26,7 +27,7 @@ export type RecordingTranscriptMutation = (current: Transcript | undefined) => T
 export interface RecordingTranscriptRepositoryPort {
   get(recordingId: string): Promise<TranscriptSnapshot | undefined>;
   update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<TranscriptSnapshot | undefined>;
-  cacheContentHash(recordingId: string, revision: number, contentHash: string): Promise<void>;
+  cacheContentHash(recordingId: string, generation: string, revision: number, contentHash: string): Promise<void>;
   listRecordingIds(limit: number, after?: string): Promise<{
     recordingIds: string[];
     nextCursor?: string;
@@ -37,6 +38,8 @@ export interface RecordingTranscriptRepositoryPort {
 type DurableTranscript = {
   recordingId: string;
   schemaVersion: typeof TRANSCRIPT_SCHEMA_VERSION;
+  canonicalizationVersion: typeof TRANSCRIPT_CANONICALIZATION_VERSION;
+  generation: string;
   revision: number;
   contentHash?: string;
   committedAt: number;
@@ -47,6 +50,7 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
   constructor(
     private readonly factory?: IDBFactory,
     private readonly now: () => number = () => Date.now(),
+    private readonly makeGeneration: () => string = createTranscriptGeneration,
   ) {}
 
   async get(recordingId: string): Promise<TranscriptSnapshot | undefined> {
@@ -89,6 +93,8 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
             const committedAt = this.now();
             result = {
               schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+              canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+              generation: this.makeGeneration(),
               revision: (current?.revision ?? 0) + 1,
               contentHash: '',
               committedAt,
@@ -97,6 +103,8 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
             store.put({
               recordingId,
               schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+              canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+              generation: result.generation,
               revision: result.revision,
               committedAt,
               transcript: next,
@@ -121,8 +129,9 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
     });
   }
 
-  /** Caches a derived hash only if the transcript revision is still the same. */
-  async cacheContentHash(recordingId: string, revision: number, contentHash: string): Promise<void> {
+  /** Caches a derived hash only if the exact transcript mutation is still current. */
+  async cacheContentHash(recordingId: string, generation: string, revision: number, contentHash: string): Promise<void> {
+    if (!isSha256Hex(contentHash)) throw new Error('Transcript hash must be a SHA-256 hex digest');
     const database = await this.open();
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
@@ -131,10 +140,15 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
       request.onerror = () => reject(request.error ?? new Error('Could not read recording transcript'));
       request.onsuccess = () => {
         const current = readStored(request.result);
-        if (!current || current.revision !== revision || current.contentHash === contentHash) return;
+        if (!current
+          || current.generation !== generation
+          || current.revision !== revision
+          || current.contentHash === contentHash) return;
         store.put({
           recordingId,
           schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+          canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+          generation: current.generation,
           revision: current.revision,
           contentHash,
           committedAt: current.committedAt,
@@ -198,10 +212,20 @@ function readStored(value: unknown): TranscriptSnapshot | undefined {
   if (nested?.segments.length) {
     const revision = finitePositiveInteger(candidate.revision) ?? 1;
     const committedAt = finiteNonNegative(candidate.committedAt) ?? finiteNonNegative(candidate.updatedAt) ?? 0;
+    const generation = typeof candidate.generation === 'string' && candidate.generation
+      ? candidate.generation
+      : legacyGeneration(candidate.recordingId, revision, committedAt);
+    const contentHash = candidate.canonicalizationVersion === TRANSCRIPT_CANONICALIZATION_VERSION
+      && typeof candidate.contentHash === 'string'
+      && isSha256Hex(candidate.contentHash)
+      ? candidate.contentHash
+      : '';
     return {
       schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+      generation,
       revision,
-      contentHash: typeof candidate.contentHash === 'string' ? candidate.contentHash : '',
+      contentHash,
       committedAt,
       transcript: nested,
     };
@@ -212,11 +236,28 @@ function readStored(value: unknown): TranscriptSnapshot | undefined {
   if (!legacy?.segments.length) return undefined;
   return {
     schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+    canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+    generation: legacyGeneration(candidate.recordingId, 1, finiteNonNegative(candidate.updatedAt) ?? 0),
     revision: 1,
     contentHash: '',
     committedAt: finiteNonNegative(candidate.updatedAt) ?? 0,
     transcript: legacy,
   };
+}
+
+function legacyGeneration(recordingId: unknown, revision: number, committedAt: number): string {
+  return `legacy:${typeof recordingId === 'string' ? recordingId : 'unknown'}:${revision}:${committedAt}`;
+}
+
+function createTranscriptGeneration(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function isSha256Hex(value: string): boolean {
+  return /^[0-9a-f]{64}$/i.test(value);
 }
 
 function finiteNonNegative(value: unknown): number | undefined {

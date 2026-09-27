@@ -1,17 +1,24 @@
 import { RecordingTranscriptService } from '../RecordingTranscriptService';
 import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../RecordingTranscriptRepository';
 import {
+  MAX_TRANSCRIPT_TEXT_LENGTH,
   MAX_TRANSCRIPT_SEGMENTS,
   normalizeTranscript,
   type Transcript,
   type TranscriptSegment,
 } from '../../../../shared/transcript';
-import { TRANSCRIPT_SCHEMA_VERSION, type TranscriptSnapshot } from '../../../../shared/transcriptIdentity';
+import {
+  TRANSCRIPT_CANONICALIZATION_VERSION,
+  TRANSCRIPT_SCHEMA_VERSION,
+  type TranscriptSnapshot,
+} from '../../../../shared/transcriptIdentity';
 
 /** In-memory stand-in for the IndexedDB adapter, normalizing on write like the real one. */
 function fakeRepository(seed: Record<string, Transcript> = {}) {
   const rows = new Map<string, TranscriptSnapshot>(Object.entries(seed).map(([id, transcript]) => [id, {
     schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+    canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+    generation: `generation:${id}:1`,
     revision: 1,
     contentHash: `hash:${id}:1`,
     committedAt: 1,
@@ -34,6 +41,8 @@ function fakeRepository(seed: Record<string, Transcript> = {}) {
       const revision = (current?.revision ?? 0) + 1;
       const snapshot: TranscriptSnapshot = {
         schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+        canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+        generation: `generation:${recordingId}:${revision}`,
         revision,
         contentHash: `hash:${recordingId}:${revision}`,
         committedAt: revision,
@@ -42,9 +51,11 @@ function fakeRepository(seed: Record<string, Transcript> = {}) {
       rows.set(recordingId, snapshot);
       return snapshot;
     },
-    async cacheContentHash(recordingId, revision, contentHash) {
+    async cacheContentHash(recordingId, generation, revision, contentHash) {
       const current = rows.get(recordingId);
-      if (current?.revision === revision) rows.set(recordingId, { ...current, contentHash });
+      if (current?.generation === generation && current.revision === revision) {
+        rows.set(recordingId, { ...current, contentHash });
+      }
     },
     async listRecordingIds(limit, after) {
       const ids = [...rows.keys()].sort().filter((id) => !after || id > after);
@@ -164,6 +175,25 @@ describe('RecordingTranscriptService', () => {
     expect(replaced.revision).toBe(2);
     expect(replaced.transcript.source).toBe('stt');
     expect(committed).toEqual([replaced]);
+  });
+
+  it('preserves the previous snapshot when replacement validation rejects', async () => {
+    const repository = fakeRepository();
+    const service = new RecordingTranscriptService(repository);
+    await service.replace('rec:1', { source: 'meet-captions', segments: [segment(0, 'kept')] });
+    const before = await service.getSnapshot('rec:1');
+
+    const invalid: Transcript[] = [
+      { source: 'stt', segments: [] },
+      { source: 'stt', segments: [{ tStartMs: -1, tEndMs: 1, text: 'bad time' }] },
+      { source: 'stt', segments: [{ tStartMs: 0, tEndMs: 1, text: 'x'.repeat(MAX_TRANSCRIPT_TEXT_LENGTH + 1) }] },
+      { source: 'guessed' as Transcript['source'], segments: [segment(0, 'bad source')] },
+    ];
+
+    for (const replacement of invalid) {
+      await expect(service.replace('rec:1', replacement)).rejects.toThrow();
+      await expect(service.getSnapshot('rec:1')).resolves.toEqual(before);
+    }
   });
 
   it('commits the current revision without changing its identity', async () => {

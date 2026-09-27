@@ -186,7 +186,8 @@ function alignAnalysisWithTranscript(
     return { status: 'stale', error: 'Analysis does not match the transcript selected for this snapshot.' };
   }
   if (
-    state.result.provenance.transcriptRevision === transcript.revision
+    state.result.provenance.transcriptGeneration === transcript.generation
+    && state.result.provenance.transcriptRevision === transcript.revision
     && state.result.provenance.transcriptHash === transcript.contentHash
   ) return state;
   return { status: 'stale', error: 'Analysis does not match the transcript selected for this snapshot.' };

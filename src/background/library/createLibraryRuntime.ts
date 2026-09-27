@@ -58,7 +58,11 @@ export function createLibraryRuntime({
     async (recordingId) => {
       const transcript = await transcripts.getSnapshot(recordingId);
       return transcript
-        ? { revision: transcript.revision, contentHash: transcript.contentHash }
+        ? {
+            generation: transcript.generation,
+            revision: transcript.revision,
+            contentHash: transcript.contentHash,
+          }
         : undefined;
     },
     onIntegrationChanged,

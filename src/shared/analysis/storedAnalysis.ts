@@ -74,9 +74,11 @@ function normalizeProvenance(value: unknown): AnalysisProvenance | undefined {
   if (typeof c.embeddingModelRevision !== 'string' || !c.embeddingModelRevision) return undefined;
   if (typeof c.embeddingDtype !== 'string' || !c.embeddingDtype) return undefined;
   if (typeof c.configHash !== 'string' || !c.configHash) return undefined;
+  const transcriptGeneration = typeof c.transcriptGeneration === 'string' ? c.transcriptGeneration : '';
   const transcriptRevision = finite(c.transcriptRevision) ?? 0;
   const transcriptHash = typeof c.transcriptHash === 'string' ? c.transcriptHash : '';
   return {
+    transcriptGeneration,
     transcriptRevision,
     transcriptHash,
     pipelineVersion,
@@ -96,7 +98,9 @@ function normalizeProvenance(value: unknown): AnalysisProvenance | undefined {
  */
 export function fromWireProvenance(value: unknown): AnalysisProvenance | undefined {
   const provenance = normalizeProvenance(value);
-  return provenance?.transcriptRevision && provenance.transcriptHash ? provenance : undefined;
+  return provenance?.transcriptGeneration && provenance.transcriptRevision && provenance.transcriptHash
+    ? provenance
+    : undefined;
 }
 
 function normalizeSegment(value: unknown): ConversationSegment | undefined {

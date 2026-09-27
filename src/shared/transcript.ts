@@ -108,6 +108,52 @@ export function normalizeTranscriptText(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, MAX_TRANSCRIPT_TEXT_LENGTH) : '';
 }
 
+/**
+ * Strict write-side validation. Durable reads stay tolerant for legacy/corrupt
+ * rows, but new producer input must never be silently dropped or truncated.
+ */
+export function validateTranscriptForWrite(value: unknown): Transcript {
+  if (!value || typeof value !== 'object') throw new Error('Transcript must be an object');
+  const candidate = value as Record<string, unknown>;
+  if (!isTranscriptSource(candidate.source)) throw new Error('Transcript source is invalid');
+  if (!Array.isArray(candidate.segments)) throw new Error('Transcript segments must be an array');
+  if (!candidate.segments.length) throw new Error('A committed transcript must contain at least one segment');
+  if (candidate.segments.length > MAX_TRANSCRIPT_SEGMENTS) {
+    throw new Error(`A transcript cannot hold more than ${MAX_TRANSCRIPT_SEGMENTS} segments`);
+  }
+  return {
+    source: candidate.source,
+    segments: sortTranscriptSegments(candidate.segments.map(validateTranscriptSegmentForWrite)),
+  };
+}
+
+/** Strict counterpart to {@link normalizeTranscriptSegment} for new writes. */
+export function validateTranscriptSegmentForWrite(value: unknown): TranscriptSegment {
+  if (!value || typeof value !== 'object') throw new Error('Transcript segment must be an object');
+  const candidate = value as Record<string, unknown>;
+  const tStartMs = finiteOffset(candidate.tStartMs);
+  const tEndMs = finiteOffset(candidate.tEndMs);
+  if (tStartMs == null) throw new Error('Transcript segment start must be a finite non-negative number');
+  if (tEndMs == null || tEndMs < tStartMs) {
+    throw new Error('Transcript segment end must be finite and not precede its start');
+  }
+  if (typeof candidate.text !== 'string') throw new Error('Transcript segment text must be a string');
+  const text = candidate.text.trim();
+  if (!text) throw new Error('Transcript segment text must contain words');
+  if (text.length > MAX_TRANSCRIPT_TEXT_LENGTH) {
+    throw new Error(`Transcript segment text cannot exceed ${MAX_TRANSCRIPT_TEXT_LENGTH} characters`);
+  }
+  let speaker: string | undefined;
+  if (candidate.speaker != null) {
+    if (typeof candidate.speaker !== 'string') throw new Error('Transcript segment speaker must be a string');
+    speaker = candidate.speaker.trim() || undefined;
+    if (speaker && speaker.length > MAX_TRANSCRIPT_TEXT_LENGTH) {
+      throw new Error(`Transcript segment speaker cannot exceed ${MAX_TRANSCRIPT_TEXT_LENGTH} characters`);
+    }
+  }
+  return { tStartMs, tEndMs, ...(speaker ? { speaker } : {}), text };
+}
+
 function finiteOffset(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -140,11 +186,22 @@ export function normalizeTranscriptSegment(value: unknown): TranscriptSegment | 
   return { tStartMs, tEndMs, ...(speaker ? { speaker } : {}), text };
 }
 
-/** Chronological order, tie-broken by end then text so the sort is stable across reads. */
+/**
+ * Canonical, locale-independent ordering used by persistence and hashing.
+ * Undefined speaker is represented as an empty string solely for the final
+ * tie-break; multiplicity is preserved.
+ */
 export function sortTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
   return [...segments].sort(
-    (a, b) => a.tStartMs - b.tStartMs || a.tEndMs - b.tEndMs || a.text.localeCompare(b.text),
+    (a, b) => a.tStartMs - b.tStartMs
+      || a.tEndMs - b.tEndMs
+      || compareCanonicalStrings(a.text, b.text)
+      || compareCanonicalStrings(a.speaker ?? '', b.speaker ?? ''),
   );
+}
+
+function compareCanonicalStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /** Decodes a durable segment list into chronological order. Invalid records are skipped. */

@@ -150,6 +150,7 @@ export class RecordingAnalysisService {
     if (!input) throw new Error('Transcript identity is required to start analysis');
     return {
       ...environment,
+      transcriptGeneration: input.generation,
       transcriptRevision: input.revision,
       transcriptHash: input.contentHash,
     };
@@ -166,6 +167,7 @@ export class RecordingAnalysisService {
     const transcript = await this.currentTranscriptIdentity(recordingId);
     return Boolean(
       transcript
+      && provenance.transcriptGeneration === transcript.generation
       && provenance.transcriptRevision === transcript.revision
       && provenance.transcriptHash === transcript.contentHash,
     );
@@ -240,10 +242,16 @@ function identityFromProvenance(
   value: AnalysisEnvironmentProvenance | AnalysisProvenance,
 ): TranscriptIdentity | undefined {
   const candidate = value as Partial<AnalysisProvenance>;
-  return typeof candidate.transcriptRevision === 'number'
+  return typeof candidate.transcriptGeneration === 'string'
+    && candidate.transcriptGeneration.length > 0
+    && typeof candidate.transcriptRevision === 'number'
     && candidate.transcriptRevision > 0
     && typeof candidate.transcriptHash === 'string'
     && candidate.transcriptHash
-    ? { revision: candidate.transcriptRevision, contentHash: candidate.transcriptHash }
+    ? {
+        generation: candidate.transcriptGeneration,
+        revision: candidate.transcriptRevision,
+        contentHash: candidate.transcriptHash,
+      }
     : undefined;
 }

@@ -16,6 +16,7 @@ const CONFIG: AnalysisConfig = {
 };
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
+  transcriptGeneration: 'transcript-generation-1',
   transcriptRevision: 1,
   transcriptHash: 'transcript-hash-1',
   pipelineVersion: PIPELINE_VERSION,
@@ -70,7 +71,8 @@ describe('isStale', () => {
     expect(isStale(provenance(), provenance())).toBe(false);
   });
 
-  it('rejects a result from a different transcript revision or content', () => {
+  it('rejects a result from a different transcript generation, revision or content', () => {
+    expect(isStale(provenance({ transcriptGeneration: 'transcript-generation-2' }), provenance())).toBe(true);
     expect(isStale(provenance({ transcriptRevision: 2 }), provenance())).toBe(true);
     expect(isStale(provenance({ transcriptHash: 'transcript-hash-2' }), provenance())).toBe(true);
   });

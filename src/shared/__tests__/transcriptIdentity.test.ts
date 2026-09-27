@@ -48,4 +48,24 @@ describe('hashTranscript', () => {
       await expect(hashTranscript(variant)).resolves.not.toBe(baseline);
     }
   });
+
+  it('uses a total speaker tie-break so arbitrary input permutations hash identically', async () => {
+    const tied: Transcript = {
+      source: 'meet-captions',
+      segments: [
+        { tStartMs: 10, tEndMs: 20, speaker: 'Zoe', text: 'same' },
+        { tStartMs: 10, tEndMs: 20, speaker: 'Ada', text: 'same' },
+      ],
+    };
+    await expect(hashTranscript({ ...tied, segments: [...tied.segments].reverse() }))
+      .resolves.toBe(await hashTranscript(tied));
+  });
+
+  it('preserves multiplicity, internal whitespace, and Unicode form in identity', async () => {
+    const base: Transcript = { source: 'stt', segments: [{ tStartMs: 0, tEndMs: 1, text: 'café world' }] };
+    const baseline = await hashTranscript(base);
+    await expect(hashTranscript({ ...base, segments: [...base.segments, ...base.segments] })).resolves.not.toBe(baseline);
+    await expect(hashTranscript({ ...base, segments: [{ ...base.segments[0], text: 'café  world' }] })).resolves.not.toBe(baseline);
+    await expect(hashTranscript({ ...base, segments: [{ ...base.segments[0], text: 'cafe\u0301 world' }] })).resolves.not.toBe(baseline);
+  });
 });

@@ -15,6 +15,8 @@
 import {
   MAX_TRANSCRIPT_SEGMENTS,
   sortTranscriptSegments,
+  validateTranscriptForWrite,
+  validateTranscriptSegmentForWrite,
   type Transcript,
   type TranscriptSegment,
   type TranscriptSource,
@@ -51,7 +53,7 @@ export class RecordingTranscriptService {
     if (!stored) return undefined;
     if (stored.contentHash) return stored;
     const contentHash = await hashTranscript(stored.transcript);
-    await this.repository.cacheContentHash(recordingId, stored.revision, contentHash).catch(() => {});
+    await this.repository.cacheContentHash(recordingId, stored.generation, stored.revision, contentHash).catch(() => {});
     return { ...stored, contentHash };
   }
 
@@ -80,6 +82,7 @@ export class RecordingTranscriptService {
     segments: TranscriptSegment[],
   ): Promise<number> {
     if (!segments.length) return 0;
+    const validatedSegments = segments.map(validateTranscriptSegmentForWrite);
 
     let added = 0;
     await this.repository.update(recordingId, (current) => {
@@ -94,7 +97,7 @@ export class RecordingTranscriptService {
 
       const existing = current?.segments ?? [];
       const seen = new Set(existing.map(segmentKey));
-      const fresh = segments.filter((segment) => {
+      const fresh = validatedSegments.filter((segment) => {
         const key = segmentKey(segment);
         if (seen.has(key)) return false;
         seen.add(key);
@@ -115,11 +118,9 @@ export class RecordingTranscriptService {
 
   /** Replaces the canonical transcript and announces the committed revision. */
   async replace(recordingId: string, transcript: Transcript): Promise<TranscriptSnapshot> {
-    if (transcript.segments.length > MAX_TRANSCRIPT_SEGMENTS) {
-      throw new Error(`A transcript cannot hold more than ${MAX_TRANSCRIPT_SEGMENTS} segments`);
-    }
-    const stored = await this.repository.update(recordingId, () => transcript);
-    if (!stored) throw new Error('A committed transcript must contain at least one segment');
+    const validated = validateTranscriptForWrite(transcript);
+    const stored = await this.repository.update(recordingId, () => validated);
+    if (!stored) throw new Error('Transcript replacement did not persist');
     const snapshot = await this.requireHash(recordingId, stored);
     this.onChanged?.(recordingId);
     await this.onCommitted?.(recordingId, snapshot);
@@ -148,7 +149,7 @@ export class RecordingTranscriptService {
   private async requireHash(recordingId: string, stored: TranscriptSnapshot): Promise<TranscriptSnapshot> {
     if (stored.contentHash) return stored;
     const contentHash = await hashTranscript(stored.transcript);
-    await this.repository.cacheContentHash(recordingId, stored.revision, contentHash).catch(() => {});
+    await this.repository.cacheContentHash(recordingId, stored.generation, stored.revision, contentHash).catch(() => {});
     return { ...stored, contentHash };
   }
 }

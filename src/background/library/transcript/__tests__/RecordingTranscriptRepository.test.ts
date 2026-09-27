@@ -5,7 +5,10 @@ import { RecordingTranscriptRepository } from '../RecordingTranscriptRepository'
 import { RecordingNotationRepository } from '../../notations/RecordingNotationRepository';
 import { openRecordingHistoryDatabase, TRANSCRIPTS_STORE } from '../../RecordingLibraryDatabase';
 import type { Transcript, TranscriptSegment } from '../../../../shared/transcript';
-import { TRANSCRIPT_SCHEMA_VERSION } from '../../../../shared/transcriptIdentity';
+import {
+  TRANSCRIPT_CANONICALIZATION_VERSION,
+  TRANSCRIPT_SCHEMA_VERSION,
+} from '../../../../shared/transcriptIdentity';
 
 const segment = (tStartMs: number, text: string, speaker = 'Ada'): TranscriptSegment =>
   ({ tStartMs, tEndMs: tStartMs + 500, speaker, text });
@@ -164,7 +167,9 @@ describe('RecordingTranscriptRepository', () => {
       committedAt: 77,
       transcript: legacyTranscript,
     });
-    await repository.cacheContentHash('rec:legacy-flat', 1, 'sha256:legacy');
+    const migrated = await repository.get('rec:legacy-flat');
+    const hash = 'a'.repeat(64);
+    await repository.cacheContentHash('rec:legacy-flat', migrated!.generation, 1, hash);
 
     const raw = await new Promise<any>((resolve, reject) => {
       const transaction = database.transaction(TRANSCRIPTS_STORE, 'readonly');
@@ -175,10 +180,32 @@ describe('RecordingTranscriptRepository', () => {
     expect(raw).toEqual({
       recordingId: 'rec:legacy-flat',
       schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+      generation: migrated!.generation,
       revision: 1,
-      contentHash: 'sha256:legacy',
+      contentHash: hash,
       committedAt: 77,
       transcript: legacyTranscript,
+    });
+  });
+
+  it('rejects a delayed hash from a deleted-and-recreated transcript with a reused revision', async () => {
+    let generation = 0;
+    repository = new RecordingTranscriptRepository(factory, () => 1_000, () => `generation:${++generation}`);
+    const first = await repository.update('rec:aba', () => transcript([segment(0, 'A')]));
+    await repository.remove('rec:aba');
+    const second = await repository.update('rec:aba', () => transcript([segment(0, 'B')]));
+
+    expect(first?.revision).toBe(1);
+    expect(second?.revision).toBe(1);
+    expect(second?.generation).not.toBe(first?.generation);
+
+    await repository.cacheContentHash('rec:aba', first!.generation, first!.revision, 'a'.repeat(64));
+    await expect(repository.get('rec:aba')).resolves.toMatchObject({
+      generation: second!.generation,
+      revision: 1,
+      contentHash: '',
+      transcript: transcript([segment(0, 'B')]),
     });
   });
 

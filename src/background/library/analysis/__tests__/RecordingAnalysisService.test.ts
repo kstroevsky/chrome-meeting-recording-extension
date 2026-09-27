@@ -5,6 +5,7 @@ import { normalizeStoredAnalysis, type StoredAnalysis } from '../../../../shared
 import type { RecordingAnalysisOutcome } from '../RecordingAnalysisOutcome';
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
+  transcriptGeneration: 'transcript-generation-1',
   transcriptRevision: 1,
   transcriptHash: 'transcript-hash-1',
   pipelineVersion: PIPELINE_VERSION,
