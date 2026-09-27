@@ -208,6 +208,9 @@ jobs:
     timeout-minutes: 35
     env:
       SHARING_SERVICE_ORIGIN: https://127.0.0.1:8791
+      # The reader the local test Worker names (tests/e2e/helpers/sharingWorker.ts).
+      # Pinned as production builds pin theirs, so the pinned path is what is tested.
+      GOOGLE_DRIVE_READER_EMAIL: recording-share-reader@test-project.iam.gserviceaccount.com
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
