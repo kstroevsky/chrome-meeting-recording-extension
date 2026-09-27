@@ -51,6 +51,25 @@ function fakeRepository(seed: Record<string, Transcript> = {}) {
       rows.set(recordingId, snapshot);
       return snapshot;
     },
+    async replaceAndRequestAnalysis(recordingId, transcript, contentHash) {
+      const current = rows.get(recordingId);
+      const next = normalizeTranscript(transcript)!;
+      const revision = (current?.revision ?? 0) + 1;
+      const snapshot: TranscriptSnapshot = {
+        schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+        canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+        generation: `generation:${recordingId}:${revision}`,
+        revision,
+        contentHash,
+        committedAt: revision,
+        transcript: next,
+      };
+      rows.set(recordingId, snapshot);
+      return snapshot;
+    },
+    async requestCurrentAnalysis(recordingId) {
+      return rows.get(recordingId);
+    },
     async cacheContentHash(recordingId, generation, revision, contentHash) {
       const current = rows.get(recordingId);
       if (current?.generation === generation && current.revision === revision) {
@@ -209,6 +228,25 @@ describe('RecordingTranscriptService', () => {
 
     expect(committedSnapshot).toEqual(before);
     expect(committed).toEqual([before]);
+  });
+
+  it('keeps a transcript write successful when the dispatcher wake-up fails', async () => {
+    const repository = fakeRepository();
+    const service = new RecordingTranscriptService(repository, async () => {
+      throw new Error('dispatcher unavailable');
+    });
+
+    await expect(service.replace('rec:1', {
+      source: 'stt',
+      segments: [segment(0, 'durable words')],
+    })).resolves.toMatchObject({
+      revision: 1,
+      transcript: { source: 'stt' },
+    });
+    await expect(service.get('rec:1')).resolves.toMatchObject({
+      source: 'stt',
+      segments: [segment(0, 'durable words')],
+    });
   });
 
   it('tells integrations about every change to the stored transcript, and only those', async () => {

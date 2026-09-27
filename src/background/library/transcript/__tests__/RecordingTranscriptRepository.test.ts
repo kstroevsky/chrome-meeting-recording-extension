@@ -3,7 +3,11 @@ import { IDBFactory } from 'fake-indexeddb';
 
 import { RecordingTranscriptRepository } from '../RecordingTranscriptRepository';
 import { RecordingNotationRepository } from '../../notations/RecordingNotationRepository';
-import { openRecordingHistoryDatabase, TRANSCRIPTS_STORE } from '../../RecordingLibraryDatabase';
+import {
+  ANALYSIS_WORK_STORE,
+  openRecordingHistoryDatabase,
+  TRANSCRIPTS_STORE,
+} from '../../RecordingLibraryDatabase';
 import type { Transcript, TranscriptSegment } from '../../../../shared/transcript';
 import {
   TRANSCRIPT_CANONICALIZATION_VERSION,
@@ -15,6 +19,15 @@ const segment = (tStartMs: number, text: string, speaker = 'Ada'): TranscriptSeg
 
 const transcript = (segments: TranscriptSegment[]): Transcript =>
   ({ source: 'meet-captions', segments });
+
+const analysisEnvironment = {
+  pipelineVersion: 2,
+  embeddingModel: 'test/model',
+  embeddingModelRevision: 'revision',
+  embeddingDimensions: 384,
+  embeddingDtype: 'q8' as const,
+  configHash: 'config',
+};
 
 describe('RecordingTranscriptRepository', () => {
   let factory: IDBFactory;
@@ -146,6 +159,123 @@ describe('RecordingTranscriptRepository', () => {
     expect(changed?.revision).toBe(2);
   });
 
+  it('atomically replaces a transcript and records the exact desired analysis work', async () => {
+    const hash = 'a'.repeat(64);
+    const stored = await repository.replaceAndRequestAnalysis(
+      'rec:atomic',
+      transcript([segment(0, 'replacement')]),
+      hash,
+      analysisEnvironment,
+    );
+
+    const database = await openRecordingHistoryDatabase(factory);
+    const work = await new Promise<any>((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readonly');
+      const request = transaction.objectStore(ANALYSIS_WORK_STORE).get('rec:atomic');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+
+    expect(await repository.get('rec:atomic')).toEqual(stored);
+    expect(work).toMatchObject({
+      recordingId: 'rec:atomic',
+      transcriptGeneration: stored.generation,
+      transcriptRevision: stored.revision,
+      transcriptHash: hash,
+      environment: analysisEnvironment,
+      requestEpoch: 1,
+      disposition: 'pending',
+      attemptCount: 0,
+      nextAttemptAt: 0,
+    });
+  });
+
+  it('preserves transcript identity when an exact replacement only fills its hash', async () => {
+    const original = await repository.update(
+      'rec:exact-replacement',
+      () => transcript([segment(0, 'same')]),
+    );
+    const replaced = await repository.replaceAndRequestAnalysis(
+      'rec:exact-replacement',
+      transcript([segment(0, 'same')]),
+      'e'.repeat(64),
+      analysisEnvironment,
+    );
+
+    expect(replaced.generation).toBe(original!.generation);
+    expect(replaced.revision).toBe(original!.revision);
+    expect(replaced.contentHash).toBe('e'.repeat(64));
+  });
+
+  it('does not request analysis for live transcript appends', async () => {
+    await repository.update('rec:append-only', () => transcript([segment(0, 'live')]));
+    const database = await openRecordingHistoryDatabase(factory);
+    const work = await new Promise<any>((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readonly');
+      const request = transaction.objectStore(ANALYSIS_WORK_STORE).get('rec:append-only');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    expect(work).toBeUndefined();
+  });
+
+  it('promotes only the matching hash-pending request when a delayed hash arrives', async () => {
+    let generation = 0;
+    repository = new RecordingTranscriptRepository(factory, () => 1_000, () => `generation:${++generation}`);
+    const first = await repository.update('rec:hash-work', () => transcript([segment(0, 'A')]));
+    await repository.requestCurrentAnalysis('rec:hash-work', analysisEnvironment);
+
+    const second = await repository.update('rec:hash-work', () => transcript([segment(0, 'B')]));
+    await repository.requestCurrentAnalysis('rec:hash-work', analysisEnvironment);
+    await repository.cacheContentHash('rec:hash-work', first!.generation, first!.revision, 'a'.repeat(64));
+
+    const database = await openRecordingHistoryDatabase(factory);
+    const readWork = () => new Promise<any>((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readonly');
+      const request = transaction.objectStore(ANALYSIS_WORK_STORE).get('rec:hash-work');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+
+    await expect(readWork()).resolves.toMatchObject({
+      transcriptGeneration: second!.generation,
+      transcriptRevision: second!.revision,
+      requestEpoch: 2,
+      disposition: 'hash-pending',
+    });
+    expect((await readWork()).transcriptHash).toBeUndefined();
+
+    const hash = 'b'.repeat(64);
+    await repository.cacheContentHash('rec:hash-work', second!.generation, second!.revision, hash);
+    await expect(readWork()).resolves.toMatchObject({
+      transcriptGeneration: second!.generation,
+      transcriptRevision: second!.revision,
+      transcriptHash: hash,
+      requestEpoch: 2,
+      disposition: 'pending',
+      nextAttemptAt: 0,
+    });
+  });
+
+  it('keeps duplicate requests idempotent and increments the epoch only when forced', async () => {
+    const stored = await repository.update('rec:epoch', () => transcript([segment(0, 'same input')]));
+    await repository.cacheContentHash('rec:epoch', stored!.generation, stored!.revision, 'c'.repeat(64));
+    await repository.requestCurrentAnalysis('rec:epoch', analysisEnvironment);
+    await repository.requestCurrentAnalysis('rec:epoch', analysisEnvironment);
+
+    const database = await openRecordingHistoryDatabase(factory);
+    const readWork = () => new Promise<any>((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readonly');
+      const request = transaction.objectStore(ANALYSIS_WORK_STORE).get('rec:epoch');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    expect((await readWork()).requestEpoch).toBe(1);
+
+    await repository.requestCurrentAnalysis('rec:epoch', analysisEnvironment, { force: true });
+    expect((await readWork()).requestEpoch).toBe(2);
+  });
+
   it('lazily migrates a legacy flattened transcript when its hash is cached', async () => {
     const legacyTranscript = transcript([segment(0, 'legacy words')]);
     const database = await openRecordingHistoryDatabase(factory);
@@ -207,6 +337,25 @@ describe('RecordingTranscriptRepository', () => {
       contentHash: '',
       transcript: transcript([segment(0, 'B')]),
     });
+  });
+
+  it('removes desired analysis work with the transcript', async () => {
+    await repository.replaceAndRequestAnalysis(
+      'rec:remove-work',
+      transcript([segment(0, 'words')]),
+      'd'.repeat(64),
+      analysisEnvironment,
+    );
+    await repository.remove('rec:remove-work');
+
+    const database = await openRecordingHistoryDatabase(factory);
+    const work = await new Promise<any>((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readonly');
+      const request = transaction.objectStore(ANALYSIS_WORK_STORE).get('rec:remove-work');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    expect(work).toBeUndefined();
   });
 
   it('pages recording ids so bounded reconciliation can progress across startups', async () => {

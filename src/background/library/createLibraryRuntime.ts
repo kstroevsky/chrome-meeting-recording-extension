@@ -41,20 +41,26 @@ export function createLibraryRuntime({
   const historyRepository = new RecordingHistoryRepository();
   const recordingContexts = new RecordingContextService(new RecordingContextRepository(), onIntegrationChanged);
   const notations = new RecordingNotationService(new RecordingNotationRepository(), onIntegrationChanged);
-  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository(), undefined, onIntegrationChanged);
+  const currentAnalysisEnvironment = () => {
+    const model = packagedModel();
+    return {
+      pipelineVersion: PIPELINE_VERSION,
+      embeddingModel: model.id,
+      embeddingModelRevision: model.revision,
+      embeddingDimensions: 384,
+      embeddingDtype: model.dtype,
+      configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
+    };
+  };
+  const transcripts = new RecordingTranscriptService(
+    new RecordingTranscriptRepository(),
+    undefined,
+    onIntegrationChanged,
+    currentAnalysisEnvironment,
+  );
   const analyses = new RecordingAnalysisService(
     new RecordingAnalysisRepository(),
-    () => {
-      const model = packagedModel();
-      return {
-        pipelineVersion: PIPELINE_VERSION,
-        embeddingModel: model.id,
-        embeddingModelRevision: model.revision,
-        embeddingDimensions: 384,
-        embeddingDtype: model.dtype,
-        configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
-      };
-    },
+    currentAnalysisEnvironment,
     async (recordingId) => {
       const transcript = await transcripts.getSnapshot(recordingId);
       return transcript
