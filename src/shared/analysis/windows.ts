@@ -88,16 +88,20 @@ function toWindow(segments: TranscriptSegment[], startIndex: number, endIndex: n
   const covered = segments.slice(startIndex, endIndex);
   const speakers: string[] = [];
   let opensWithDiscourseCue = false;
+  let tStartMs = Number.POSITIVE_INFINITY;
+  let tEndMs = Number.NEGATIVE_INFINITY;
   for (const segment of covered) {
     if (segment.speaker && !speakers.includes(segment.speaker)) speakers.push(segment.speaker);
     if (!opensWithDiscourseCue && startsWithDiscourseCue(segment.text)) opensWithDiscourseCue = true;
+    tStartMs = Math.min(tStartMs, segment.tStartMs);
+    tEndMs = Math.max(tEndMs, segment.tEndMs);
   }
 
   return {
     startIndex,
     endIndex,
-    tStartMs: covered[0].tStartMs,
-    tEndMs: covered[covered.length - 1].tEndMs,
+    tStartMs,
+    tEndMs,
     text: covered.map((segment) => segment.text).join(' '),
     speakers,
     opensWithDiscourseCue,
