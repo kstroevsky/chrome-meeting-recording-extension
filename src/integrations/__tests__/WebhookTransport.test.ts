@@ -1,4 +1,5 @@
 import { createHmac } from 'crypto';
+import { INTEGRATION_EVENT_TYPE_PREFIX } from '../config';
 import { buildIntegrationTestPayload } from '../IntegrationTestEvent';
 import { normalizeWebhookEndpoint } from '../webhook/WebhookEndpoint';
 import { createStandardWebhookSecret, signStandardWebhook } from '../webhook/StandardWebhookSigner';
@@ -55,7 +56,7 @@ describe('webhook transport', () => {
       timeoutMs: 5_000,
     });
     const body = buildIntegrationTestPayload({
-      eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventId: 'evt_test',
       eventTime: 1_700_000_000_000,
       producerId: 'producer_1',

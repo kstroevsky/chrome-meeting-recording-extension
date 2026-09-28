@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.invalid/integration-recording-snapshot-cloudevent-v1.schema.json",
+  "$id": "https://raw.githubusercontent.com/kstroevsky/chrome-meeting-recording-extension/main/docs/schemas/integration-recording-snapshot-cloudevent-v1.schema.json",
   "title": "Integration recording snapshot CloudEvent v1",
   "type": "object",
   "additionalProperties": false,
@@ -22,8 +22,10 @@
       "pattern": "^urn:meeting-recorder:destination:"
     },
     "type": {
-      "type": "string",
-      "pattern": "\\.recording\\.(ready|updated)\\.v1$"
+      "enum": [
+        "io.github.kstroevsky.meeting-recorder.recording.ready.v1",
+        "io.github.kstroevsky.meeting-recorder.recording.updated.v1"
+      ]
     },
     "subject": {
       "type": "string",
@@ -53,7 +55,7 @@
           }
         },
         "recording": {
-          "$ref": "integration-recording-v1.schema.json"
+          "$ref": "https://raw.githubusercontent.com/kstroevsky/chrome-meeting-recording-extension/main/docs/schemas/integration-recording-v1.schema.json"
         }
       }
     }

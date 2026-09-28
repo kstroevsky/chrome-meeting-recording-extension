@@ -5,6 +5,7 @@ import type {
   RecordingSnapshotEventData,
   StructuredCloudEvent,
 } from './contracts';
+import { INTEGRATION_EVENT_TYPE_PREFIX } from './config';
 
 export type RecordingCloudEventInput = {
   eventTypePrefix: string;
@@ -47,8 +48,7 @@ export function buildRecordingCloudEvent(
 }
 
 export function assertIntegrationEventTypePrefix(prefix: string): void {
-  if (!prefix.trim()) throw new Error('Integration event type prefix is required');
-  if (prefix === 'com.example' || prefix.startsWith('com.example.')) {
-    throw new Error('Integration event type prefix must use a project-controlled domain');
+  if (prefix !== INTEGRATION_EVENT_TYPE_PREFIX) {
+    throw new Error(`Integration event type prefix must be ${INTEGRATION_EVENT_TYPE_PREFIX}`);
   }
 }

@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { INTEGRATION_EVENT_TYPE_PREFIX } from '../config';
 import { IDBFactory } from 'fake-indexeddb';
 import type { IntegrationDataPolicy, IntegrationReadiness } from '../contracts';
 import { IntegrationDeliveryRepository } from '../IntegrationDeliveryRepository';
@@ -95,7 +96,7 @@ function harness(policy: IntegrationDataPolicy, start = 1_000) {
     unitOfWork,
     snapshots,
     isRecordingFinalized: async () => source.finalized,
-    eventTypePrefix: 'dev.example',
+    eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
     readyTimeoutMs: 100,
     now: () => now,
   });

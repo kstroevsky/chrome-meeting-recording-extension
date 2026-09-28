@@ -14,8 +14,6 @@ declare const __TELEMETRY_ENDPOINT__: string;
 declare const __SHARING_SERVICE_ORIGIN__: string;
 /** Service-account email the sharing Worker must name as Drive reader. Empty: not pinned. */
 declare const __SHARING_READER_EMAIL__: string | undefined;
-/** Reverse-domain CloudEvent type namespace owned/configured by this build. */
-declare const __INTEGRATION_EVENT_TYPE_PREFIX__: string;
 /**
  * The embedding model this build packaged, injected by webpack from the same
  * manifest the fetcher verified. Read through `analysisEngineConfig()` rather

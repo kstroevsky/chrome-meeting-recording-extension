@@ -1,4 +1,5 @@
 import type { IntegrationDataPolicy } from '../../../integrations/contracts';
+import { INTEGRATION_EVENT_TYPE_PREFIX } from '../../../integrations/config';
 import type { RecordingHistoryEntry } from '../../../shared/recordingHistory';
 import { utf8ByteLength } from '../../../integrations/serialization';
 import { IntegrationPreviewService } from '../IntegrationPreviewService';
@@ -97,7 +98,7 @@ describe('IntegrationPreviewService', () => {
       getAnalysisState: async () => ({ status: 'none' }),
     });
     const first = await service.build('recording:internal-secret', POLICY, {
-      eventTypePrefix: 'dev.example',
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventKind: 'recording.ready.v1',
       eventId: 'event_1',
       eventTime: 20_000,
@@ -114,7 +115,7 @@ describe('IntegrationPreviewService', () => {
       ],
     };
     const second = await service.build('recording:internal-secret', POLICY, {
-      eventTypePrefix: 'dev.example',
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventKind: 'recording.updated.v1',
       eventId: 'event_2',
       eventTime: 21_000,

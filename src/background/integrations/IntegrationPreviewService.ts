@@ -3,6 +3,7 @@ import type { RecordingContext } from '../../shared/recordingContext';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
 import type { Transcript } from '../../shared/transcript';
 import { buildIntegrationSnapshotPayload } from '../../integrations/IntegrationSnapshotBuilder';
+import { INTEGRATION_EVENT_TYPE_PREFIX } from '../../integrations/config';
 import type {
   IntegrationDataPolicy,
   IntegrationEventKind,
@@ -18,8 +19,6 @@ import type { IntegrationAnalysisProjectionSource } from '../../integrations/Int
 import { extendSpeakerPseudonyms } from '../../integrations/SpeakerPseudonyms';
 import type { IntegrationSpeakerAlias } from '../../integrations/persistence';
 import type { AnalysisExportState } from '../library/analysis/RecordingAnalysisService';
-
-export const INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX = 'dev.meeting-recorder.preview';
 
 type IntegrationPreviewDeps = {
   getHistory: (recordingId: string) => Promise<RecordingHistoryEntry | undefined>;
@@ -57,7 +56,7 @@ export class IntegrationPreviewService {
   async preview(recordingId: string, policy: IntegrationDataPolicy): Promise<IntegrationPayloadPreview> {
     const normalizedPolicy = requirePreviewPolicy(policy);
     const envelope: IntegrationSnapshotEnvelope = {
-      eventTypePrefix: INTEGRATION_PREVIEW_EVENT_TYPE_PREFIX,
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventKind: 'recording.ready.v1',
       eventId: createIntegrationId('event'),
       eventTime: this.now(),
