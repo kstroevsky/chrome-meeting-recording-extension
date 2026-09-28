@@ -30,9 +30,9 @@
         "npm": ">=10"
     },
     "scripts": {
-    "analysis:model": "node scripts/fetch-analysis-model.mjs",
-    "analysis:model:inspect": "node scripts/inspect-analysis-model.mjs",
-    "dev": "npm run analysis:model && webpack --mode=development",
+        "analysis:model": "node scripts/fetch-analysis-model.mjs",
+        "analysis:model:inspect": "node scripts/inspect-analysis-model.mjs",
+        "dev": "npm run analysis:model && webpack --mode=development",
         "build": "npm run analysis:model && webpack --mode=production",
         "build:edge": "webpack --mode=production --env target=edge",
         "build:brave": "webpack --mode=production --env target=brave",
@@ -67,11 +67,11 @@
         "test:e2e:live": "node scripts/run-real-meet-e2e.mjs",
         "test:real-meet": "node scripts/run-real-meet-e2e.mjs",
         "check:ci-domains": "node scripts/ci/plan-validation.mjs check-ownership",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.research.json --noEmit",
-    "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
-    "check:background-architecture": "node scripts/check-background-architecture.mjs",
-    "test:production-guards": "node scripts/check-production-build.mjs && npm run check:background-architecture",
-    "lint": "npm run typecheck"
+        "typecheck": "tsc --noEmit && tsc -p tsconfig.research.json --noEmit",
+        "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
+        "check:background-architecture": "node scripts/check-background-architecture.mjs",
+        "test:production-guards": "node scripts/check-production-build.mjs && npm run check:background-architecture",
+        "lint": "npm run typecheck"
     },
     "devDependencies": {
         "@playwright/test": "^1.60.0",
@@ -97,6 +97,7 @@
     },
     "dependencies": {
         "@huggingface/transformers": "4.2.0",
+        "mediabunny": "1.60.0",
         "webm-duration-fix": "^1.0.4"
     }
 }
