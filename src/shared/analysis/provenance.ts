@@ -41,8 +41,9 @@ export type EmbeddingDtype = 'fp32' | 'fp16' | 'q8' | 'int8' | 'uint8' | 'q4' | 
  * | --- | --- |
  * | 1 | initial pipeline |
  * | 2 | tail window covers only the remainder (D-22); topic importance ranks against the cluster centroid (D-23) |
+ * | 3 | token-safe lossless windows and token-length embedding batches (ADR-0009 UNIT-02 / TECH-02) |
  */
-export const PIPELINE_VERSION = 2;
+export const PIPELINE_VERSION = 3;
 
 export type AnalysisEnvironmentProvenance = {
   pipelineVersion: number;

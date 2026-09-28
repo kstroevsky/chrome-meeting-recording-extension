@@ -88,6 +88,11 @@ describe('buildContextWindows', () => {
     expect(window.tStartMs).toBe(0);
     expect(window.tEndMs).toBe(2_800);
     expect(window.text).toBe('line 0 line 1 line 2');
+    expect(window.sourceSpans).toEqual([
+      expect.objectContaining({ segmentIndex: 0, textStart: 0, textEnd: 6, timingFidelity: 'segment' }),
+      expect.objectContaining({ segmentIndex: 1, textStart: 0, textEnd: 6, timingFidelity: 'segment' }),
+      expect.objectContaining({ segmentIndex: 2, textStart: 0, textEnd: 6, timingFidelity: 'segment' }),
+    ]);
   });
 
   it('covers the full media interval when later utterances overlap a longer earlier one', () => {

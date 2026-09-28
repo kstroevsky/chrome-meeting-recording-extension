@@ -19,7 +19,10 @@
  */
 
 import type { Embedding } from '../../shared/analysis/types';
+import type { ContextWindow } from '../../shared/analysis/types';
 import type { EmbeddingDtype } from '../../shared/analysis/provenance';
+import type { WindowConfig } from '../../shared/analysis/windows';
+import type { TranscriptSegment } from '../../shared/transcript';
 import type {
   AnalysisWorkerRequest,
   AnalysisWorkerResponse,
@@ -52,6 +55,7 @@ export type EmbeddingEngineInfo = {
   device: EmbeddingDevice;
   dimensions: number;
   dtype: EmbeddingDtype;
+  maxTokens: number;
   loadMs: number;
 };
 
@@ -208,6 +212,30 @@ export class EmbeddingWorkerClient {
     return vectors;
   }
 
+  /** Uses the already-loaded packaged tokenizer to make lossless token-safe windows. */
+  async prepareWindows(segments: TranscriptSegment[], config: WindowConfig): Promise<ContextWindow[]> {
+    if (this.failure) throw this.failure;
+    if (this.disposed) throw new Error('The embedding worker client is disposed');
+    if (!segments.length) return [];
+
+    const response = await this.request({
+      type: 'PREPARE_WINDOWS',
+      seq: this.nextSeq(),
+      segments,
+      config,
+    });
+    if (response.type === 'ERROR') throw new Error(response.error);
+    if (response.type !== 'PREPARED_WINDOWS') {
+      throw new Error(`Unexpected embedding reply: ${response.type}`);
+    }
+    for (const window of response.windows) {
+      if (!window.tokenLength || window.tokenLength > this.info.maxTokens) {
+        throw new Error('The embedding worker returned a window outside the packaged token limit');
+      }
+    }
+    return response.windows;
+  }
+
   /** An `EncodeBatch` bound to this client, for `analyzeTranscript`. */
   encoder(): (texts: string[]) => Promise<Embedding[]> {
     return (texts) => this.embed(texts);
@@ -288,7 +316,13 @@ function openHandshake(
       const data = event.data;
       if (data?.type === 'OPENED') {
         cleanup();
-        resolve({ device: data.device, dimensions: data.dimensions, dtype: data.dtype, loadMs: data.loadMs });
+        resolve({
+          device: data.device,
+          dimensions: data.dimensions,
+          dtype: data.dtype,
+          maxTokens: data.maxTokens,
+          loadMs: data.loadMs,
+        });
       } else if (data?.type === 'ERROR') {
         cleanup();
         reject(new Error(`The embedding worker could not open: ${data.error}`));

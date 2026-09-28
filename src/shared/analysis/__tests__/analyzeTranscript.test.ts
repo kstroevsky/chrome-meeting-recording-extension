@@ -1,5 +1,6 @@
 import { EMBEDDING_BATCH_SIZE, analyzeTranscript } from '../analyzeTranscript';
 import type { AnalysisConfig } from '../types';
+import { buildContextWindows } from '../windows';
 import type { TranscriptSegment } from '../../transcript';
 
 /**
@@ -116,6 +117,53 @@ describe('analyzeTranscript', () => {
     expect(EMBEDDING_BATCH_SIZE).toBe(32);
     expect(sizes.slice(0, -1).every((n) => n === 32)).toBe(true);
     expect(sizes[sizes.length - 1]).toBeLessThanOrEqual(32);
+  });
+
+  it('buckets by token length but restores chronological vectors before analysis', async () => {
+    const transcript = transcriptOf([
+      ['redis', 4],
+      ['berlin', 4],
+      ['hiring', 4],
+      ['release', 4],
+    ]);
+    const chronological = buildContextWindows(transcript, CONFIG);
+    const tokenLengths = [40, 10, 30, 20];
+    const prepared = chronological.map((window, index) => ({
+      ...window,
+      tokenLength: tokenLengths[index],
+    }));
+    const seen: string[] = [];
+    const recordingEncoder = async (texts: string[]) => {
+      seen.push(...texts);
+      return encode(texts);
+    };
+
+    const [baseline, bucketed] = await Promise.all([
+      analyzeTranscript(transcript, CONFIG, encode),
+      analyzeTranscript(transcript, CONFIG, recordingEncoder, {
+        prepareWindows: async () => prepared,
+      }),
+    ]);
+
+    expect(seen).toEqual([
+      chronological[1].text,
+      chronological[3].text,
+      chronological[2].text,
+      chronological[0].text,
+    ]);
+    const deterministicShape = (result: Awaited<ReturnType<typeof analyzeTranscript>>) => ({
+      utteranceCount: result.utteranceCount,
+      segments: result.segments.map(({ id: _id, localTopicId: _topic, embedding, ...segment }) => ({
+        ...segment,
+        embedding: Array.from(embedding),
+      })),
+      topics: result.topics.map(({ id: _id, segments, centroid, ...topic }) => ({
+        ...topic,
+        segmentCount: segments.length,
+        centroid: Array.from(centroid),
+      })),
+    });
+    expect(deterministicShape(bucketed)).toEqual(deterministicShape(baseline));
   });
 
   it('reports progress as windows are encoded', async () => {

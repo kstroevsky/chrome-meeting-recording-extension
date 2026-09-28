@@ -4,6 +4,7 @@ import type { AnalysisResult } from '../../../shared/analysis/analyzeTranscript'
 import type { AnalysisConfig } from '../../../shared/analysis/types';
 import type { AnalysisProvenance } from '../../../shared/analysis/provenance';
 import type { TranscriptSegment } from '../../../shared/transcript';
+import { buildContextWindows } from '../../../shared/analysis/windows';
 
 const CONFIG: AnalysisConfig = {
   windowUtterances: 4,
@@ -64,7 +65,8 @@ function fakeEngine(overrides: { device?: 'webgpu' | 'wasm'; failAfter?: number 
   let batches = 0;
   const state = { disposed: 0, batches: 0 };
   const client: AnalysisEmbeddingEngine = {
-    info: { device: overrides.device ?? 'webgpu', dimensions: 2, dtype: 'q8' as const, loadMs: 1 },
+    info: { device: overrides.device ?? 'webgpu', dimensions: 2, dtype: 'q8' as const, maxTokens: 512, loadMs: 1 },
+    prepareWindows: async (transcript, config) => buildContextWindows(transcript, config),
     encoder: () => async (texts: string[]) => {
       batches += 1;
       state.batches = batches;

@@ -13,7 +13,12 @@
  */
 
 import type { TranscriptSegment } from '../transcript';
-import { startsWithDiscourseCue, type ContextWindow, type SegmentationConfig } from './types';
+import {
+  startsWithDiscourseCue,
+  type AnalysisSourceSpan,
+  type ContextWindow,
+  type SegmentationConfig,
+} from './types';
 
 /** SEG-02 bounds a window to this many utterances on either side of a boundary. */
 const MIN_WINDOW_UTTERANCES = 3;
@@ -85,24 +90,61 @@ export function buildContextWindows(
 }
 
 function toWindow(segments: TranscriptSegment[], startIndex: number, endIndex: number): ContextWindow {
-  const covered = segments.slice(startIndex, endIndex);
+  const sourceSpans: AnalysisSourceSpan[] = [];
+  for (let segmentIndex = startIndex; segmentIndex < endIndex; segmentIndex += 1) {
+    const segment = segments[segmentIndex];
+    sourceSpans.push({
+      segmentIndex,
+      textStart: 0,
+      textEnd: segment.text.length,
+      tStartMs: segment.tStartMs,
+      tEndMs: segment.tEndMs,
+      ...(segment.speaker ? { speaker: segment.speaker } : {}),
+      timingFidelity: 'segment',
+    });
+  }
+  return contextWindowFromSourceSpans(segments, sourceSpans);
+}
+
+/** Builds one derived window from explicit canonical source coverage. */
+export function contextWindowFromSourceSpans(
+  segments: TranscriptSegment[],
+  sourceSpans: AnalysisSourceSpan[],
+  tokenLength?: number,
+): ContextWindow {
+  if (!sourceSpans.length) throw new Error('A contextual window must cover at least one source span');
   const speakers: string[] = [];
   let opensWithDiscourseCue = false;
   let tStartMs = Number.POSITIVE_INFINITY;
   let tEndMs = Number.NEGATIVE_INFINITY;
-  for (const segment of covered) {
-    if (segment.speaker && !speakers.includes(segment.speaker)) speakers.push(segment.speaker);
-    if (!opensWithDiscourseCue && startsWithDiscourseCue(segment.text)) opensWithDiscourseCue = true;
-    tStartMs = Math.min(tStartMs, segment.tStartMs);
-    tEndMs = Math.max(tEndMs, segment.tEndMs);
+  const textParts: string[] = [];
+  let previous: AnalysisSourceSpan | undefined;
+  for (const span of sourceSpans) {
+    const segment = segments[span.segmentIndex];
+    if (!segment) throw new Error(`Analysis source span references missing segment ${span.segmentIndex}`);
+    if (span.textStart < 0 || span.textEnd > segment.text.length || span.textEnd <= span.textStart) {
+      throw new Error(`Analysis source span is outside segment ${span.segmentIndex}`);
+    }
+    const part = segment.text.slice(span.textStart, span.textEnd);
+    if (previous && previous.segmentIndex !== span.segmentIndex) textParts.push(' ');
+    textParts.push(part);
+    if (span.speaker && !speakers.includes(span.speaker)) speakers.push(span.speaker);
+    if (!opensWithDiscourseCue && span.textStart === 0 && startsWithDiscourseCue(part)) {
+      opensWithDiscourseCue = true;
+    }
+    tStartMs = Math.min(tStartMs, span.tStartMs);
+    tEndMs = Math.max(tEndMs, span.tEndMs);
+    previous = span;
   }
 
   return {
-    startIndex,
-    endIndex,
+    startIndex: sourceSpans[0].segmentIndex,
+    endIndex: sourceSpans[sourceSpans.length - 1].segmentIndex + 1,
     tStartMs,
     tEndMs,
-    text: covered.map((segment) => segment.text).join(' '),
+    text: textParts.join(''),
+    sourceSpans: sourceSpans.map((span) => ({ ...span })),
+    ...(tokenLength != null ? { tokenLength } : {}),
     speakers,
     opensWithDiscourseCue,
   };

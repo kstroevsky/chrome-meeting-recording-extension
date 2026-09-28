@@ -35,6 +35,8 @@ import {
 import type { AnalysisJob } from '../../shared/analysis/job';
 import type { AnalysisProvenance } from '../../shared/analysis/provenance';
 import type { AnalysisConfig } from '../../shared/analysis/types';
+import type { ContextWindow } from '../../shared/analysis/types';
+import type { WindowConfig } from '../../shared/analysis/windows';
 import type { TranscriptSegment } from '../../shared/transcript';
 import type { EmbeddingEngineInfo } from './EmbeddingWorkerClient';
 import { describeRuntimeError } from '../errors';
@@ -42,6 +44,7 @@ import { describeRuntimeError } from '../errors';
 /** The small engine surface the analysis pipeline actually needs. */
 export type AnalysisEmbeddingEngine = {
   readonly info: EmbeddingEngineInfo;
+  prepareWindows(transcript: TranscriptSegment[], config: WindowConfig): Promise<ContextWindow[]>;
   encoder(): EncodeBatch;
   dispose(): void;
 };
@@ -246,6 +249,7 @@ export class AnalysisManager {
 
       const result = await analyzeTranscript(transcript, config, engine.encoder(), {
         signal: controller.signal,
+        prepareWindows: (segments, windowConfig) => engine.prepareWindows(segments, windowConfig),
         onProgress: ({ windowsEncoded, windowsTotal }) => {
           task.job = {
             ...task.job,

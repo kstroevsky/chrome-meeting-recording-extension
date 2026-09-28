@@ -66,6 +66,7 @@ function opened(overrides: Partial<Extract<AnalysisWorkerResponse, { type: 'OPEN
     device: 'webgpu' as const,
     dimensions: 4,
     dtype: 'q8' as const,
+    maxTokens: 512,
     loadMs: 12,
     ...overrides,
   };
@@ -170,6 +171,79 @@ describe('EmbeddingWorkerClient', () => {
     // Each vector owns its bytes: mutating one cannot reach another.
     result[0][0] = 99;
     expect(result[1][0]).toBe(1);
+  });
+
+  it('prepares windows in the same worker that owns the packaged tokenizer', async () => {
+    const worker = new FakeWorker();
+    const client = await openClient(worker);
+    const segment = { tStartMs: 0, tEndMs: 1_000, speaker: 'Ada', text: 'hello world' };
+
+    const promise = client.prepareWindows([segment], { windowUtterances: 4, windowStride: 4 });
+    await Promise.resolve();
+    expect(worker.sent[1]).toMatchObject({
+      type: 'PREPARE_WINDOWS',
+      seq: 1,
+      segments: [segment],
+    });
+    worker.reply({
+      type: 'PREPARED_WINDOWS',
+      seq: 1,
+      windows: [{
+        startIndex: 0,
+        endIndex: 1,
+        tStartMs: 0,
+        tEndMs: 1_000,
+        text: 'hello world',
+        sourceSpans: [{
+          segmentIndex: 0,
+          textStart: 0,
+          textEnd: 11,
+          tStartMs: 0,
+          tEndMs: 1_000,
+          speaker: 'Ada',
+          timingFidelity: 'segment',
+        }],
+        tokenLength: 5,
+        speakers: ['Ada'],
+        opensWithDiscourseCue: false,
+      }],
+    });
+
+    await expect(promise).resolves.toMatchObject([{ text: 'hello world', tokenLength: 5 }]);
+  });
+
+  it('rejects a prepared window beyond the packaged model limit', async () => {
+    const worker = new FakeWorker();
+    const client = await openClient(worker);
+    const promise = client.prepareWindows(
+      [{ tStartMs: 0, tEndMs: 1, text: 'too long' }],
+      { windowUtterances: 4, windowStride: 4 },
+    );
+    await Promise.resolve();
+    worker.reply({
+      type: 'PREPARED_WINDOWS',
+      seq: 1,
+      windows: [{
+        startIndex: 0,
+        endIndex: 1,
+        tStartMs: 0,
+        tEndMs: 1,
+        text: 'too long',
+        sourceSpans: [{
+          segmentIndex: 0,
+          textStart: 0,
+          textEnd: 8,
+          tStartMs: 0,
+          tEndMs: 1,
+          timingFidelity: 'segment',
+        }],
+        tokenLength: 513,
+        speakers: [],
+        opensWithDiscourseCue: false,
+      }],
+    });
+
+    await expect(promise).rejects.toThrow(/outside the packaged token limit/);
   });
 
   it('refuses a reply whose vector count does not match the batch', async () => {

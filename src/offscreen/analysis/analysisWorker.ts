@@ -20,6 +20,7 @@
 import { env, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 import { toEncoderInput } from '../../shared/analysis/encoderInput';
 import type { EmbeddingDtype } from '../../shared/analysis/provenance';
+import { buildTokenBoundedContextWindows } from '../../shared/analysis/tokenBoundedWindows';
 import type {
   AnalysisWorkerOpen,
   AnalysisWorkerRequest,
@@ -40,6 +41,7 @@ const ctx = self as unknown as {
 
 let extractor: FeatureExtractionPipeline | undefined;
 let dimensions = 0;
+let maxTokens = 0;
 let activeDevice: EmbeddingDevice = 'wasm';
 let activeDtype: EmbeddingDtype = 'q8';
 
@@ -89,9 +91,16 @@ async function load(request: AnalysisWorkerOpen): Promise<void> {
       // as a hard failure instead of falling through to WASM.
       const probe = await candidate([toEncoderInput('probe')], { pooling: 'mean', normalize: true });
 
+      const tokenizerLimit = positiveInteger(candidate.tokenizer.model_max_length);
+      const modelLimit = positiveInteger((candidate.model.config as { max_position_embeddings?: unknown }).max_position_embeddings);
+      if (!tokenizerLimit || !modelLimit) {
+        throw new Error('The packaged embedding artifacts do not declare a finite token limit');
+      }
+
       extractor = candidate;
       activeDevice = device;
       dimensions = (probe.dims as number[])[1];
+      maxTokens = Math.min(tokenizerLimit, modelLimit);
       lastError = undefined;
       break;
     } catch (error) {
@@ -112,8 +121,18 @@ async function load(request: AnalysisWorkerOpen): Promise<void> {
     device: activeDevice,
     dimensions,
     dtype: activeDtype,
+    maxTokens,
     loadMs: Math.round(performance.now() - started),
   });
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function tokenLength(text: string): number {
+  if (!extractor) throw new Error('The embedding worker was asked to tokenize before it was opened');
+  return extractor.tokenizer.encode(toEncoderInput(text), { add_special_tokens: true }).length;
 }
 
 async function embed(texts: string[]): Promise<{ data: Float32Array; count: number; dimensions: number }> {
@@ -132,6 +151,20 @@ ctx.onmessage = (event: MessageEvent<AnalysisWorkerRequest>) => {
     try {
       if (request.type === 'OPEN') {
         await load(request);
+        return;
+      }
+      if (request.type === 'PREPARE_WINDOWS') {
+        if (!extractor || !maxTokens) throw new Error('The embedding worker was asked to prepare windows before it was opened');
+        post({
+          type: 'PREPARED_WINDOWS',
+          seq: request.seq,
+          windows: buildTokenBoundedContextWindows(
+            request.segments,
+            request.config,
+            maxTokens,
+            tokenLength,
+          ),
+        });
         return;
       }
       const started = performance.now();

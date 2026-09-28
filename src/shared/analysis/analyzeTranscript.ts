@@ -18,7 +18,7 @@
  * vectors instead of re-embedding for each of 40,500 configurations.
  */
 
-import { buildContextWindows } from './windows';
+import { buildContextWindows, type WindowConfig } from './windows';
 import { findBoundaryPeaks, scoreBoundaries } from './boundaries';
 import { buildConversationSegments } from './segments';
 import { clusterSegments } from './clusters';
@@ -32,6 +32,10 @@ export const EMBEDDING_BATCH_SIZE = 32;
 
 /** Encodes a batch of window texts. Supplied by the caller; see the file docblock. */
 export type EncodeBatch = (texts: string[]) => Promise<Embedding[]>;
+export type PrepareWindows = (
+  transcript: TranscriptSegment[],
+  config: WindowConfig,
+) => Promise<ContextWindow[]>;
 
 export type AnalysisProgress = {
   windowsEncoded: number;
@@ -48,6 +52,8 @@ export type AnalyzeOptions = {
   onProgress?: (progress: AnalysisProgress) => void;
   /** Aborts between batches, so a cancelled job stops at the next boundary. */
   signal?: { aborted: boolean };
+  /** Production supplies the packaged tokenizer's lossless token-safe window builder. */
+  prepareWindows?: PrepareWindows;
 };
 
 /**
@@ -64,7 +70,9 @@ export async function analyzeTranscript(
   encode: EncodeBatch,
   options: AnalyzeOptions = {},
 ): Promise<AnalysisResult> {
-  const windows = buildContextWindows(transcript, config);
+  const windows = options.prepareWindows
+    ? await options.prepareWindows(transcript, config)
+    : buildContextWindows(transcript, config);
   if (!windows.length) return { segments: [], topics: [], utteranceCount: transcript.length };
 
   const embeddings = await encodeAll(windows, encode, options);
@@ -114,16 +122,28 @@ async function encodeAll(
   encode: EncodeBatch,
   options: AnalyzeOptions,
 ): Promise<Embedding[]> {
-  const embeddings: Embedding[] = [];
-  for (let i = 0; i < windows.length; i += EMBEDDING_BATCH_SIZE) {
+  // Stable length bucketing reduces padding inside a batch. Each row keeps its
+  // original chronological index and is scattered back before any downstream
+  // stage sees it, so batching cannot change boundary or clustering order.
+  const ordered = windows
+    .map((window, index) => ({ window, index }))
+    .sort((left, right) => (
+      (left.window.tokenLength ?? Number.MAX_SAFE_INTEGER)
+      - (right.window.tokenLength ?? Number.MAX_SAFE_INTEGER)
+      || left.index - right.index
+    ));
+  const embeddings = new Array<Embedding>(windows.length);
+  let windowsEncoded = 0;
+  for (let i = 0; i < ordered.length; i += EMBEDDING_BATCH_SIZE) {
     if (options.signal?.aborted) throw new Error('Analysis was cancelled');
-    const batch = windows.slice(i, i + EMBEDDING_BATCH_SIZE);
-    const encoded = await encode(batch.map((window) => window.text));
+    const batch = ordered.slice(i, i + EMBEDDING_BATCH_SIZE);
+    const encoded = await encode(batch.map(({ window }) => window.text));
     if (encoded.length !== batch.length) {
       throw new Error(`The encoder returned ${encoded.length} vectors for ${batch.length} windows`);
     }
-    embeddings.push(...encoded);
-    options.onProgress?.({ windowsEncoded: embeddings.length, windowsTotal: windows.length });
+    batch.forEach(({ index }, batchIndex) => { embeddings[index] = encoded[batchIndex]; });
+    windowsEncoded += batch.length;
+    options.onProgress?.({ windowsEncoded, windowsTotal: windows.length });
   }
   return embeddings;
 }
