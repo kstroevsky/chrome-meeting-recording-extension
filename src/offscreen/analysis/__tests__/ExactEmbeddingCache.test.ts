@@ -5,6 +5,7 @@ const identity = (overrides: Partial<ExactEncoderInputIdentity> = {}): ExactEnco
   preprocessingFingerprint: 'query-prefix:v1|special-tokens|mean|l2',
   inputIds: [0n, 7n, 8n, 2n, 1n],
   attentionMask: [1n, 1n, 1n, 1n, 0n],
+  tokenTypeIds: [0n, 0n, 0n, 0n, 0n],
   ...overrides,
 });
 
@@ -24,7 +25,7 @@ describe('ExactEmbeddingCache', () => {
     expect(subject.stats()).toMatchObject({ hits: 1, misses: 1, entries: 1 });
   });
 
-  it('misses for token, mask, artifact, preprocessing, or recording-scope changes', async () => {
+  it('misses for token, mask, token-type, artifact, preprocessing, or recording-scope changes', async () => {
     const subject = cache();
     let computes = 0;
     const run = (recordingId: string, value: ExactEncoderInputIdentity) => subject.getOrCompute(
@@ -36,12 +37,13 @@ describe('ExactEmbeddingCache', () => {
     await run('recording:1', identity());
     await run('recording:1', identity({ inputIds: [0n, 7n, 9n, 2n, 1n] }));
     await run('recording:1', identity({ attentionMask: [1n, 1n, 1n, 0n, 0n] }));
+    await run('recording:1', identity({ tokenTypeIds: [0n, 0n, 1n, 0n, 0n] }));
     await run('recording:1', identity({ artifactFingerprint: 'e5@next:q8:wasm' }));
     await run('recording:1', identity({ preprocessingFingerprint: 'passage-prefix:v1|special-tokens|mean|l2' }));
     await run('recording:2', identity());
 
-    expect(computes).toBe(6);
-    expect(subject.stats()).toMatchObject({ hits: 0, misses: 6, entries: 6 });
+    expect(computes).toBe(7);
+    expect(subject.stats()).toMatchObject({ hits: 0, misses: 7, entries: 7 });
   });
 
   it('coalesces simultaneous exact requests and never caches a failed compute', async () => {
@@ -62,10 +64,14 @@ describe('ExactEmbeddingCache', () => {
     expect(computes).toBe(1);
     expect(subject.stats().coalesced).toBe(1);
 
-    await expect(subject.getOrCompute('recording:1', identity({ inputIds: [99n] , attentionMask: [1n] }), async () => {
+    await expect(subject.getOrCompute('recording:1', identity({
+      inputIds: [99n], attentionMask: [1n], tokenTypeIds: [0n],
+    }), async () => {
       throw new Error('backend failed');
     })).rejects.toThrow('backend failed');
-    await expect(subject.getOrCompute('recording:1', identity({ inputIds: [99n], attentionMask: [1n] }), async () => (
+    await expect(subject.getOrCompute('recording:1', identity({
+      inputIds: [99n], attentionMask: [1n], tokenTypeIds: [0n],
+    }), async () => (
       Float32Array.of(9)
     ))).resolves.toEqual(Float32Array.of(9));
   });
@@ -83,7 +89,7 @@ describe('ExactEmbeddingCache', () => {
     let computes = 0;
     const run = (token: bigint) => subject.getOrCompute(
       'recording:1',
-      identity({ inputIds: [token], attentionMask: [1n] }),
+      identity({ inputIds: [token], attentionMask: [1n], tokenTypeIds: [0n] }),
       async () => Float32Array.of(++computes),
     );
     await run(1n);

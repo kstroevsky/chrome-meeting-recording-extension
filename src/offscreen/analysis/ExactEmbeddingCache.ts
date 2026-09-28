@@ -6,6 +6,8 @@ export type ExactEncoderInputIdentity = {
   preprocessingFingerprint: string;
   inputIds: readonly (number | bigint)[];
   attentionMask: readonly (number | bigint)[];
+  /** Present when the selected graph consumes token-type/segment ids. */
+  tokenTypeIds?: readonly (number | bigint)[];
 };
 
 export type ExactEmbeddingCacheStats = {
@@ -168,11 +170,15 @@ export function canonicalEncoderInput(identity: ExactEncoderInputIdentity): stri
   if (identity.inputIds.length !== identity.attentionMask.length || !identity.inputIds.length) {
     throw new Error('Encoder cache identity requires equal non-empty ids and attention mask');
   }
+  if (identity.tokenTypeIds && identity.tokenTypeIds.length !== identity.inputIds.length) {
+    throw new Error('Encoder cache token-type ids must match the input length');
+  }
   return [
     field(identity.artifactFingerprint),
     field(identity.preprocessingFingerprint),
     numericSequence(identity.inputIds),
     numericSequence(identity.attentionMask),
+    field(identity.tokenTypeIds ? numericSequence(identity.tokenTypeIds) : ''),
   ].join('');
 }
 
