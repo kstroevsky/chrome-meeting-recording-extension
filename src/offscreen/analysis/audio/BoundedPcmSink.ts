@@ -47,7 +47,7 @@ export type PcmSinkSummary = {
  */
 export async function drainDecodedAudioSamples(
   samples: AsyncIterable<DecodedAudioSampleLike>,
-  consume: (chunk: PcmChunk) => Promise<void>,
+  consume: (chunk: PcmChunk) => Promise<ArrayBuffer | void>,
   options: BoundedPcmSinkOptions,
 ): Promise<PcmSinkSummary> {
   const { poolSize, bufferBytes } = options;
@@ -114,12 +114,19 @@ export async function drainDecodedAudioSamples(
 
       let work!: Promise<void>;
       work = (async () => {
+        let returned: ArrayBuffer | void;
         try {
-          await consume(chunk);
+          returned = await consume(chunk);
         } finally {
-          free.push(buffer);
           inFlight.delete(work);
         }
+        const reusable = returned ?? buffer;
+        if (reusable.byteLength !== bufferBytes) {
+          throw new Error(
+            'PCM consumer detached or replaced a pooled buffer without returning equal capacity',
+          );
+        }
+        free.push(reusable);
       })();
       inFlight.add(work);
 

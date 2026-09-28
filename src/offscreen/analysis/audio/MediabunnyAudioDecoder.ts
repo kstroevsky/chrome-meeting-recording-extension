@@ -34,7 +34,7 @@ const DEFAULT_SOURCE_CACHE_BYTES = 8 * 1024 * 1024;
  */
 export async function decodeSealedAudioFile(
   file: File,
-  consume: (chunk: PcmChunk) => Promise<void>,
+  consume: (chunk: PcmChunk) => Promise<ArrayBuffer | void>,
   options: MediabunnyDecodeOptions,
 ): Promise<MediabunnyDecodeSummary> {
   if (!(file instanceof Blob) || file.size < 1) throw new Error('Audio decoding requires a non-empty sealed File');

@@ -3,6 +3,7 @@ import {
   type DecodedAudioSampleLike,
   type PcmChunk,
 } from '../audio/BoundedPcmSink';
+import { MessageChannel } from 'node:worker_threads';
 
 class FakeSample implements DecodedAudioSampleLike {
   closed = false;
@@ -30,6 +31,20 @@ class FakeSample implements DecodedAudioSampleLike {
 
 async function* sequence(samples: FakeSample[]): AsyncGenerator<FakeSample> {
   for (const sample of samples) yield sample;
+}
+
+async function transferBuffer(buffer: ArrayBuffer): Promise<ArrayBuffer> {
+  const { port1, port2 } = new MessageChannel();
+  try {
+    const received = new Promise<ArrayBuffer>((resolve) => {
+      port2.once('message', (value: ArrayBuffer) => resolve(value));
+    });
+    port1.postMessage(buffer, [buffer]);
+    return await received;
+  } finally {
+    port1.close();
+    port2.close();
+  }
 }
 
 describe('TECH-08 bounded PCM sink', () => {
@@ -62,6 +77,30 @@ describe('TECH-08 bounded PCM sink', () => {
 
     await expect(work).resolves.toMatchObject({ samples: 3, frames: 6, bytesCopied: 24 });
     expect(samples.every((sample) => sample.closed)).toBe(true);
+  });
+
+  it('reuses a buffer returned after transferable ownership round-trips through a consumer', async () => {
+    const samples = [
+      new FakeSample(0, 4, 1, 1, [1]),
+      new FakeSample(0.25, 4, 1, 1, [2]),
+    ];
+    const seen: number[] = [];
+
+    await expect(drainDecodedAudioSamples(sequence(samples), async (chunk) => {
+      seen.push(new Float32Array(chunk.buffer, 0, chunk.byteLength / 4)[0]);
+      const consumerOwned = await transferBuffer(chunk.buffer);
+      expect(chunk.buffer.byteLength).toBe(0);
+      return await transferBuffer(consumerOwned);
+    }, { trackId: 9, poolSize: 1, bufferBytes: 8 })).resolves.toMatchObject({ samples: 2 });
+
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it('rejects a detached pooled buffer that the consumer does not return', async () => {
+    const sample = new FakeSample(0, 4, 1, 1, [1]);
+    await expect(drainDecodedAudioSamples(sequence([sample]), async (chunk) => {
+      await transferBuffer(chunk.buffer);
+    }, { trackId: 9, poolSize: 1, bufferBytes: 8 })).rejects.toThrow(/without returning equal capacity/);
   });
 
   it('preserves timestamps and marks real discontinuities', async () => {
