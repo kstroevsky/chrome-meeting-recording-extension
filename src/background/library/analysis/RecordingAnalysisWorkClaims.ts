@@ -1,3 +1,4 @@
+import type { AnalysisJob } from '../../../shared/analysis/job';
 import { ANALYSIS_WORK_STORE, openRecordingHistoryDatabase } from '../RecordingLibraryDatabase';
 import {
   normalizeRecordingAnalysisWork,
@@ -9,6 +10,10 @@ export type ClaimedAnalysisWork = RecordingAnalysisWork & {
   transcriptHash: string;
   claim: NonNullable<RecordingAnalysisWork['claim']>;
 };
+
+export type AnalysisAttemptTransition =
+  | { disposition: 'retry-wait'; nextAttemptAt: number; error?: string }
+  | { disposition: 'canceled' | 'unsupported'; error?: string };
 
 export function isClaimable(work: RecordingAnalysisWork, now: number): boolean {
   if (work.disposition === 'pending' || work.disposition === 'retry-wait') return true;
@@ -72,6 +77,37 @@ export function createAttemptToken(): string {
   const bytes = new Uint8Array(16);
   globalThis.crypto.getRandomValues(bytes);
   return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+export function matchesAnalysisAttempt(
+  work: RecordingAnalysisWork | undefined,
+  job: AnalysisJob,
+): work is RecordingAnalysisWork {
+  return Boolean(
+    work
+    && job.requestEpoch
+    && work.requestEpoch === job.requestEpoch
+    && work.disposition === 'claimed'
+    && work.claim?.attemptToken === job.id,
+  );
+}
+
+export function applyAnalysisAttemptTransition(
+  work: RecordingAnalysisWork,
+  transition: AnalysisAttemptTransition,
+  updatedAt: number,
+): RecordingAnalysisWork {
+  const next: RecordingAnalysisWork = {
+    ...work,
+    disposition: transition.disposition,
+    updatedAt,
+  };
+  delete next.claim;
+  if (transition.disposition === 'retry-wait') next.nextAttemptAt = Math.max(0, transition.nextAttemptAt);
+  else delete next.nextAttemptAt;
+  if (transition.error?.trim()) next.error = transition.error.trim().slice(0, 2_048);
+  else delete next.error;
+  return next;
 }
 
 function matchesClaim(
