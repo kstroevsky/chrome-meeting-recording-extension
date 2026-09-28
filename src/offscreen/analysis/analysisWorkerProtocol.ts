@@ -17,6 +17,7 @@ import type { TranscriptSegment } from '../../shared/transcript';
 
 /** Which backend to attempt. `wasm` is the floor every machine has (RES-06). */
 export type EmbeddingDevice = 'webgpu' | 'wasm';
+export type AnalysisPoolingMode = 'transformers' | 'locality' | 'pooled-onnx';
 
 export type AnalysisWorkerOpen = {
   type: 'OPEN';
@@ -30,6 +31,8 @@ export type AnalysisWorkerOpen = {
   /** Production sets false so the parent can retry each backend in a fresh worker. */
   allowFallback?: boolean;
   dtype: EmbeddingDtype;
+  /** Research-only graph/kernel selector; production clients omit it. */
+  poolingMode?: AnalysisPoolingMode;
 };
 
 export type AnalysisWorkerEmbed = {

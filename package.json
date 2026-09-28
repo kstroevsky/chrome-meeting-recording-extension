@@ -32,6 +32,7 @@
     "scripts": {
         "analysis:model": "node scripts/fetch-analysis-model.mjs",
         "analysis:model:inspect": "node scripts/inspect-analysis-model.mjs",
+        "analysis:model:pool": "npm run analysis:model && node scripts/build-pooled-analysis-model.mjs",
         "dev": "npm run analysis:model && webpack --mode=development",
         "build": "npm run analysis:model && webpack --mode=production",
         "build:edge": "webpack --mode=production --env target=edge",
