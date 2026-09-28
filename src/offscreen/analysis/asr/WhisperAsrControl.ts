@@ -128,6 +128,7 @@ export async function createLocalWhisperTranscriber(
   }
 
   const asr = await pipeline('automatic-speech-recognition', config.modelId, {
+    revision: config.revision,
     device: config.device,
     dtype: {
       model: config.encoderDtype,
