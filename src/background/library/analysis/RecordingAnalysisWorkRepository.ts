@@ -8,14 +8,18 @@ import {
   type AnalysisWorkDisposition,
   type RecordingAnalysisWork,
 } from './RecordingAnalysisWork';
+import {
+  claimWork,
+  cleanAnalysisWorkError,
+  createAttemptToken,
+  isClaimable,
+  transitionClaim,
+  type ClaimedAnalysisWork,
+} from './RecordingAnalysisWorkClaims';
+
+export type { ClaimedAnalysisWork } from './RecordingAnalysisWorkClaims';
 
 const DEFAULT_LEASE_MS = 2 * 60_000;
-
-export type ClaimedAnalysisWork = RecordingAnalysisWork & {
-  disposition: 'claimed';
-  transcriptHash: string;
-  claim: NonNullable<RecordingAnalysisWork['claim']>;
-};
 
 /**
  * Durable scheduler state for ADR-0009 TECH-04.
@@ -162,11 +166,11 @@ export class RecordingAnalysisWorkRepository {
     error: string,
     nextAttemptAt: number,
   ): Promise<boolean> {
-    return await this.transitionClaim(recordingId, requestEpoch, attemptToken, (current) => ({
+    return await transitionClaim(this.factory, recordingId, requestEpoch, attemptToken, (current) => ({
       ...current,
       disposition: 'retry-wait',
       nextAttemptAt: Math.max(0, nextAttemptAt),
-      error: cleanError(error),
+      error: cleanAnalysisWorkError(error),
       updatedAt: this.now(),
       claim: undefined,
     }));
@@ -180,7 +184,7 @@ export class RecordingAnalysisWorkRepository {
     disposition: Extract<AnalysisWorkDisposition, 'canceled' | 'unsupported'>,
     error?: string,
   ): Promise<boolean> {
-    return await this.transitionClaim(recordingId, requestEpoch, attemptToken, (current) => {
+    return await transitionClaim(this.factory, recordingId, requestEpoch, attemptToken, (current) => {
       const next: RecordingAnalysisWork = {
         ...current,
         disposition,
@@ -188,7 +192,7 @@ export class RecordingAnalysisWorkRepository {
       };
       delete next.claim;
       delete next.nextAttemptAt;
-      if (error) next.error = cleanError(error);
+      if (error) next.error = cleanAnalysisWorkError(error);
       else delete next.error;
       return next;
     });
@@ -200,7 +204,7 @@ export class RecordingAnalysisWorkRepository {
     requestEpoch: number,
     attemptToken: string,
   ): Promise<boolean> {
-    return await this.transitionClaim(recordingId, requestEpoch, attemptToken, (current) => {
+    return await transitionClaim(this.factory, recordingId, requestEpoch, attemptToken, (current) => {
       const next: RecordingAnalysisWork = {
         ...current,
         disposition: 'pending',
@@ -214,87 +218,7 @@ export class RecordingAnalysisWorkRepository {
     });
   }
 
-  private async transitionClaim(
-    recordingId: string,
-    requestEpoch: number,
-    attemptToken: string,
-    update: (current: RecordingAnalysisWork) => RecordingAnalysisWork,
-  ): Promise<boolean> {
-    const database = await this.open();
-    return await new Promise((resolve, reject) => {
-      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readwrite');
-      const store = transaction.objectStore(ANALYSIS_WORK_STORE);
-      const request = store.get(recordingId);
-      let changed = false;
-      request.onerror = () => reject(request.error ?? new Error('Could not read claimed analysis work'));
-      request.onsuccess = () => {
-        const current = normalizeRecordingAnalysisWork(request.result);
-        if (!matchesClaim(current, requestEpoch, attemptToken)) return;
-        store.put(stripUndefined(update(current)));
-        changed = true;
-      };
-      transaction.oncomplete = () => resolve(changed);
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not update claimed analysis work'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Claimed analysis work update aborted'));
-    });
-  }
-
   private open(): Promise<IDBDatabase> {
     return openRecordingHistoryDatabase(this.factory);
   }
-}
-
-function isClaimable(work: RecordingAnalysisWork, now: number): boolean {
-  if (work.disposition === 'pending' || work.disposition === 'retry-wait') return true;
-  return work.disposition === 'claimed'
-    && Boolean(work.claim)
-    && work.claim!.leaseUntil <= now;
-}
-
-function claimWork(
-  current: RecordingAnalysisWork & { transcriptHash: string },
-  now: number,
-  leaseMs: number,
-  attemptToken: string,
-): ClaimedAnalysisWork {
-  const claim = { attemptToken, claimedAt: now, leaseUntil: now + leaseMs };
-  const next: ClaimedAnalysisWork = {
-    ...current,
-    transcriptHash: current.transcriptHash,
-    disposition: 'claimed',
-    attemptCount: current.attemptCount + 1,
-    nextAttemptAt: claim.leaseUntil,
-    claim,
-    updatedAt: now,
-  };
-  delete next.error;
-  return next;
-}
-
-export function matchesClaim(
-  work: RecordingAnalysisWork | undefined,
-  requestEpoch: number,
-  attemptToken: string,
-): work is RecordingAnalysisWork & { claim: NonNullable<RecordingAnalysisWork['claim']> } {
-  return Boolean(
-    work
-    && work.requestEpoch === requestEpoch
-    && work.disposition === 'claimed'
-    && work.claim?.attemptToken === attemptToken,
-  );
-}
-
-function cleanError(error: string): string {
-  return error.trim().slice(0, 2_048) || 'Analysis attempt failed';
-}
-
-function stripUndefined(work: RecordingAnalysisWork): RecordingAnalysisWork {
-  return Object.fromEntries(Object.entries(work).filter(([, value]) => value !== undefined)) as RecordingAnalysisWork;
-}
-
-function createAttemptToken(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
-  const bytes = new Uint8Array(16);
-  globalThis.crypto.getRandomValues(bytes);
-  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
