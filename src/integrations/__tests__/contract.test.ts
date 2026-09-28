@@ -38,6 +38,22 @@ describe('integration external contract', () => {
     expect(integrationEventTypePrefix()).toBe('io.github.kstroevsky.meeting-recorder');
   });
 
+  it('pins the published V1 schema identifiers and exact recording event types', () => {
+    const recordingSchema = loadSchema('integration-recording-v1.schema.json') as any;
+    const snapshotSchema = loadSchema('integration-recording-snapshot-cloudevent-v1.schema.json') as any;
+    const recordingSchemaId = 'https://raw.githubusercontent.com/kstroevsky/chrome-meeting-recording-extension/main/docs/schemas/integration-recording-v1.schema.json';
+
+    expect(recordingSchema.$id).toBe(recordingSchemaId);
+    expect(snapshotSchema.$id).toBe(
+      'https://raw.githubusercontent.com/kstroevsky/chrome-meeting-recording-extension/main/docs/schemas/integration-recording-snapshot-cloudevent-v1.schema.json',
+    );
+    expect(snapshotSchema.properties.type.enum).toEqual([
+      'io.github.kstroevsky.meeting-recorder.recording.ready.v1',
+      'io.github.kstroevsky.meeting-recorder.recording.updated.v1',
+    ]);
+    expect(snapshotSchema.properties.data.properties.recording.$ref).toBe(recordingSchemaId);
+  });
+
   it('makes artifact links imply artifact metadata at the shared policy boundary', () => {
     expect(normalizeIntegrationDataPolicy({
       ...CONSERVATIVE_INTEGRATION_POLICY,
