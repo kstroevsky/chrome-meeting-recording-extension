@@ -1,0 +1,1811 @@
+# ADR-0009 — Local recording processing: verified baseline and delivery plan
+
+**Status:** Proposed implementation/research plan, not an accepted architecture decision. **Review date:** 2026-09-27. **Code baseline:** `2f272c73cace4f4c111fd0cb2d4f9dcc60be2aaa`.
+
+This revision distinguishes implemented behavior, reproducible defects, experiments, and release gates. The historical review below is retained verbatim for traceability; its statements about what is “current,” its old sequence, and its unresolved `chatgpt-content-reference` placeholders are not current evidence. Sections R1–R12 govern this proposal. Existing ADR-0007 contracts stay in force until explicitly amended; experimental challengers do not amend them. No production code is changed by this review.
+
+**Decision:** Keep the functional core, background ownership of canonical library state, offscreen-owned inference Worker, packaged multilingual E5, and temporal-segment/global-topic separation. Finish input identity and recovery correctness, repair the evaluator, and establish reproducible public-meeting evidence before selecting new algorithms or ASR. Run the bounded audio-decode feasibility spike alongside the research work once storage/timeline contracts are understood; it need not wait for every NLP experiment.
+
+**Success means:** no mixed transcript/analysis identity; rejected writes preserve canonical content; recovery eventually visits all eligible recordings; evaluations compare the same underlying content; no silently dropped words; bounded resource use and cancellation; and measured improvement on held-out meetings within browser budgets. “10× better” is an ambition, not a measured result. R8 defines a falsifiable efficiency target.
+
+## R1. Verified implementation status and remaining defects
+
+Paths below are repository-relative. Source inspection and small executable counterexamples establish the findings; browser endurance, model quality, and real-device throughput require their own runs.
+
+| Original proposal | Current implementation | Verdict / remaining work |
+|---|---|---|
+| Transcript envelope and identity | `RecordingTranscriptRepository.ts` stores schema, revision, commit time; `transcriptIdentity.ts` computes SHA-256; service lazily fills/caches the hash | Implemented with qualifications: hash is not part of the original write transaction; revision is monotonic only while the row exists. Fix R2. |
+| Commit/replace triggers derived work | `RecordingTranscriptService.replace/commit`, `createLibraryRuntime.ts` commit listener; finalization wiring commits captions | Implemented. Append remains separate from “ready for analysis.” Replacement validation and error semantics need hardening. |
+| Startup reconciliation | `createBackgroundRuntime.ts` reads a durable cursor, processes **25** transcript IDs per bootstrap, then advances/resets cursor | Implemented pagination, not guaranteed timely completion: remaining pages wait for another bootstrap. R3 adds an explicit continuation and retry contract. |
+| Analysis belongs to an immutable input | `RecordingAnalysisCoordinator`, `RecordingAnalysisService`, `AnalysisResultCommitter`, and `shared/analysis/provenance.ts` bind/check transcript revision and hash | Implemented for normal replacement; old results are rejected or filtered. Hash/epoch integrity is a prerequisite for this guarantee. |
+| Unknown restart provenance fails closed | `AnalysisResultCommitter` accepts wire provenance or an existing per-job captured provenance; otherwise discards and reconciles | Implemented. Keep this behavior; never infer old input from current settings/transcript. |
+| Consistent integration projection | `IntegrationPreviewService.alignAnalysisWithTranscript` compares both fields against the selected snapshot; readiness treats stale analysis as pending | Implemented. A self-consistent older snapshot is different from a guarantee of latest-state linearizability. No global cross-aggregate transaction is claimed. |
+| Legacy readability | Repository adapts flattened rows; analysis normalization allows absent identity and currentness rejects it | Implemented. Legacy compatibility must not imply accepting unknown future schemas or malformed identity as current. |
+| Coverage | Identity, revision, replacement race, paging, provenance, and mismatch tests exist | Useful regression coverage, not a proof of the remaining transitions below. |
+
+**F1 — High, reproduced: rejected replacement destroys previous content.** `RecordingTranscriptService.replace` calls `repository.update` before checking that a usable nonempty transcript survived normalization. `update` deletes the row when normalization yields no segments; only afterward does `replace` throw. Replacing a valid transcript with `{ source: 'stt', segments: [] }` rejects but leaves no old transcript. Validate before mutation, inside the transaction for state-dependent conditions. Any rejected replacement must preserve content, identity, and revision. Include all-invalid segments, invalid source through a runtime boundary, and over-limit text in this contract.
+
+**F2 — High, reproduced at the repository/service seam: revision reuse permits an ABA hash race.** Read A at revision 1; delete its row; create B at revision 1; finish A's delayed hash and call `cacheContentHash(id, 1, H(A))`. The cache accepts it and a subsequent service snapshot returns B with H(A). This is not a SHA-256 collision. It breaks the premise of every downstream fence. Physical recording deletion normally has a history tombstone, but the transcript API itself permits row removal, and F1 creates a deletion path without that fence. Preserve a non-reusable generation/revision counter for a living recording and compare the generation in the hash write; see R2.
+
+**F3 — Medium, reproduced: canonical ordering is incomplete.** `sortTranscriptSegments` compares start, end, then `text.localeCompare`, with no speaker tie-break. Two simultaneous segments with identical text and different speakers hash differently when input order is reversed. Locale-sensitive comparison also is not a portable serialization contract. Current whitespace handling trims text/speaker edges only; `hello world` and `hello  world` hash differently. The current test proves trim invariance and ordering of unequal timestamps, not arbitrary permutation/whitespace invariance. Specify exact equivalences before changing hashes.
+
+**F4 — High for algorithm selection, reproduced: boundary scoring overcredits predictions.** In `scripts/calibrate-analysis.ts`, `boundaryF1([9,10,11], [10])` returns **1** because each prediction independently matches the same gold boundary. One-to-one matching gives precision 1/3, recall 1, F1 **0.5**. Moreover, it scores raw peaks before minimum-duration segment merging, not necessarily the final boundaries the player sees. Repair both before comparing algorithms.
+
+**F5 — Medium, source-confirmed: selection/evaluation contracts are unstable.** Gold is majority-projected onto each candidate's windows, so changing window shape changes truth resolution and the number of pairs. Cluster assignment is reconstructed using timestamp containment, which can duplicate/omit windows for overlapping speech instead of using exact coverage indices. The comparator's pairwise `0.002` near-tie rule is non-transitive: scores 0.5000/0.5015/0.5030 with precisions 1/0.5/0 can prefer the first over the second, second over third, and third over first. R5 replaces these with a fixed evaluation axis and deterministic selection procedure.
+
+**F6 — Medium, reproduced: calibration escapes ordinary type checking.** `clusterScores` declares only precision/recall/F1 but returns and consumers read `falseMerges`. Direct TypeScript diagnostics report TS2353 and TS2339. `tsconfig.json` excludes this script, so application typecheck can pass. Add a research/tooling check before calling this harness authoritative.
+
+**F7 — Medium, source-confirmed resource risk: post-embedding work is not necessarily cheap.** `importance.ts` compares passages to earlier passages and to siblings, giving quadratic pair work for a large topic. `analyzeTranscript.ts` runs the arithmetic after encoding in its caller; cancellation is checked between embedding batches, not throughout this arithmetic. A transcript cap is not a latency budget. Measure this path and keep capture/playback responsive before adding further quadratic algorithms.
+
+**F8 — High, independently reproduced fault path: short OPFS writes are acknowledged as complete.** `src/offscreen/storage/opfsWorker.ts:79` ignores the number returned by `accessHandle.write`, advances by the requested length, and acknowledges all requested bytes. A handle returning 2 for an 8-byte write caused an acknowledgement of 8 and the next write at offset 8. Retry the unwritten suffix with actual-byte accounting; zero progress must end in a bounded explicit failure. This concerns permitted partial writes, not a claim of observed field corruption. [File System write contract](https://fs.spec.whatwg.org/#dom-filesystemsyncaccesshandle-write)
+
+**F9 — High, independently reproduced fault path: storage-worker stalls bypass the seal deadline.** `WorkerStorageTarget.write` waits for an acknowledgement without a deadline; `close` awaits this chain before starting `awaitSeal`'s timer. Withheld write acknowledgement leaves write and close pending with no deadline registered. Open/discard acknowledgements also need bounded settlement. The existing seal-timeout test does not cover this preceding stall.
+
+**F10 — Medium, reproduced with the packaged tokenizer: valid transcript windows silently truncate.** Four individually accepted approximately 1,800-character turns generated 2,409 tokens, truncated to 512 by the installed feature-extraction tokenizer path. Changing the final subject produced identical encoded input IDs, while keyword generation still consumed the full text. The defect is representational loss, not a conjecture about the embedding model's semantic quality. UNIT-02 is an immediate correction, not just a future ASR seam.
+
+**F11 — Medium, reproduced: overlapping speech loses temporal coverage.** `windows.ts:99` uses the end of the last-starting turn rather than the maximum covered end; `segments.ts` propagates window ends. A 0–60-second turn with shorter overlapping acknowledgements produced windows ending at 4/8 seconds. Preserve source interval coverage, then separately define non-overlapping playback chapter ownership. Setting maximum end alone does not settle that second problem.
+
+**F12 — Medium, independently reproduced: a newer commit can lose its retry before a job exists.** In `RecordingAnalysisCoordinator.ensureCurrentAnalysis`, B arriving while A's enqueue is pending records a follow-up after `busy`. If A's enqueue then fails, the older call removes the marker; there is no job to trigger `settle`. Test both `ensureReady` failure and enqueue refusal, and preserve a newer dirty generation until a bounded retry succeeds without another commit/restart.
+
+## R2. Canonical input contract and atomic writes
+
+**ID-01 — Identity represents exactly the persisted snapshot used by the consumer.** Keep distinct concepts: storage schema, canonicalization version, revision/generation, content digest, and analysis environment. `committedAt` is diagnostic wall time, never a concurrency fence. An unchanged canonical replacement may remain a no-op; changes to source, timestamps, speaker, or words must invalidate derived work. Revision equality and digest equality are both required for currentness. Identical content returning after an intervening change does not revive an old run automatically.
+
+**ID-02 — Make writes strict and reads compatible.** Separate write validation from tolerant legacy decoding. Reject invalid new source/timestamps, empty or unusable replacements, and overflow before a destructive write. Never silently truncate imported/STT words to the current **2,000 characters per segment** or **20,000 segments**. Either reject with an actionable error or introduce an explicitly versioned lossless representation/limit change before enabling those producers. Preserve canonical words; analysis normalization is a derived view. A speaker name is not a stable speaker identifier, and a speaker change must not be guessed from text.
+
+**ID-03 — Publish one canonicalization specification and golden vectors.** Use a total, locale-independent order over normalized `(start, end, text, speaker)` tuples, an explicit null representation, preserved multiplicity, and a versioned tuple encoding. Decide whether internal whitespace/Unicode normalization is an intended equivalence; the conservative baseline is documented edge trimming only. If equivalences change, migrate/invalidate hash caches and analyses, rather than interpreting old hashes under new rules. Test tied timestamps/text, speakers absent/present, duplicate segments, punctuation, composed/decomposed Unicode, non-BMP characters, reordered valid input, and JSON round trips. Do not normalize away meaningful timing, case, punctuation, negation, or numerical content to improve cache hits.
+
+**ID-04 — Fence hash completion against a non-reused mutation identity.** Keep a lightweight counter/tombstone across transcript clearing while its recording exists, or use a durable unique generation token together with revision. If full recording deletion removes this metadata, that recording ID must never be reused. Compute WebCrypto outside the active IndexedDB transaction, then cache only when the expected generation/revision still matches; this avoids awaiting WebCrypto inside a transaction that may become inactive. An unhashed persisted row is recoverable state, not a current analysis identity. Validate cached hash format/schema and invalidate it on migration. Do not use commit timestamps as an ABA fix.
+
+**ID-05 — Separate durable commit from notification success.** Once a replacement commits, a failed analysis notification must not make callers believe the transcript write rolled back. Return committed identity plus a scheduling disposition, or isolate notification failure and rely on the reconciler. Retrying a successful write is idempotent. If concurrent import/STT producers are introduced, require an expected revision/generation compare-and-set so an older producer cannot overwrite a newer correction.
+
+**Acceptance:** preserve existing normal A→B and late-result tests; add F1/F2/F3 reproductions, delete/recreate, A→B→A, failed hash-cache writes, restart before digest persistence, conflicting producers, and revision exhaustion/future-schema policy. Assert stored content and digest agree, not merely that the revision changed. Do not mark this phase complete on mock-only concurrency tests: exercise the IndexedDB adapter and a real MV3 restart boundary.
+
+## R3. Reconciliation, publication, and failure semantics
+
+**REC-01 — Safety and liveness are separate obligations.** Currentness is:
+
+```text
+notDeleted(recording)
+AND result.inputGeneration/revision == selectedTranscript.generation/revision
+AND result.inputHash == selectedTranscript.contentHash
+AND result.environment == requiredEnvironment
+```
+
+Generation is proposed under ID-04; revision/hash/environment already exist. Continue filtering on reads even if a result passed pre-write validation: another commit may race persistence. Result acknowledgement follows durable persistence or a deliberate discard/terminal disposition. Do not guess missing provenance on replay.
+
+**REC-02 — Give pagination a wake-up mechanism.** After each bounded page, persist continuation and schedule the next slice with the existing Chrome alarm/lifecycle mechanisms; recover/recreate the alarm at startup. Bound scans, active/queued jobs, bytes held, and elapsed work independently. A page of 25 keys does not bound inference work or guarantee a scan completes. Prefer queuing durable input references over whole transcript copies; cap aggregate queued inputs and unacknowledged results in `AnalysisManager`. Post-recording analysis can overlap a subsequent capture, so define a small capture-priority admission rule and measure contention. State the fairness rule: every eligible item is eventually visited while the extension is running and resources are available; insertions behind a cursor are caught on the next complete sweep. Do not spin through an unbounded library in one service-worker event.
+
+**REC-03 — Distinguish transient failure, user cancellation, permanent unsupported capability, and stale work.** Use durable retry/backoff/disposition keyed to input/environment so one poison recording does not block a page and unsupported machines do not continuously re-run unchanged jobs. Preserve explicit cancellation until user retry or a defined input/environment change. Failure to start a job must remain eligible for retry even if the scan advances. A later dirty-generation request must survive an earlier pending enqueue failure (F12); releasing `pending` must arrange retry even when no job ever existed. “Pending” must mean there is a path to convergence, not a permanent badge. This is a proposed lifecycle contract; audit existing outcome semantics before implementing it.
+
+**REC-04 — Bind outcomes as well as successful results.** A failed/unsupported outcome from A must not establish B's terminal readiness. Carry the attempted input/environment identity into outcome records or invalidate unbound outcomes on replacement. Define precedence among a current success, a forced recompute, stale success, and a terminal attempt; keep a usable current success visible until a replacement result is valid when recomputing the same input.
+
+**REC-05 — Integration consistency is local to the selected snapshot.** Continue using the same `build` path for preview and persisted integration payloads. A B/A mismatch omits analysis and reports pending. Test both interleavings of parallel reads, analysis-only policy, unknown transcript identity, stale configuration, replacement while snapshot assembly runs, and terminal A outcomes after B. Do not require a global transaction over history/context/notations unless a concrete cross-aggregate invariant needs it. A queued integration delivery is an immutable historical snapshot, not something to silently rewrite when a later revision appears.
+
+## R4. Source-independent analysis units and traceability
+
+**UNIT-01 — Retain canonical segments, derive analysis units with explicit source coverage.** The initial identity adapter preserves existing output. Each derived turn/window carries ordered source segment IDs or indices and text spans, media start/end, known speaker/unknown, and timing fidelity. When splitting a long segment without word timings, retain its enclosing interval and mark fine alignment unavailable; evenly interpolated word times are not measured timing. Do not merge across known speaker changes or erase overlap to obtain convenient windows.
+
+**UNIT-05 — Preserve overlap and aggregation meaning.** Derive coverage intervals from all covered turns, including maximum end; preserve overlaps in source mappings and explicitly choose exclusive playback chapter boundaries independently. Unknown speakers are unknown, not proof of a shared speaker. The calibration fixture merger must not join all unlabelled adjacent speech as one speaker. Specify the aggregation mass for each experiment (tokens, turns, duration, or semantic units); equal window means and equal segment means change when input is repartitioned. Overlap duplicates must not silently inflate keyword counts. Treat any mass change as an evaluated algorithm change, not an automatic correctness fix.
+
+**UNIT-02 — Bound encoder input by the packaged tokenizer, not characters or turn count.** Keep E5's existing query prefix, mean pooling and L2 normalization. Measure token counts including prefix and special tokens against the pinned model's context limit; record truncation/coverage and avoid silent loss. The E5 model card documents a 512-token limit, but verify the packaged tokenizer/config rather than treating that number as a generic interface constant. Split/re-window losslessly with mappings; labels and semantic vectors must describe the same text. [E5 model card](https://huggingface.co/intfloat/multilingual-e5-small)
+
+**UNIT-03 — Distinguish exact invariants from robustness expectations.** Exact tests: speaker-label bijection, legal uniform timestamp translation, canonical input permutation, deterministic replay with the same vectors, source coverage conservation. Approximate tests: split/merge representations with the same word/time/speaker information, punctuation removal, backchannels, ASR corruptions, and backend perturbations. Annotation loss cannot promise invariance: speaker removal deliberately removes one boundary feature. Freeze approximate tolerances from development data before evaluation; never choose them after seeing failures. Metamorphic transformations must preserve the properties they claim to preserve.
+
+**TRACE-01 — Make explanations replayable and bounded.** An optional research trace records source coverage, tokenizer lengths, vectors/artifact identity, each boundary component, selected/rejected peaks, duration repairs, cluster similarities/merge history, importance components, and timing/byte counters. Persist numeric summaries by default; text-bearing local traces require deliberate export and deletion controls. No raw text, audio, vectors, speaker names, or content hashes in telemetry. Hashes of predictable text are not anonymization. Trace disabled must avoid building the trace payload, not merely avoid writing it.
+
+## R5. Evaluation protocol: repair the judge before improving the contestants
+
+**EVAL-01 — Use a fixed reference axis.** Gold boundaries/topic membership attach to immutable corpus word/utterance IDs and, where reliable, media timestamps. Every candidate projects its result back onto that axis using explicit source coverage. Changing window size must not change the gold labels or evaluation denominator. Boundary truth is contiguous segmentation; recurring topic identity is a separate label. An A→B→A conversation has three temporal segments but two global topics.
+
+**EVAL-08 — Cross-ASR mappings require alignment, not shared array indices.** Freeze reference transcript normalization, speaker/overlap ordering, edit-alignment costs, timing constraints and tie-breaking before comparing recognizers. Align hypothesis words monotonically to reference words within compatible time/track regions when timing exists; aligned substitutions still map to their reference items. Project topic assignments through this alignment. Deleted/unmatched reference items remain in the evaluation denominator with separate unassigned singleton predictions, never one shared “unknown topic” cluster; report them separately and require a predeclared coverage gate. Inserted hypothesis words do not create extra reference items: count their rate and effects on time boundaries separately, with a frozen insertion/error gate. Report ambiguous alignments rather than hand-repairing a favored model. When overlap or missing time makes alignment unreliable, mark fixed-item clustering comparison ineligible; time-boundary metrics alone do not qualify an ASR candidate for promotion. Validate the alignment on manually checked insertion/deletion/substitution/overlap examples.
+
+**EVAL-02 — Score final boundaries with one-to-one matching.** For a predeclared tolerance, maximize the number of disjoint predicted/gold matches, then minimize total displacement with deterministic tie-breaking. If M pairs match, precision=M/numberPredicted and recall=M/numberGold. Both empty is perfect boundary agreement; one empty is zero F1. No start/end pseudo-boundaries. Report exact and time-tolerant boundary P/R/F1 plus displacement distribution and unmatched counts. Fix tolerance in seconds before comparing ASR outputs; window-index tolerance is diagnostic only. Use the final merged segments, not pre-repair peaks.
+
+**EVAL-03 — Add complementary metrics without averaging away dangerous errors.** On a fixed discrete axis, report Pk and WindowDiff with the same gold-derived window length for every candidate; use `k=max(1, round(N/(2*S_gold)))`, document rounding, and return N/A when `N<=k`. Here N counts reference units and S_gold counts contiguous gold segments, not recurring topic IDs. Pk compares same-contiguous-segment membership of endpoints; WindowDiff compares boundary counts between them. Report both raw numerators and denominators. Time-based boundary scores are primary for cross-ASR comparisons where transcript units differ. [WindowDiff definition and limitations](https://aclanthology.org/J02-1002/), [time-space chaptering evaluation](https://arxiv.org/abs/2602.08979)
+
+For global topics report pairwise P/R/F1 and B³ on the same fixed items. Define false merge explicitly as `FP/(TP+FP)` for predicted same-topic pairs; report N/A when that denominator is zero, together with FP and false split counts. B³ averages `|pred(i)∩gold(i)|/|pred(i)|` and `|pred(i)∩gold(i)|/|gold(i)|` over reference items. Fix empty/singleton conventions and weighting in the evaluator tests. Do not compare raw FP counts from different numbers of windows.
+
+**EVAL-04 — Include real baselines and failure cases.** Score single-topic, singleton-topic, regular-time boundaries, current production, and each challenger. Hand-computable fixtures cover duplicate predictions, nearby gold boundaries, no boundaries, one item, recurrence, overlap, partial labels, and missing timings. Reject malformed/partial coverage rather than silently improving the score by dropping difficult items. If a corpus genuinely has partial annotation, explicitly report scored coverage and exclude it from metrics requiring a complete partition.
+
+**EVAL-05 — Avoid corpus leakage.** Pin corpus release, license/usage conditions, exact source URL, file hashes, loader version, annotation level and coordinate mapping. Group AMI sessions from the same scenario/team and all derived versions/corruptions under one lineage before splitting. QMSum contains AMI/ICSI meetings: deduplicate by original meeting, not filename or dataset name. Keep development, validation/selection, and final target-domain holdout roles separate. Inspect gold construction: QMSum topic spans are useful recurrence supervision but must be checked for coverage/overlap before being treated as an exhaustive clustering partition. Original AMI topic annotation is the primary starting point; AMI-ME is supplementary effectiveness data, not independent topic gold. [AMI annotations](https://groups.inf.ed.ac.uk/ami/corpus/annotation.shtml), [QMSum schema](https://github.com/Yale-LILY/QMSum), [AMI-ME release](https://github.com/Liyht/AMI-ME)
+
+**EVAL-06 — Freeze the decision rule before opening holdout.** Primary quality endpoint: meeting-macro time-tolerant boundary F1 when timings are trustworthy; report fixed-axis F1 separately otherwise. Product safeguards: false-merge rate and recurrence pairwise recall, each with an explicit non-inferiority gate. Report B³, Pk, WindowDiff, label usefulness, and costs separately. For example, gold A A B B A A versus predicted a a b b c c has perfect boundaries and no false merges but recurrence recall 3/7; this must not pass solely on the first two metrics. Freeze minimum meaningful gain, non-inferiority margins, time tolerance, device budgets, bootstrap seed/count, candidate budget and tie-break order in the experiment manifest on development data. The manifest also fixes one-sided confidence level, interval construction, selection/multiple-comparison handling, evaluation population, minimum support and missing-data disposition. For quality-changing candidates, using candidate-minus-baseline paired differences, require a lower confidence bound on boundary-F1 gain above the frozen minimum meaningful gain, an upper bound on false-merge increase at or below its allowed margin, and a lower bound on recurrence-recall change at or above minus its allowed margin. Require an upper bound on the candidate's absolute false-merge rate below the separately frozen product cap, and all cost/coverage gates. The margins/cap are product decisions made before validation/holdout, not numbers inferred from this review. Behavior-preserving optimizations follow TECH-00: require output equivalence and measured resource benefit rather than a positive quality gain over identical output; all other safeguards remain in force.
+
+For the false-merge gate, pool FP and predicted-positive counts over the fixed eligible meeting set and report the pooled ratio alongside per-meeting diagnostics; zero-positive meetings contribute zero to both counts and are not silently dropped. Resample whole independent lineages and recompute that ratio. For the recurrence gate, freeze the gold-recurring meeting population (meetings with positive gold same-topic pairs), compute recall on every such meeting, and macro-average it. Empty predicted-positive support, insufficient independent lineages, or undefined resampling ratios make confirmation **inconclusive**, not passing; do not discard undefined replicates until a confidence interval looks good. The manifest must specify an adequate minimum support and the response to inconclusive evidence: retain baseline, gather more data, and run a new prespecified confirmation. Missing frozen values block promotion, not mechanics research. Compare paired per-meeting deltas; bootstrap the independent lineage/group when sessions are related. Do not bootstrap boundaries as independent observations. Small datasets yield uncertainty, not permission to claim universal settings.
+
+Selection first excludes candidates violating false-merge/resource/non-inferiority gates, then selects by the frozen primary endpoint; a fixed tolerance band relative to the best eligible score may use cost as a deterministic tie-break. Never use a non-transitive pairwise “almost equal” comparator. Keep the Pareto table and per-language failures. Touch final RU/UK/EN holdout only after selection; inspecting it to redesign starts a new experiment requiring new confirmatory evidence.
+
+**EVAL-07 — Separate deployment evidence.** Synthetic fixtures validate mechanics; public meetings provide external English-heavy evidence; consented target-language extension recordings determine product suitability. Report WER/CER alongside name/number/negation errors and downstream segmentation/recurrence/label changes for ASR. Simulated corruption is a stress test, not a calibrated proxy for a recognizer's correlated errors. Reference-free embedding cohesion is diagnostic only, especially when the same encoder is used to optimize and judge. [Reference-free evaluation caveats](https://aclanthology.org/2024.lrec-main.1524/), [WER and semantic-error motivation, clinical domain](https://arxiv.org/abs/2511.16544)
+
+## R6. Small, falsifiable algorithm experiments
+
+Run controlled stages, not a Cartesian product of every idea in the historical review. Keep the current packaged model, input mapping, dataset split, and evaluator fixed while changing one factor. Re-embed when input units/window text change; cached baseline windows cannot fairly evaluate different representations.
+
+| Experiment | Hypothesis and implementation boundary | Falsifier / promotion evidence |
+|---|---|---|
+| Length-aware aggregation | Downweight low-information backchannels; compare uniform, token length, sqrt, log1p only in research | Better boundaries without losing short decisive turns, names/numbers or minority speakers; distinguish weighting unit embeddings from weighting already-mixed window embeddings |
+| Global segmentation | Penalized weighted coherence may repair local-peak errors in completed meetings | Quality gain at measured bounded CPU/memory/cancellation cost; not merely fewer segments |
+| Boundary refinement | Finer contexts around coarse candidates improve seek points | Incremental benefit over coarse baseline, counted extra token/inference cost; measure missed boundaries outside candidate regions |
+| Global recurring-topic clustering | Average/complete-link can reduce order-dependent false joins | False-merge and B³ gains on recurrence/shared-vocabulary cases; bounded matrix size and deterministic ties |
+| Dialogue/lexical features | Speaker-distribution divergence or keyword memory adds information beyond cosine | Ablation gains across languages and missing-speaker cases; no added features without signal |
+| Phrase labels / importance | Bigrams/trigrams and diversity may improve labels; importance components may be redundant; decouple scoring vocabulary from capped display labels if evaluation supports it | Blinded human judgments/source support; importance weights remain unchanged without relevant gold |
+
+For the DP experiment, define a precise objective rather than calling any global algorithm “CVS.” For unit vector x_i and positive weight w_i, let W=sum(w_i), S=sum(w_i*x_i), Q=sum(w_i*||x_i||²) over a candidate segment. Weighted SSE is `C=Q-||S||²/W`. Evaluate `D[j]=min_i(D[i]+C(i,j)+lambda)` over legal contiguous segments, with `D[0]=0`; the constant charge for the first segment does not change the optimum. Prefix sums make each cost O(d), giving O(n*L*d) with a declared maximum span L, versus O(n²*d) without it, and O(n*d) prefix storage. Clamp only numerical roundoff below zero; do not hide invalid vectors. Minimum/maximum duration, penalty, and candidate pruning are explicit research settings, not universal defaults. Unit-test against exhaustive enumeration on tiny sequences. This is a proposed weighted-SSE challenger, not a reproduction of the original CVS objective. [CVS paper](https://arxiv.org/abs/1503.05543)
+
+Length weighting is supported as an experiment by TreeSeg-LASW, but the reviewed publisher abstract is not enough to reproduce its full method or adopt its reported gains. Obtain the full algorithm/implementation before claiming replication. `sqrt` is our additional hypothesis; the abstract reports linear/logarithmic families. Keyword cohesion is another separate hypothesis, not evidence that the proposed combination will win. [LASW publisher abstract](https://ieeexplore.ieee.org/abstract/document/11637230/), [Words That Stick](https://aclanthology.org/2024.conll-1.1/)
+
+**Research status map:** low-cohesion cluster splitting remains an active research challenger after global clustering, with the same false-merge/recurrence gates. Speaker-distribution Jensen–Shannon divergence, dominant-speaker switch, transition rate, question–answer continuity and finite-memory vocabulary novelty remain optional feature ablations, not a required shipping bundle. Importance-component correlation and first-passage bias remain diagnostics until importance gold exists. CATCH-style learned contextual representations and S³/ICA topic modeling remain deferred model/representation challengers. M³Seg, UPS, SegNSP and summarization-based segmentation remain deferred learned/generative alternatives; no production interfaces are created for them now. AMI-ME and reference-free cohesion remain supplementary diagnostics, not promotion ground truth. This enumerates retained options without treating unverified historical paper claims as evidence.
+
+Temporal segmentation and recurring-topic clustering optimize different objects: never let a noncontiguous topic cluster stand in for one contiguous DP segment. Length weighting is not generally split-invariant because embedding a whole string is not the mean of its fragment embeddings. Test the UNIT-03 transformations rather than assuming the formula solves chunk-shape sensitivity.
+
+## R7. Model-independent bounded audio decoding
+
+**STORE-01 — Protect the recording before deriving text from it.** Fix F8 with suffix retries and byte-accurate acknowledgement; test short writes, zero progress, and partial-then-error without gaps or false completion. Fix F9 with deadlines for open/write/drain/seal/discard, settlement of every pending promise on failure, worker termination, and capture-device cleanup. Preserve a discoverable recoverable prefix instead of claiming a corrupt file is sealed. Measure duration-fix full-file rewrite I/O and temporary swap-file disk headroom separately from RAM; the existing WebM fixer streams and should not be described as a whole-file RAM allocation. `unlimitedStorage` does not create physical disk capacity.
+
+**AUDIO-01 — Prove the actual byte source.** The spike consumes a sealed recording through the existing location/lease boundary, including retained OPFS media and an explicit outcome when only a downloads artifact or unavailable Drive object remains. Sealed does not imply locally readable. The current playback lease is tied to a player tab and session; add a processing-job ownership policy rather than pretending that lease already protects a resumable ASR job. Define input generation, deletion cancellation, crash cleanup and missing-media outcomes. Do not add host permissions or upload meeting audio as a hidden fallback. Cover the containers/codecs the recorder actually emits and partial/corrupt artifacts.
+
+**AUDIO-02 — Demux and decode are different operations.** WebCodecs accepts encoded chunks; it does not demux MediaRecorder WebM/MP4. Select a bounded demuxer only after inspecting produced files, codec initialization, timestamps, codec delay/pre-skip, and seek/restart behavior. Query `AudioDecoder.isConfigSupported`; feature detection is required. A `decodeAudioData` whole-file fallback does not satisfy the long-recording memory gate. [WebCodecs specification](https://www.w3.org/TR/webcodecs/)
+
+**AUDIO-03 — Specify frames and ownership.** Extend the historical `AudioFrame` sketch with sample format/layout (planar or interleaved float32), frame count per channel, track identity, integer presentation timestamp with explicit time base, discontinuity metadata, and release/ownership rules. Derive duration from sample count/rate; convert to media milliseconds at the transcript boundary. Preserve separate mic/tab track alignment, offsets and pause mapping; microphone activity is not remote-speaker diarization, and mixed stereo is not two identified speakers. Never concatenate independent tracks into one chronology without alignment.
+
+**AUDIO-04 — Bound the whole pipeline.** Backpressure covers source bytes, demux output, decoder queue, decoded frames, and sink queue. Release `AudioData` promptly; abort cancels reads, resets/closes decoder, releases leases and worker resources, and discards queued frames. Memory must plateau with recording duration under a deliberately slow consumer. Persist resumable position only if codec/container seek preconditions are known; otherwise restart deterministically without publishing duplicate transcript chunks. Keep resampling/downmix/VAD/model overlap in the model adapter. A later resampler must be stateful across chunks and preserve timing/filter delay; reset it only at declared discontinuities.
+
+**AUDIO-05 — Validate with real encoded fixtures.** Use known impulses/tones and reference timestamps across pause/resume and separate tracks, including a shorter final chunk, overlap, silence, codec delay and corrupted/truncated tail. Measure sample/time error, peak memory, real-time factor `processingSeconds/audioSeconds`, cancellation latency and contention with active capture. Freeze numeric pass budgets on named target devices before judging the spike. For scale, 3 h × 48,000 samples/s × 2 channels × 4 bytes = **4,147,200,000 bytes** of float32 PCM before overhead; this is why full decode is disallowed, not a predicted streaming memory figure.
+
+The audio spike can fail. If emitted formats or available APIs cannot meet these gates, document the concrete failure and compare bounded alternatives, including the deferred sidecar, before choosing an ASR engine. It is not evidence to silently reinstate a 16 kHz sidecar or adopt an unsupported decoder.
+
+## R8. Efficiency, cache design, and resource budgets
+
+**PERF-01 — Cache exact encoder inputs first in research.** An artifact manifest identifies transcript content, canonicalization/analysis-unit versions, ordered window texts and source coverage, tokenizer/model file digests, prefix/pooling/normalization, dimensions, dtype, runtime/backend fingerprint and artifact encoding/checksum. Separate a reusable text→vector key from transcript-specific timing/speaker metadata if useful; reuse must never reuse stale mappings. A threshold-only change reuses vectors; a tokenization/window/model change misses. Pin model bytes, not a mutable repository name. Runtime/backend differences are diagnostic for current production provenance, but research reuse across them requires measured equivalence.
+
+**PERF-02 — Persist production cache only when measured reuse justifies it.** Keep it evictable, quota-bounded, checksum-validated, and atomic (temporary artifact then published manifest); corruption, partial writes or eviction trigger recomputation without affecting canonical transcripts/media. Coordinate deletion of derived content with recording deletion. Do not place cache files where retained-media reconciliation will mistake them for recordings. Do not introduce a cache of model weights: the model is already packaged. This amends the historical step 5 from an unconditional feature to an evidence-gated optimization; research cache is needed earlier for reproducibility.
+
+**PERF-03 — Eliminate repeated cheap work before adding models.** Compute cluster pair counts from the contingency table: `TP=sum_ab choose(n_ab,2)`, predicted positives=`sum_a choose(n_a.,2)`, gold positives=`sum_b choose(n_.b,2)`. Then FP/ FN are differences. This replaces O(N²) pair enumeration with a linear pass plus table reduction while preserving exact metrics; compare against brute-force fixtures. Cache boundary components independent of a searched parameter; reuse segmentations across clustering configurations; retain unique outputs and deterministic candidate IDs. Avoid thousands of redundant reconstructions in the current grid.
+
+**PERF-04 — Profile end-to-end, not just model throughput.** Record cold/warm load, tokenization, encoding, boundaries, segmentation, clustering, labels, importance, serialization/IndexedDB and cancellation. Include typical, max-supported and one-huge-topic inputs. For n normalized vectors of width d, storage is `4*n*d` bytes before metadata/copies; an n×n float32 matrix is `4*n²` bytes. Bound n/L and concurrent artifacts before allocation. Reuse each passage pair's cosine once for recurrence and novelty where equivalence is proven; quadratic work remains quadratic. Chunk/yield or move heavy deterministic work off the offscreen event loop with cancellation checks. Preserve the existing single inference queue until measured need justifies a scheduler.
+
+**PERF-05 — Make the 10× goal testable.** For K threshold-only runs, uncached time is `K*(E+A)` and reusable-vector time is `E+K*A+I`, where E is inference, A arithmetic and I artifact I/O. Report measured speedup, not an assumed tenfold saving. The existing calibration already embeds once, so caching does not create a new 10× gain there. Target an order-of-magnitude reduction only against a named baseline/workload that still repeats inference or pair enumeration; use the same machine, corpus, outputs, cold/warm conditions and repeated measurements. Record quality equivalence and capture contention alongside wall time. No 10× quality claim is meaningful without a defined endpoint and baseline.
+
+## R9. Delivery sequence, gates, and rollback
+
+| Phase / responsibility | Deliverable | Exit gate and fallback |
+|---|---|---|
+| P0 — Library/lifecycle/storage | ID-01…05, REC-01…05, STORE-01; finish residual correctness rather than reimplement identity | F1/F2/F3/F8/F9/F12 regressions plus restart/publication/multi-page liveness coverage; failed migration retains readable canonical data and never exposes mismatched analysis |
+| P1 — Research tooling | EVAL-01…07, tooling typecheck, tiny oracle tests, deterministic manifests | Evaluator agrees with hand examples and brute-force counts, fixed-axis coverage is complete, no holdout leakage; old scores labeled historical/non-comparable |
+| P2 — Input + corpus | Analysis-unit seam with F10/F11 coverage fixes, bounded trace, pinned AMI/ICSI subset, QMSum lineage mapping, exact-input research cache | Existing baseline replayed; paired chunk-shape/noise fixtures and public data baseline report with uncertainty; no production threshold promotion |
+| P3 — Audio/platform, parallel after P0 contracts | AUDIO-01…05 sealed-media fake-sink spike | Actual emitted files decode with bounded memory, valid timeline and cancellation; otherwise record feasibility failure and alternatives |
+| P4 — NLP/performance | Small controlled experiments from R6, PERF-03/04 optimizations | Frozen validation protocol selects a candidate that passes quality and cost gates; retain baseline if none qualifies |
+| P5 — Optional production optimization | PERF-01/02 production cache | Demonstrated expected reuse, quota/delete/corruption recovery and measured benefit; evict/disable cache on failure |
+| P6 — ASR + target-domain review | Recognizer adapters on extension audio and consented RU/UK/EN holdout | Fidelity, downstream quality, memory/latency and offline/privacy gates pass together; keep captions/canonical original if replacement fails |
+
+Each phase produces a reviewable change with requirements, evidence, known limitations and rollback. Changing analysis units/algorithms updates the analysis pipeline/config identity and marks derived results stale. Changing canonicalization requires the separate ID-03 migration. Historical analyses are derived data; rollback may recompute them but must not delete or rewrite source transcripts. Local traces/corpora remain outside normal source history.
+
+**Deferred, preserved:** new LLM dependencies; a generic GPU scheduler; production strategy-interface families before a challenger wins; heavier embeddings selected from retrieval leaderboards; fixed ASR sample-rate/VAD/chunk-overlap choices in the generic decoder; importance-weight retuning without gold; freezing `.93/.95`, four-turn windows or 3-second pauses from English-only data; and promotion of academic methods on reported paper results alone. Existing exact blend weights and batch size remain unchanged by this plan. The historical exploratory ideas remain available in R6's research backlog, not concurrent shipping commitments.
+
+## R10. Evidence record and review limits
+
+The historical text's “CI gate green” refers to a previous run and is not fresh validation. This review exercised current code with the existing dependencies, and used Node 24 for the direct counterexamples. The shell's default Node 18 is below the repository's Node >=24 requirement; results from that environment must be identified separately.
+
+Reproduced against actual TypeScript functions/adapters using transpilation and `fake-indexeddb`, without modifying production/tests: empty replacement rejects and removes old row; revision reuse accepts a mismatched delayed hash; reversed tied speakers produce different hashes; internal whitespace is not collapsed; boundary overprediction receives F1=1. Independent fault injection additionally reproduced short-write mis-acknowledgement, pending storage drain without a deadline, and the failed-enqueue follow-up loss. The NLP reviewer used the packaged tokenizer for the truncation counterexample and synthetic overlap fixtures for the timing issue. A direct compiler pass also produced the calibration script's two missing-`falseMerges` diagnostics. These are counterexamples, not throughput measurements or browser-lifecycle proofs.
+
+Fresh checks on **Node 24.19.0** (the repository requires >=24):
+
+- Application TypeScript check: passed (`node node_modules/typescript/bin/tsc --noEmit`).
+- Full Jest unit suite: **221 suites, 2,384 tests passed** (`node node_modules/jest/bin/jest.js --runInBand --watchman=false --testPathIgnorePatterns=/tests/e2e/`).
+- Node script suite: **63 tests passed** (`node --test tests/scripts/*.test.mjs`).
+- Focused transcript/analysis/provenance/integration check: **11 suites, 162 tests passed** under Node 24; these overlap the full suite and are not additional coverage counts.
+- Calibration script checked separately: **failed** with TS2353/TS2339 as described in F6. Green application tests do not override this failure or the reproduced defects.
+
+The initial Node 18 full suite also passed, but the supported-runtime results above are the validation baseline. Preservation verification passed: exact original suffix, allowlisted additions and explicit status changes. An independent reviewer found four gaps (recurrence gating, statistical decision rules, research-status mapping and cross-ASR alignment); all four were repaired and independently verified. Ledger bundles: **42 active / 4 deferred / 12 superseded**. This verifies the proposed plan, not completion of its implementation or empirical algorithm quality. No public-corpus bake-off, real-model inference benchmark, microphone recording, full browser endurance run or ASR quality claim is implied. Graph indexes were navigation aids; current source is the evidence. This review covers processing and its lifecycle/storage/consumer dependencies, not a claim that every unrelated sharing, OAuth or UI behavior has been exhaustively proven.
+
+The original review is retained as the exact input artifact with SHA-256 `fcf1a16666711651021588e863474ddf0109b2037baeed5d0d41121f7d36e25a`. Its recommendations are refined above; its factual claims of missing identity/commit/projection support are superseded by R1, its execution order by R9, and its model-size/new-paper comparisons are not selection evidence. Only linked primary sources in R4–R7 support this revision's research rationale; unresolvable historical citation placeholders confer no authority.
+
+## R11. Concrete technical approaches — research extension, 2026-09-28
+
+This extension turns R2–R8 into a ranked set of implementable mechanisms. Source inspection still targets `2f272c73cace4f4c111fd0cb2d4f9dcc60be2aaa`. “Exact” below means exact for a stated mathematical objective or preserved operation order; it does not mean that a different algorithm preserves current product outputs. No new model/library has been installed and no production implementation is included in this revision.
+
+**TECH-00 — Two adoption routes.** A quality-changing representation, objective, clustering rule or recognizer must satisfy EVAL-06 in full. A behavior-preserving optimization instead needs a defined equivalence domain, an independent output oracle, identical consumer-visible decisions, and a material measured resource benefit under the frozen workload/budget. It need not invent a positive quality gain over identical output. Approximate numerics require an explicit error budget and decision-boundary checks; if these reveal changed outputs, classify the candidate as quality-changing. Neither route may weaken recurrence, coverage, privacy, input identity or cancellation requirements. Kernel measurements below nominate experiments; browser measurements decide adoption.
+
+### TECH-01. Fuse passage comparisons and remove redundant pooling work
+
+**Direct fit:** `shared/analysis/importance.ts`, `vector.ts`, and the installed Transformers.js `pipelines/feature-extraction.js` / `utils/tensor.js`.
+
+For a topic with n uniquely identified passages, current novelty uses `n(n−1)/2` cosines and recurrence uses `n(n−1)`. Compute `s=max(0,cosine(x_i,x_j))` once for every `i<j`; add it to both recurrence sums and update passage j's maximum similarity to earlier passages. Return recurrence sum divided by `n−1`; novelty is `1−earlierMax`, with first-passage novelty still 1. This reduces pairwise cosine evaluations from `3n(n−1)/2` to `n(n−1)/2`, with O(n) additional accumulators and no similarity matrix. It remains O(n²d), so chunk/yield and cancellation are still necessary.
+
+Retain the existing `cosine` implementation and ascending pair traversal first: recurrence additions can occur in the same per-passage order as today. If duplicate passage IDs are accepted, preserve the existing exclusion-by-ID recurrence denominator; novelty still considers earlier duplicate IDs. Do not silently change those semantics. Only later test precomputed norms or SIMD as separate numerical changes. The convenient centroid-sum recurrence shortcut is **not generally equivalent** because recurrence clamps every pair at zero.
+
+A second independent kernel opportunity is mean pooling. Installed code walks embedding dimensions outside tokens and repeatedly converts the same attention-mask element. Walk tokens outside dimensions, convert each mask once, accumulate into Float64 scratch space, then cast the averaged vector to the existing output dtype and normalize as before. This makes hidden-state reads contiguous while preserving accumulation order for each dimension. Do not patch `node_modules`; benchmark an owned adapter/upstream change with the pinned dependency. Reject zero-valid-token/nonfinite inputs at the established validation boundary rather than inventing values.
+
+**Checked evidence:** native-realm Node 24 prototypes preserved all six ranking signals in 60 fixtures and float32 pooling output in 18 fixtures. They exercised empty/singleton ranking, mixed-sign/positive/zero vectors, duplicate IDs, different widths and padding. R12 records timings and limits. Add long-topic equivalence, cancellation, Unicode keyword/discourse fixtures and full consumer-output checks before implementation is accepted. These are the best initial efficiency candidates because they do not require new weights or new topic labels.
+
+### TECH-02. Batch by token length; evaluate an ONNX graph that returns pooled vectors
+
+**First, eliminate padding waste without changing text.** Tokenize with the packaged tokenizer and exact prefix/special-token policy. Bucket bounded groups of windows by their actual token length, retain original indices, embed with the existing batch size 32, then scatter vectors back into chronological order before any boundary calculation. Never concatenate unrelated windows into one model sequence to “pack” them. Preserve every source mapping, the short tail and cancellation/progress accounting. A bounded reorder buffer prevents an entire library of text from becoming an in-memory batch. Any variable batch-size experiment requires a separate amendment to the existing batch-32 contract.
+
+A dense-attention work proxy is `sum_batches(batchCount * maxTokenLength²)`; projection/feed-forward work also matters, so this is not a runtime predictor. In a deliberately skewed arithmetic example (eight batches, each with 31 lengths of 32 and one of 512), regrouping reduces that proxy by about 7.79× at unchanged batch size. **This is a toy cost calculation, not measured inference acceleration.** Verify batched versus original vectors and topic decisions on RU/UK/EN text; padding shape may change numerical kernels. The current feature-extraction path explicitly enables padding and truncation, so UNIT-02 must land first.
+
+**Then test reducing model-output traffic.** The installed pipeline reads token states and pools/normalizes them in JavaScript. Inspect the actual packaged ONNX output signature and profile this cost. A separately fingerprinted export could place masked mean and L2 normalization inside the graph:
+
+```text
+u = sum_t(mask_t * hidden_t) / sum_t(mask_t)
+v = u / ||u||₂
+```
+
+Match current inclusion of prefix/special tokens, mask handling, dtype casts and zero-vector policy. Expose `[batch,384]` instead of `[batch,tokens,384]` to JavaScript. For float32 batch 32 and 256 tokens, that output payload is 12 MiB versus 48 KiB, a **256× output-size reduction**, not a 256× model-memory or latency gain. Internal transformer activations still exist. A pooled-only graph needs an explicit worker adapter; do not run the existing token-pooling code over its already-pooled output. Treat the changed graph hash as a new embedding artifact and validate Q8/backend parity near decision thresholds. [ONNX export/pooling boundary](https://www.sbert.net/docs/sentence_transformer/usage/efficiency.html), [ORT GPU tensor ownership](https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html)
+
+Do not enable graph capture globally: it requires suitable static shapes and supported GPU execution. Dynamic length buckets, final partial batches, extra sessions and retained GPU buffers can erase its benefit. WASM threads require verified cross-origin isolation and a capture-contention experiment; the current single-thread fallback stays until that separate spike passes. [ORT performance conditions](https://onnxruntime.ai/docs/tutorials/web/performance-diagnosis.html)
+
+### TECH-03. Reuse exact encoder inputs, while keeping timeline metadata revision-specific
+
+**Concrete cache decomposition:** one record maps an exact ordered token sequence plus its attention-mask semantics and encoder/artifact/preprocessing fingerprint to a vector; a separate manifest maps the current transcript generation to ordered vector keys and current time/speaker/source-span metadata. Use canonical length-delimited serialization and a collision-resistant digest; retain enough manifest data to validate hits. Never key reusable vectors solely by `recordingId`, raw unprefixed text, or a segment index.
+
+Timestamp/speaker corrections can reuse text-only vectors when the actual encoder input is identical, but still recompute time/speaker boundary features and publish under the new transcript identity. Text corrections reuse only unchanged complete encoder inputs. With fixed groups of four turns, inserting one turn near the start can shift almost every later window; do not promise local re-embedding without measuring that effect. Evaluate stable derived-unit/block boundaries separately, under UNIT-03, before changing the representation to improve cache hits.
+
+Coalesce simultaneous requests for the same exact key into one in-flight promise inside the inference owner. That is an efficiency mechanism, not durable job state. Eviction, worker termination and failed writes may lose the cache; they must not lose the recording's work request. Recheck identity when publishing results even on a cache hit. Keep caches recording-scoped initially to simplify deletion and avoid cross-recording membership leakage; any shared physical cache needs explicit ownership/reachability cleanup. A transferred `ArrayBuffer` detaches its sender's view: copy, reconstruct or transfer ownership deliberately instead of invalidating a cached array still in use.
+
+**Decisive experiment:** replay a threshold-only change, timestamp edit, speaker edit, middle-word correction, inserted first turn and model/prefix change. Compare complete cold/warm output; record hit ratio, hash/tokenization cost, bytes read/written, avoided inference and eviction recovery. A cache wins only when avoided inference exceeds lookup/I/O/maintenance cost. This makes PERF-01 concrete without making PERF-02's production cache unconditional.
+
+### TECH-04. Use a durable desired-analysis row and conditional result publication
+
+The existing transcript, analysis, outcome and history stores share one IndexedDB database. That permits a narrow transactional solution to missed callbacks and stale overwrites; it does not require event sourcing or a generic workflow framework.
+
+Introduce a proposed per-recording work row containing desired transcript generation/revision, required environment fingerprint, request epoch, scheduling/retry disposition and any claimed attempt token. Store a reference, not the full transcript. Final transcript `commit`/`replace` and the desired-work transition occur in the same library transaction. Live append alone does not start inference. When a hash is not yet available, the row records hash-pending input identity; compute it outside IndexedDB, then attach it only with an ID-04 identity check.
+
+A dispatcher claims a bounded number of eligible rows and sends only admitted work to offscreen. Newer inputs supersede desired state rather than appending unbounded full transcripts to `AnalysisManager.pending`. Completion uses a library transaction to compare the attempt's captured input/environment/request epoch with the current transcript, latest desired state and deletion fence, write result/outcome, and retire that exact request. A stale completion may be acknowledged/discarded but cannot clear newer work or overwrite a newer published result. An explicit forced recompute advances the request epoch even when input bytes are unchanged.
+
+The library work row and offscreen outbox are in different databases, so **do not claim an atomic transaction across them**. Keep at-least-once dispatch and acknowledgement-after-library-commit. A crash after claim but before send, after send but before job-ID recording, or after result commit but before acknowledgement must converge by reconciliation. An expired claim is permission to investigate/retry, not proof the old worker stopped: attempt fencing makes duplicate executions safe. Reconcile with live offscreen state, enforce retry/cancellation policy, and cap duplicate/in-flight bytes. Environment changes must update or reconcile desired rows; an old row alone is not proof that its environment remains current. Keep R3's read-time environment/input checks even with conditional publication. A due index accelerates ordinary recovery; R3's bounded full sweep remains a repair path for legacy rows and environment changes. [IndexedDB transaction semantics](https://www.w3.org/TR/IndexedDB-3/#transaction-concept)
+
+**Acceptance:** inject termination at each boundary above; run A→B→C while A loads; replay A after C completes; force recomputation on unchanged input; cancel, delete and restart. Assert latest eligible input eventually completes, no durable request disappears before a matching result/explicit disposition, and neither stale outcomes nor stale attempts clear a newer row. This is a proposed cross-repository transaction seam and requires source changes plus schema migration in P0; it is not already implemented.
+
+### TECH-05. Accelerate the existing weighted-SSE experiment with safe pruning
+
+Use R6's Float64 prefix statistics and unpruned DP as the reference. For fixed vectors and positive weights, the cost satisfies:
+
+```text
+C(A∪B) − C(A) − C(B)
+  = W_A*W_B/(W_A+W_B) * ||mean_A − mean_B||² ≥ 0.
+```
+
+This gives PELT's zero-constant pruning condition. With `D[0]=0` and a penalty per segment, predecessor a is dominated via endpoint s when `D[a]+C(a,s)>D[s]`, **but only at future b where the replacement segment (s,b) is legal**. Use strict comparison to retain ties unless a different tie policy is proved. Do not add another penalty into this dominance test; the final segment penalty cancels. [PELT theorem and conditions](https://arxiv.org/html/1101.1438)
+
+Minimum duration/length requires delayed pruning. With minimum h units, domination at s cannot remove a for endpoints before `s+h`. A common maximum span L bounds cost to O(nLd); under compatible constraints a retained set can reduce actual work further. Worst case without a span bound remains quadratic in n, with vector-dimension cost; expected linear behavior is not established for these meetings. Boundary bonuses, candidate restrictions, data-dependent weights or a new cost require a fresh legality/pruning argument. Start with the plain SSE objective.
+
+**Reproduced counterexample:** unit vectors `[-1,1,-1,1,-1,-1,1]`, unit weights, minimum length 2 and penalty 3/5. Correct DP returns endpoint `[7]` with cost `261/35`; immediate naive pruning returns `[4,7]` with cost `118/15`. At endpoint 6, its replacement for the deleted predecessor would require an illegal one-unit final segment. Keep this exact rational fixture and compare constrained pruning against exhaustive/unpruned solvers on small randomized cases. Count evaluated candidate segments and measure browser runtime; pruning is an exact acceleration of this challenger, not proof that SSE improves topic quality over current peaks.
+
+### TECH-06. Build average-link topic hierarchies once and reuse their cuts
+
+Make R6's global-clustering challenger precise. Normalize each nonzero temporal-segment leaf once; current segment means are not necessarily unit length. Begin with equal leaf masses to isolate linkage, then evaluate token/duration mass separately. For fixed unit leaves x_i and positive masses w_i:
+
+```text
+W_A = sum_(i∈A) w_i;  S_A = sum_(i∈A) w_i*x_i
+averageCosine(A,B) = (S_A · S_B)/(W_A*W_B)
+                  = mean_A · mean_B
+```
+
+Do **not** renormalize the cluster means. Their norms carry dispersion that `cosine(mean_A,mean_B)` removes. This is a different objective from the current first-qualifying centroid merge, not a drop-in preservation of it. For two clusters each containing vectors at ±20 degrees around the same direction, centroid cosine is 1, but average cross-pair cosine is about 0.883. Retune thresholds; `.93/.95` are not transferable.
+
+For distance `d=1−averageCosine`, update `d(A∪B,C)=(W_A*d(A,C)+W_B*d(B,C))/(W_A+W_B)`. The update is constant time **per updated pair**. Equal masses give standard average linkage, not WPGMA's equal weighting of child clusters. Build a cubic global-minimum reference first; use a verified nearest-neighbor-chain implementation for O(m²) clustering after O(m²d) initial distances, where m counts temporal segments. A condensed Float64 distance table uses `8*m*(m−1)/2` bytes—about 3.81 MiB at m=1,000—before metadata. Bound m before allocating. [Linkage definitions and implementation bounds](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html), [chain correctness and tie handling](https://arxiv.org/pdf/1109.2378)
+
+Complete the hierarchy with proper merge sorting/relabeling, then reuse cuts for all candidate thresholds. Chain discovery order is not global merge-height order; do not stop the whole algorithm on its first above-threshold reciprocal pair. Reuse applies only while leaves, masses and metric stay fixed, and each partition still costs work to materialize/score. Average linkage does not guarantee that every within-topic pair matches; complete-link remains the stricter challenger if false merges persist.
+
+**Checked:** explicit weighted-pair enumeration agrees with moment statistics on 1,000 seeded cases (maximum absolute error below 1.4e−16). Remaining acceptance: chain versus reference on tie-free cases, valid-minimum choices under ties, cancelling means, unequal masses, hierarchy cut equivalence, fixed-segmentation A→B→A recall and shared-vocabulary false merges. Avoid hidden reweighting by segment length during the first comparison.
+
+### TECH-07. Test local token-state pooling as one new representation experiment
+
+The late-chunking paper encodes context before pooling spans. Adapt that mechanism cautiously to **bounded local blocks** of the existing E5 encoder: retain token states in the embedding Worker, form prefix sums, then pool left/right spans around candidate boundaries at multiple widths. For a valid text-token span `[a,b)`, its mean is `(H_b−H_a)/(b−a)`; masked/special tokens need explicit exclusion and counts. Span extraction costs O(d) after prefix construction. Return compact vectors/scores and source mappings, not all meeting token states. This can trade many independent flank re-embeddings for one block forward pass. [Original late-chunking method and retrieval evaluation](https://arxiv.org/html/2409.04701v3)
+
+It does **not** extend E5's context limit. Bidirectional token states on opposite sides of a boundary see one another and may blur topic changes; the paper's retrieval gains do not establish segmentation gains. Cached independently encoded flanks cannot be substituted for shared-context states. Use distinct representation/cache identities, shift block seams as a robustness test, and count all context/overlap tokens in cost and coverage. No word or pause is removed from canonical content.
+
+First verify that the packaged token-output graph supports this path, and reconstruct current whole-window pooling before evaluating new boundaries. A pooled-only TECH-02 export cannot recover discarded token states: retain a separately fingerprinted unpooled research export if this experiment proceeds. Do not enable both paths together and attribute their combined effects to either. Promote only if finer time boundaries and recurrence pass R5 without introducing overlap smearing or unacceptable memory/inference cost.
+
+### TECH-08. Use an existing demuxer, with explicit ownership of decoded buffers
+
+The first concrete R7 spike candidate is **Mediabunny + native WebCodecs**: sealed OPFS `File` → `BlobSource` → selected WebM/MP4 parser → actual audio tracks → `AudioSampleSink` → bounded fake consumer. The recorder can produce WebM/Opus, MP4 with AAC or Opus, and M4A/AAC; inspect codec metadata rather than file extensions. Mediabunny documents lazy reads, async sample iteration and disposal; pin the tested version and its MPL-2.0 license/source notices before adoption. Its cache bound is not a whole-process memory guarantee. [Reading API](https://mediabunny.dev/guide/reading-media-files), [sample sinks](https://mediabunny.dev/guide/media-sinks), [license](https://github.com/Vanilagy/mediabunny/blob/main/LICENSE)
+
+Use a fixed-capacity pool of transferable PCM buffers. The consumer returns capacity only after releasing the buffer, not when `postMessage` returns. Close each decoded sample in `finally`; dispose the input/iterator on abort, and have a supervisor terminate a wedged decoder after the frozen cancellation deadline. Account for source cache, packet prefetch, decoder-owned output, PCM pool and consumer state separately. If high-level sink buffering cannot meet the gate, use its encoded-packet reader with an explicitly controlled `AudioDecoder`; `decodeQueueSize` alone does not bound output/native memory.
+
+Preserve track offsets, pre-skip/codec delay and discontinuities through stateful resampling. Fake-sink success on real emitted files, slow consumption, 3-hour input, truncated tails and repeated cancellation is required before ASR. Stock whole-file ffmpeg.wasm usage is not the automatic fallback: filesystem-copy examples do not establish bounded streaming. R7's feasibility gate may reject this library/runtime without forcing a sidecar design.
+
+### TECH-09. Establish a bounded multilingual ASR control before a broad model contest
+
+Use **multilingual Whisper through the already-present Transformers.js/ONNX stack** as an initial quality/runtime control; `onnx-community/whisper-small` is one concrete exported candidate, not a selected shipping model. Compare a smaller multilingual size if it cannot meet the frozen device budget. Pin exact conversion files, hashes and provenance; resolve the export's license metadata against upstream notices before packaging. RU/UK/EN support means a language is supported, not that recognition on this product's audio is accurate. [ONNX candidate card](https://huggingface.co/onnx-community/whisper-small/blob/main/README.md), [upstream language definitions](https://github.com/openai/whisper/blob/main/whisper/tokenizer.py)
+
+Feed bounded mono PCM windows, with this adapter alone owning the model-required 16 kHz stateful resampling, chunk context, overlap and timestamp mapping. Use transcription rather than translation. Keep original media offsets when stitching; deduplicate only matched overlap at the same audio time, not legitimate repeated phrases. Initially allow one active audio window/request. Decoder tokens are sequential; generic token batching cannot remove autoregressive dependencies. Package resources and test with outbound HTTP(S) blocked, following the current E5 worker boundary.
+
+A VAD stage is an optional compute-saving experiment, not proof of silence. Compare the same audio with and without it; count omitted low-volume/short speech, clipped starts/ends, non-speech hallucinations and time-map errors. If speech fraction is rho and processing cost per second were constant, a cost model is `T_vad + rho*T_asr + overlap/context cost`; it is not a measured speedup or quality guarantee. Never concatenate separated speech intervals without retaining a reversible media-time map.
+
+Evaluate encoder and decoder dtypes separately; Transformers.js explicitly flags Whisper encoder quantization sensitivity. Do not generalize E5 Q8 success to all ASR modules. Measure cold/warm load, real-time factor, retained/native memory, cancellation, name/number fidelity and R5 downstream scores. If ONNX misses a frozen runtime budget, whisper.cpp WASM is a conditional comparator using the same model family/audio/settings, not a second implementation to build concurrently. [Dtype guidance](https://huggingface.co/docs/transformers.js/guides/dtypes), [whisper.cpp browser example](https://github.com/ggml-org/whisper.cpp/tree/master/examples/whisper.wasm)
+
+## R12. Experiment order, measured evidence, and stopping rules
+
+Do not turn TECH-01…09 into one large implementation. They form three bounded tracks with separate attribution:
+
+| Order | Experiment | Existing phase | Evidence required before the next investment |
+|---|---|---|---|
+| First correctness | Transactional desired work / conditional publication (TECH-04) and existing F1–F12 priorities | P0 | Crash/replay invariants and bounded backlog; no new analysis algorithms while the input contract is unreliable |
+| First efficiency | Fused pair comparisons, then pooling locality (TECH-01), separately | P1/P4 | Exact output oracle, browser CPU profile, responsiveness and end-to-end benefit |
+| Next inference | Token-length buckets; only then pooled ONNX output if transfer/pooling matters (TECH-02) | P2/P4 | Same texts/mappings, vector and decision parity, named-device memory/latency; no assumed GPU win |
+| Next reuse | Exact-input research cache, production only if reuse pays (TECH-03) | P2/P5 | Edit/eviction matrix and measured cache economics |
+| Quality search | Plain SSE versus peaks; constrained PELT only as the exact solver optimization; average-link hierarchy versus current clustering (TECH-05/06) | P4 | Repaired evaluator, exact solver oracles, R5 quality gates and browser budgets |
+| Optional representation | Local token-state pooling (TECH-07) | P4, after baseline comparisons | Source mapping, boundary seam robustness and measured quality gain; otherwise retain independent contexts |
+| Audio, in parallel after storage contracts | Mediabunny fake-sink spike, then bounded Whisper control (TECH-08/09) | P3/P6 | Decoder memory/timing/cancellation first; actual RU/UK/EN ASR/downstream evidence second |
+
+**Fresh exploratory measurements, not a shipped performance result.** On Apple M1 Pro / macOS arm64 / Node 24.19.0, prototypes ran against the current ranking code and the installed pooling function, using synthetic 384-wide float32 vectors. Each measurement used two warmups and seven interleaved baseline/candidate pairs. Median times below are separate sample medians; the ratio column is the median of matched pair ratios, so it need not equal the ratio of those two medians.
+
+| Kernel / workload | Baseline median | Candidate median | Median paired speed ratio | Equivalence evidence |
+|---|---:|---:|---:|---|
+| Ranking, 128 passages | 48.33 ms | 15.71 ms | 2.97× | 60 small/edge fixtures across widths/modes; six numeric outputs compared using `Object.is` |
+| Ranking, 512 passages | 771.96 ms | 263.01 ms | 3.17× | Same prototype; asymptotic pair count reduced exactly threefold for unique IDs |
+| Mean pooling, batch 32 × 128 tokens × 384 dimensions | 71.68 ms | 5.92 ms | 12.38× | 18 shape/padding fixtures with identical float32 output |
+
+Ranking comparisons included its unchanged keyword/discourse work. Pooling measured the installed function copied verbatim into the normal JavaScript realm with only the output Tensor wrapper replaced; it did not run a model or measure tensor transfer. An earlier VM-based pooling measurement was rejected because VM global-access overhead could exaggerate gains; those samples are not used above. This correction is why the retained evidence includes the runner and raw samples, not just a favorable ratio.
+
+These are single-process kernel experiments with no inference, real meeting vectors, browser event loop, GPU contention, or independent-process confidence interval. They support the mechanisms and justify a browser experiment; they do not satisfy product adoption gates. In particular, a 12× pooling gain cannot deliver 12× end-to-end analysis when encoding dominates. R8's full cost model still applies.
+
+Additional checks: exact rational arithmetic reproduced TECH-05's unsafe-pruning counterexample; 1,000 seeded weighted-SSE split identities had maximum absolute error below 4.9e−15, and 1,000 weighted average-link identities below 1.4e−16. These verify formulas and expose an unsafe shortcut; they are not implementations of constrained PELT or nearest-neighbor-chain clustering.
+
+Retain benchmark scripts/results and the revision ledger with the review artifact. The full application tests in R10 belong to the preceding audit and are not relabeled as new runs. For this documentation-only extension, validation consists of source/primary-reference checks, the numerical experiments above, preservation checks and a completed independent review with no blocking findings. That reviewer independently reproduced the equivalence/formula checks (its executable equivalence run used Node 18), inspected the raw timing arithmetic and qualified the benchmark limits; it did not independently rerun Node 24 performance. The systems proposal was checked directly after one parallel reviewer stopped at an account usage limit; it must still pass TECH-04's executable lifecycle acceptance tests when implemented.
+
+**Stop or reject:** reject an optimization that changes accepted output without entering the quality-changing route; reject unsupported pruning, stale cache mappings, silent truncation, and unbounded decoder buffering. Defer graph capture, whole-meeting token-state retention, blind whitening/embedding compression, larger ASR models and additional schedulers unless measured bottlenecks justify them. E5's high cosine band is documented model behavior, not sufficient evidence that whitening or an arbitrary cosine threshold improves segmentation. [E5 model explanation](https://huggingface.co/intfloat/multilingual-e5-small/blob/main/README.md)
+
+# Historical review — retained input, not current implementation status
+
+The main conclusion is important:
+
+> **You are not blocked on choosing an ASR model or obtaining your own transcript. There is a substantial architecture + NLP hardening phase that should happen before either.**
+>
+> More importantly, we can now run meaningful real-conversation research without your private transcript at all: public AMI/ICSI/QMSum data gives us actual meetings, speakers, timings and topic annotations. Your own Russian/Ukrainian calls remain necessary for the *final domain calibration*, but not for finding and fixing structural weaknesses.
+
+## 1. State of the repository
+
+PR #17's separation survived the later refactors well. The architecture is substantially healthier than it was when we first designed local processing:
+
+```text
+Content / capture
+      │
+      ▼
+background control plane
+      │
+      ├── recording/*
+      ├── library/transcript/*
+      ├── library/analysis/*
+      ├── runtime/*
+      └── integrations/*
+              │
+              ▼
+       canonical library state
+              │
+              ▼
+offscreen data plane
+      │
+      ├── media / uploads
+      └── analysis/
+              │
+              ▼
+       dedicated embedding Worker
+
+shared/analysis/*
+      ↑
+pure deterministic NLP
+```
+
+That division is good. In particular, I would **not rewrite the processing module into a new framework**.
+
+The functional core/imperative shell separation is quite strong: vector maths, boundary detection, segmentation, clustering, keywords and importance live as pure code, while browser lifecycle, persistence and worker durability live outside it. Long-running inference remains in an offscreen-owned worker rather than an MV3 service worker. Background remains the canonical-data writer. Durable result acknowledgement is carefully handled. The later background split has also removed the old giant-controller shape.
+
+The external integrations work is similarly well-shaped: there is one projection path from internal state into the public integration contract, privacy policy is explicit, internal IDs are not exported, and speaker pseudonymization is separated from canonical transcript state.
+
+The current head's CI gate is successful. This particular run reused the repository's validation planner/cache and therefore skipped the expensive domain jobs rather than executing every suite afresh, so I would describe it as **CI gate green**, not “every test reran on this exact commit.”
+
+### The current NLP pipeline
+
+What presently ships is approximately:
+
+```text
+TranscriptSegment[]
+       │
+       ▼
+4-utterance contextual windows
+       │
+       ▼
+multilingual-e5-small Q8
+384-dimensional normalized vectors
+       │
+       ├──── semantic boundary scores
+       │       + pause
+       │       + speaker change
+       │       + discourse cue
+       │
+       ▼
+local peaks
+       │
+       ▼
+temporal segments
+       │
+       ▼
+current-cluster assignment
+       + periodic global centroid merges
+       │
+       ▼
+global topics
+       │
+       ├── c-TF-IDF labels
+       └── importance arithmetic
+```
+
+The underlying design remains attractive: deterministic, local, relatively cheap, easy to test, no large generative model, and reusable embeddings.
+
+But several assumptions that made sense when PR #17 was designed have changed.
+
+The biggest one is this:
+
+> The clustering/segmentation architecture was consciously designed with “browser + incremental/live” constraints in mind, but the production trigger is now **post-recording batch analysis of a finished transcript**.
+
+That changes what algorithms are affordable.
+
+---
+
+# 2. The highest-priority problem is not NLP
+
+There is one architectural problem I would fix **before introducing any STT engine**.
+
+### An analysis currently does not identify the transcript that produced it
+
+`AnalysisProvenance` records:
+
+```ts
+pipelineVersion
+embeddingModel
+embeddingModelRevision
+embeddingDimensions
+embeddingDtype
+configHash
+embeddingDevice? // diagnostic
+```
+
+It does **not** contain a transcript fingerprint/revision.
+
+[Current analysis provenance implementation](https://github.com/kstroevsky/chrome-meeting-recording-extension/blob/feat/external-integrations-module/src/shared/analysis/provenance.ts?utm_source=chatgpt.com)
+
+And `RecordingAnalysisCoordinator.analyze()` currently checks whether a current analysis already exists **before** reading the transcript:
+
+```ts
+if (!force && await analyses.get(historyId)) {
+    return { ok: false, reason: 'already-analyzed' };
+}
+```
+
+[RecordingAnalysisCoordinator](https://github.com/kstroevsky/chrome-meeting-recording-extension/blob/feat/external-integrations-module/src/background/library/analysis/RecordingAnalysisCoordinator.ts?utm_source=chatgpt.com)
+
+Today that is mostly harmless because Meet captions are effectively the one immutable transcript source.
+
+It becomes a correctness bug the moment we have:
+
+```text
+recording
+   ↓
+transcript A
+   ↓
+analysis A
+
+later:
+
+STT / retranscription / imported transcript B
+   ↓
+???
+```
+
+The old analysis still has perfectly current:
+
+```text
+pipelineVersion = 2
+model = E5
+configHash = xyz
+```
+
+so the system cannot know it belongs to transcript A.
+
+Worse, external integrations can eventually observe:
+
+```text
+transcript: B
+
+analysis:
+   topics computed from transcript A
+```
+
+and consider both ready.
+
+The current integration snapshot code independently reads transcript and analysis, and stale analysis is mapped to `unsupported`; there is no cross-check tying the result to the transcript revision.
+
+[IntegrationPreviewService](https://github.com/kstroevsky/chrome-meeting-recording-extension/blob/feat/external-integrations-module/src/background/integrations/IntegrationPreviewService.ts?utm_source=chatgpt.com)
+
+This should be fixed now, because it has nothing to do with which STT model wins.
+
+## Proposed derived-data identity
+
+I would introduce a stored transcript envelope conceptually like:
+
+```ts
+type StoredTranscript = {
+  schemaVersion: 1;
+
+  revision: number;
+  contentHash: string;
+  committedAt: number;
+
+  transcript: Transcript;
+};
+```
+
+The hash should cover the canonical normalized representation of:
+
+```text
+source
+tStartMs
+tEndMs
+speaker
+text
+ordering
+schemaVersion
+```
+
+For transcript identity I would use SHA-256/WebCrypto rather than reuse the 32-bit FNV config hash. This is not primarily a cryptographic-security requirement; it is a correctness identifier for arbitrary user content and can eventually cross persistence/integration boundaries.
+
+Then:
+
+```ts
+type AnalysisProvenance = {
+   ...
+   transcriptHash: string;
+   transcriptRevision: number;
+};
+```
+
+Now the relationship becomes explicit:
+
+```text
+Transcript B
+hash = H(B)
+
+Analysis
+input = H(B)
+```
+
+and staleness becomes:
+
+```text
+analysis.transcriptHash !== currentTranscript.contentHash
+```
+
+in addition to model/config/pipeline staleness.
+
+This single addition unlocks clean retranscription, import, STT model switching, re-analysis and integration updates.
+
+---
+
+# 3. The second architectural gap: a late transcript is not a first-class event
+
+The transcript repository remains optimized for live Meet-caption append.
+
+`RecordingTranscriptService` has essentially:
+
+```text
+get
+status
+append
+removeAll
+```
+
+`append()` refuses a source change.
+
+The service itself explicitly says `processing` is currently unreachable.
+
+[RecordingTranscriptService](https://github.com/kstroevsky/chrome-meeting-recording-extension/blob/feat/external-integrations-module/src/background/library/transcript/RecordingTranscriptService.ts?utm_source=chatgpt.com)
+
+That was correct for PR #17.
+
+It is not the contract we want before STT.
+
+We want:
+
+```text
+caption source
+        │
+        ├──── append while recording
+        │
+        ▼
+   commit transcript
+        │
+        ▼
+analysis reconciliation
+
+or
+
+finished recording
+        │
+        ▼
+STT eventually completes
+        │
+        ▼
+   commit transcript
+        │
+        ▼
+analysis reconciliation
+
+or
+
+user imports/replaces transcript
+        │
+        ▼
+   commit transcript
+        │
+        ▼
+analysis reconciliation
+```
+
+The important concept should therefore be **transcript commit**, not “recording finished.”
+
+### Don't make a callback the correctness mechanism
+
+It would be easy to write:
+
+```ts
+await transcripts.save(...);
+await analysis.analyze(recordingId);
+```
+
+That is insufficient in MV3.
+
+Chrome can kill the service worker between those two statements.
+
+The repository already understands this principle elsewhere, so I would apply the same discipline:
+
+```text
+durable transcript revision committed
+        │
+        ▼
+analysis becomes derivably dirty
+        │
+        ▼
+fast-path notification
+        +
+bounded reconciliation
+```
+
+A transcript-commit notification can make the usual path immediate.
+
+A startup/recovery reconciler makes it correct.
+
+Something like:
+
+```ts
+ensureCurrentAnalysis(recordingId)
+```
+
+should become idempotent:
+
+```text
+no transcript          → no work
+same fingerprint       → no work
+job already active     → no work
+analysis missing       → enqueue
+analysis wrong input   → enqueue
+analysis wrong config  → enqueue
+```
+
+This is an industry-standard reconciler shape and fits the existing repository much better than introducing an event-sourcing system.
+
+### Race that needs a test
+
+There is an especially important case:
+
+```text
+Transcript A
+   ↓
+Analysis A running
+
+Transcript B committed before A finishes
+   ↓
+
+Analysis A result arrives
+```
+
+The result must never become the current analysis for B.
+
+Once provenance carries `transcriptHash`, this is simple:
+
+```text
+A result input hash != current transcript hash
+→ don't expose it as current
+→ ensure B is scheduled
+```
+
+---
+
+# 4. External integrations make this correction more urgent
+
+The new integration module raises the bar for consistency.
+
+Its snapshot builder is intentionally a canonical-state projection:
+
+```text
+history
+context
+notations
+transcript
+analysis
+artifacts
+       ↓
+IntegrationRecordingV1
+```
+
+That is a good design.
+
+But several aggregates are currently fetched independently. Once transcripts become replaceable, an integration build can race a transcript update and observe a mixed logical revision.
+
+You do not necessarily need to refactor the whole library into one transaction immediately. A transcript fingerprint already lets the builder detect the important inconsistency:
+
+```text
+transcript.contentHash = B
+
+analysis.provenance.transcriptHash = A
+
+→ snapshot is NOT analysis-ready
+```
+
+I would also stop translating a stale analysis into `unsupported`.
+
+Those are semantically different:
+
+```text
+unsupported
+= this machine/runtime cannot perform analysis
+
+stale
+= we deliberately need to recompute derived data
+```
+
+That distinction matters to external automation.
+
+The clean model is closer to:
+
+```text
+readiness.pending = ['analysis']
+
+analysis omitted / status stale
+```
+
+until the reconciler produces a B analysis.
+
+---
+
+# 5. A deeper NLP problem: “utterance” is currently source-defined
+
+This is the biggest processing issue to solve before STT.
+
+The current window builder says:
+
+```text
+4 transcript utterances = one semantic context
+```
+
+[Current contextual-window implementation](https://github.com/kstroevsky/chrome-meeting-recording-extension/blob/feat/external-integrations-module/src/shared/analysis/windows.ts?utm_source=chatgpt.com)
+
+That implicitly assumes a `TranscriptSegment` has a reasonably stable linguistic granularity.
+
+Meet captions may produce:
+
+```text
+one speaker turn
+one revised caption
+one phrase
+```
+
+A future ASR engine may instead produce:
+
+```text
+5-second chunk
+sentence
+VAD region
+30-second segment
+word-timestamp groups
+```
+
+Those are not interchangeable.
+
+A pipeline whose fundamental semantic unit is “four upstream chunks” will change behavior when the ASR implementation changes even if **the words are identical**.
+
+There is direct research support for treating this as a separate problem. Wan et al. showed that raw acoustically determined ASR segmentation does not necessarily match units appropriate for downstream NLP, and correcting the segmentation improved downstream translation and information retrieval. :chatgpt-content-reference{index="7"}
+
+I would insert one layer:
+
+```text
+TranscriptSegment[]
+        │
+        ▼
+AnalysisTurnNormalizer
+        │
+        ▼
+AnalysisTurn[]
+        │
+        ▼
+context windows
+```
+
+An `AnalysisTurn` is not another persisted canonical truth. It is a deterministic analysis representation.
+
+Initially its production strategy can remain almost identity-like.
+
+But the seam lets us later evaluate:
+
+```text
+same-speaker adjacent merge
+token-budget turns
+punctuation/sentence boundaries
+VAD chunk joining
+very-long-turn splitting
+backchannel handling
+```
+
+without modifying `Transcript` or teaching the NLP pipeline about Parakeet/Qwen/GigaAM/Whisper.
+
+### The test I care about most
+
+Create semantically identical transcripts represented as:
+
+```text
+A: 30 speaker turns
+
+B: same words split into 100 ASR-like chunks
+
+C: same words merged into 15 long chunks
+```
+
+The *macro topics* should remain approximately invariant.
+
+I suspect the current 4-utterance implementation will fail that test quite noticeably.
+
+Finding that out **before** choosing ASR is extremely valuable.
+
+---
+
+# 6. The newest research gives us a specific improvement to test right now
+
+A particularly relevant 2026 paper appeared after PR #17 was designed: **“Unsupervised Topic Segmentation of Meetings with Length-Aware Semantic Weighting.”**
+
+It addresses exactly a meeting-specific failure mode: short acknowledgements/backchannels such as “yeah”, “right”, “okay”, interruptions and low-information turns receiving too much influence. The authors add length-aware weighting to a global meeting segmentation approach and report consistent improvements on AMI, ICSI and AliMeeting4MUG under Pk and WindowDiff. :chatgpt-content-reference{index="8"}
+
+This maps almost perfectly onto your current architecture.
+
+Today:
+
+```text
+4 turns containing:
+
+"Yeah."
+"Right."
+"Okay."
+"I agree."
+
+→ one embedding
+
+and
+
+4 dense 30-word turns
+→ one embedding
+```
+
+Both become one equally weighted context vector downstream.
+
+Likewise segment embeddings average window embeddings equally.
+
+I would add an **experimental**, not shipping, aggregation strategy:
+
+```text
+uniform             // current baseline
+token-count
+sqrt(token-count)
+log1p(token-count)
+```
+
+for window/segment semantic aggregation.
+
+No new model is needed.
+
+AMI/ICSI can tell us whether it helps.
+
+This is one of the highest-value scientific experiments available to you today.
+
+---
+
+# 7. We can stop waiting for your real transcript to benchmark segmentation
+
+Your existing calibration harness is actually better than it was during PR #17.
+
+It already understands:
+
+```text
+synthetic
+real tuning
+holdout
+```
+
+and does not tune on the holdout.
+
+That is correct.
+
+[Current calibration runner](https://github.com/kstroevsky/chrome-meeting-recording-extension/blob/feat/external-integrations-module/scripts/calibrate-analysis.ts?utm_source=chatgpt.com)
+
+What is missing is actual public conversational ground truth.
+
+## AMI is usable immediately
+
+The original AMI corpus has **manual topic segmentation**, including hierarchical topic/subtopic labels and descriptions. :chatgpt-content-reference{index="10"}
+
+There is also now the 2026 **AMI-ME** dataset: 130 AMI meetings and 2,459 fine-grained segments, with three effectiveness annotators per segment, under CC BY 4.0. :chatgpt-content-reference{index="11"}
+
+One nuance: AMI-ME's fine-grained segmentation is partly generated/refined for its effectiveness task; I would **not treat that as a replacement for the original manually annotated AMI topic boundaries** without validating its construction. Use original AMI as the primary segmentation ground truth and AMI-ME as supplementary 2026 data.
+
+ICSI is another real multi-speaker meeting corpus, and the public TreeSeg project already contains loaders for AMI and ICSI, which can save a lot of parsing work. :chatgpt-content-reference{index="12"}
+
+QMSum is useful for a different property: it contains 232 meetings and `topic_list` entries with relevant spans, including non-contiguous spans for topics that recur later. That is very useful for testing your **temporal segments vs global recurring topics** design. :chatgpt-content-reference{index="13"}
+
+So:
+
+> **You do not need to wait for your private transcript to start validating the fundamental segmentation and recurrence mechanics.**
+
+You still need your Russian/Ukrainian data before freezing production parameters, because AMI/ICSI are not your target language/domain.
+
+---
+
+# 8. Your current evaluation metric is too narrow
+
+The existing calibration's boundary score is effectively tolerant boundary F1 around ±1 window.
+
+That was reasonable for a synthetic spike.
+
+It is not enough for real algorithm selection.
+
+Why?
+
+With the current 4-turn window:
+
+```text
+±1 window
+≈ ±4 utterances
+```
+
+Change the window size and the meaning of the metric itself changes.
+
+I would report at least four complementary quantities:
+
+| Aspect | Metric |
+|---|---|
+| exact/local boundary correctness | Boundary precision/recall/F1 |
+| segmentation structure | Pk |
+| segmentation structure | WindowDiff |
+| playback UX | time-tolerant boundary F1, e.g. ±N seconds |
+| global-topic assignment | pairwise P/R/F1 |
+| cluster fairness | B³ or ARI |
+| dangerous error | explicit false-merge count/rate |
+
+Pk and WindowDiff remain standard in recent unsupervised segmentation papers, including *Words That Stick* and the 2026 meeting length-weighting paper. :chatgpt-content-reference{index="14"}
+
+The time-based metric is particularly relevant because ACL 2026's *Beyond Transcripts* explicitly distinguishes transcript-space and **time-space** evaluation and shows that transcript quality and acoustic features affect chaptering. :chatgpt-content-reference{index="15"}
+
+### Don't optimize one arithmetic average
+
+Today you have a combined segmentation/clustering score.
+
+I would not choose the eventual config by:
+
+```text
+(boundary F1 + cluster F1) / 2
+```
+
+alone.
+
+A catastrophic false topic merge has a very different UX cost from a slight boundary displacement.
+
+Instead, report a Pareto surface and impose constraints, for example:
+
+```text
+first:
+false-merge rate <= acceptable limit
+
+then maximize:
+segmentation + clustering quality
+```
+
+And bootstrap scores **by meeting**, not by individual boundary, to get confidence intervals.
+
+---
+
+# 9. Reference-free evaluation can help before annotations exist
+
+Two papers are useful here.
+
+SegReFree introduced an embedding-based reference-free segmentation-quality measure. :chatgpt-content-reference{index="16"}
+
+Ghinassi et al. 2024 subsequently proposed a broader embedding-space framework using Average Relative Proximity and showed strong correlations with traditional annotation-dependent metrics in many domains—although importantly, **conversation was the hardest domain**. :chatgpt-content-reference{index="17"}
+
+I would therefore add one of these as a **regression signal**, not as ground truth.
+
+That gives the development loop:
+
+```text
+algorithm change
+     │
+     ├── synthetic gold tests
+     ├── public AMI gold tests
+     ├── holdout
+     └── reference-free cohesion regression
+```
+
+Later, when you run an unlabeled Russian call, you at least have a sanity metric before manual annotation exists.
+
+---
+
+# 10. We should reconsider local-peak-only segmentation
+
+The current algorithm is approximately:
+
+```text
+adjacent window cosine change
+        ↓
+local peak detection
+        ↓
+min-duration repair
+```
+
+That is wonderfully simple.
+
+But now that analysis happens **once after the conversation**, there is no need to restrict ourselves exclusively to local decisions.
+
+A classic but still directly useful method is Content Vector Segmentation. It uses global optimization/dynamic programming over semantic coherence. :chatgpt-content-reference{index="18"}
+
+This isn't merely academic historical trivia: Zoom's AutoMin 2023 system actually used CVS with sentence embeddings and dynamic programming for meeting segmentation. :chatgpt-content-reference{index="19"}
+
+I would implement it as an experimental competitor over the **same cached E5 embeddings**.
+
+Then compare:
+
+```text
+Current:
+local peaks
+
+Experiment:
+global coherence + DP
+
+Experiment:
+global coherence + DP + length weighting
+```
+
+No new model.
+
+No user transcript.
+
+No product commitment.
+
+That is exactly what a good research harness should allow.
+
+### Two-stage boundary refinement is another inexpensive experiment
+
+The current disjoint 4-turn windows solved the overlap-smearing problem, but they create coarse spatial resolution.
+
+A useful compromise:
+
+```text
+coarse 4-turn disjoint scan
+        ↓
+candidate boundary region
+        ↓
+re-embed only that local region
+with smaller disjoint left/right contexts
+        ↓
+refined utterance-level boundary
+```
+
+You only pay extra embeddings around a handful of candidates.
+
+That deserves a benchmark.
+
+---
+
+# 11. The global clustering algorithm deserves a challenger
+
+This is another place where the post-recording trigger changes the tradeoff.
+
+Current behavior is roughly:
+
+```text
+new temporal segment
+   ↓
+compare to current cluster
+   ↓
+join / open cluster
+   ↓
+periodic centroid merge
+```
+
+It is cheap and incremental.
+
+But it has an asymmetric error model:
+
+```text
+false split
+→ may be repaired by later merge
+
+false join
+→ cannot be repaired
+```
+
+It is also order-dependent.
+
+For a completed meeting with, say, tens of temporal segments, a full similarity matrix is tiny:
+
+```text
+100 segments
+→ 10,000 cosine values
+```
+
+That's nothing compared with embedding inference.
+
+I would therefore benchmark a global clustering challenger:
+
+```text
+segment embeddings
+      ↓
+full cosine matrix
+      ↓
+average-link / complete-link agglomeration
+      ↓
+threshold
+```
+
+and optionally a post-hoc **split low-cohesion cluster** pass.
+
+I would prefer average/complete linkage over connected-components/single-link behavior because chaining can create exactly the overmerge problem we're trying to avoid.
+
+Recent work reinforces the importance of richer contextual representations for dialogue theme clustering. CATCH 2025 focuses on context-aware representations because sparse, short dialogue utterances cluster poorly in isolation. :chatgpt-content-reference{index="20"}
+
+S³ 2025 is also worth watching for global semantic structure: it uses ICA in embedding space and reports substantially faster contextual topic modeling than BERTopic. It is **not a drop-in meeting segmentation algorithm**, but it is relevant as a possible future global-topic challenger. :chatgpt-content-reference{index="21"}
+
+I would not ship either now.
+
+I would make the harness capable of comparing them.
+
+---
+
+# 12. There are cheap dialogue features worth evaluating
+
+Your current boundary score is:
+
+```text
+0.70 semantic
+0.10 long pause
+0.10 speaker-pattern change
+0.10 discourse cue
+```
+
+The structure is sensible.
+
+The current `speakerPatternChange`, however, is basically a Jaccard comparison of speaker sets.
+
+That throws away:
+
+```text
+speaker frequency
+dominant speaker
+turn ordering
+interruption pattern
+```
+
+The 2024 multi-party conversation study by Decker & Amblard specifically found linguistic/dialogue features useful for segmentation, including speaker structure and new-vocabulary behavior. :chatgpt-content-reference{index="22"}
+
+I would experimentally add:
+
+```text
+speaker-distribution divergence
+dominant-speaker switch
+turn-transition rate
+question → answer continuity
+finite-memory vocabulary novelty
+```
+
+A Jensen–Shannon divergence over speaker distributions is probably a more useful candidate than set Jaccard.
+
+Do not add all these to the production score.
+
+Add them to the trace and calibration harness and see whether they have signal.
+
+---
+
+# 13. Keyword cohesion is worth trying before another model
+
+*Words That Stick* (CoNLL 2024) is unusually applicable to your constraints.
+
+It remains unsupervised, uses strong embeddings plus representative keywords, retains a memory of earlier keywords, and improved unsupervised segmentation without fine-tuning. :chatgpt-content-reference{index="23"}
+
+Your current pipeline calculates topic keywords only **after** segmentation.
+
+An experimental variant can maintain a cheap lexical/keyphrase memory during segmentation:
+
+```text
+embedding change
++
+keyword-cohesion change
+```
+
+This may help when embeddings put semantically adjacent but topically distinct technical discussions too close together.
+
+Again: research lane first.
+
+---
+
+# 14. Your topic labels can improve without an LLM
+
+c-TF-IDF is an excellent baseline for this extension because it is:
+
+```text
+deterministic
+cheap
+local
+explainable
+zero-model
+```
+
+I would keep it.
+
+The weakness is mostly candidate generation: unigram labels often become less natural than phrases.
+
+EmbedRank showed that sentence embeddings can select unsupervised keyphrases and that MMR diversity was preferred by human raters. :chatgpt-content-reference{index="24"}
+
+You already have:
+
+```text
+E5
+MMR implementation
+topic centroids
+```
+
+So a future experiment is inexpensive:
+
+```text
+candidate unigrams + bigrams + trigrams
+
+score =
+c-TF-IDF
++
+similarity(candidate embedding, topic centroid)
+
+then MMR select N diverse phrases
+```
+
+For example:
+
+```text
+redis
+connection pool
+worker timeout
+```
+
+instead of:
+
+```text
+redis
+connection
+pool
+worker
+```
+
+I would not wire this into production until evaluated qualitatively.
+
+Russian/Ukrainian morphology is another reason not to overfit the current unigram tokenizer. But I would not introduce a heavy lemmatizer before seeing real examples.
+
+---
+
+# 15. The current importance score has two mathematical smells
+
+Current passage importance combines:
+
+```text
+0.30 similarity_to_topic
+0.25 novelty
+0.20 keyword_distinctiveness
+0.15 recurrence
+0.10 discourse_signal
+```
+
+Two issues stand out.
+
+First, `similarity_to_topic` and `recurrence` are closely related vector-space centrality measures. They are unlikely to be independent signals, so you may effectively be assigning ~45% of the score to “how central is this embedding?”
+
+Second, the first passage receives maximal novelty by construction because it has no previous passage against which to compare.
+
+That induces a positional prior:
+
+```text
+earlier == more novel
+```
+
+whether or not earlier is more important.
+
+I would **not change the weights yet**, because we do not possess “important moment” ground truth.
+
+Instead change observability:
+
+```ts
+importance: {
+   total,
+   similarity,
+   novelty,
+   keywordDistinctiveness,
+   recurrence,
+   discourse
+}
+```
+
+in calibration/debug traces.
+
+Then measure correlations.
+
+If:
+
+```text
+corr(similarity, recurrence) = 0.9
+```
+
+we have empirical justification to redesign it later.
+
+Representative excerpts still don't have a major product consumer, so this is not where I would spend most of the next sprint.
+
+---
+
+# 16. Introduce an analysis trace
+
+This is a software-engineering improvement with enormous research payoff.
+
+Right now a failed meeting eventually tells you:
+
+```text
+wrong topics
+```
+
+We want to be able to see why:
+
+```text
+window 12:
+semanticChange     .061
+pause              1.000
+speakerChange      .225
+discourseCue       0
+combined           .165
+peak               yes
+
+segment 7:
+cluster similarities
+  cluster_1        .917
+  cluster_2        .943
+  cluster_3        .881
+assigned           cluster_2
+
+topic:
+keywords [...]
+importance components [...]
+```
+
+Add an optional:
+
+```ts
+trace?: AnalysisTraceSink
+```
+
+to the pure pipeline.
+
+Production:
+
+```text
+undefined
+```
+
+Calibration/dev:
+
+```text
+collect structured trace
+```
+
+That will make every future real-transcript investigation much faster.
+
+Do not log user transcripts to telemetry.
+
+---
+
+# 17. Add metamorphic tests now
+
+We don't need human topic labels for a whole category of powerful tests.
+
+Examples:
+
+```text
+same transcript + all timestamps shifted by +1 hour
+→ same topics
+
+same text split into smaller adjacent chunks
+→ approximately same macro topics
+
+adjacent same-speaker chunks merged
+→ approximately same macro topics
+
+speaker labels removed
+→ semantic structure remains plausible
+
+punctuation removed
+→ macro topics stable
+
+"yes / right / uh-huh" injected
+→ shouldn't create new topics
+
+duplicate paraphrase inside same topic
+→ shouldn't create new topic
+
+tiny Float32 perturbations
+→ shouldn't radically change graph
+```
+
+These tests exercise **invariants**, not gold labels.
+
+For the future ASR pipeline, split/merge invariance is especially important.
+
+---
+
+# 18. ASR noise can already be simulated
+
+We can build robustness testing before choosing Parakeet/GigaAM/Qwen/etc.
+
+Take a clean public meeting transcript and generate controlled corruption:
+
+```text
+word deletion
+content-word substitution
+function-word substitution
+repetition
+filler insertion
+punctuation removal
+speaker-label removal
+utterance merging
+utterance splitting
+timestamp jitter
+```
+
+Then measure:
+
+```text
+boundary degradation
+false topic merges
+cluster F1 degradation
+label stability
+```
+
+This creates curves such as:
+
+```text
+5% semantic corruption  → cluster F1 -2%
+10%                     → -7%
+20%                     → -23%
+```
+
+That tells us how robust the processing system itself is.
+
+And later, when comparing ASR models, **this downstream degradation matters more than WER alone**.
+
+Recent research strongly supports this. *WER is Unaware* found that conventional ASR metrics correlated poorly with the actual semantic impact of errors in dialogue. Its domain is clinical dialogue, so the exact metric does not transfer to meetings, but the methodological lesson does. :chatgpt-content-reference{index="25"}
+
+Likewise, work on correcting ASR segmentation found downstream tasks improve when segmentation errors are corrected even without changing the core recognizer. :chatgpt-content-reference{index="26"}
+
+Therefore the eventual ASR bake-off should report:
+
+```text
+WER/CER
++
+topic boundary degradation
++
+topic cluster degradation
++
+keyword/label degradation
+```
+
+not merely WER.
+
+---
+
+# 19. Preserve pause/audio information
+
+The code was right to keep timestamps.
+
+Do not collapse future STT output to plain text.
+
+ACL 2026's *Beyond Transcripts* is particularly relevant here. It systematically compared text and audio chaptering and found that **pauses supplied the largest acoustic gains**, while transcript quality, duration and speaker composition also mattered. :chatgpt-content-reference{index="27"}
+
+For eventual STT, retain:
+
+```text
+time
+track/source
+speaker if available
+```
+
+and leave room for acoustic features.
+
+You don't need an acoustic segmentation model now.
+
+Just don't design them out.
+
+---
+
+# 20. Build an embedding cache boundary
+
+The calibration script already follows a very good principle:
+
+> Embed once; vary cheap arithmetic repeatedly.
+
+Production does not fully exploit this.
+
+If:
+
+```text
+assignmentThreshold changes
+mergeThreshold changes
+peak prominence changes
+importance definition changes
+```
+
+the transcript embeddings themselves have not changed.
+
+Yet analysis invalidation can require inference again.
+
+Once transcript fingerprinting exists, I would introduce an **evictable derived embedding artifact**:
+
+```text
+key:
+  transcriptHash
+  analysisUnitVersion
+  embeddingModel
+  embeddingRevision
+  dtype
+  window specification
+
+value:
+  window metadata
+  vectors
+```
+
+Then:
+
+```text
+Transcript
+   ↓
+embedding artifact   ← expensive
+   ↓
+segmentation         ← cheap
+clustering           ← cheap
+keywords             ← cheap
+importance           ← cheap
+```
+
+This matters now because 4B is explicitly going to change arithmetic/configuration repeatedly.
+
+It also makes experimentation with DP/global clustering extremely cheap.
+
+It should be a cache, not canonical state.
+
+Corruption/deletion of the cache must only cost recomputation.
+
+---
+
+# 21. The embedding model itself does not need changing now
+
+I also checked newer multilingual embedding work rather than assuming E5 remains optimal.
+
+There are much newer models: Nomic Embed v2 is multilingual and has 475M total / 142M active parameters but reports around 1.8 GB memory; Jina v3 is ~570M parameters; BGE-M3 is also around 569M and ~2.27 GB. :chatgpt-content-reference{index="28"}
+
+They are very interesting for a server.
+
+They are much less obviously attractive for a Chrome extension whose current packaged Q8 E5 model was deliberately chosen for browser size and WASM fallback.
+
+Multilingual-E5 itself was trained contrastively on a billion multilingual text pairs and has small/base/large variants explicitly designed around efficiency/quality tradeoffs. :chatgpt-content-reference{index="29"}
+
+So I would **not reopen the embedding choice yet**.
+
+Once the public corpus harness exists, adding one challenger is trivial—and then we can make the decision empirically instead of from MTEB retrieval numbers that don't directly measure meeting segmentation.
+
+---
+
+# 22. We should also revise one old architectural assumption
+
+The Plan B document still largely describes:
+
+```text
+live AudioWorklet
+→ 16 kHz PCM sidecar
+→ Whisper
+```
+
+That was a reasonable first design.
+
+I no longer think we should build the sidecar first.
+
+Without an ASR model, we can spike a cleaner abstraction:
+
+```text
+sealed recording artifact
+       ↓
+container demux / audio decode
+       ↓
+bounded audio frames
+       ↓
+AsyncIterable<AudioFrame>
+       ↓
+fake consumer
+```
+
+Where:
+
+```ts
+type AudioFrame = {
+  samples: Float32Array;
+  sampleRate: number;
+  channels: number;
+  tStartMs: number;
+};
+```
+
+Crucially, don't hard-code 16 kHz into this generic stage.
+
+The eventual model-specific audio frontend can request:
+
+```text
+16k
+mono
+resampling
+VAD
+overlap
+```
+
+if that's what the winning model needs.
+
+The spike should prove:
+
+```text
+2–3h artifact does not become one huge ArrayBuffer
+bounded memory
+cancellation works
+timestamps remain correct
+pause/resume timeline is correct
+separate mic/tab tracks work
+decode faster than acceptable threshold
+```
+
+If that succeeds, we avoid:
+
+```text
+live recording overhead
+temporary 100+ MB/hour PCM sidecar
+extra cleanup/recovery path
+```
+
+and gain:
+
+```text
+retranscribe old recordings
+```
+
+Only if post-recording decoding proves operationally bad should the PCM sidecar return.
+
+---
+
+# 23. Research approaches I explicitly would **not** build now
+
+There are several impressive recent methods that I investigated but would defer.
+
+M³Seg directly targets unsupervised topic segmentation of ASR transcripts and reports large gains, but introduces learned region/edge machinery. :chatgpt-content-reference{index="30"}
+
+UPS 2025 models utterance-pair adjacency/topic affiliation and performs strongly under several supervision regimes, but requires another trained model. :chatgpt-content-reference{index="31"}
+
+SegNSP 2026 frames boundaries as next-sentence continuation and reports B-F1 0.79 on CitiLink-Minutes and 0.65 on WikiSection, 0.17 above its reproducible baseline on the latter. It is scientifically very relevant—but again means another fine-tuned encoder. :chatgpt-content-reference{index="32"}
+
+Summarization-based segmentation also performs well on noisy spoken dialogue, but it reintroduces a generative dependency you deliberately removed. :chatgpt-content-reference{index="33"}
+
+These papers should influence the **research interfaces**—especially making boundary scoring pluggable enough to compare pair-coherence scores later—but not the v1 production dependency graph.
+
+---
+
+# 24. Recommended sequence
+
+I would implement the next work in this order:
+
+1. **Derived-data correctness PR.** Add transcript revisions/fingerprints, carry the transcript fingerprint in analysis provenance, make transcript commit/replace first-class, invalidate analysis by input identity, make late transcript arrival schedule analysis, add bounded startup reconciliation, prevent old in-flight results from becoming current, and ensure integration snapshots never combine a transcript with analysis from another revision. This PR needs no model and no corpus.
+
+2. **Analysis robustness/research-infrastructure PR.** Introduce the `AnalysisTurn` seam with identity behavior initially, add structured analysis tracing, add split/merge/chunk-shape metamorphic tests, add backchannel/noise corruption generators, improve metrics with Pk/WindowDiff/time boundary metrics/B³ or ARI, and bootstrap confidence intervals by meeting.
+
+3. **Public-meeting benchmark PR/tooling.** Add pinned AMI/ICSI loaders, keep the corpora outside ordinary repository history, freeze source/version/hash, use original manual AMI topic segmentation as primary gold, use QMSum for recurrence tests and AMI-ME as a supplementary 2026 dataset. Embed each transcript once using the packaged E5 encoder.
+
+4. **Algorithm bake-off.** Keep the current pipeline as baseline and compare: current local peaks; length-aware semantic weighting; global CVS-like dynamic-programming segmentation; two-stage local boundary refinement; richer speaker-distribution features; keyword cohesion; current online clustering vs global agglomerative clustering with a low-cohesion split/refinement pass. Nothing becomes production based only on one benchmark.
+
+5. **Derived embedding cache.** Once transcript fingerprinting exists, persist an evictable embedding artifact so threshold/segmentation/clustering experiments don't require another model run. This substantially reduces iteration cost.
+
+6. **Model-independent audio decode spike.** Stream a sealed recording into bounded timestamped decoded audio frames with a fake sink. Test long recordings, pause/resume, cancellation, mic/tab separation and recovery. Do not yet commit to sample rate, VAD, chunk overlap or model-specific preprocessing.
+
+7. **Only then do the ASR bake-off and your in-domain calibration.** Compare candidate recognizers on Russian/Ukrainian/English real extension audio, but judge them on both ASR fidelity and **downstream topic stability**. Once your own hand-labeled conversations exist, use them as the final holdout before freezing the semantic values.
+
+That is the point at which I would decide whether `.93/.95`, four-turn windows, 3-second pauses, current importance weights, etc. become actual product contracts.
+
+---
+
+# 25. What I would deliberately *not* change yet
+
+I would leave the current `.93/.95` assignment/merge thresholds as candidates. I would not retune them from English AMI and claim they are valid for Russian/Ukrainian.
+
+I would not change the five importance weights from intuition.
+
+I would not add an LLM.
+
+I would not introduce a generic GPU-resource scheduler until a second heavy model actually exists.
+
+I would not hard-code ASR-specific 16 kHz/VAD/chunk-overlap policies into the generic audio layer.
+
+I would not replace multilingual-E5 based on MTEB alone.
+
+I would not replace the production segmentation/clustering implementation with an academic algorithm until the same corpus runner demonstrates a consistent advantage and the browser cost is measured.
+
+And I would not create a web of `SegmentationStrategy`, `ClusterStrategy`, `KeywordStrategy`, etc. interfaces in production preemptively. Keep algorithm challengers under the calibration/research boundary until one actually wins. That avoids speculative architecture.
+
+---
+
+# Final assessment
+
+The processing subsystem from PR #17 was worth building. Its strongest choice was not any particular cosine threshold; it was the separation:
+
+```text
+transcript contract
+      ↓
+pure deterministic semantic core
+      ↓
+worker-backed inference
+      ↓
+versioned derived result
+```
+
+That has held up through 172 subsequent commits and a major background restructuring.
+
+The weaknesses are now mostly at the **input/derived-data boundary** and in the **scientific validation layer**, not the browser runtime architecture.
+
+The single most important correction is:
+
+```text
+Analysis must be derived from
+a specific immutable transcript revision,
+not merely from "recording ID".
+```
+
+The single most important NLP improvement is:
+
+```text
+Raw TranscriptSegment
+must stop implicitly meaning
+"stable semantic utterance".
+```
+
+And the biggest new opportunity is that **we do not have to wait for your transcripts to do serious research anymore**. AMI/ICSI plus recent meeting-segmentation work gives us enough real conversational structure to test the architecture scientifically now. Original AMI provides manually segmented meetings; recent research demonstrates useful directions like global optimization, length-aware weighting, lexical/keyword cohesion and richer dialogue features. :chatgpt-content-reference{index="34"}
+
+Your own Russian/Ukrainian recordings are still the thing that eventually answers:
+
+> “Are these the right final settings for **this product**?”
+
+But they are **not** the thing preventing us from answering:
+
+> “Is this a robust, correctly versioned, source-independent and scientifically competitive processing architecture?”
+
+We can answer the second question—and implement most of the improvements—now.
