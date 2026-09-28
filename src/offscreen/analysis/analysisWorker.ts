@@ -19,6 +19,7 @@
 
 import { env, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 import { toEncoderInput } from '../../shared/analysis/encoderInput';
+import { analyzeTranscript } from '../../shared/analysis/analyzeTranscript';
 import type { EmbeddingDtype } from '../../shared/analysis/provenance';
 import { buildTokenBoundedContextWindows } from '../../shared/analysis/tokenBoundedWindows';
 import { meanPoolingLocality } from './meanPooling';
@@ -207,6 +208,32 @@ ctx.onmessage = (event: MessageEvent<AnalysisWorkerRequest>) => {
             tokenLength,
           ),
         });
+        return;
+      }
+      if (request.type === 'ANALYZE') {
+        if (!extractor || !maxTokens) throw new Error('The analysis worker was asked to analyze before it was opened');
+        const result = await analyzeTranscript(
+          request.transcript,
+          request.config,
+          async (texts) => {
+            const { data, count, dimensions: width } = await embed(texts.map(toEncoderInput));
+            const vectors: Float32Array[] = [];
+            for (let index = 0; index < count; index += 1) {
+              vectors.push(data.slice(index * width, (index + 1) * width));
+            }
+            return vectors;
+          },
+          {
+            prepareWindows: async (segments, config) => buildTokenBoundedContextWindows(
+              segments,
+              config,
+              maxTokens,
+              tokenLength,
+            ),
+            onProgress: (progress) => post({ type: 'ANALYSIS_PROGRESS', seq: request.seq, progress }),
+          },
+        );
+        post({ type: 'ANALYZED', seq: request.seq, result });
         return;
       }
       const started = performance.now();

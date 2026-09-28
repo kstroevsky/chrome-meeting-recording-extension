@@ -128,11 +128,15 @@ describe('isStale', () => {
     expect(isStale(onGpu, provenance())).toBe(false);
   });
 
-  it('is at the version that includes token-safe windows and length batching', () => {
+  it('is at the version that includes token-safe windows, length batching, and logical-window chunk aggregation', () => {
     // D-22/D-23 established v2. ADR-0009 TECH-02 changes the exact windows and
     // their batching without adding a config threshold, so it advances v3.
-    expect(PIPELINE_VERSION).toBe(3);
+    // Token-limit chunks are now aggregated back to one logical temporal
+    // window before boundary detection, which changes analysis semantics and
+    // therefore advances the persisted pipeline identity again.
+    expect(PIPELINE_VERSION).toBe(4);
     expect(isStale(provenance({ pipelineVersion: 1 }), provenance())).toBe(true);
     expect(isStale(provenance({ pipelineVersion: 2 }), provenance())).toBe(true);
+    expect(isStale(provenance({ pipelineVersion: 3 }), provenance())).toBe(true);
   });
 });

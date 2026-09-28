@@ -45,6 +45,20 @@ export type AnalysisSourceSpan = {
 };
 
 /**
+ * One encoder-sized piece of a logical context window.
+ *
+ * These chunks exist only to satisfy the model context limit. They do not own
+ * media timing and therefore cannot become temporal boundary units on their
+ * own. Their vectors are aggregated back into the parent ContextWindow before
+ * boundary detection.
+ */
+export type AnalysisEmbeddingChunk = {
+  text: string;
+  sourceSpans: AnalysisSourceSpan[];
+  tokenLength: number;
+};
+
+/**
  * A contextual embedding window: the unit that actually gets encoded.
  *
  * A window is 3–5 consecutive utterances, which is the same span SEG-02 asks
@@ -70,6 +84,8 @@ export type ContextWindow = {
    * tokens. Present on production windows prepared by the embedding worker.
    */
   tokenLength?: number;
+  /** Encoder-only chunks when this logical window exceeds the model limit. */
+  embeddingChunks?: AnalysisEmbeddingChunk[];
   /** Distinct speakers heard in this window, in order of first appearance. */
   speakers: string[];
   /**

@@ -1,4 +1,8 @@
-import { AnalysisManager, type AnalysisEmbeddingEngine } from '../AnalysisManager';
+import {
+  AnalysisManager,
+  DEFAULT_ANALYSIS_HEARTBEAT_MS,
+  type AnalysisEmbeddingEngine,
+} from '../AnalysisManager';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisResult } from '../../../shared/analysis/analyzeTranscript';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
@@ -181,6 +185,48 @@ describe('AnalysisManager', () => {
     await settle();
     expect(h.opens).toBe(1);
     expect(last(h.reported)?.status).toBe('completed');
+  });
+
+  it('keeps reporting analyzing while model load or other silent work is still running', async () => {
+    jest.useFakeTimers();
+    try {
+      let release!: () => void;
+      let reached!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const reachedGate = new Promise<void>((resolve) => { reached = resolve; });
+      const h = harness({
+        beforeAnalyze: async () => {
+          reached();
+          await gate;
+        },
+      });
+
+      h.manager.enqueue(
+        'rec_1',
+        transcriptOf([['redis', 12]]),
+        CONFIG,
+        PROVENANCE,
+        { attemptToken: 'attempt-heartbeat', requestEpoch: 7 },
+      );
+      await reachedGate;
+
+      const beforeHeartbeat = h.reported.length;
+      jest.advanceTimersByTime(DEFAULT_ANALYSIS_HEARTBEAT_MS);
+      await Promise.resolve();
+
+      expect(h.reported).toHaveLength(beforeHeartbeat + 1);
+      expect(last(h.reported)).toMatchObject({
+        id: 'attempt-heartbeat',
+        requestEpoch: 7,
+        status: 'analyzing',
+      });
+
+      release();
+      await settle();
+      expect(last(h.reported)?.status).toBe('completed');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('runs the pipeline and delivers the result with the job', async () => {

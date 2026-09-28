@@ -1,5 +1,6 @@
 import { EmbeddingWorkerClient } from '../EmbeddingWorkerClient';
 import type { AnalysisWorkerRequest, AnalysisWorkerResponse } from '../analysisWorkerProtocol';
+import type { AnalysisConfig } from '../../../shared/analysis/types';
 
 /**
  * A worker double that records what it was asked and answers on demand. Using
@@ -57,6 +58,19 @@ const CONFIG = {
   wasmBaseUrl: 'chrome-extension://x/ort/',
   modelId: 'Xenova/multilingual-e5-small',
   dtype: 'q8' as const,
+};
+
+const ANALYSIS_CONFIG: AnalysisConfig = {
+  windowUtterances: 4,
+  windowStride: 4,
+  longPauseMs: 3_000,
+  peakNeighbourhood: 2,
+  peakMinProminence: 0.05,
+  minSegmentMs: 1_000,
+  assignmentThreshold: 0.93,
+  mergeThreshold: 0.95,
+  mergeEverySegments: 12,
+  keywordsPerTopic: 3,
 };
 
 function opened(overrides: Partial<Extract<AnalysisWorkerResponse, { type: 'OPENED' }>> = {}) {
@@ -210,6 +224,35 @@ describe('EmbeddingWorkerClient', () => {
     });
 
     await expect(promise).resolves.toMatchObject([{ text: 'hello world', tokenLength: 5 }]);
+  });
+
+  it('runs the complete pipeline in the worker and forwards progress without settling early', async () => {
+    const worker = new FakeWorker();
+    const client = await openClient(worker);
+    const segment = { tStartMs: 0, tEndMs: 1_000, speaker: 'Ada', text: 'hello world' };
+    const progress: Array<{ windowsEncoded: number; windowsTotal: number }> = [];
+
+    const promise = client.analyze([segment], ANALYSIS_CONFIG, {
+      onProgress: (value) => progress.push(value),
+    });
+    await Promise.resolve();
+    expect(worker.sent[1]).toMatchObject({
+      type: 'ANALYZE',
+      seq: 1,
+      transcript: [segment],
+      config: ANALYSIS_CONFIG,
+    });
+
+    worker.reply({
+      type: 'ANALYSIS_PROGRESS',
+      seq: 1,
+      progress: { windowsEncoded: 1, windowsTotal: 2 },
+    });
+    expect(progress).toEqual([{ windowsEncoded: 1, windowsTotal: 2 }]);
+
+    const result = { segments: [], topics: [], utteranceCount: 1 };
+    worker.reply({ type: 'ANALYZED', seq: 1, result });
+    await expect(promise).resolves.toEqual(result);
   });
 
   it('rejects a prepared window beyond the packaged model limit', async () => {

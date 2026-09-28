@@ -7,7 +7,7 @@
  */
 
 import type { TranscriptSegment } from '../transcript';
-import type { AnalysisSourceSpan, ContextWindow } from './types';
+import type { AnalysisEmbeddingChunk, AnalysisSourceSpan, ContextWindow } from './types';
 import {
   buildContextWindows,
   contextWindowFromSourceSpans,
@@ -37,6 +37,7 @@ export function buildTokenBoundedContextWindows(
     const fragments = base.sourceSpans.flatMap((span) => (
       splitSourceSpan(segments, span, maxTokens, tokenLength)
     ));
+    const chunks: AnalysisEmbeddingChunk[] = [];
     let current: AnalysisSourceSpan[] = [];
     let currentLength = 0;
     for (const fragment of fragments) {
@@ -52,7 +53,7 @@ export function buildTokenBoundedContextWindows(
       if (!current.length) {
         throw new Error('A token-safe source fragment exceeded the encoder limit');
       }
-      result.push(contextWindowFromSourceSpans(segments, current, currentLength));
+      chunks.push(toEmbeddingChunk(segments, current, currentLength));
       const fragmentWindow = contextWindowFromSourceSpans(segments, [fragment]);
       const fragmentLength = checkedTokenLength(fragmentWindow.text, tokenLength);
       if (fragmentLength > maxTokens) {
@@ -61,10 +62,28 @@ export function buildTokenBoundedContextWindows(
       current = [fragment];
       currentLength = fragmentLength;
     }
-    if (current.length) result.push(contextWindowFromSourceSpans(segments, current, currentLength));
+    if (current.length) chunks.push(toEmbeddingChunk(segments, current, currentLength));
+    if (chunks.length < 2) throw new Error('An over-limit logical window did not produce multiple encoder chunks');
+    // Preserve one temporal/boundary unit. Split pieces have only enclosing
+    // segment timing, so promoting them to ContextWindows would manufacture a
+    // seekable topic boundary inside an interval we cannot locate more finely.
+    result.push({ ...base, embeddingChunks: chunks });
   }
 
   return result;
+}
+
+function toEmbeddingChunk(
+  segments: TranscriptSegment[],
+  sourceSpans: AnalysisSourceSpan[],
+  tokenLength: number,
+): AnalysisEmbeddingChunk {
+  const window = contextWindowFromSourceSpans(segments, sourceSpans, tokenLength);
+  return {
+    text: window.text,
+    sourceSpans: window.sourceSpans,
+    tokenLength,
+  };
 }
 
 function splitSourceSpan(

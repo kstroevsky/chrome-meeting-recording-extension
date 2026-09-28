@@ -166,6 +166,36 @@ describe('analyzeTranscript', () => {
     expect(deterministicShape(bucketed)).toEqual(deterministicShape(baseline));
   });
 
+  it('aggregates token-limit chunks before temporal segmentation', async () => {
+    const transcript: TranscriptSegment[] = [{
+      tStartMs: 600_000,
+      tEndMs: 660_000,
+      speaker: 'Ada',
+      text: 'redis first half and berlin second half',
+    }];
+    const logical = buildContextWindows(transcript, CONFIG)[0];
+    const prepared = [{
+      ...logical,
+      embeddingChunks: [
+        { text: 'redis first half', sourceSpans: logical.sourceSpans, tokenLength: 10 },
+        { text: 'berlin second half', sourceSpans: logical.sourceSpans, tokenLength: 11 },
+      ],
+    }];
+    const seen: string[] = [];
+    const chunkEncoder = async (texts: string[]) => {
+      seen.push(...texts);
+      return encode(texts);
+    };
+
+    const result = await analyzeTranscript(transcript, CONFIG, chunkEncoder, {
+      prepareWindows: async () => prepared,
+    });
+
+    expect(seen).toEqual(['redis first half', 'berlin second half']);
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({ tStartMs: 600_000, tEndMs: 660_000, startWindow: 0, endWindow: 1 });
+  });
+
   it('reports progress as windows are encoded', async () => {
     const seen: { windowsEncoded: number; windowsTotal: number }[] = [];
     await analyzeTranscript(

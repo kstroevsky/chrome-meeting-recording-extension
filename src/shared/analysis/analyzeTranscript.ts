@@ -24,6 +24,7 @@ import { buildConversationSegments } from './segments';
 import { clusterSegments } from './clusters';
 import { topicLabels } from './keywords';
 import { rankPassages, type Passage } from './importance';
+import { meanCentroid } from './vector';
 import type { TranscriptSegment } from '../transcript';
 import type { AnalysisConfig, ContextWindow, Embedding, Topic } from './types';
 
@@ -122,30 +123,50 @@ async function encodeAll(
   encode: EncodeBatch,
   options: AnalyzeOptions,
 ): Promise<Embedding[]> {
-  // Stable length bucketing reduces padding inside a batch. Each row keeps its
-  // original chronological index and is scattered back before any downstream
-  // stage sees it, so batching cannot change boundary or clustering order.
-  const ordered = windows
-    .map((window, index) => ({ window, index }))
+  // Encoder chunks solve only the model context limit. They retain their parent
+  // logical window index and are aggregated back before any temporal stage sees
+  // them, so a split source segment cannot manufacture a playback boundary.
+  const inputs = windows.flatMap((window, windowIndex) => (
+    window.embeddingChunks?.length
+      ? window.embeddingChunks.map((chunk, chunkIndex) => ({
+          windowIndex,
+          chunkIndex,
+          text: chunk.text,
+          tokenLength: chunk.tokenLength,
+        }))
+      : [{
+          windowIndex,
+          chunkIndex: 0,
+          text: window.text,
+          tokenLength: window.tokenLength ?? Number.MAX_SAFE_INTEGER,
+        }]
+  ));
+  // Stable length bucketing reduces padding inside a batch. Each encoder input
+  // keeps its chronological parent/chunk index; vectors are restored and then
+  // collapsed to one vector per logical window before downstream analysis.
+  const ordered = inputs
     .sort((left, right) => (
-      (left.window.tokenLength ?? Number.MAX_SAFE_INTEGER)
-      - (right.window.tokenLength ?? Number.MAX_SAFE_INTEGER)
-      || left.index - right.index
+      left.tokenLength - right.tokenLength
+      || left.windowIndex - right.windowIndex
+      || left.chunkIndex - right.chunkIndex
     ));
-  const embeddings = new Array<Embedding>(windows.length);
-  let windowsEncoded = 0;
+  const chunkEmbeddings = windows.map(() => [] as Embedding[]);
+  let inputsEncoded = 0;
   for (let i = 0; i < ordered.length; i += EMBEDDING_BATCH_SIZE) {
     if (options.signal?.aborted) throw new Error('Analysis was cancelled');
     const batch = ordered.slice(i, i + EMBEDDING_BATCH_SIZE);
-    const encoded = await encode(batch.map(({ window }) => window.text));
+    const encoded = await encode(batch.map(({ text }) => text));
     if (encoded.length !== batch.length) {
       throw new Error(`The encoder returned ${encoded.length} vectors for ${batch.length} windows`);
     }
-    batch.forEach(({ index }, batchIndex) => { embeddings[index] = encoded[batchIndex]; });
-    windowsEncoded += batch.length;
-    options.onProgress?.({ windowsEncoded, windowsTotal: windows.length });
+    batch.forEach(({ windowIndex }, batchIndex) => { chunkEmbeddings[windowIndex].push(encoded[batchIndex]); });
+    inputsEncoded += batch.length;
+    options.onProgress?.({ windowsEncoded: inputsEncoded, windowsTotal: inputs.length });
   }
-  return embeddings;
+  return chunkEmbeddings.map((parts, index) => {
+    if (!parts.length) throw new Error(`Logical analysis window ${index} produced no embedding`);
+    return parts.length === 1 ? parts[0] : meanCentroid(parts);
+  });
 }
 
 /**

@@ -29,6 +29,7 @@
 
 import {
   analyzeTranscript,
+  type AnalysisProgress,
   type AnalysisResult,
   type EncodeBatch,
 } from '../../shared/analysis/analyzeTranscript';
@@ -41,11 +42,20 @@ import type { TranscriptSegment } from '../../shared/transcript';
 import type { EmbeddingEngineInfo } from './EmbeddingWorkerClient';
 import { describeRuntimeError } from '../errors';
 
+/** Keeps a claimed durable-work lease alive even while model load/CPU work is silent. */
+export const DEFAULT_ANALYSIS_HEARTBEAT_MS = 60_000;
+
 /** The small engine surface the analysis pipeline actually needs. */
 export type AnalysisEmbeddingEngine = {
   readonly info: EmbeddingEngineInfo;
   prepareWindows(transcript: TranscriptSegment[], config: WindowConfig): Promise<ContextWindow[]>;
   encoder(): EncodeBatch;
+  /** Production worker fast path: keeps all deterministic CPU stages offscreen-main. */
+  analyze?: (
+    transcript: TranscriptSegment[],
+    config: AnalysisConfig,
+    options: { signal?: AbortSignal; onProgress?: (progress: AnalysisProgress) => void },
+  ) => Promise<AnalysisResult>;
   dispose(): void;
 };
 
@@ -239,6 +249,12 @@ export class AnalysisManager {
       return;
     }
 
+    const heartbeat = setInterval(() => {
+      if (!controller.signal.aborted && task.job.status === 'analyzing') {
+        void this.emit(task.job);
+      }
+    }, DEFAULT_ANALYSIS_HEARTBEAT_MS);
+
     try {
       if (this.deps.beforeAnalyze) {
         await this.deps.beforeAnalyze({ ...task.job });
@@ -247,10 +263,7 @@ export class AnalysisManager {
       task.job = { ...task.job, device: engine.info.device };
       await this.emit(task.job);
 
-      const result = await analyzeTranscript(transcript, config, engine.encoder(), {
-        signal: controller.signal,
-        prepareWindows: (segments, windowConfig) => engine.prepareWindows(segments, windowConfig),
-        onProgress: ({ windowsEncoded, windowsTotal }) => {
+      const onProgress = ({ windowsEncoded, windowsTotal }: AnalysisProgress) => {
           task.job = {
             ...task.job,
             status: 'analyzing',
@@ -259,8 +272,14 @@ export class AnalysisManager {
             progress: windowsTotal > 0 ? windowsEncoded / windowsTotal : 0,
           };
           void this.emit(task.job);
-        },
-      });
+      };
+      const result = engine.analyze
+        ? await engine.analyze(transcript, config, { signal: controller.signal, onProgress })
+        : await analyzeTranscript(transcript, config, engine.encoder(), {
+            signal: controller.signal,
+            prepareWindows: (segments, windowConfig) => engine.prepareWindows(segments, windowConfig),
+            onProgress,
+          });
 
       if (controller.signal.aborted) {
         await this.settleTerminal(task, { status: 'canceled' });
@@ -301,6 +320,8 @@ export class AnalysisManager {
         status: this.deps.isUnsupported?.() ? 'unsupported' : 'failed',
         error: message,
       });
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 

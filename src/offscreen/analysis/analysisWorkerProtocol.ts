@@ -11,7 +11,8 @@
  */
 
 import type { EmbeddingDtype } from '../../shared/analysis/provenance';
-import type { ContextWindow } from '../../shared/analysis/types';
+import type { AnalysisResult, AnalysisProgress } from '../../shared/analysis/analyzeTranscript';
+import type { AnalysisConfig, ContextWindow } from '../../shared/analysis/types';
 import type { WindowConfig } from '../../shared/analysis/windows';
 import type { TranscriptSegment } from '../../shared/transcript';
 
@@ -48,7 +49,18 @@ export type AnalysisWorkerPrepareWindows = {
   config: WindowConfig;
 };
 
-export type AnalysisWorkerRequest = AnalysisWorkerOpen | AnalysisWorkerPrepareWindows | AnalysisWorkerEmbed;
+export type AnalysisWorkerAnalyze = {
+  type: 'ANALYZE';
+  seq: number;
+  transcript: TranscriptSegment[];
+  config: AnalysisConfig;
+};
+
+export type AnalysisWorkerRequest =
+  | AnalysisWorkerOpen
+  | AnalysisWorkerPrepareWindows
+  | AnalysisWorkerEmbed
+  | AnalysisWorkerAnalyze;
 
 export type AnalysisWorkerOpened = {
   type: 'OPENED';
@@ -79,10 +91,24 @@ export type AnalysisWorkerEmbedded = {
   embedMs: number;
 };
 
+export type AnalysisWorkerProgress = {
+  type: 'ANALYSIS_PROGRESS';
+  seq: number;
+  progress: AnalysisProgress;
+};
+
+export type AnalysisWorkerAnalyzed = {
+  type: 'ANALYZED';
+  seq: number;
+  result: AnalysisResult;
+};
+
 export type AnalysisWorkerError = { type: 'ERROR'; seq: number; error: string };
 
 export type AnalysisWorkerResponse =
   | AnalysisWorkerOpened
   | AnalysisWorkerPreparedWindows
   | AnalysisWorkerEmbedded
+  | AnalysisWorkerProgress
+  | AnalysisWorkerAnalyzed
   | AnalysisWorkerError;

@@ -6,6 +6,14 @@ const CONFIG = { windowUtterances: 4, windowStride: 4 };
 /** Mimics a prefix plus two special tokens while making each code point one token. */
 const tokenLength = (text: string) => 3 + [...text.trim()].length;
 
+const encoderSpans = (windows: ReturnType<typeof buildTokenBoundedContextWindows>) => windows.flatMap((window) => (
+  window.embeddingChunks?.flatMap((chunk) => chunk.sourceSpans) ?? window.sourceSpans
+));
+
+const encoderChunks = (windows: ReturnType<typeof buildTokenBoundedContextWindows>) => windows.flatMap((window) => (
+  window.embeddingChunks ?? [{ text: window.text, sourceSpans: window.sourceSpans, tokenLength: window.tokenLength! }]
+));
+
 describe('buildTokenBoundedContextWindows', () => {
   it('preserves an ordinary window while recording its exact token length', () => {
     const segments: TranscriptSegment[] = [
@@ -32,9 +40,12 @@ describe('buildTokenBoundedContextWindows', () => {
 
     const windows = buildTokenBoundedContextWindows(segments, CONFIG, 15, tokenLength);
 
-    expect(windows.length).toBeGreaterThan(1);
-    expect(windows.every((window) => window.tokenLength! <= 15)).toBe(true);
-    const spans = windows.flatMap((window) => window.sourceSpans);
+    expect(windows).toHaveLength(1);
+    expect(windows[0].embeddingChunks!.length).toBeGreaterThan(1);
+    expect(encoderChunks(windows).every((chunk) => chunk.tokenLength <= 15)).toBe(true);
+    expect(windows[0].tStartMs).toBe(1_000);
+    expect(windows[0].tEndMs).toBe(9_000);
+    const spans = encoderSpans(windows);
     expect(spans[0].textStart).toBe(0);
     expect(spans[spans.length - 1].textEnd).toBe(text.length);
     for (let index = 1; index < spans.length; index += 1) {
@@ -58,12 +69,11 @@ describe('buildTokenBoundedContextWindows', () => {
       tokenLength,
     );
 
-    const reconstructed = windows
-      .flatMap((window) => window.sourceSpans)
+    const reconstructed = encoderSpans(windows)
       .map((span) => text.slice(span.textStart, span.textEnd))
       .join('');
     expect(reconstructed).toBe(text);
-    expect(windows.every((window) => window.tokenLength! <= 7)).toBe(true);
+    expect(encoderChunks(windows).every((chunk) => chunk.tokenLength <= 7)).toBe(true);
   });
 
   it('does not assume token counts grow monotonically with source length', () => {
@@ -81,10 +91,10 @@ describe('buildTokenBoundedContextWindows', () => {
       jaggedLength,
     );
 
-    expect(windows.length).toBeGreaterThan(1);
-    expect(windows.every((window) => window.tokenLength! <= 10)).toBe(true);
-    expect(windows
-      .flatMap((window) => window.sourceSpans)
+    expect(windows).toHaveLength(1);
+    expect(windows[0].embeddingChunks!.length).toBeGreaterThan(1);
+    expect(encoderChunks(windows).every((chunk) => chunk.tokenLength <= 10)).toBe(true);
+    expect(encoderSpans(windows)
       .map((span) => text.slice(span.textStart, span.textEnd))
       .join('')).toBe(text);
   });
@@ -99,9 +109,9 @@ describe('buildTokenBoundedContextWindows', () => {
 
     const windows = buildTokenBoundedContextWindows(segments, CONFIG, 17, tokenLength);
 
-    expect(windows.length).toBeGreaterThan(1);
-    expect(windows.every((window) => window.tokenLength! <= 17)).toBe(true);
-    const seen = windows.flatMap((window) => window.sourceSpans.map((span) => span.segmentIndex));
+    expect(encoderChunks(windows).some((chunk) => chunk.tokenLength <= 17)).toBe(true);
+    expect(encoderChunks(windows).every((chunk) => chunk.tokenLength <= 17)).toBe(true);
+    const seen = encoderSpans(windows).map((span) => span.segmentIndex);
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
     expect(new Set(seen)).toEqual(new Set([0, 1, 2, 3]));
     expect(Math.min(...windows.map((window) => window.tStartMs))).toBe(0);
