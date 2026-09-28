@@ -51,6 +51,7 @@ export const RELEVANCE_RULES = [
         'playwright.config.ts',
         'tsconfig.json',
         'tsconfig.e2e.json',
+        'tsconfig.research.json',
       ),
       prefix('scripts/ci/'),
     ],
