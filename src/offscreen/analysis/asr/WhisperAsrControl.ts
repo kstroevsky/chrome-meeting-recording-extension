@@ -62,6 +62,7 @@ export class WhisperAsrControl {
   private readonly windows: WhisperWindowAssembler;
   private words: WhisperTimedWord[] = [];
   private windowCount = 0;
+  private previousWindow: WhisperAudioWindow | undefined;
 
   constructor(
     private readonly transcriber: WhisperWindowTranscriber,
@@ -106,7 +107,10 @@ export class WhisperAsrControl {
         this.words,
         mapWhisperWordsToMediaTime(window, output.words),
         this.config.sameTimeToleranceMs,
+        this.previousWindow,
+        window,
       );
+      this.previousWindow = window;
     }
   }
 }

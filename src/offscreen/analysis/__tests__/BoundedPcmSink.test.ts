@@ -139,6 +139,48 @@ describe('TECH-08 bounded PCM sink', () => {
     expect(samples[0].closed).toBe(true);
   });
 
+  it('does not let a never-resolving consumer defeat cancellation', async () => {
+    const controller = new AbortController();
+    const abandoned: string[] = [];
+    let entered = false;
+    const work = drainDecodedAudioSamples(
+      sequence([new FakeSample(0, 10, 1, 1, [1])]),
+      async () => {
+        entered = true;
+        return await new Promise<ArrayBuffer | void>(() => {});
+      },
+      {
+        trackId: 1,
+        poolSize: 1,
+        bufferBytes: 4,
+        signal: controller.signal,
+        consumerAckTimeoutMs: 60_000,
+        onConsumerAbandoned: (_chunk, reason) => { abandoned.push(reason); },
+      },
+    );
+    while (!entered) await Promise.resolve();
+    controller.abort();
+
+    await expect(work).rejects.toThrow(/cancelled/);
+    expect(abandoned).toEqual(['aborted']);
+  });
+
+  it('abandons a wedged consumer after the configured ACK deadline', async () => {
+    const abandoned: string[] = [];
+    await expect(drainDecodedAudioSamples(
+      sequence([new FakeSample(0, 10, 1, 1, [1])]),
+      async () => await new Promise<ArrayBuffer | void>(() => {}),
+      {
+        trackId: 1,
+        poolSize: 1,
+        bufferBytes: 4,
+        consumerAckTimeoutMs: 5,
+        onConsumerAbandoned: (_chunk, reason) => { abandoned.push(reason); },
+      },
+    )).rejects.toThrow(/did not acknowledge/);
+    expect(abandoned).toEqual(['timeout']);
+  });
+
   it('rejects decoded samples larger than the fixed pool capacity', async () => {
     const sample = new FakeSample(0, 48_000, 4, 2, new Array(8).fill(0));
     await expect(drainDecodedAudioSamples(sequence([sample]), async () => {}, {

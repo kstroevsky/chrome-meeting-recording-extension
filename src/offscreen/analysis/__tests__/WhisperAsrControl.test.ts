@@ -86,12 +86,25 @@ describe('TECH-09 bounded Whisper control', () => {
     const merged = mergeWhisperOverlap(accepted, [
       { text: ' YES', startUs: 1_050_000, endUs: 1_210_000 },
       { text: ' yes', startUs: 3_000_000, endUs: 3_200_000 },
-    ], 100);
+    ], 100, { startUs: 0, endUs: 1_500_000 }, { startUs: 1_000_000, endUs: 4_000_000 });
     expect(merged).toEqual([
       accepted[0],
       accepted[1],
       { text: ' yes', startUs: 3_000_000, endUs: 3_200_000 },
     ]);
+  });
+
+  it('keeps a legitimate repeated word after removing the overlapped copy', () => {
+    const accepted: WhisperTimedWord[] = [
+      { text: ' yes', startUs: 900_000, endUs: 1_050_000 },
+    ];
+    const merged = mergeWhisperOverlap(accepted, [
+      { text: ' YES', startUs: 920_000, endUs: 1_060_000 },
+      { text: ' yes', startUs: 1_080_000, endUs: 1_200_000 },
+    ], 100, { startUs: 0, endUs: 1_500_000 }, { startUs: 900_000, endUs: 2_000_000 });
+
+    expect(merged.map((word) => word.text.trim().toLowerCase())).toEqual(['yes', 'yes']);
+    expect(merged[1].startUs).toBe(1_080_000);
   });
 
   it('serializes bounded windows and maps Whisper word timestamps to media time', async () => {

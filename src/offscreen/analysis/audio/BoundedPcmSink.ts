@@ -27,6 +27,10 @@ export type BoundedPcmSinkOptions = {
   bufferBytes: number;
   signal?: AbortSignal;
   discontinuityToleranceFrames?: number;
+  /** Maximum time a consumer may retain one pooled buffer without ACKing it. */
+  consumerAckTimeoutMs?: number;
+  /** Supervisor hook for abandoning/terminating the resource that owns a wedged ACK. */
+  onConsumerAbandoned?: (chunk: PcmChunk, reason: 'aborted' | 'timeout') => void;
 };
 
 export type PcmSinkSummary = {
@@ -37,6 +41,8 @@ export type PcmSinkSummary = {
   firstTimestampUs?: number;
   lastEndTimestampUs?: number;
 };
+
+export const DEFAULT_PCM_CONSUMER_ACK_TIMEOUT_MS = 5_000;
 
 /**
  * Drains decoded samples through a fixed-capacity PCM pool.
@@ -116,7 +122,7 @@ export async function drainDecodedAudioSamples(
       work = (async () => {
         let returned: ArrayBuffer | void;
         try {
-          returned = await consume(chunk);
+          returned = await awaitConsumerAck(consume(chunk), chunk, options);
         } finally {
           inFlight.delete(work);
         }
@@ -150,4 +156,51 @@ function validateSample(sample: DecodedAudioSampleLike): void {
 
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error('Audio decoding was cancelled');
+}
+
+function awaitConsumerAck(
+  pending: Promise<ArrayBuffer | void>,
+  chunk: PcmChunk,
+  options: BoundedPcmSinkOptions,
+): Promise<ArrayBuffer | void> {
+  const timeoutMs = options.consumerAckTimeoutMs ?? DEFAULT_PCM_CONSUMER_ACK_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return Promise.reject(new Error('PCM consumer ACK timeout must be a positive finite duration'));
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      action();
+    };
+    const abandon = (reason: 'aborted' | 'timeout') => {
+      try { options.onConsumerAbandoned?.(chunk, reason); } catch {}
+    };
+    const onAbort = () => finish(() => {
+      abandon('aborted');
+      reject(new Error('Audio decoding was cancelled'));
+    });
+
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => finish(() => {
+      abandon('timeout');
+      reject(new Error(`PCM consumer did not acknowledge a buffer within ${timeoutMs} ms`));
+    }), timeoutMs);
+    pending.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+  });
 }

@@ -155,21 +155,55 @@ export function mergeWhisperOverlap(
   accepted: WhisperTimedWord[],
   incoming: readonly WhisperTimedWord[],
   sameTimeToleranceMs: number,
+  previousWindow?: Pick<WhisperAudioWindow, 'startUs' | 'endUs'>,
+  incomingWindow?: Pick<WhisperAudioWindow, 'startUs' | 'endUs'>,
 ): WhisperTimedWord[] {
   if (!Number.isFinite(sameTimeToleranceMs) || sameTimeToleranceMs < 0 || sameTimeToleranceMs > 1_000) {
     throw new Error(`Whisper overlap tolerance must be in 0..1000 ms, got ${sameTimeToleranceMs}`);
   }
   const toleranceUs = sameTimeToleranceMs * 1_000;
-  const result = [...accepted];
-  for (const word of incoming) {
-    const normalized = normalizeWord(word.text);
-    const duplicate = result.some((existing) => (
-      normalizeWord(existing.text) === normalized
-      && intervalDistanceUs(existing, word) <= toleranceUs
-    ));
-    if (!duplicate) result.push(word);
+  if (!previousWindow || !incomingWindow) {
+    return [...accepted, ...incoming].sort((a, b) => a.startUs - b.startUs || a.endUs - b.endUs);
   }
-  return result.sort((a, b) => a.startUs - b.startUs || a.endUs - b.endUs);
+
+  const overlapStartUs = Math.max(previousWindow.startUs, incomingWindow.startUs);
+  const overlapEndUs = Math.min(previousWindow.endUs, incomingWindow.endUs);
+  if (overlapEndUs <= overlapStartUs) {
+    return [...accepted, ...incoming].sort((a, b) => a.startUs - b.startUs || a.endUs - b.endUs);
+  }
+
+  const previousOverlap = accepted.filter((word) => intersects(word, overlapStartUs, overlapEndUs));
+  const incomingOverlap = incoming.filter((word) => intersects(word, overlapStartUs, overlapEndUs));
+  // The duplicated ASR material is a suffix of the previous window and a
+  // prefix of the next one. Match that short sequence monotonically instead of
+  // globally deleting equal nearby words, which would collapse legitimate
+  // speech such as "yes yes".
+  let duplicatePrefix = 0;
+  const max = Math.min(previousOverlap.length, incomingOverlap.length);
+  for (let length = max; length >= 1; length -= 1) {
+    const previousStart = previousOverlap.length - length;
+    let matches = true;
+    for (let index = 0; index < length; index += 1) {
+      const left = previousOverlap[previousStart + index];
+      const right = incomingOverlap[index];
+      if (normalizeWord(left.text) !== normalizeWord(right.text)
+        || intervalDistanceUs(left, right) > toleranceUs) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      duplicatePrefix = length;
+      break;
+    }
+  }
+  const duplicates = new Set(incomingOverlap.slice(0, duplicatePrefix));
+  return [...accepted, ...incoming.filter((word) => !duplicates.has(word))]
+    .sort((a, b) => a.startUs - b.startUs || a.endUs - b.endUs);
+}
+
+function intersects(word: WhisperTimedWord, startUs: number, endUs: number): boolean {
+  return word.endUs >= startUs && word.startUs <= endUs;
 }
 
 function intervalDistanceUs(a: WhisperTimedWord, b: WhisperTimedWord): number {
@@ -178,5 +212,5 @@ function intervalDistanceUs(a: WhisperTimedWord, b: WhisperTimedWord): number {
 }
 
 function normalizeWord(text: string): string {
-  return text.trim().normalize('NFKC').toLocaleLowerCase();
+  return text.trim().normalize('NFKC').toLowerCase();
 }
