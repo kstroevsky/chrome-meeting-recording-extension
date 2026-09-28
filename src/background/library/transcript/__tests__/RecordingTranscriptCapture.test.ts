@@ -2,7 +2,11 @@ import { RecordingTranscriptCapture } from '../RecordingTranscriptCapture';
 import { RecordingTranscriptService } from '../RecordingTranscriptService';
 import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../RecordingTranscriptRepository';
 import { normalizeTranscript, type CaptionUtterance, type Transcript } from '../../../../shared/transcript';
-import { TRANSCRIPT_SCHEMA_VERSION, type TranscriptSnapshot } from '../../../../shared/transcriptIdentity';
+import {
+  TRANSCRIPT_CANONICALIZATION_VERSION,
+  TRANSCRIPT_SCHEMA_VERSION,
+  type TranscriptSnapshot,
+} from '../../../../shared/transcriptIdentity';
 import { RecordingSession } from '../../../recording/session/RecordingSession';
 import type { RecordingRunConfig } from '../../../../shared/recording';
 
@@ -15,6 +19,8 @@ function fakeRepository() {
     const revision = revisions.get(recordingId) ?? 1;
     return {
       schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+      generation: `generation:${recordingId}:${revision}`,
       revision,
       contentHash: `hash:${recordingId}:${revision}`,
       committedAt: revision,
@@ -35,6 +41,14 @@ function fakeRepository() {
       }
       return snapshots(recordingId);
     },
+    async replaceAndRequestAnalysis(recordingId, transcript) {
+      const next = normalizeTranscript(transcript);
+      if (!next?.segments.length) throw new Error('Transcript replacement must contain words');
+      rows.set(recordingId, next);
+      revisions.set(recordingId, (revisions.get(recordingId) ?? 0) + 1);
+      return snapshots(recordingId)!;
+    },
+    async requestCurrentAnalysis(recordingId) { return snapshots(recordingId); },
     async cacheContentHash() {},
     async listRecordingIds(limit, after) {
       const ids = [...rows.keys()].sort().filter((id) => !after || id > after);

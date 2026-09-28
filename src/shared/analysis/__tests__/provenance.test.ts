@@ -128,10 +128,11 @@ describe('isStale', () => {
     expect(isStale(onGpu, provenance())).toBe(false);
   });
 
-  it('is at the version that includes the tail-window and centroid corrections', () => {
-    // D-22 and D-23 changed what the pipeline outputs without changing any
-    // threshold, so only the version can make earlier rows read as stale.
-    expect(PIPELINE_VERSION).toBe(2);
+  it('is at the version that includes token-safe windows and length batching', () => {
+    // D-22/D-23 established v2. ADR-0009 TECH-02 changes the exact windows and
+    // their batching without adding a config threshold, so it advances v3.
+    expect(PIPELINE_VERSION).toBe(3);
     expect(isStale(provenance({ pipelineVersion: 1 }), provenance())).toBe(true);
+    expect(isStale(provenance({ pipelineVersion: 2 }), provenance())).toBe(true);
   });
 });

@@ -56,6 +56,18 @@ function fakeRepository() {
       outcomes.set(id, outcome);
       return true;
     },
+    async putAttemptOutcome(id, _job, outcome) {
+      outcomes.set(id, outcome);
+      return true;
+    },
+    async publishAttemptResult(id, _job, analysis, outcome) {
+      const checked = normalizeStoredAnalysis(analysis);
+      if (!checked) throw new Error('Refusing to store an analysis that does not decode');
+      rows.set(id, checked);
+      outcomes.set(id, outcome);
+      return true;
+    },
+    async cancelDesired() { return { changed: false }; },
     async remove(id) { rows.delete(id); },
     async removeAll(id) { rows.delete(id); outcomes.delete(id); },
   };
