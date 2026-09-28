@@ -5,6 +5,9 @@ import { normalizeStoredAnalysis, type StoredAnalysis } from '../../../../shared
 import type { RecordingAnalysisOutcome } from '../RecordingAnalysisOutcome';
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
+  transcriptGeneration: 'transcript-generation-1',
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: PIPELINE_VERSION,
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: '761b726d',
@@ -53,6 +56,18 @@ function fakeRepository() {
       outcomes.set(id, outcome);
       return true;
     },
+    async putAttemptOutcome(id, _job, outcome) {
+      outcomes.set(id, outcome);
+      return true;
+    },
+    async publishAttemptResult(id, _job, analysis, outcome) {
+      const checked = normalizeStoredAnalysis(analysis);
+      if (!checked) throw new Error('Refusing to store an analysis that does not decode');
+      rows.set(id, checked);
+      outcomes.set(id, outcome);
+      return true;
+    },
+    async cancelDesired() { return { changed: false }; },
     async remove(id) { rows.delete(id); },
     async removeAll(id) { rows.delete(id); outcomes.delete(id); },
   };
@@ -126,7 +141,7 @@ describe('RecordingAnalysisService', () => {
     await expect(service.state('rec:1')).resolves.toEqual({ status: 'stale' });
   });
 
-  it('exposes durable terminal outcomes without treating them as pending', async () => {
+  it('does not attribute an unbound legacy terminal outcome to a current transcript', async () => {
     const repository = fakeRepository();
     const service = new RecordingAnalysisService(repository, () => provenance());
     repository.outcomes.set('rec:1', {
@@ -137,15 +152,12 @@ describe('RecordingAnalysisService', () => {
       updatedAt: 20,
     });
 
-    await expect(service.exportState('rec:1')).resolves.toEqual({
-      status: 'failed',
-      error: 'backend unavailable',
-    });
+    await expect(service.exportState('rec:1')).resolves.toEqual({ status: 'none' });
   });
 
   it('persists terminal outcomes that happen before an analysis job exists', async () => {
     const repository = fakeRepository();
-    const service = new RecordingAnalysisService(repository, () => provenance());
+    const service = new RecordingAnalysisService(repository, () => provenance(), async () => undefined);
 
     await service.recordTerminalOutcome(
       'rec:1',

@@ -1,9 +1,14 @@
-import { AnalysisManager, type AnalysisEmbeddingEngine } from '../AnalysisManager';
+import {
+  AnalysisManager,
+  DEFAULT_ANALYSIS_HEARTBEAT_MS,
+  type AnalysisEmbeddingEngine,
+} from '../AnalysisManager';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisResult } from '../../../shared/analysis/analyzeTranscript';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
 import type { AnalysisProvenance } from '../../../shared/analysis/provenance';
 import type { TranscriptSegment } from '../../../shared/transcript';
+import { buildContextWindows } from '../../../shared/analysis/windows';
 
 const CONFIG: AnalysisConfig = {
   windowUtterances: 4,
@@ -22,6 +27,9 @@ const SUBJECTS: Record<string, number> = { redis: 0, berlin: 90, hiring: 180 };
 
 /** What the control plane captured at enqueue; the manager must hand it back. */
 const PROVENANCE = {
+  transcriptGeneration: 'generation-1',
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: 2,
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: 'rev',
@@ -61,7 +69,8 @@ function fakeEngine(overrides: { device?: 'webgpu' | 'wasm'; failAfter?: number 
   let batches = 0;
   const state = { disposed: 0, batches: 0 };
   const client: AnalysisEmbeddingEngine = {
-    info: { device: overrides.device ?? 'webgpu', dimensions: 2, dtype: 'q8' as const, loadMs: 1 },
+    info: { device: overrides.device ?? 'webgpu', dimensions: 2, dtype: 'q8' as const, maxTokens: 512, loadMs: 1 },
+    prepareWindows: async (transcript, config) => buildContextWindows(transcript, config),
     encoder: () => async (texts: string[]) => {
       batches += 1;
       state.batches = batches;
@@ -128,6 +137,18 @@ async function settle(): Promise<void> {
 }
 
 describe('AnalysisManager', () => {
+  it('uses the caller-owned attempt id and request epoch, and deduplicates a replay', () => {
+    const h = harness();
+    const request = { attemptToken: 'attempt-42', requestEpoch: 9 };
+    const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE, request);
+    const replayed = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE, request);
+
+    expect(id).toBe('attempt-42');
+    expect(replayed).toBe('attempt-42');
+    expect(h.reported[0]).toMatchObject({ id: 'attempt-42', requestEpoch: 9 });
+    expect(h.manager.activeJobs().filter((job) => job.id === 'attempt-42')).toHaveLength(1);
+  });
+
   it('reports an analyzing job before the engine has loaded', () => {
     const h = harness();
     const id = h.manager.enqueue('rec_1', transcriptOf([['redis', 12]]), CONFIG, PROVENANCE);
@@ -164,6 +185,48 @@ describe('AnalysisManager', () => {
     await settle();
     expect(h.opens).toBe(1);
     expect(last(h.reported)?.status).toBe('completed');
+  });
+
+  it('keeps reporting analyzing while model load or other silent work is still running', async () => {
+    jest.useFakeTimers();
+    try {
+      let release!: () => void;
+      let reached!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const reachedGate = new Promise<void>((resolve) => { reached = resolve; });
+      const h = harness({
+        beforeAnalyze: async () => {
+          reached();
+          await gate;
+        },
+      });
+
+      h.manager.enqueue(
+        'rec_1',
+        transcriptOf([['redis', 12]]),
+        CONFIG,
+        PROVENANCE,
+        { attemptToken: 'attempt-heartbeat', requestEpoch: 7 },
+      );
+      await reachedGate;
+
+      const beforeHeartbeat = h.reported.length;
+      jest.advanceTimersByTime(DEFAULT_ANALYSIS_HEARTBEAT_MS);
+      await Promise.resolve();
+
+      expect(h.reported).toHaveLength(beforeHeartbeat + 1);
+      expect(last(h.reported)).toMatchObject({
+        id: 'attempt-heartbeat',
+        requestEpoch: 7,
+        status: 'analyzing',
+      });
+
+      release();
+      await settle();
+      expect(last(h.reported)?.status).toBe('completed');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('runs the pipeline and delivers the result with the job', async () => {

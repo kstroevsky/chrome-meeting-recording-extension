@@ -1,5 +1,6 @@
 import { EMBEDDING_BATCH_SIZE, analyzeTranscript } from '../analyzeTranscript';
 import type { AnalysisConfig } from '../types';
+import { buildContextWindows } from '../windows';
 import type { TranscriptSegment } from '../../transcript';
 
 /**
@@ -116,6 +117,83 @@ describe('analyzeTranscript', () => {
     expect(EMBEDDING_BATCH_SIZE).toBe(32);
     expect(sizes.slice(0, -1).every((n) => n === 32)).toBe(true);
     expect(sizes[sizes.length - 1]).toBeLessThanOrEqual(32);
+  });
+
+  it('buckets by token length but restores chronological vectors before analysis', async () => {
+    const transcript = transcriptOf([
+      ['redis', 4],
+      ['berlin', 4],
+      ['hiring', 4],
+      ['release', 4],
+    ]);
+    const chronological = buildContextWindows(transcript, CONFIG);
+    const tokenLengths = [40, 10, 30, 20];
+    const prepared = chronological.map((window, index) => ({
+      ...window,
+      tokenLength: tokenLengths[index],
+    }));
+    const seen: string[] = [];
+    const recordingEncoder = async (texts: string[]) => {
+      seen.push(...texts);
+      return encode(texts);
+    };
+
+    const [baseline, bucketed] = await Promise.all([
+      analyzeTranscript(transcript, CONFIG, encode),
+      analyzeTranscript(transcript, CONFIG, recordingEncoder, {
+        prepareWindows: async () => prepared,
+      }),
+    ]);
+
+    expect(seen).toEqual([
+      chronological[1].text,
+      chronological[3].text,
+      chronological[2].text,
+      chronological[0].text,
+    ]);
+    const deterministicShape = (result: Awaited<ReturnType<typeof analyzeTranscript>>) => ({
+      utteranceCount: result.utteranceCount,
+      segments: result.segments.map(({ id: _id, localTopicId: _topic, embedding, ...segment }) => ({
+        ...segment,
+        embedding: Array.from(embedding),
+      })),
+      topics: result.topics.map(({ id: _id, segments, centroid, ...topic }) => ({
+        ...topic,
+        segmentCount: segments.length,
+        centroid: Array.from(centroid),
+      })),
+    });
+    expect(deterministicShape(bucketed)).toEqual(deterministicShape(baseline));
+  });
+
+  it('aggregates token-limit chunks before temporal segmentation', async () => {
+    const transcript: TranscriptSegment[] = [{
+      tStartMs: 600_000,
+      tEndMs: 660_000,
+      speaker: 'Ada',
+      text: 'redis first half and berlin second half',
+    }];
+    const logical = buildContextWindows(transcript, CONFIG)[0];
+    const prepared = [{
+      ...logical,
+      embeddingChunks: [
+        { text: 'redis first half', sourceSpans: logical.sourceSpans, tokenLength: 10 },
+        { text: 'berlin second half', sourceSpans: logical.sourceSpans, tokenLength: 11 },
+      ],
+    }];
+    const seen: string[] = [];
+    const chunkEncoder = async (texts: string[]) => {
+      seen.push(...texts);
+      return encode(texts);
+    };
+
+    const result = await analyzeTranscript(transcript, CONFIG, chunkEncoder, {
+      prepareWindows: async () => prepared,
+    });
+
+    expect(seen).toEqual(['redis first half', 'berlin second half']);
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({ tStartMs: 600_000, tEndMs: 660_000, startWindow: 0, endWindow: 1 });
   });
 
   it('reports progress as windows are encoded', async () => {

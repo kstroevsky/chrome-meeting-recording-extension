@@ -1,25 +1,90 @@
 import { RecordingTranscriptService } from '../RecordingTranscriptService';
 import type { RecordingTranscriptMutation, RecordingTranscriptRepositoryPort } from '../RecordingTranscriptRepository';
 import {
+  MAX_TRANSCRIPT_TEXT_LENGTH,
   MAX_TRANSCRIPT_SEGMENTS,
   normalizeTranscript,
   type Transcript,
   type TranscriptSegment,
 } from '../../../../shared/transcript';
+import {
+  TRANSCRIPT_CANONICALIZATION_VERSION,
+  TRANSCRIPT_SCHEMA_VERSION,
+  type TranscriptSnapshot,
+} from '../../../../shared/transcriptIdentity';
 
 /** In-memory stand-in for the IndexedDB adapter, normalizing on write like the real one. */
 function fakeRepository(seed: Record<string, Transcript> = {}) {
-  const rows = new Map<string, Transcript>(Object.entries(seed));
-  const port: RecordingTranscriptRepositoryPort & { rows: Map<string, Transcript> } = {
+  const rows = new Map<string, TranscriptSnapshot>(Object.entries(seed).map(([id, transcript]) => [id, {
+    schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+    canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+    generation: `generation:${id}:1`,
+    revision: 1,
+    contentHash: `hash:${id}:1`,
+    committedAt: 1,
+    transcript,
+  }]));
+  const port: RecordingTranscriptRepositoryPort & { rows: Map<string, TranscriptSnapshot> } = {
     rows,
     async get(recordingId) {
       return rows.get(recordingId);
     },
     async update(recordingId: string, mutate: RecordingTranscriptMutation) {
-      const next = normalizeTranscript(mutate(rows.get(recordingId)));
-      if (next && next.segments.length) rows.set(recordingId, next);
-      else rows.delete(recordingId);
-      return next;
+      const current = rows.get(recordingId);
+      const raw = mutate(current?.transcript);
+      if (raw === current?.transcript) return current;
+      const next = normalizeTranscript(raw);
+      if (!next?.segments.length) {
+        rows.delete(recordingId);
+        return undefined;
+      }
+      const revision = (current?.revision ?? 0) + 1;
+      const snapshot: TranscriptSnapshot = {
+        schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+        canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+        generation: `generation:${recordingId}:${revision}`,
+        revision,
+        contentHash: `hash:${recordingId}:${revision}`,
+        committedAt: revision,
+        transcript: next,
+      };
+      rows.set(recordingId, snapshot);
+      return snapshot;
+    },
+    async replaceAndRequestAnalysis(recordingId, transcript, contentHash) {
+      const current = rows.get(recordingId);
+      const next = normalizeTranscript(transcript)!;
+      const revision = (current?.revision ?? 0) + 1;
+      const snapshot: TranscriptSnapshot = {
+        schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+        canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+        generation: `generation:${recordingId}:${revision}`,
+        revision,
+        contentHash,
+        committedAt: revision,
+        transcript: next,
+      };
+      rows.set(recordingId, snapshot);
+      return snapshot;
+    },
+    async requestCurrentAnalysis(recordingId) {
+      return rows.get(recordingId);
+    },
+    async cacheContentHash(recordingId, generation, revision, contentHash) {
+      const current = rows.get(recordingId);
+      if (current?.generation === generation && current.revision === revision) {
+        rows.set(recordingId, { ...current, contentHash });
+      }
+    },
+    async listRecordingIds(limit, after) {
+      const ids = [...rows.keys()].sort().filter((id) => !after || id > after);
+      const recordingIds = ids.slice(0, limit);
+      return {
+        recordingIds,
+        ...(ids.length > limit && recordingIds.length
+          ? { nextCursor: recordingIds[recordingIds.length - 1] }
+          : {}),
+      };
     },
     async remove(recordingId) {
       rows.delete(recordingId);
@@ -111,6 +176,87 @@ describe('RecordingTranscriptService', () => {
 
     await service.append('rec:1', 'meet-captions', [segment(0, 'first')]);
     await expect(service.status('rec:1')).resolves.toBe('ready');
+  });
+
+  it('replaces a transcript as a new revision and announces the commit', async () => {
+    const repository = fakeRepository();
+    const committed: TranscriptSnapshot[] = [];
+    const service = new RecordingTranscriptService(repository, (_id, snapshot) => {
+      committed.push(snapshot);
+    });
+    await service.append('rec:1', 'meet-captions', [segment(0, 'caption')]);
+
+    const replaced = await service.replace('rec:1', {
+      source: 'stt',
+      segments: [segment(0, 'speech recognition')],
+    });
+
+    expect(replaced.revision).toBe(2);
+    expect(replaced.transcript.source).toBe('stt');
+    expect(committed).toEqual([replaced]);
+  });
+
+  it('preserves the previous snapshot when replacement validation rejects', async () => {
+    const repository = fakeRepository();
+    const service = new RecordingTranscriptService(repository);
+    await service.replace('rec:1', { source: 'meet-captions', segments: [segment(0, 'kept')] });
+    const before = await service.getSnapshot('rec:1');
+
+    const invalid: Transcript[] = [
+      { source: 'stt', segments: [] },
+      { source: 'stt', segments: [{ tStartMs: -1, tEndMs: 1, text: 'bad time' }] },
+      { source: 'stt', segments: [{ tStartMs: 0, tEndMs: 1, text: 'x'.repeat(MAX_TRANSCRIPT_TEXT_LENGTH + 1) }] },
+      { source: 'guessed' as Transcript['source'], segments: [segment(0, 'bad source')] },
+    ];
+
+    for (const replacement of invalid) {
+      await expect(service.replace('rec:1', replacement)).rejects.toThrow();
+      await expect(service.getSnapshot('rec:1')).resolves.toEqual(before);
+    }
+  });
+
+  it('commits the current revision without changing its identity', async () => {
+    const repository = fakeRepository();
+    const committed: TranscriptSnapshot[] = [];
+    const service = new RecordingTranscriptService(repository, (_id, snapshot) => {
+      committed.push(snapshot);
+    });
+    await service.append('rec:1', 'meet-captions', [segment(0, 'caption')]);
+    const before = await service.getSnapshot('rec:1');
+
+    const committedSnapshot = await service.commit('rec:1');
+
+    expect(committedSnapshot).toEqual(before);
+    expect(committed).toEqual([before]);
+  });
+
+  it('keeps a transcript write successful when the dispatcher wake-up fails', async () => {
+    const repository = fakeRepository();
+    const service = new RecordingTranscriptService(repository, async () => {
+      throw new Error('dispatcher unavailable');
+    });
+
+    await expect(service.replace('rec:1', {
+      source: 'stt',
+      segments: [segment(0, 'durable words')],
+    })).resolves.toMatchObject({
+      revision: 1,
+      transcript: { source: 'stt' },
+    });
+    await expect(service.get('rec:1')).resolves.toMatchObject({
+      source: 'stt',
+      segments: [segment(0, 'durable words')],
+    });
+  });
+
+  it('tells integrations about every change to the stored transcript, and only those', async () => {
+    const changed: string[] = [];
+    const service = new RecordingTranscriptService(fakeRepository(), undefined, (id) => { changed.push(id); });
+    await service.append('rec:1', 'meet-captions', [segment(0, 'caption')]);
+    await service.append('rec:1', 'meet-captions', [segment(0, 'caption')]); // a redelivery stores nothing
+    await service.replace('rec:1', { source: 'stt', segments: [segment(0, 'speech recognition')] });
+    await service.commit('rec:1'); // announces completeness, changes nothing
+    expect(changed).toEqual(['rec:1', 'rec:1']);
   });
 
   it('drops a recording transcript entirely', async () => {

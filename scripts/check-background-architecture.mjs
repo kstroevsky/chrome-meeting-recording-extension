@@ -11,8 +11,12 @@ const MAX_ENTRYPOINT_LINES = 100;
 
 const LINE_LIMIT_EXCEPTIONS = new Map([
   [
+    'runtime/createBackgroundRuntime.ts',
+    'The background composition root: wiring and startup recovery in one readable place; a few lines over the target.',
+  ],
+  [
     'library/analysis/RecordingAnalysisCoordinator.ts',
-    '271-line cohesive analysis orchestration; split only when another real responsibility emerges.',
+    'Cohesive analysis lifecycle orchestration, including durable transcript reconciliation; split when a separable owner emerges.',
   ],
 ]);
 

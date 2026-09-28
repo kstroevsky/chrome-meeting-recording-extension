@@ -21,6 +21,10 @@ async function fixture() {
     'src/background/library/analysis/RecordingAnalysisCoordinator.ts',
     Array.from({ length: 251 }, (_, index) => `// accepted ${index}`).join('\n') + '\n',
   );
+  await write(
+    'src/background/runtime/createBackgroundRuntime.ts',
+    Array.from({ length: 251 }, (_, index) => `// accepted ${index}`).join('\n') + '\n',
+  );
   return {
     root,
     write,
@@ -44,7 +48,7 @@ function output(result) {
   return `${result.stdout}\n${result.stderr}`;
 }
 
-test('accepts nested production files, the documented size exception, and entrypoint listeners', async () => {
+test('accepts nested production files, the documented size exceptions, and entrypoint listeners', async () => {
   await withFixture(async (f) => {
     const result = f.run();
     assert.equal(result.status, 0, output(result));

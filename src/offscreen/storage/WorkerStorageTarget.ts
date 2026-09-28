@@ -36,10 +36,15 @@ export class WorkerStorageTarget implements StorageTarget {
   private closed = false;
   private failure: Error | null = null;
   private sealed: SealedStorageFile | null = null;
-  private readonly writeAcks = new Map<number, { resolve: () => void; reject: (e: unknown) => void }>();
+  private readonly writeAcks = new Map<number, {
+    expectedBytes: number;
+    resolve: () => void;
+    reject: (e: unknown) => void;
+  }>();
   private settleSeal: ((result: SealResult) => void) | null = null;
   private rejectSeal: ((e: unknown) => void) | null = null;
   private settleDiscard: (() => void) | null = null;
+  private rejectDiscard: ((e: unknown) => void) | null = null;
 
   private constructor(
     private readonly worker: Worker,
@@ -108,12 +113,25 @@ export class WorkerStorageTarget implements StorageTarget {
       .then(async () => {
         if (this.failure) throw this.failure;
         const buffer = await chunk.arrayBuffer();
-        await new Promise<void>((resolve, reject) => {
-          this.writeAcks.set(seq, { resolve, reject });
-          this.worker.postMessage({ type: 'write', seq, buffer }, [buffer]);
-        });
-        this.writtenBytes += chunk.size;
-        this.pendingWrites = Math.max(0, this.pendingWrites - 1);
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              this.writeAcks.delete(seq);
+              const error = new Error(`opfsWorker write timed out after ${TIMEOUTS.OPFS_WORKER_ACK_MS} ms`);
+              reject(error);
+              this.fail(error);
+            }, TIMEOUTS.OPFS_WORKER_ACK_MS);
+            this.writeAcks.set(seq, {
+              expectedBytes: chunk.size,
+              resolve: () => { clearTimeout(timer); resolve(); },
+              reject: (error) => { clearTimeout(timer); reject(error); },
+            });
+            this.worker.postMessage({ type: 'write', seq, buffer }, [buffer]);
+          });
+          this.writtenBytes += chunk.size;
+        } finally {
+          this.pendingWrites = Math.max(0, this.pendingWrites - 1);
+        }
         const durationMs = roundMs(nowMs() - startedAt);
         debugPerf(console.log, 'storage', 'opfs_write_complete', {
           stream: this.stream,
@@ -171,8 +189,11 @@ export class WorkerStorageTarget implements StorageTarget {
     });
 
     if (!file || this.writtenBytes === 0) {
-      await this.discardInternal();
-      this.worker.terminate();
+      try {
+        await this.discardInternal();
+      } finally {
+        this.worker.terminate();
+      }
       return null;
     }
 
@@ -225,8 +246,16 @@ export class WorkerStorageTarget implements StorageTarget {
 
   private discardInternal(): Promise<void> {
     const startedAt = nowMs();
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.settleDiscard = null;
+        this.rejectDiscard = null;
+        const error = new Error(`opfsWorker discard timed out after ${TIMEOUTS.OPFS_WORKER_ACK_MS} ms`);
+        reject(error);
+        this.fail(error);
+      }, TIMEOUTS.OPFS_WORKER_ACK_MS);
       this.settleDiscard = () => {
+        clearTimeout(timer);
         debugPerf(console.log, 'storage', 'opfs_cleanup', {
           stream: this.stream,
           durationMs: roundMs(nowMs() - startedAt),
@@ -234,6 +263,7 @@ export class WorkerStorageTarget implements StorageTarget {
         });
         resolve();
       };
+      this.rejectDiscard = (error) => { clearTimeout(timer); reject(error); };
       this.worker.postMessage({ type: 'discard' });
     });
   }
@@ -244,7 +274,15 @@ export class WorkerStorageTarget implements StorageTarget {
         const ack = this.writeAcks.get(msg.seq);
         if (ack) {
           this.writeAcks.delete(msg.seq);
-          ack.resolve();
+          if (msg.bytes !== ack.expectedBytes) {
+            const error = new Error(
+              `opfsWorker acknowledged ${msg.bytes} bytes for a ${ack.expectedBytes}-byte write`,
+            );
+            ack.reject(error);
+            this.fail(error);
+          } else {
+            ack.resolve();
+          }
         }
         break;
       }
@@ -257,6 +295,7 @@ export class WorkerStorageTarget implements StorageTarget {
       case 'discarded': {
         this.settleDiscard?.();
         this.settleDiscard = null;
+        this.rejectDiscard = null;
         break;
       }
       case 'error': {
@@ -273,14 +312,22 @@ export class WorkerStorageTarget implements StorageTarget {
     for (const { reject } of this.writeAcks.values()) reject(error);
     this.writeAcks.clear();
     this.rejectSeal?.(error);
+    this.rejectDiscard?.(error);
     this.settleSeal = null;
     this.rejectSeal = null;
+    this.settleDiscard = null;
+    this.rejectDiscard = null;
+    this.worker.terminate();
   }
 }
 
 /** Sends `open` and resolves on the worker's `opened`; rejects on error or load failure. */
 function openHandshake(worker: Worker, filename: string, mimeType: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`opfsWorker open timed out after ${TIMEOUTS.OPFS_WORKER_ACK_MS} ms`));
+    }, TIMEOUTS.OPFS_WORKER_ACK_MS);
     const onMessage = (event: MessageEvent<WorkerOutbound>) => {
       const data = event.data;
       if (data?.type === 'opened') {
@@ -296,6 +343,7 @@ function openHandshake(worker: Worker, filename: string, mimeType: string): Prom
       reject(event.error ?? new Error('opfsWorker failed to load'));
     };
     const cleanup = () => {
+      clearTimeout(timer);
       worker.removeEventListener('message', onMessage as EventListener);
       worker.removeEventListener('error', onError as EventListener);
     };

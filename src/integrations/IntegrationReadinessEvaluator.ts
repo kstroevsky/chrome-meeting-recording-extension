@@ -30,7 +30,9 @@ export class IntegrationReadinessEvaluator {
     // update, like any other change.
     if (
       policy.analysis
-      && (!source.analysis || source.analysis.status === 'none' || source.analysis.status === 'analyzing')
+      // Stale analysis belongs to an older transcript revision and is re-run,
+      // so it is pending too: its old result is never exported.
+      && (!source.analysis || ['none', 'analyzing', 'stale'].includes(source.analysis.status))
     ) {
       pending.push('analysis');
     }

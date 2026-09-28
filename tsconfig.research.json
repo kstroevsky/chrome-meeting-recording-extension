@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "outDir": "dist-research"
+  },
+  "include": [
+    "scripts/calibrate-analysis.ts"
+  ],
+  "exclude": []
+}

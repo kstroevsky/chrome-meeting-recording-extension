@@ -6,7 +6,7 @@
 
 import { TIMEOUTS } from '../../../shared/timeouts';
 
-type Behavior = 'normal' | 'openError' | 'writeError' | 'sealHang';
+type Behavior = 'normal' | 'openError' | 'openHang' | 'writeError' | 'writeHang' | 'shortAck' | 'sealHang' | 'discardHang';
 
 /**
  * jsdom's Blob has no arrayBuffer(); real MediaRecorder chunks in the offscreen
@@ -52,16 +52,18 @@ class FakeWorker {
     if (transfer) this.transfers.push(transfer);
     queueMicrotask(() => {
       if (msg.type === 'open') {
+        if (FakeWorker.behavior === 'openHang') return;
         FakeWorker.behavior === 'openError'
           ? this.emit({ type: 'error', op: 'open', message: 'no sync access' })
           : this.emit({ type: 'opened' });
       } else if (msg.type === 'write') {
+        if (FakeWorker.behavior === 'writeHang') return;
         if (FakeWorker.behavior === 'writeError') {
           this.emit({ type: 'error', op: 'write', message: 'write failed' });
         } else {
           const bytes = new Uint8Array(msg.buffer).byteLength;
           this.bytes += bytes;
-          this.emit({ type: 'written', seq: msg.seq, bytes });
+          this.emit({ type: 'written', seq: msg.seq, bytes: FakeWorker.behavior === 'shortAck' ? bytes - 1 : bytes });
         }
       } else if (msg.type === 'close') {
         if (FakeWorker.behavior === 'sealHang') return; // wedged: never reply 'sealed'
@@ -69,6 +71,7 @@ class FakeWorker {
         // The worker runs the duration fix in-thread before sealing.
         this.emit({ type: 'sealed', file, bytes: this.bytes, durationFixed: this.bytes > 0 });
       } else if (msg.type === 'discard') {
+        if (FakeWorker.behavior === 'discardHang') return;
         this.emit({ type: 'discarded' });
       }
     });
@@ -154,10 +157,48 @@ describe('WorkerStorageTarget', () => {
     expect(FakeWorker.instances).toHaveLength(before);
   });
 
+  it('times out a worker that never acknowledges open', async () => {
+    FakeWorker.behavior = 'openHang';
+    jest.useFakeTimers();
+    try {
+      const creating = WorkerStorageTarget.create('rec.webm');
+      creating.catch(() => {});
+      await jest.advanceTimersByTimeAsync(TIMEOUTS.OPFS_WORKER_ACK_MS + 1);
+      await expect(creating).rejects.toThrow(/open timed out/);
+      expect(FakeWorker.instances[0].terminated).toBe(true);
+      expect(WorkerStorageTarget.unsupported).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('rejects in-flight writes if the worker reports an error', async () => {
     const target = await WorkerStorageTarget.create('rec.webm');
     FakeWorker.behavior = 'writeError';
     await expect(target.write(chunk('x'))).rejects.toThrow(/write failed/);
+  });
+
+  it('times out a write acknowledgement and fails the worker path', async () => {
+    const target = await WorkerStorageTarget.create('rec.webm');
+    FakeWorker.behavior = 'writeHang';
+    jest.useFakeTimers();
+    try {
+      const writing = target.write(chunk('abc'));
+      writing.catch(() => {});
+      await jest.advanceTimersByTimeAsync(TIMEOUTS.OPFS_WORKER_ACK_MS + 1);
+      await expect(writing).rejects.toThrow(/write timed out/);
+      expect(FakeWorker.instances[0].terminated).toBe(true);
+      await expect(target.close()).rejects.toThrow(/write timed out/);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('rejects an acknowledgement that claims fewer bytes than the chunk', async () => {
+    const target = await WorkerStorageTarget.create('rec.webm');
+    FakeWorker.behavior = 'shortAck';
+    await expect(target.write(chunk('abc'))).rejects.toThrow(/acknowledged 2 bytes/);
+    expect(FakeWorker.instances[0].terminated).toBe(true);
   });
 
   it('rejects writes after close', async () => {
@@ -192,6 +233,25 @@ describe('WorkerStorageTarget', () => {
       closePromise.catch(() => {}); // avoid an unhandled rejection while advancing
       await jest.advanceTimersByTimeAsync(TIMEOUTS.SEAL_BASE_MS + 5_000);
       await expect(closePromise).rejects.toThrow(/timed out/);
+      expect(FakeWorker.instances[0].terminated).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('times out cleanup when a sealed worker never acknowledges discard', async () => {
+    const target = await WorkerStorageTarget.create('rec.webm');
+    await target.write(chunk('abc'));
+    const artifact = await target.close();
+    expect(artifact).toBeTruthy();
+    FakeWorker.behavior = 'discardHang';
+
+    jest.useFakeTimers();
+    try {
+      const cleanup = artifact!.cleanup();
+      cleanup.catch(() => {});
+      await jest.advanceTimersByTimeAsync(TIMEOUTS.OPFS_WORKER_ACK_MS + 1);
+      await expect(cleanup).rejects.toThrow(/discard timed out/);
       expect(FakeWorker.instances[0].terminated).toBe(true);
     } finally {
       jest.useRealTimers();

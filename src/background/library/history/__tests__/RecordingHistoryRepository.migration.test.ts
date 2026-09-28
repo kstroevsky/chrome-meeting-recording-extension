@@ -64,12 +64,14 @@ describe('recording-history v2 migration', () => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    expect(database.version).toBe(8);
+    expect(database.version).toBe(9);
     expect(database.objectStoreNames.contains('recordingContexts')).toBe(true);
     expect(database.objectStoreNames.contains('notations')).toBe(true);
     expect(database.objectStoreNames.contains('transcripts')).toBe(true);
     expect(database.objectStoreNames.contains('analyses')).toBe(true);
     expect(database.objectStoreNames.contains('analysisOutcomes')).toBe(true);
+    expect(database.objectStoreNames.contains('analysisWork')).toBe(true);
+    expect(database.transaction('analysisWork', 'readonly').objectStore('analysisWork').indexNames.contains('analysisWorkDue')).toBe(true);
     const transaction = database.transaction('recordings', 'readonly');
     const store = transaction.objectStore('recordings');
     expect(store.indexNames.contains('activeCreatedAtId')).toBe(true);
@@ -176,5 +178,6 @@ describe('a library another branch took further without this branch’s stores',
     expect(database.version).toBe(10);
     expect(database.objectStoreNames.contains('recordingContexts')).toBe(true);
     expect(database.objectStoreNames.contains('analysisOutcomes')).toBe(true);
+    expect(database.objectStoreNames.contains('analysisWork')).toBe(true);
   });
 });

@@ -15,6 +15,9 @@ const {
 const { telemetryHostPermission } = require('./scripts/lib/telemetryEndpoint.cjs')
 const { normalizeSharingServiceOrigin, sharingHostPermission } = require('./scripts/lib/sharingServiceOrigin.cjs')
 const { ANALYSIS_MODEL, modelCacheDir } = require('./scripts/lib/analysisModel.cjs')
+const ANALYSIS_ONNX_SOURCE_PATH = process.env.ANALYSIS_POOLING === 'pooled-onnx'
+  ? ANALYSIS_MODEL.onnxPath.replace(/\.onnx$/, '_pooled.onnx')
+  : ANALYSIS_MODEL.onnxPath
 
 const GOOGLE_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_OAUTH_CLIENT_ID'
 const GOOGLE_WEB_OAUTH_CLIENT_ID_ENV_KEY = 'GOOGLE_WEB_OAUTH_CLIENT_ID'
@@ -332,8 +335,15 @@ module.exports = (_env, argv) => {
               to: `models/${ANALYSIS_MODEL.id}`,
               filter: (resourcePath) => {
                 const relative = path.relative(modelCacheDir(), resourcePath).split(path.sep).join('/')
-                return !relative.startsWith('onnx/') || relative === ANALYSIS_MODEL.onnxPath
+                return !relative.startsWith('onnx/')
               },
+            },
+            {
+              // Research builds may substitute a graph that pools inside ONNX,
+              // but the runtime URL stays the manifest-selected filename so
+              // Transformers.js' dtype resolution remains unchanged.
+              from: path.join(modelCacheDir(), ANALYSIS_ONNX_SOURCE_PATH),
+              to: `models/${ANALYSIS_MODEL.id}/${ANALYSIS_MODEL.onnxPath}`,
             },
             // ONNX Runtime's WASM binaries, copied from the version
             // @huggingface/transformers resolved. Not an independent dependency:

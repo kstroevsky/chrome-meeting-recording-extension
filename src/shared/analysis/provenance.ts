@@ -41,10 +41,12 @@ export type EmbeddingDtype = 'fp32' | 'fp16' | 'q8' | 'int8' | 'uint8' | 'q4' | 
  * | --- | --- |
  * | 1 | initial pipeline |
  * | 2 | tail window covers only the remainder (D-22); topic importance ranks against the cluster centroid (D-23) |
+ * | 3 | token-safe lossless windows and token-length embedding batches (ADR-0009 UNIT-02 / TECH-02) |
+ * | 4 | token-limit chunks aggregate back to one logical temporal window (ADR-0009 stabilization) |
  */
-export const PIPELINE_VERSION = 2;
+export const PIPELINE_VERSION = 4;
 
-export type AnalysisProvenance = {
+export type AnalysisEnvironmentProvenance = {
   pipelineVersion: number;
   /** The model's identity, e.g. its Hugging Face repo id. */
   embeddingModel: string;
@@ -66,7 +68,7 @@ export type AnalysisProvenance = {
    * {@link hashAnalysisConfig}.
    *
    * Not every §9 open contract is in here. `AnalysisConfig` carries the
-   * segmentation, clustering, keyword and MMR values — the ones that change the
+   * segmentation, clustering and keyword values — the ones that change the
    * result. The embedding dtype is its own field above, and the throughput
    * target is deliberately absent: it is an acceptance target, not a condition
    * that determines what the analysis says.
@@ -90,6 +92,12 @@ export type AnalysisProvenance = {
   embeddingDevice?: 'webgpu' | 'wasm';
 };
 
+export type AnalysisProvenance = AnalysisEnvironmentProvenance & {
+  transcriptGeneration: string;
+  transcriptRevision: number;
+  transcriptHash: string;
+};
+
 /**
  * A stable digest of the output-affecting configuration a run used.
  *
@@ -107,7 +115,10 @@ export function hashAnalysisConfig(config: AnalysisConfig): string {
 
 /** Whether an analysis was produced under different conditions than these. */
 export function isStale(stored: AnalysisProvenance, current: AnalysisProvenance): boolean {
-  return stored.pipelineVersion !== current.pipelineVersion
+  return stored.transcriptGeneration !== current.transcriptGeneration
+    || stored.transcriptRevision !== current.transcriptRevision
+    || stored.transcriptHash !== current.transcriptHash
+    || stored.pipelineVersion !== current.pipelineVersion
     || stored.embeddingModel !== current.embeddingModel
     || stored.embeddingModelRevision !== current.embeddingModelRevision
     || stored.embeddingDimensions !== current.embeddingDimensions

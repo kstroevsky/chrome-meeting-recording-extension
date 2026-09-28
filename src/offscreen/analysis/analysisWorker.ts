@@ -19,9 +19,13 @@
 
 import { env, pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 import { toEncoderInput } from '../../shared/analysis/encoderInput';
+import { analyzeTranscript } from '../../shared/analysis/analyzeTranscript';
 import type { EmbeddingDtype } from '../../shared/analysis/provenance';
+import { buildTokenBoundedContextWindows } from '../../shared/analysis/tokenBoundedWindows';
+import { meanPoolingLocality } from './meanPooling';
 import type {
   AnalysisWorkerOpen,
+  AnalysisPoolingMode,
   AnalysisWorkerRequest,
   AnalysisWorkerResponse,
   EmbeddingDevice,
@@ -40,8 +44,10 @@ const ctx = self as unknown as {
 
 let extractor: FeatureExtractionPipeline | undefined;
 let dimensions = 0;
+let maxTokens = 0;
 let activeDevice: EmbeddingDevice = 'wasm';
 let activeDtype: EmbeddingDtype = 'q8';
+let activePoolingMode: AnalysisPoolingMode = 'transformers';
 
 function post(message: AnalysisWorkerResponse, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
@@ -87,11 +93,20 @@ async function load(request: AnalysisWorkerOpen): Promise<void> {
       // then fail on its first inference — a driver that advertises WebGPU but
       // cannot run this graph — and a probe outside the loop would report that
       // as a hard failure instead of falling through to WASM.
-      const probe = await candidate([toEncoderInput('probe')], { pooling: 'mean', normalize: true });
+      const poolingMode = request.poolingMode ?? 'transformers';
+      const probe = await runEmbedding(candidate, [toEncoderInput('probe')], poolingMode);
+
+      const tokenizerLimit = positiveInteger(candidate.tokenizer.model_max_length);
+      const modelLimit = positiveInteger((candidate.model.config as { max_position_embeddings?: unknown }).max_position_embeddings);
+      if (!tokenizerLimit || !modelLimit) {
+        throw new Error('The packaged embedding artifacts do not declare a finite token limit');
+      }
 
       extractor = candidate;
       activeDevice = device;
+      activePoolingMode = poolingMode;
       dimensions = (probe.dims as number[])[1];
+      maxTokens = Math.min(tokenizerLimit, modelLimit);
       lastError = undefined;
       break;
     } catch (error) {
@@ -112,18 +127,65 @@ async function load(request: AnalysisWorkerOpen): Promise<void> {
     device: activeDevice,
     dimensions,
     dtype: activeDtype,
+    maxTokens,
     loadMs: Math.round(performance.now() - started),
   });
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function tokenLength(text: string): number {
+  if (!extractor) throw new Error('The embedding worker was asked to tokenize before it was opened');
+  return extractor.tokenizer.encode(toEncoderInput(text), { add_special_tokens: true }).length;
 }
 
 async function embed(texts: string[]): Promise<{ data: Float32Array; count: number; dimensions: number }> {
   if (!extractor) throw new Error('The embedding worker was asked to embed before it was opened');
 
-  // Mean pooling and L2 normalization, so cosine similarity is a dot product
-  // and every downstream score in `shared/analysis` is comparable.
-  const output = await extractor(texts, { pooling: 'mean', normalize: true });
+  const output = await runEmbedding(extractor, texts, activePoolingMode);
   const [count, width] = output.dims as [number, number];
   return { data: Float32Array.from(output.data as ArrayLike<number>), count, dimensions: width };
+}
+
+async function runEmbedding(
+  candidate: FeatureExtractionPipeline,
+  texts: string[],
+  poolingMode: AnalysisPoolingMode,
+): Promise<Awaited<ReturnType<FeatureExtractionPipeline['model']>>[string]> {
+  // Production keeps Transformers.js' installed pooling by default. The two
+  // alternatives exist only for ADR-0009 adoption tests and are fixed for the
+  // worker session during OPEN so graph and post-processing cannot disagree.
+  if (poolingMode === 'transformers') {
+    return candidate(texts, { pooling: 'mean', normalize: true });
+  }
+  if (poolingMode === 'pooled-onnx') return pooledOnnx(candidate, texts);
+
+  const modelInputs = candidate.tokenizer(texts, { padding: true, truncation: true });
+  const modelOutputs = await candidate.model(modelInputs);
+  if (!modelOutputs.last_hidden_state) {
+    throw new Error('The locality pooling experiment requires last_hidden_state');
+  }
+  return meanPoolingLocality(modelOutputs.last_hidden_state, modelInputs.attention_mask).normalize(2, -1);
+}
+
+async function pooledOnnx(
+  candidate: FeatureExtractionPipeline,
+  texts: string[],
+): Promise<Awaited<ReturnType<FeatureExtractionPipeline['model']>>[string]> {
+  const modelInputs = candidate.tokenizer(texts, { padding: true, truncation: true });
+  const modelOutputs = await candidate.model(modelInputs);
+  // Keep the ordinary BertModel output name when building the experimental
+  // graph. Transformers.js tolerates arbitrary output rank but some model-path
+  // plumbing assumes the canonical name. Rank is the fence: the production
+  // graph exposes [batch, tokens, width], while TECH-03's graph exposes the
+  // already pooled [batch, width] tensor.
+  const output = modelOutputs.sentence_embedding ?? modelOutputs.last_hidden_state;
+  if (!output || output.dims.length !== 2) {
+    throw new Error('The pooled ONNX experiment requires one rank-2 sentence embedding output');
+  }
+  return output;
 }
 
 ctx.onmessage = (event: MessageEvent<AnalysisWorkerRequest>) => {
@@ -132,6 +194,46 @@ ctx.onmessage = (event: MessageEvent<AnalysisWorkerRequest>) => {
     try {
       if (request.type === 'OPEN') {
         await load(request);
+        return;
+      }
+      if (request.type === 'PREPARE_WINDOWS') {
+        if (!extractor || !maxTokens) throw new Error('The embedding worker was asked to prepare windows before it was opened');
+        post({
+          type: 'PREPARED_WINDOWS',
+          seq: request.seq,
+          windows: buildTokenBoundedContextWindows(
+            request.segments,
+            request.config,
+            maxTokens,
+            tokenLength,
+          ),
+        });
+        return;
+      }
+      if (request.type === 'ANALYZE') {
+        if (!extractor || !maxTokens) throw new Error('The analysis worker was asked to analyze before it was opened');
+        const result = await analyzeTranscript(
+          request.transcript,
+          request.config,
+          async (texts) => {
+            const { data, count, dimensions: width } = await embed(texts.map(toEncoderInput));
+            const vectors: Float32Array[] = [];
+            for (let index = 0; index < count; index += 1) {
+              vectors.push(data.slice(index * width, (index + 1) * width));
+            }
+            return vectors;
+          },
+          {
+            prepareWindows: async (segments, config) => buildTokenBoundedContextWindows(
+              segments,
+              config,
+              maxTokens,
+              tokenLength,
+            ),
+            onProgress: (progress) => post({ type: 'ANALYSIS_PROGRESS', seq: request.seq, progress }),
+          },
+        );
+        post({ type: 'ANALYZED', seq: request.seq, result });
         return;
       }
       const started = performance.now();

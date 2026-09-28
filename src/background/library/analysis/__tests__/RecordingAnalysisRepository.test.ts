@@ -2,15 +2,23 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 
 import { RecordingAnalysisRepository } from '../RecordingAnalysisRepository';
+import { RecordingAnalysisWorkRepository } from '../RecordingAnalysisWorkRepository';
 import { RecordingTranscriptRepository } from '../../transcript/RecordingTranscriptRepository';
 import { RecordingNotationRepository } from '../../notations/RecordingNotationRepository';
-import { PIPELINE_VERSION } from '../../../../shared/analysis/provenance';
+import { PIPELINE_VERSION, type AnalysisProvenance } from '../../../../shared/analysis/provenance';
 import type { StoredAnalysis } from '../../../../shared/analysis/storedAnalysis';
+import {
+  openRecordingHistoryDatabase,
+  RECORDINGS_STORE,
+} from '../../RecordingLibraryDatabase';
 
 const v = (...values: number[]) => Float32Array.from(values);
 
 const analysis = (over: Partial<StoredAnalysis> = {}): StoredAnalysis => ({
   provenance: {
+    transcriptGeneration: 'generation-1',
+    transcriptRevision: 1,
+    transcriptHash: 'transcript-hash-1',
     pipelineVersion: PIPELINE_VERSION,
     embeddingModel: 'Xenova/multilingual-e5-small',
     embeddingModelRevision: '761b726d',
@@ -76,6 +84,189 @@ describe('RecordingAnalysisRepository', () => {
         updatedAt: 2_000,
       },
     });
+  });
+
+  it('publishes only the exact claimed epoch/token and marks its work satisfied', async () => {
+    const transcripts = new RecordingTranscriptRepository(factory, () => 100, () => 'generation-1');
+    const work = new RecordingAnalysisWorkRepository(factory, () => 200, () => 'attempt-1');
+    const environment = {
+      pipelineVersion: PIPELINE_VERSION,
+      embeddingModel: 'Xenova/multilingual-e5-small',
+      embeddingModelRevision: '761b726d',
+      embeddingDimensions: 3,
+      embeddingDtype: 'q8' as const,
+      configHash: 'abc12345',
+    };
+    const hash = 'a'.repeat(64);
+    const snapshot = await transcripts.replaceAndRequestAnalysis('rec:1', {
+      source: 'stt',
+      segments: [{ tStartMs: 0, tEndMs: 1_000, text: 'words' }],
+    }, hash, environment);
+    const claim = await work.claim('rec:1', { now: 200 });
+    const provenance: AnalysisProvenance = {
+      ...environment,
+      transcriptGeneration: snapshot.generation,
+      transcriptRevision: snapshot.revision,
+      transcriptHash: hash,
+    };
+    const completed = analysis({ provenance, completedAt: 300 });
+    const job = {
+      id: claim!.claim.attemptToken,
+      requestEpoch: claim!.requestEpoch,
+      historyId: 'rec:1',
+      status: 'completed' as const,
+      progress: 1,
+      startedAt: 200,
+      finishedAt: 300,
+    };
+
+    await expect(repository.publishAttemptResult('rec:1', job, completed, {
+      status: 'completed',
+      jobId: job.id,
+      startedAt: 200,
+      updatedAt: 300,
+    }, provenance)).resolves.toBe(true);
+
+    await expect(repository.get('rec:1')).resolves.toMatchObject({ completedAt: 300, provenance });
+    await expect(repository.getOutcome('rec:1')).resolves.toMatchObject({
+      status: 'completed',
+      jobId: 'attempt-1',
+    });
+    await expect(work.get('rec:1')).resolves.toMatchObject({
+      requestEpoch: 1,
+      disposition: 'satisfied',
+    });
+    expect((await work.get('rec:1'))?.claim).toBeUndefined();
+  });
+
+  it('rejects a superseded attempt without changing analysis, outcome, or newer work', async () => {
+    const transcripts = new RecordingTranscriptRepository(factory, () => 100, (() => {
+      let generation = 0;
+      return () => `generation-${++generation}`;
+    })());
+    const work = new RecordingAnalysisWorkRepository(factory, () => 200, () => 'attempt-a');
+    const environment = {
+      pipelineVersion: PIPELINE_VERSION,
+      embeddingModel: 'Xenova/multilingual-e5-small',
+      embeddingModelRevision: '761b726d',
+      embeddingDimensions: 3,
+      embeddingDtype: 'q8' as const,
+      configHash: 'abc12345',
+    };
+    const first = await transcripts.replaceAndRequestAnalysis('rec:1', {
+      source: 'stt',
+      segments: [{ tStartMs: 0, tEndMs: 1_000, text: 'A' }],
+    }, 'a'.repeat(64), environment);
+    const claim = await work.claim('rec:1', { now: 200 });
+    const provenance: AnalysisProvenance = {
+      ...environment,
+      transcriptGeneration: first.generation,
+      transcriptRevision: first.revision,
+      transcriptHash: 'a'.repeat(64),
+    };
+    await transcripts.replaceAndRequestAnalysis('rec:1', {
+      source: 'stt',
+      segments: [{ tStartMs: 0, tEndMs: 1_000, text: 'B' }],
+    }, 'b'.repeat(64), environment);
+    const job = {
+      id: claim!.claim.attemptToken,
+      requestEpoch: claim!.requestEpoch,
+      historyId: 'rec:1',
+      status: 'completed' as const,
+      progress: 1,
+      startedAt: 200,
+      finishedAt: 300,
+    };
+
+    await expect(repository.publishAttemptResult(
+      'rec:1',
+      job,
+      analysis({ provenance, completedAt: 300 }),
+      { status: 'completed', jobId: job.id, startedAt: 200, updatedAt: 300 },
+      provenance,
+    )).resolves.toBe(false);
+
+    await expect(repository.getSnapshot('rec:1')).resolves.toMatchObject({
+      analysis: undefined,
+      outcome: undefined,
+      work: {
+        requestEpoch: 2,
+        transcriptHash: 'b'.repeat(64),
+        disposition: 'pending',
+      },
+    });
+    await expect(work.get('rec:1')).resolves.toMatchObject({
+      requestEpoch: 2,
+      transcriptHash: 'b'.repeat(64),
+      disposition: 'pending',
+    });
+  });
+
+  it('rejects publication when the recording is tombstoned', async () => {
+    const transcripts = new RecordingTranscriptRepository(factory, () => 100, () => 'generation-1');
+    const work = new RecordingAnalysisWorkRepository(factory, () => 200, () => 'attempt-1');
+    const environment = {
+      pipelineVersion: PIPELINE_VERSION,
+      embeddingModel: 'Xenova/multilingual-e5-small',
+      embeddingModelRevision: '761b726d',
+      embeddingDimensions: 3,
+      embeddingDtype: 'q8' as const,
+      configHash: 'abc12345',
+    };
+    const hash = 'a'.repeat(64);
+    const snapshot = await transcripts.replaceAndRequestAnalysis('rec:1', {
+      source: 'stt',
+      segments: [{ tStartMs: 0, tEndMs: 1_000, text: 'words' }],
+    }, hash, environment);
+    const claim = await work.claim('rec:1', { now: 200 });
+    const database = await openRecordingHistoryDatabase(factory);
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(RECORDINGS_STORE, 'readwrite');
+      transaction.objectStore(RECORDINGS_STORE).put({
+        id: 'rec:1',
+        name: 'Deleted recording',
+        createdAt: 1,
+        storageMode: 'local',
+        status: 'complete',
+        deletedAt: 250,
+        files: [{
+          id: 'file:1',
+          stream: 'tab',
+          filename: 'recording.webm',
+          mimeType: 'video/webm',
+          locations: [],
+          delivery: { requested: 'local', status: 'downloaded' },
+          destination: 'local',
+          status: 'available',
+        }],
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    const provenance: AnalysisProvenance = {
+      ...environment,
+      transcriptGeneration: snapshot.generation,
+      transcriptRevision: snapshot.revision,
+      transcriptHash: hash,
+    };
+    const job = {
+      id: claim!.claim.attemptToken,
+      requestEpoch: claim!.requestEpoch,
+      historyId: 'rec:1',
+      status: 'completed' as const,
+      progress: 1,
+      startedAt: 200,
+      finishedAt: 300,
+    };
+
+    await expect(repository.publishAttemptResult(
+      'rec:1',
+      job,
+      analysis({ provenance, completedAt: 300 }),
+      { status: 'completed', jobId: job.id, startedAt: 200, updatedAt: 300 },
+      provenance,
+    )).resolves.toBe(false);
+    await expect(repository.get('rec:1')).resolves.toBeUndefined();
   });
 
   it('does not let a replayed older job replace a newer durable outcome', async () => {

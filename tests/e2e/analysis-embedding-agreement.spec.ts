@@ -55,6 +55,11 @@ const SAMPLE = [
 
 test('dumps the multilingual agreement sample @analysis-bench', async ({}, testInfo) => {
   const dtype = process.env.ANALYSIS_DTYPE ?? 'q8';
+  const poolingMode = process.env.ANALYSIS_POOLING === 'locality'
+    ? 'locality'
+    : process.env.ANALYSIS_POOLING === 'pooled-onnx'
+      ? 'pooled-onnx'
+      : 'transformers';
   // WASM by default so the sample is comparable across dtypes on one backend;
   // FP16 is a WebGPU export and has to be sampled there.
   const device = process.env.ANALYSIS_DEVICE ?? 'wasm';
@@ -70,7 +75,7 @@ test('dumps the multilingual agreement sample @analysis-bench', async ({}, testI
       waitUntil: 'domcontentloaded',
     });
 
-    const result = await page.evaluate(async ({ dtype, device, texts }) => {
+    const result = await page.evaluate(async ({ dtype, device, texts, poolingMode }) => {
       return await new Promise<{ device: string; vectors: number[][] }>((resolve, reject) => {
         const worker = new Worker(chrome.runtime.getURL('analysisWorker.js'));
         let opened: any;
@@ -78,7 +83,11 @@ test('dumps the multilingual agreement sample @analysis-bench', async ({}, testI
         worker.onmessage = (event: MessageEvent<any>) => {
           const m = event.data;
           if (m.type === 'ERROR') { worker.terminate(); reject(new Error(m.error)); return; }
-          if (m.type === 'OPENED') { opened = m; worker.postMessage({ type: 'EMBED', seq: 2, texts }); return; }
+          if (m.type === 'OPENED') {
+            opened = m;
+            worker.postMessage({ type: 'EMBED', seq: 2, texts });
+            return;
+          }
           if (m.type === 'EMBEDDED') {
             const flat = Array.from(new Float32Array(m.vectors));
             const vectors: number[][] = [];
@@ -92,19 +101,20 @@ test('dumps the multilingual agreement sample @analysis-bench', async ({}, testI
           modelBaseUrl: chrome.runtime.getURL('models/'),
           wasmBaseUrl: chrome.runtime.getURL('ort/'),
           modelId: 'Xenova/multilingual-e5-small',
-          device, dtype,
+          device, dtype, poolingMode,
         });
       });
-    }, { dtype, device, texts: SAMPLE });
+    }, { dtype, device, texts: SAMPLE, poolingMode });
 
     const dir = path.resolve('output', 'analysis-agreement');
     mkdirSync(dir, { recursive: true });
+    const suffix = poolingMode === 'transformers' ? '' : `-${poolingMode}`;
     writeFileSync(
-      path.join(dir, `${dtype}.json`),
-      JSON.stringify({ dtype, device: result.device, texts: SAMPLE, vectors: result.vectors }),
+      path.join(dir, `${dtype}${suffix}.json`),
+      JSON.stringify({ dtype, device: result.device, poolingMode, texts: SAMPLE, vectors: result.vectors }),
     );
     // eslint-disable-next-line no-console
-    console.log(`    wrote ${dir}/${dtype}.json (${result.vectors.length} vectors on ${result.device})`);
+    console.log(`    wrote ${dir}/${dtype}${suffix}.json (${result.vectors.length} vectors on ${result.device})`);
   } finally {
     if (harness) await closeHarness(harness);
   }

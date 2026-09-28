@@ -73,6 +73,14 @@ export const TIMEOUTS = {
   READY_TIMEOUT_MS: 5_000,
 
   /**
+   * Bound for one control/ack round-trip with the dedicated OPFS worker. Open,
+   * each serialized chunk write, and discard are expected to be much faster;
+   * this generous ceiling exists only so a wedged worker cannot pin capture or
+   * finalization forever before the separate seal deadline even begins.
+   */
+  OPFS_WORKER_ACK_MS: 15_000,
+
+  /**
    * Base budget for sealing an OPFS recording — closing the sync handle and
    * running the in-worker WebM duration fix. A dead or silently-wedged worker
    * never replies `sealed`, so `close()` races this budget and fails fast instead

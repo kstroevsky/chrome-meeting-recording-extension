@@ -1,7 +1,7 @@
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingContext } from '../../shared/recordingContext';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
-import type { Transcript } from '../../shared/transcript';
+import type { TranscriptSnapshot } from '../../shared/transcriptIdentity';
 import { buildIntegrationSnapshotPayload } from '../../integrations/IntegrationSnapshotBuilder';
 import type {
   IntegrationDataPolicy,
@@ -25,7 +25,7 @@ type IntegrationPreviewDeps = {
   getHistory: (recordingId: string) => Promise<RecordingHistoryEntry | undefined>;
   getContext: (recordingId: string) => Promise<RecordingContext | undefined>;
   listNotations: (recordingId: string) => Promise<RecordingNotation[]>;
-  getTranscript: (recordingId: string) => Promise<Transcript | undefined>;
+  getTranscriptSnapshot: (recordingId: string) => Promise<TranscriptSnapshot | undefined>;
   getAnalysisState: (recordingId: string) => Promise<AnalysisExportState>;
   now?: () => number;
 };
@@ -90,16 +90,20 @@ export class IntegrationPreviewService {
     incompleteRelease: Extract<IntegrationReadiness['release'], 'manual' | 'timeout'> = 'manual',
   ): Promise<BuiltIntegrationSnapshot> {
     const normalizedPolicy = requirePreviewPolicy(policy);
-    const [history, context, notations, transcript, analysisState] = await Promise.all([
+    const [history, context, notations, transcriptSnapshot, rawAnalysisState] = await Promise.all([
       this.deps.getHistory(recordingId),
       this.deps.getContext(recordingId),
       normalizedPolicy.notations ? this.deps.listNotations(recordingId) : Promise.resolve(undefined),
-      normalizedPolicy.transcript ? this.deps.getTranscript(recordingId) : Promise.resolve(undefined),
+      normalizedPolicy.transcript || normalizedPolicy.analysis
+        ? this.deps.getTranscriptSnapshot(recordingId)
+        : Promise.resolve(undefined),
       normalizedPolicy.analysis ? this.deps.getAnalysisState(recordingId) : Promise.resolve(undefined),
     ]);
     if (!history || history.deletedAt) throw new Error('Recording is unavailable');
     if (!context) throw new Error('Recording context is unavailable for this recording');
 
+    const transcript = normalizedPolicy.transcript ? transcriptSnapshot?.transcript : undefined;
+    const analysisState = alignAnalysisWithTranscript(rawAnalysisState, transcriptSnapshot);
     const readinessEvaluation = this.readinessEvaluator.evaluate({
       history,
       ...(transcript ? { transcript } : {}),
@@ -145,15 +149,17 @@ export class IntegrationPreviewService {
     policy: IntegrationDataPolicy,
   ): Promise<IntegrationReadinessEvaluation> {
     const normalizedPolicy = requirePreviewPolicy(policy);
-    const [history, transcript, analysisState] = await Promise.all([
+    // A transcript is never waited for; it is read only to tell whether the
+    // analysis still belongs to it (a stale one is re-run, so it is pending).
+    const [history, transcriptSnapshot, rawAnalysisState] = await Promise.all([
       this.deps.getHistory(recordingId),
-      normalizedPolicy.transcript ? this.deps.getTranscript(recordingId) : Promise.resolve(undefined),
+      normalizedPolicy.analysis ? this.deps.getTranscriptSnapshot(recordingId) : Promise.resolve(undefined),
       normalizedPolicy.analysis ? this.deps.getAnalysisState(recordingId) : Promise.resolve(undefined),
     ]);
     if (!history || history.deletedAt) throw new Error('Recording is unavailable');
+    const analysisState = alignAnalysisWithTranscript(rawAnalysisState, transcriptSnapshot);
     return this.readinessEvaluator.evaluate({
       history,
-      ...(transcript ? { transcript } : {}),
       ...(analysisState ? { analysis: analysisState } : {}),
     }, normalizedPolicy);
   }
@@ -163,12 +169,28 @@ function analysisProjection(
   state: AnalysisExportState | undefined,
 ): IntegrationAnalysisProjectionSource | undefined {
   if (!state || state.status === 'none') return undefined;
-  if (state.status === 'stale') return { status: 'unsupported', error: state.error };
+  if (state.status === 'stale') return undefined;
   if (state.status === 'completed') return { status: 'completed', result: state.result };
   return {
     status: state.status,
     ...(state.error ? { error: state.error } : {}),
   };
+}
+
+function alignAnalysisWithTranscript(
+  state: AnalysisExportState | undefined,
+  transcript: TranscriptSnapshot | undefined,
+): AnalysisExportState | undefined {
+  if (!state || state.status !== 'completed') return state;
+  if (!transcript) {
+    return { status: 'stale', error: 'Analysis does not match the transcript selected for this snapshot.' };
+  }
+  if (
+    state.result.provenance.transcriptGeneration === transcript.generation
+    && state.result.provenance.transcriptRevision === transcript.revision
+    && state.result.provenance.transcriptHash === transcript.contentHash
+  ) return state;
+  return { status: 'stale', error: 'Analysis does not match the transcript selected for this snapshot.' };
 }
 
 function requirePreviewPolicy(policy: IntegrationDataPolicy): IntegrationDataPolicy {

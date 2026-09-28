@@ -140,6 +140,7 @@ test('classifies representative repository paths conservatively', () => {
       ['verify', 'mock-e2e', 'production-e2e'],
     ],
     ['webpack.config.js', DOMAIN_NAMES],
+    ['tsconfig.research.json', DOMAIN_NAMES],
     ['package-lock.json', DOMAIN_NAMES],
     ['.github/workflows/ci.yml', DOMAIN_NAMES],
     ['static/manifest.json', DOMAIN_NAMES],

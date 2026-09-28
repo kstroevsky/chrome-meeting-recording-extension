@@ -9,6 +9,7 @@ import {
   normalizeTranscriptSegments,
   sortTranscriptSegments,
   toTranscriptSegments,
+  validateTranscriptForWrite,
   type CaptionUtterance,
 } from '../transcript';
 
@@ -87,6 +88,26 @@ describe('transcript durable-data boundaries', () => {
     ];
     expect(sortTranscriptSegments(tied).map((s) => s.text)).toEqual(['c', 'a', 'b']);
     expect(sortTranscriptSegments(tied)).not.toBe(tied);
+  });
+
+  it('breaks identical timing/text ties by speaker without locale-dependent ordering', () => {
+    const tied = [
+      { tStartMs: 5, tEndMs: 9, text: 'same', speaker: 'Zoe' },
+      { tStartMs: 5, tEndMs: 9, text: 'same', speaker: 'Ada' },
+      { tStartMs: 5, tEndMs: 9, text: 'same' },
+    ];
+    expect(sortTranscriptSegments(tied).map((s) => s.speaker)).toEqual([undefined, 'Ada', 'Zoe']);
+  });
+
+  it('rejects lossy new writes while keeping tolerant durable decoding', () => {
+    const long = 'x'.repeat(MAX_TRANSCRIPT_TEXT_LENGTH + 1);
+    expect(() => validateTranscriptForWrite({ source: 'stt', segments: [] })).toThrow(/at least one segment/);
+    expect(() => validateTranscriptForWrite({ source: 'stt', segments: [{ tStartMs: 2, tEndMs: 1, text: 'x' }] }))
+      .toThrow(/end/);
+    expect(() => validateTranscriptForWrite({ source: 'stt', segments: [{ tStartMs: 0, tEndMs: 1, text: long }] }))
+      .toThrow(/cannot exceed/);
+    expect(normalizeTranscriptSegment({ tStartMs: 0, tEndMs: 1, text: long })?.text)
+      .toHaveLength(MAX_TRANSCRIPT_TEXT_LENGTH);
   });
 
   it('reads a whole transcript only when its source is known', () => {

@@ -18,12 +18,13 @@
  * vectors instead of re-embedding for each of 40,500 configurations.
  */
 
-import { buildContextWindows } from './windows';
+import { buildContextWindows, type WindowConfig } from './windows';
 import { findBoundaryPeaks, scoreBoundaries } from './boundaries';
 import { buildConversationSegments } from './segments';
 import { clusterSegments } from './clusters';
 import { topicLabels } from './keywords';
 import { rankPassages, type Passage } from './importance';
+import { meanCentroid } from './vector';
 import type { TranscriptSegment } from '../transcript';
 import type { AnalysisConfig, ContextWindow, Embedding, Topic } from './types';
 
@@ -32,6 +33,10 @@ export const EMBEDDING_BATCH_SIZE = 32;
 
 /** Encodes a batch of window texts. Supplied by the caller; see the file docblock. */
 export type EncodeBatch = (texts: string[]) => Promise<Embedding[]>;
+export type PrepareWindows = (
+  transcript: TranscriptSegment[],
+  config: WindowConfig,
+) => Promise<ContextWindow[]>;
 
 export type AnalysisProgress = {
   windowsEncoded: number;
@@ -48,6 +53,8 @@ export type AnalyzeOptions = {
   onProgress?: (progress: AnalysisProgress) => void;
   /** Aborts between batches, so a cancelled job stops at the next boundary. */
   signal?: { aborted: boolean };
+  /** Production supplies the packaged tokenizer's lossless token-safe window builder. */
+  prepareWindows?: PrepareWindows;
 };
 
 /**
@@ -64,7 +71,9 @@ export async function analyzeTranscript(
   encode: EncodeBatch,
   options: AnalyzeOptions = {},
 ): Promise<AnalysisResult> {
-  const windows = buildContextWindows(transcript, config);
+  const windows = options.prepareWindows
+    ? await options.prepareWindows(transcript, config)
+    : buildContextWindows(transcript, config);
   if (!windows.length) return { segments: [], topics: [], utteranceCount: transcript.length };
 
   const embeddings = await encodeAll(windows, encode, options);
@@ -114,18 +123,50 @@ async function encodeAll(
   encode: EncodeBatch,
   options: AnalyzeOptions,
 ): Promise<Embedding[]> {
-  const embeddings: Embedding[] = [];
-  for (let i = 0; i < windows.length; i += EMBEDDING_BATCH_SIZE) {
+  // Encoder chunks solve only the model context limit. They retain their parent
+  // logical window index and are aggregated back before any temporal stage sees
+  // them, so a split source segment cannot manufacture a playback boundary.
+  const inputs = windows.flatMap((window, windowIndex) => (
+    window.embeddingChunks?.length
+      ? window.embeddingChunks.map((chunk, chunkIndex) => ({
+          windowIndex,
+          chunkIndex,
+          text: chunk.text,
+          tokenLength: chunk.tokenLength,
+        }))
+      : [{
+          windowIndex,
+          chunkIndex: 0,
+          text: window.text,
+          tokenLength: window.tokenLength ?? Number.MAX_SAFE_INTEGER,
+        }]
+  ));
+  // Stable length bucketing reduces padding inside a batch. Each encoder input
+  // keeps its chronological parent/chunk index; vectors are restored and then
+  // collapsed to one vector per logical window before downstream analysis.
+  const ordered = inputs
+    .sort((left, right) => (
+      left.tokenLength - right.tokenLength
+      || left.windowIndex - right.windowIndex
+      || left.chunkIndex - right.chunkIndex
+    ));
+  const chunkEmbeddings = windows.map(() => [] as Embedding[]);
+  let inputsEncoded = 0;
+  for (let i = 0; i < ordered.length; i += EMBEDDING_BATCH_SIZE) {
     if (options.signal?.aborted) throw new Error('Analysis was cancelled');
-    const batch = windows.slice(i, i + EMBEDDING_BATCH_SIZE);
-    const encoded = await encode(batch.map((window) => window.text));
+    const batch = ordered.slice(i, i + EMBEDDING_BATCH_SIZE);
+    const encoded = await encode(batch.map(({ text }) => text));
     if (encoded.length !== batch.length) {
       throw new Error(`The encoder returned ${encoded.length} vectors for ${batch.length} windows`);
     }
-    embeddings.push(...encoded);
-    options.onProgress?.({ windowsEncoded: embeddings.length, windowsTotal: windows.length });
+    batch.forEach(({ windowIndex }, batchIndex) => { chunkEmbeddings[windowIndex].push(encoded[batchIndex]); });
+    inputsEncoded += batch.length;
+    options.onProgress?.({ windowsEncoded: inputsEncoded, windowsTotal: inputs.length });
   }
-  return embeddings;
+  return chunkEmbeddings.map((parts, index) => {
+    if (!parts.length) throw new Error(`Logical analysis window ${index} produced no embedding`);
+    return parts.length === 1 ? parts[0] : meanCentroid(parts);
+  });
 }
 
 /**

@@ -1,24 +1,10 @@
 /**
- * @file background/library/analysis/RecordingAnalysisCoordinator.ts
+ * Durable control-plane dispatcher for ADR-0009 TECH-04.
  *
- * The control plane's half of topic analysis (RT-02, HOST-02).
- *
- * **Background reads and writes; offscreen computes.** The data plane never
- * touches `recording-history` — this reads the transcript out of it, hands the
- * segments across the port, and writes the result back when it returns. That
- * keeps one writer for the aggregate, which is the property that makes the
- * whole thing reasonable to think about: an analysis arriving late, twice, or
- * after a service-worker restart cannot race a repository it does not own.
- *
- * **A completed result is acknowledged only after it is stored.** The ack is
- * what lets the offscreen document drop its copy, so sending it first would
- * open a window where the only copy of a finished analysis exists nowhere.
- *
- * **Nothing here may rely on service-worker memory for correctness.** This
- * object is rebuilt empty every time the worker restarts, which the whole
- * architecture assumes happens at any moment. Its maps are caches and
- * optimizations; the facts they cache — whether a recording was deleted, what
- * conditions a run used — are read from durable state or carried with the job.
+ * Desired work lives in recording-history IndexedDB before offscreen is
+ * contacted. Claims are leases and every state/result transition is fenced by
+ * requestEpoch + attemptToken, so service-worker restarts and duplicate
+ * execution cannot lose or publish superseded work.
  */
 
 import { makeLogger } from '../../../shared/logger';
@@ -26,18 +12,32 @@ import type { WireAnalysis } from '../../../shared/analysis/storedAnalysis';
 import type { AnalysisJob } from '../../../shared/analysis/job';
 import type { AnalysisProvenance } from '../../../shared/analysis/provenance';
 import type { AnalysisConfig } from '../../../shared/analysis/types';
-import type { Transcript } from '../../../shared/transcript';
+import type { TranscriptSnapshot } from '../../../shared/transcriptIdentity';
 import type { RecordingAnalysisService } from './RecordingAnalysisService';
+import {
+  requiredAnalysisEnvironment,
+  sameRequiredAnalysisEnvironment,
+} from './RecordingAnalysisWork';
+import {
+  DEFAULT_ANALYSIS_LEASE_MS,
+  RecordingAnalysisWorkRepository,
+  type ClaimedAnalysisWork,
+} from './RecordingAnalysisWorkRepository';
 import { AnalysisResultCommitter } from './AnalysisResultCommitter';
 
 const L = makeLogger('background');
+// AnalysisManager has hard concurrency 1. The durable work table is already the
+// queue, so claiming more than one transcript only burns leases and memory.
+const DEFAULT_DISPATCH_BATCH = 1;
+const MAX_RETRY_MS = 60_000;
 
-/** The offscreen surface this needs, narrowed so tests need no port. */
 export interface AnalysisDataPlane {
   ensureReady(): Promise<void>;
   analyzeTranscript(
+    attemptToken: string,
+    requestEpoch: number,
     historyId: string,
-    transcript: Transcript['segments'],
+    transcript: TranscriptSnapshot['transcript']['segments'],
     config: AnalysisConfig,
     provenance: AnalysisProvenance,
   ): Promise<{ ok: boolean; jobId?: string; error?: string }>;
@@ -48,263 +48,370 @@ export interface AnalysisDataPlane {
 export type RecordingAnalysisCoordinatorDeps = {
   dataPlane: AnalysisDataPlane;
   analyses: RecordingAnalysisService;
-  /** Reads a recording's persisted transcript; `undefined` when it has none. */
-  readTranscript: (historyId: string) => Promise<Transcript | undefined>;
-  /**
-   * Whether the recording has been **tombstoned** — the durable deletion fence.
-   *
-   * Tombstoned, not merely absent. History delivery is asynchronous relative
-   * to run completion, so an analysis result can legitimately arrive before
-   * its history row exists. Treating "no row" as "deleted" would silently
-   * drop those results.
-   */
-  isRecordingDeleted: (historyId: string) => Promise<boolean>;
-  /** The §9 values a run should use. Injected so a later settings surface can supply them. */
+  work: RecordingAnalysisWorkRepository;
+  readTranscript: (historyId: string) => Promise<TranscriptSnapshot | undefined>;
+  requestAnalysis: (
+    historyId: string,
+    options?: { force?: boolean },
+  ) => Promise<TranscriptSnapshot | undefined>;
+  isRecordingFinalized?: (historyId: string) => Promise<boolean>;
   config: () => AnalysisConfig;
-  /** Notified whenever a job moves, for the surface. */
   onJobChanged?: (job: AnalysisJob) => void;
-  /**
-   * Fired after a job stops being work anyone is waiting on — acknowledged and
-   * released. Analysis settling changes nothing in `RecordingSession`, so this
-   * is what lets a caller re-evaluate anything gated on active work, such as a
-   * deferred extension reload.
-   */
   onSettled?: () => void;
+  scheduleWake?: (when: number) => void;
   now?: () => number;
 };
 
-/** Why a requested analysis did not start. */
 export type AnalysisStartResult =
   | { ok: true; jobId: string }
   | { ok: false; reason: 'no-transcript' | 'already-analyzed' | 'busy' | 'failed'; error?: string };
 
 export class RecordingAnalysisCoordinator {
-  /**
-   * The job holding each recording, from enqueue until its outcome is settled —
-   * which for `completed` means stored (or discarded) *and* acknowledged, not
-   * merely computed. A cache: after a restart it is rebuilt from replayed state.
-   */
-  private readonly running = new Map<string, string>();
-  /** Covers the async enqueue window before a durable offscreen job id exists. */
-  private readonly pending = new Set<string>();
-  /**
-   * Recordings purged by this worker instance — a fast path only. The durable
-   * fence is {@link RecordingAnalysisCoordinatorDeps.isRecordingDeleted}.
-   */
-  private readonly purged = new Set<string>();
-  /**
-   * Enqueue-time provenance by job, as a fallback for a result that arrives
-   * without its own. The authoritative copy travels with the job and comes back
-   * with the result, so this only matters for a data plane that predates that.
-   */
-  private readonly provenanceByJob = new Map<string, AnalysisProvenance>();
   private readonly resultCommitter: AnalysisResultCommitter;
 
   constructor(private readonly deps: RecordingAnalysisCoordinatorDeps) {
     this.resultCommitter = new AnalysisResultCommitter({
       analyses: deps.analyses,
-      isRecordingDeleted: deps.isRecordingDeleted,
-      isPurged: (historyId) => this.purged.has(historyId),
-      fallbackProvenance: (jobId) => this.provenanceByJob.get(jobId),
+      retry: (job, error) => this.retryAttempt(job, error),
       settle: (job) => this.settle(job),
+      wake: (historyId) => { void this.wake(historyId); },
       now: deps.now,
     });
   }
 
-  /**
-   * Starts analysis for one recording, unless there is nothing to analyse, one
-   * is already in progress, or a current result already exists.
-   *
-   * `force` skips the freshness check — the recompute path for a changed
-   * configuration, where the caller has already decided the stored result is
-   * not the one it wants.
-   */
   async analyze(historyId: string, options: { force?: boolean } = {}): Promise<AnalysisStartResult> {
-    if (this.running.has(historyId) || this.pending.has(historyId)) {
-      return { ok: false, reason: 'busy' };
+    if (!options.force && await this.deps.analyses.get(historyId)) {
+      return { ok: false, reason: 'already-analyzed' };
     }
-    this.pending.add(historyId);
-    const startedAt = this.deps.now?.() ?? Date.now();
-    try {
-      if (!options.force && await this.deps.analyses.get(historyId)) {
-        return { ok: false, reason: 'already-analyzed' };
-      }
 
-      const transcript = await this.deps.readTranscript(historyId);
-      if (!transcript?.segments.length) {
-        await this.recordPreJobTerminalOutcome(
-          historyId,
-          'unsupported',
-          'Analysis is unavailable because the recording has no transcript.',
-          startedAt,
-        );
-        return { ok: false, reason: 'no-transcript' };
-      }
-
-      this.purged.delete(historyId);
-      const provenance = this.deps.analyses.provenanceForNewRun();
-      await this.deps.dataPlane.ensureReady();
-      const response = await this.deps.dataPlane.analyzeTranscript(
+    let transcript = await this.deps.requestAnalysis(historyId, options);
+    if (!transcript?.transcript.segments.length) {
+      await this.recordPreJobTerminalOutcome(
         historyId,
-        transcript.segments,
-        this.deps.config(),
-        provenance,
+        'unsupported',
+        'Analysis is unavailable because the recording has no transcript.',
       );
-      if (!response.ok || !response.jobId) {
-        const error = response.error ?? 'The data plane refused the job';
-        await this.recordPreJobTerminalOutcome(historyId, 'failed', error, startedAt);
-        return { ok: false, reason: 'failed', error };
+      return { ok: false, reason: 'no-transcript' };
+    }
+
+    let work = await this.deps.work.get(historyId);
+    if (!work) return { ok: false, reason: 'failed', error: 'Desired analysis work was not persisted' };
+    if (!options.force
+      && (work.disposition === 'canceled' || work.disposition === 'unsupported' || work.disposition === 'satisfied')) {
+      transcript = await this.deps.requestAnalysis(historyId, { force: true });
+      work = await this.deps.work.get(historyId);
+      if (!transcript || !work) return { ok: false, reason: 'failed', error: 'Could not renew analysis work' };
+    }
+    return await this.dispatchRecording(historyId);
+  }
+
+  /** Fast-path wake after a transcript/work transaction has already committed. */
+  async wake(historyId: string): Promise<AnalysisStartResult> {
+    return await this.dispatchRecording(historyId);
+  }
+
+  /** Claims and dispatches a bounded set of globally due rows. */
+  async dispatchDue(limit: number = DEFAULT_DISPATCH_BATCH): Promise<number> {
+    const now = this.now();
+    const claims = await this.deps.work.claimDue(limit, { now });
+    let dispatched = 0;
+    for (const claim of claims) {
+      if (this.deps.isRecordingFinalized && !await this.deps.isRecordingFinalized(claim.recordingId)) {
+        await this.deps.work.releaseClaim(
+          claim.recordingId,
+          claim.requestEpoch,
+          claim.claim.attemptToken,
+        );
+        continue;
       }
-      this.running.set(historyId, response.jobId);
-      this.provenanceByJob.set(response.jobId, provenance);
-      return { ok: true, jobId: response.jobId };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      L.warn('Could not start topic analysis', historyId, message);
-      await this.recordPreJobTerminalOutcome(historyId, 'failed', message, startedAt);
-      return { ok: false, reason: 'failed', error: message };
-    } finally {
-      this.pending.delete(historyId);
+      await this.dispatchClaim(claim);
+      dispatched += 1;
     }
+    const nextAttemptAt = await this.deps.work.nextAttemptAfter(now);
+    if (nextAttemptAt != null) this.deps.scheduleWake?.(nextAttemptAt);
+    return dispatched;
   }
 
-  /**
-   * Drops a deleted recording's analysis, and stops a running one.
-   *
-   * The history tombstone is written before this is called and is what
-   * actually fences a late result — see `handleResult`. The in-memory marker
-   * here only saves a round trip for results arriving to this same worker.
-   */
+  /** Drops durable state for a deleted recording and best-effort cancels its worker. */
   async purge(historyId: string): Promise<void> {
-    this.purged.add(historyId);
-    await this.cancel(historyId).catch(() => {});
+    const work = await this.deps.work.get(historyId);
+    const activeToken = work?.disposition === 'claimed' ? work.claim?.attemptToken : undefined;
     await this.deps.analyses.removeAll(historyId);
+    if (activeToken) await this.deps.dataPlane.cancelAnalysis(activeToken).catch(() => {});
   }
 
-  /** Aborts a recording's running analysis, if it has one. */
+  /** Explicitly cancels the currently claimed offscreen attempt. */
   async cancel(historyId: string): Promise<boolean> {
-    const jobId = this.running.get(historyId);
-    if (!jobId) return false;
-    const response = await this.deps.dataPlane.cancelAnalysis(jobId);
-    return response.ok;
-  }
-
-  /**
-   * Records a job's latest state.
-   *
-   * `analyzing` and `completed` both hold the recording: a completed job's
-   * result is not yet stored, so a second run started in that interval would
-   * repeat the whole computation for nothing — and after a reconnect, when
-   * delivery can lag by seconds, that interval is not small.
-   *
-   * The three result-less endings release the recording and are acknowledged
-   * here, because nothing else is coming for them and the outbox drains only
-   * on acknowledgement.
-   */
-  async handleJobState(job: AnalysisJob): Promise<void> {
-    const lost = job.status === 'failed' && job.lostResult === true;
-    const durableStatus = job.status === 'completed' || lost ? 'analyzing' : job.status;
-    await this.deps.analyses.recordJobOutcome(
-      job,
-      durableStatus,
-      durableStatus === 'analyzing' ? undefined : job.error,
-      this.deps.now?.(),
-    );
-
-    if (job.status === 'analyzing' || job.status === 'completed') {
-      this.running.set(job.historyId, job.id);
-    } else if (lost) {
-      // Release the dead job's hold so the replacement can start, but do **not**
-      // acknowledge it yet — see `recoverLostResult`.
-      if (this.running.get(job.historyId) === job.id) this.running.delete(job.historyId);
-    } else {
-      this.settle(job);
+    const canceled = await this.deps.analyses.cancelDesired(historyId, this.now());
+    if (!canceled.changed) return false;
+    if (canceled.attemptToken) {
+      await this.deps.dataPlane.cancelAnalysis(canceled.attemptToken).catch((error) => {
+        L.warn('Durable analysis cancellation could not reach the data plane', historyId, error);
+      });
     }
-    this.deps.onJobChanged?.(job);
-
-    if (lost) await this.recoverLostResult(job);
+    return true;
   }
 
-  /**
-   * Replaces a result the data plane computed and then lost with its document.
-   *
-   * **The unacknowledged outbox row is the recovery token.** Acknowledging on
-   * arrival would delete the only durable trace of the work while the
-   * replacement run existed nowhere yet — and because an acknowledgement also
-   * ends the job's claim on the runtime, a reload deferred until "work
-   * finishes" could be applied in exactly that gap, destroying a recording's
-   * analysis for good.
-   *
-   * So the row survives until recovery is actually established: a replacement
-   * queued, a current result already on disk, or nothing left to analyse. If
-   * none of those hold — the data plane refused, or is unreachable — the row
-   * stays, and the next reconnect replays it and tries again.
-   */
-  private async recoverLostResult(job: AnalysisJob): Promise<void> {
-    let outcome: AnalysisStartResult;
-    try {
-      outcome = await this.analyze(job.historyId);
-    } catch (error) {
-      L.warn('Could not re-run an analysis whose result was lost', job.historyId, error);
+  async handleJobState(job: AnalysisJob): Promise<void> {
+    this.deps.onJobChanged?.(job);
+    if (!job.requestEpoch) {
+      if (job.status !== 'analyzing') this.settle(job);
+      await this.ensureCurrentAnalysis(job.historyId);
       return;
     }
 
-    if (!outcome.ok) {
-      // `already-analyzed` and `no-transcript` are recoveries too: one means a
-      // current result is on disk, the other that there is nothing left to
-      // analyse. `busy` and `failed` are not — the work still has to happen.
-      const recovered = outcome.reason === 'already-analyzed' || outcome.reason === 'no-transcript';
-      if (!recovered) {
-        L.warn(
-          `Could not re-run the lost analysis for ${job.historyId} (${outcome.reason}); `
-          + 'keeping its durable state so a later reconnect can retry',
-        );
-        return;
+    if (job.status === 'analyzing' || job.status === 'completed') {
+      const now = this.now();
+      const committed = await this.deps.analyses.recordAttemptOutcome(
+        job,
+        'analyzing',
+        undefined,
+        { disposition: 'claimed', leaseUntil: now + DEFAULT_ANALYSIS_LEASE_MS },
+        now,
+      );
+      if (!committed) {
+        if (job.status === 'analyzing') {
+          await this.deps.dataPlane.cancelAnalysis(job.id).catch(() => {});
+        } else {
+          this.settle(job);
+        }
+      }
+      return;
+    }
+
+    if (job.status === 'canceled' || job.status === 'unsupported') {
+      await this.deps.analyses.recordAttemptOutcome(
+        job,
+        job.status,
+        job.error,
+        { disposition: job.status, ...(job.error ? { error: job.error } : {}) },
+        this.now(),
+      );
+      this.settle(job);
+      return;
+    }
+
+    const retryAt = await this.retryAt(job);
+    const committed = await this.deps.analyses.recordAttemptOutcome(
+      job,
+      'analyzing',
+      job.error ?? (job.lostResult ? 'Completed analysis result was lost before acknowledgement.' : 'Analysis attempt failed.'),
+      {
+        disposition: 'retry-wait',
+        nextAttemptAt: retryAt,
+        ...(job.error ? { error: job.error } : {}),
+      },
+      this.now(),
+    );
+    this.settle(job);
+    if (committed) this.deps.scheduleWake?.(retryAt);
+  }
+
+  async handleResult(job: AnalysisJob, wire: WireAnalysis, wireProvenance?: unknown): Promise<void> {
+    await this.resultCommitter.commit(job, wire, wireProvenance);
+  }
+
+  async ensureCurrentAnalysis(historyId: string): Promise<AnalysisStartResult> {
+    const settled = await this.ensureDesiredAnalysis(historyId);
+    if (settled) return settled;
+    return await this.dispatchRecording(historyId);
+  }
+
+  /** Bounded full-sweep repair path retained for legacy/environment changes. */
+  async reconcile(recordingIds: string[]): Promise<void> {
+    for (const historyId of recordingIds) {
+      if (this.deps.isRecordingFinalized && !await this.deps.isRecordingFinalized(historyId)) continue;
+      // Reconciliation only repairs durable desired state here. Dispatching is
+      // global and bounded below, so a 25-recording repair page cannot enqueue
+      // 25 whole transcripts into the offscreen document at once.
+      const result = await this.ensureDesiredAnalysis(historyId);
+      if (result && !result.ok && result.reason === 'failed' && result.error) {
+        L.warn('Could not reconcile recording analysis', historyId, result.error);
       }
     }
-    this.settle(job);
+    await this.dispatchDue();
   }
 
   /**
-   * Persists a completed analysis, then releases it.
+   * Ensures current durable desired work exists without claiming it.
    *
-   * Every exit path acknowledges except one — a transient storage failure —
-   * because that is the only case where the same result arriving again could
-   * succeed. Everything else is either done, or cannot be fixed by resending.
+   * `undefined` means the row is eligible for the bounded dispatcher. A result
+   * means there is intentionally nothing to dispatch right now.
    */
-  async handleResult(job: AnalysisJob, wire: WireAnalysis, wireProvenance?: unknown): Promise<void> {
-    await this.resultCommitter.commit(job, wire, wireProvenance);
+  private async ensureDesiredAnalysis(historyId: string): Promise<AnalysisStartResult | undefined> {
+    if (await this.deps.analyses.get(historyId)) return { ok: false, reason: 'already-analyzed' };
+    const transcript = await this.deps.requestAnalysis(historyId);
+    if (!transcript?.transcript.segments.length) return { ok: false, reason: 'no-transcript' };
+    const work = await this.deps.work.get(historyId);
+    if (!work) return { ok: false, reason: 'failed', error: 'Desired analysis work was not persisted' };
+    if (work.disposition === 'satisfied') {
+      const renewed = await this.deps.requestAnalysis(historyId, { force: true });
+      if (!renewed) return { ok: false, reason: 'failed', error: 'Could not renew analysis work' };
+      return undefined;
+    }
+    if (work.disposition === 'canceled' || work.disposition === 'unsupported') {
+      return { ok: false, reason: 'failed', ...(work.error ? { error: work.error } : {}) };
+    }
+    return undefined;
+  }
+
+  private async dispatchRecording(historyId: string): Promise<AnalysisStartResult> {
+    const current = await this.deps.work.get(historyId);
+    if (!current) return { ok: false, reason: 'failed', error: 'No durable analysis request exists' };
+    if (current.disposition === 'claimed' && (current.claim?.leaseUntil ?? 0) > this.now()) {
+      return { ok: false, reason: 'busy' };
+    }
+    if (current.disposition === 'hash-pending') return { ok: false, reason: 'busy' };
+    if (current.disposition === 'satisfied') return { ok: false, reason: 'already-analyzed' };
+    if (current.disposition === 'canceled' || current.disposition === 'unsupported') {
+      return { ok: false, reason: 'failed', ...(current.error ? { error: current.error } : {}) };
+    }
+    if ((current.nextAttemptAt ?? Number.POSITIVE_INFINITY) > this.now()) {
+      this.deps.scheduleWake?.(current.nextAttemptAt!);
+      return { ok: false, reason: 'busy' };
+    }
+    const claim = await this.deps.work.claim(historyId, { now: this.now() });
+    if (!claim) return { ok: false, reason: 'busy' };
+    return await this.dispatchClaim(claim);
+  }
+
+  private async dispatchClaim(claim: ClaimedAnalysisWork): Promise<AnalysisStartResult> {
+    const transcript = await this.deps.readTranscript(claim.recordingId);
+    const exactTranscript = transcript
+      && transcript.generation === claim.transcriptGeneration
+      && transcript.revision === claim.transcriptRevision
+      && transcript.contentHash === claim.transcriptHash;
+
+    if (!exactTranscript) {
+      const repaired = await this.deps.requestAnalysis(claim.recordingId);
+      if (!repaired) {
+        await this.recordClaimTerminal(
+          claim,
+          'unsupported',
+          'Analysis is unavailable because the requested transcript no longer exists.',
+        );
+        return { ok: false, reason: 'no-transcript' };
+      }
+      return await this.dispatchRecording(claim.recordingId);
+    }
+
+    const provenance = this.deps.analyses.provenanceForNewRun({
+      generation: transcript.generation,
+      revision: transcript.revision,
+      contentHash: transcript.contentHash,
+    });
+    if (!sameRequiredAnalysisEnvironment(claim.environment, requiredAnalysisEnvironment(provenance))) {
+      await this.deps.requestAnalysis(claim.recordingId);
+      return await this.dispatchRecording(claim.recordingId);
+    }
+
+    try {
+      await this.deps.dataPlane.ensureReady();
+      const response = await this.deps.dataPlane.analyzeTranscript(
+        claim.claim.attemptToken,
+        claim.requestEpoch,
+        claim.recordingId,
+        transcript.transcript.segments,
+        this.deps.config(),
+        provenance,
+      );
+      if (!response.ok || response.jobId !== claim.claim.attemptToken) {
+        const error = response.error
+          ?? (response.jobId
+            ? 'The data plane returned a different analysis attempt id'
+            : 'The data plane refused the analysis attempt');
+        await this.retryClaim(claim, error);
+        return { ok: false, reason: 'failed', error };
+      }
+      return { ok: true, jobId: claim.claim.attemptToken };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      L.warn('Could not dispatch topic analysis', claim.recordingId, message);
+      await this.retryClaim(claim, message);
+      return { ok: false, reason: 'failed', error: message };
+    }
+  }
+
+  private async retryClaim(claim: ClaimedAnalysisWork, error: string): Promise<void> {
+    const retryAt = this.now() + retryDelayMs(claim.attemptCount);
+    const committed = await this.deps.analyses.recordAttemptOutcome(
+      jobForClaim(claim),
+      'analyzing',
+      error,
+      { disposition: 'retry-wait', nextAttemptAt: retryAt, error },
+      this.now(),
+    );
+    if (committed) this.deps.scheduleWake?.(retryAt);
+  }
+
+  private async retryAttempt(job: AnalysisJob, error: string): Promise<boolean> {
+    if (!job.requestEpoch) return false;
+    const retryAt = await this.retryAt(job);
+    const committed = await this.deps.analyses.recordAttemptOutcome(
+      job,
+      'analyzing',
+      error,
+      { disposition: 'retry-wait', nextAttemptAt: retryAt, error },
+      this.now(),
+    );
+    if (committed) this.deps.scheduleWake?.(retryAt);
+    return committed;
+  }
+
+  private async retryAt(job: AnalysisJob): Promise<number> {
+    const work = await this.deps.work.get(job.historyId);
+    return this.now() + retryDelayMs(work?.attemptCount ?? 1);
+  }
+
+  private async recordClaimTerminal(
+    claim: ClaimedAnalysisWork,
+    status: 'canceled' | 'unsupported',
+    error?: string,
+  ): Promise<void> {
+    await this.deps.analyses.recordAttemptOutcome(
+      jobForClaim(claim),
+      status,
+      error,
+      { disposition: status, ...(error ? { error } : {}) },
+      this.now(),
+    );
   }
 
   private async recordPreJobTerminalOutcome(
     historyId: string,
     status: 'failed' | 'unsupported',
     error: string,
-    startedAt: number,
   ): Promise<void> {
     try {
-      await this.deps.analyses.recordTerminalOutcome(
-        historyId,
-        status,
-        error,
-        startedAt,
-        this.deps.now?.() ?? Date.now(),
-      );
+      const now = this.now();
+      await this.deps.analyses.recordTerminalOutcome(historyId, status, error, now, now);
     } catch (cause) {
       L.warn('Could not persist pre-job analysis outcome', historyId, cause);
     }
   }
 
-  /**
-   * Ends a job's hold on its recording and acknowledges it.
-   *
-   * Releases the recording only if this job still holds it: a replayed state
-   * for a superseded job must not unlock the run that replaced it.
-   */
   private settle(job: AnalysisJob): void {
-    if (this.running.get(job.historyId) === job.id) this.running.delete(job.historyId);
-    this.provenanceByJob.delete(job.id);
     this.deps.dataPlane.acknowledgeAnalysisState(job.id);
     this.deps.onSettled?.();
   }
+
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+}
+
+function jobForClaim(claim: ClaimedAnalysisWork): AnalysisJob {
+  return {
+    id: claim.claim.attemptToken,
+    requestEpoch: claim.requestEpoch,
+    historyId: claim.recordingId,
+    status: 'analyzing',
+    progress: 0,
+    startedAt: claim.claim.claimedAt,
+  };
+}
+
+function retryDelayMs(attemptCount: number): number {
+  const exponent = Math.max(0, Math.min(6, attemptCount - 1));
+  return Math.min(MAX_RETRY_MS, 1_000 * (2 ** exponent));
 }

@@ -181,12 +181,39 @@ export function discourseSignal(passage: Passage): number {
  * order the conversation happened in.
  */
 export function rankPassages(passages: Passage[], topic: TopicContext): ScoredPassage[] {
+  const recurrenceSums = new Array<number>(passages.length).fill(0);
+  const earlierMax = new Array<number>(passages.length).fill(0);
+  const countsById = new Map<string, number>();
+  for (const passage of passages) {
+    countsById.set(passage.id, (countsById.get(passage.id) ?? 0) + 1);
+  }
+
+  // Novelty and recurrence used to traverse the same passage pairs separately:
+  // once for each later passage's novelty and twice for recurrence. Walk each
+  // unordered pair exactly once. For any one passage the additions still arrive
+  // in sibling-index order, preserving the existing floating-point operation
+  // order as well as the formulas.
+  for (let i = 0; i < passages.length; i += 1) {
+    for (let j = i + 1; j < passages.length; j += 1) {
+      const similarity = Math.max(0, cosine(passages[i].embedding, passages[j].embedding));
+      earlierMax[j] = Math.max(earlierMax[j], similarity);
+
+      // Recurrence deliberately excludes every sibling with the same id, while
+      // novelty still regards an earlier duplicate id as prior information.
+      if (passages[i].id !== passages[j].id) {
+        recurrenceSums[i] += similarity;
+        recurrenceSums[j] += similarity;
+      }
+    }
+  }
+
   return passages.map((passage, index) => {
+    const recurrenceDenominator = passages.length - (countsById.get(passage.id) ?? 0);
     const signals = {
       similarityToTopic: similarityToTopic(passage, topic.centroid),
-      novelty: novelty(passage, passages.slice(0, index)),
+      novelty: index === 0 ? 1 : Math.max(0, 1 - earlierMax[index]),
       keywordDistinctiveness: keywordDistinctiveness(passage, topic.keywords),
-      recurrence: recurrence(passage, passages),
+      recurrence: recurrenceDenominator ? recurrenceSums[index] / recurrenceDenominator : 0,
       discourseSignal: discourseSignal(passage),
     };
     return {

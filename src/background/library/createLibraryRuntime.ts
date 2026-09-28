@@ -8,6 +8,7 @@ import { RecordingPlaybackService } from '../playback/RecordingPlaybackService';
 import { RecordingAnalysisCoordinator } from './analysis/RecordingAnalysisCoordinator';
 import { RecordingAnalysisRepository } from './analysis/RecordingAnalysisRepository';
 import { RecordingAnalysisService } from './analysis/RecordingAnalysisService';
+import { RecordingAnalysisWorkRepository } from './analysis/RecordingAnalysisWorkRepository';
 import { RecordingContextRepository } from './context/RecordingContextRepository';
 import { RecordingContextService } from './context/RecordingContextService';
 import { RecordingHistoryRepository } from './history/RecordingHistoryRepository';
@@ -27,6 +28,7 @@ type LibraryRuntimeDeps = {
   playbackLeases: PlaybackLeaseManager;
   logger: Logger;
   onAnalysisSettled?: () => void;
+  scheduleAnalysisWake?: (when: number) => void;
   onIntegrationChanged?: (recordingId: string) => void;
 };
 
@@ -36,16 +38,13 @@ export function createLibraryRuntime({
   playbackLeases,
   logger,
   onAnalysisSettled,
+  scheduleAnalysisWake,
   onIntegrationChanged,
 }: LibraryRuntimeDeps) {
   const historyRepository = new RecordingHistoryRepository();
-  const recordingContexts = new RecordingContextService(
-    new RecordingContextRepository(),
-    onIntegrationChanged,
-  );
+  const recordingContexts = new RecordingContextService(new RecordingContextRepository(), onIntegrationChanged);
   const notations = new RecordingNotationService(new RecordingNotationRepository(), onIntegrationChanged);
-  const transcripts = new RecordingTranscriptService(new RecordingTranscriptRepository(), onIntegrationChanged);
-  const analyses = new RecordingAnalysisService(new RecordingAnalysisRepository(), () => {
+  const currentAnalysisEnvironment = () => {
     const model = packagedModel();
     return {
       pipelineVersion: PIPELINE_VERSION,
@@ -55,18 +54,49 @@ export function createLibraryRuntime({
       embeddingDtype: model.dtype,
       configHash: hashAnalysisConfig(CANDIDATE_ANALYSIS_CONFIG),
     };
-  }, onIntegrationChanged);
+  };
+  const transcripts = new RecordingTranscriptService(
+    new RecordingTranscriptRepository(),
+    undefined,
+    onIntegrationChanged,
+    currentAnalysisEnvironment,
+  );
+  const analyses = new RecordingAnalysisService(
+    new RecordingAnalysisRepository(),
+    currentAnalysisEnvironment,
+    async (recordingId) => {
+      const transcript = await transcripts.getSnapshot(recordingId);
+      return transcript
+        ? {
+            generation: transcript.generation,
+            revision: transcript.revision,
+            contentHash: transcript.contentHash,
+          }
+        : undefined;
+    },
+    onIntegrationChanged,
+  );
+  const analysisWork = new RecordingAnalysisWorkRepository();
 
   const analysisCoordinator = new RecordingAnalysisCoordinator({
     dataPlane: offscreen,
     analyses,
-    readTranscript: (historyId) => transcripts.get(historyId),
-    // Absence is not deletion: history delivery and analysis completion settle independently.
-    isRecordingDeleted: async (historyId) => Boolean(
-      (await historyRepository.get(historyId))?.deletedAt,
-    ),
+    work: analysisWork,
+    readTranscript: (historyId) => transcripts.getSnapshot(historyId),
+    requestAnalysis: (historyId, options) => transcripts.requestAnalysis(historyId, options),
+    isRecordingFinalized: async (historyId) => {
+      const entry = await historyRepository.get(historyId);
+      return Boolean(entry && !entry.deletedAt && entry.status !== 'saving');
+    },
     config: () => CANDIDATE_ANALYSIS_CONFIG,
     onSettled: onAnalysisSettled,
+    scheduleWake: scheduleAnalysisWake,
+  });
+  transcripts.setCommitListener(async (historyId) => {
+    const result = await analysisCoordinator.wake(historyId);
+    if (!result.ok && result.reason === 'failed') {
+      logger.warn(`Could not dispatch topic analysis for ${historyId}:`, result.error ?? 'unknown failure');
+    }
   });
 
   const history = new RecordingHistoryService(
@@ -114,6 +144,7 @@ export function createLibraryRuntime({
     notations,
     transcripts,
     analyses,
+    analysisWork,
     analysisCoordinator,
     playback,
   };

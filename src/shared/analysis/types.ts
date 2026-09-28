@@ -27,6 +27,38 @@
 export type Embedding = Float32Array;
 
 /**
+ * Exact canonical-text coverage carried by a derived analysis window.
+ *
+ * A split source segment has only segment-level timing, so its fragment keeps
+ * the enclosing media interval and says so explicitly instead of fabricating
+ * word timing. `textStart`/`textEnd` are UTF-16 offsets into the canonical
+ * `TranscriptSegment.text`, matching JavaScript string slicing.
+ */
+export type AnalysisSourceSpan = {
+  segmentIndex: number;
+  textStart: number;
+  textEnd: number;
+  tStartMs: number;
+  tEndMs: number;
+  speaker?: string;
+  timingFidelity: 'segment' | 'enclosing-segment';
+};
+
+/**
+ * One encoder-sized piece of a logical context window.
+ *
+ * These chunks exist only to satisfy the model context limit. They do not own
+ * media timing and therefore cannot become temporal boundary units on their
+ * own. Their vectors are aggregated back into the parent ContextWindow before
+ * boundary detection.
+ */
+export type AnalysisEmbeddingChunk = {
+  text: string;
+  sourceSpans: AnalysisSourceSpan[];
+  tokenLength: number;
+};
+
+/**
  * A contextual embedding window: the unit that actually gets encoded.
  *
  * A window is 3–5 consecutive utterances, which is the same span SEG-02 asks
@@ -45,6 +77,15 @@ export type ContextWindow = {
   tEndMs: number;
   /** The window's text, for encoding and for c-TF-IDF. */
   text: string;
+  /** Ordered, lossless coverage of canonical transcript text. */
+  sourceSpans: AnalysisSourceSpan[];
+  /**
+   * Exact packaged-tokenizer length of the E5-prefixed input, including special
+   * tokens. Present on production windows prepared by the embedding worker.
+   */
+  tokenLength?: number;
+  /** Encoder-only chunks when this logical window exceeds the model limit. */
+  embeddingChunks?: AnalysisEmbeddingChunk[];
   /** Distinct speakers heard in this window, in order of first appearance. */
   speakers: string[];
   /**

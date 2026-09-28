@@ -3,7 +3,7 @@ import { clearAlarm, createAlarm, getAlarm } from '../../platform/chrome/alarms'
 import type { RecordingNotation } from '../../shared/notations';
 import type { RecordingContext } from '../../shared/recordingContext';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
-import type { Transcript } from '../../shared/transcript';
+import type { TranscriptSnapshot } from '../../shared/transcriptIdentity';
 import { integrationEventTypePrefix } from '../../integrations/config';
 import { IntegrationCoordinator } from '../../integrations/IntegrationCoordinator';
 import { IntegrationDispatcher } from '../../integrations/IntegrationDispatcher';
@@ -28,7 +28,7 @@ type CanonicalRecordingReaders = {
   getHistory(recordingId: string): Promise<RecordingHistoryEntry | undefined>;
   getContext(recordingId: string): Promise<RecordingContext | undefined>;
   listNotations(recordingId: string): Promise<RecordingNotation[]>;
-  getTranscript(recordingId: string): Promise<Transcript | undefined>;
+  getTranscriptSnapshot(recordingId: string): Promise<TranscriptSnapshot | undefined>;
   getAnalysisState(recordingId: string): Promise<AnalysisExportState>;
 };
 

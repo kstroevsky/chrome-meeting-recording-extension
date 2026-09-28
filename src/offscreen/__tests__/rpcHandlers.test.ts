@@ -583,6 +583,7 @@ describe('topic analysis commands (ADR-0007)', () => {
   };
   const transcript = [{ tStartMs: 0, tEndMs: 2_000, speaker: 'Ada', text: 'the redis pool is saturated' }];
   const provenance = {
+    transcriptGeneration: 'generation-1',
     pipelineVersion: 2,
     embeddingModel: 'Xenova/multilingual-e5-small',
     embeddingModelRevision: 'rev',
@@ -594,6 +595,8 @@ describe('topic analysis commands (ADR-0007)', () => {
   const analyze = (overrides: Record<string, unknown> = {}) => ({
     __id: 'ana-1',
     type: 'OFFSCREEN_ANALYZE_TRANSCRIPT' as const,
+    attemptToken: 'attempt-7',
+    requestEpoch: 7,
     historyId: 'rec_1',
     transcript,
     config: ANALYSIS_CONFIG,
@@ -613,7 +616,13 @@ describe('topic analysis commands (ADR-0007)', () => {
 
     await listener(analyze());
 
-    expect(analyzeTranscript).toHaveBeenCalledWith('rec_1', transcript, ANALYSIS_CONFIG, provenance);
+    expect(analyzeTranscript).toHaveBeenCalledWith(
+      'rec_1',
+      transcript,
+      ANALYSIS_CONFIG,
+      provenance,
+      { attemptToken: 'attempt-7', requestEpoch: 7 },
+    );
     expect(replyFor(port, 'ana-1')).toEqual({ ok: true, jobId: 'ana_7' });
   });
 
@@ -646,6 +655,12 @@ describe('topic analysis commands (ADR-0007)', () => {
     // A run that could not say what produced it is refused, not defaulted.
     await listener(analyze({ __id: 'd', provenance: undefined }));
     expect(replyFor(port, 'd')).toEqual({ ok: false, error: 'Missing analysis provenance' });
+
+    await listener(analyze({ __id: 'e', attemptToken: '' }));
+    expect(replyFor(port, 'e')).toEqual({ ok: false, error: 'Missing attempt token' });
+
+    await listener(analyze({ __id: 'f', requestEpoch: 0 }));
+    expect(replyFor(port, 'f')).toEqual({ ok: false, error: 'Invalid request epoch' });
 
     expect(analyzeTranscript).not.toHaveBeenCalled();
   });
