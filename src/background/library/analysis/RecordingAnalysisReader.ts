@@ -12,6 +12,15 @@ import {
 } from '../../../shared/analysis/storedAnalysis';
 import type { TranscriptIdentity } from '../../../shared/transcriptIdentity';
 import type { RecordingAnalysisRepositoryPort } from './RecordingAnalysisRepository';
+import {
+  hasCompleteOutcomeBinding,
+  type RecordingAnalysisOutcome,
+} from './RecordingAnalysisOutcome';
+import {
+  requiredAnalysisEnvironment,
+  sameRequiredAnalysisEnvironment,
+  type RecordingAnalysisWork,
+} from './RecordingAnalysisWork';
 
 /** Why a recording has no usable analysis, or that it has one. */
 export type AnalysisState =
@@ -48,15 +57,19 @@ export class RecordingAnalysisReader {
   }
 
   async exportState(recordingId: string): Promise<AnalysisExportState> {
-    const { analysis, outcome } = await this.repository.getSnapshot(recordingId);
+    const { analysis, outcome, work } = await this.repository.getSnapshot(recordingId);
     if (analysis && await this.isCurrent(recordingId, analysis.provenance)) {
       return { status: 'completed', result: analysis };
     }
-    if (outcome?.status === 'analyzing') {
-      return { status: 'analyzing', ...(outcome.error ? { error: outcome.error } : {}) };
+    const currentOutcome = outcome && await this.isCurrentOutcome(recordingId, outcome, work)
+      ? outcome
+      : undefined;
+    if (currentOutcome?.status === 'analyzing') {
+      return { status: 'analyzing', ...(currentOutcome.error ? { error: currentOutcome.error } : {}) };
     }
-    if (outcome && (outcome.status === 'failed' || outcome.status === 'canceled' || outcome.status === 'unsupported')) {
-      return { status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) };
+    if (currentOutcome
+      && (currentOutcome.status === 'failed' || currentOutcome.status === 'canceled' || currentOutcome.status === 'unsupported')) {
+      return { status: currentOutcome.status, ...(currentOutcome.error ? { error: currentOutcome.error } : {}) };
     }
     if (analysis) {
       return {
@@ -64,11 +77,18 @@ export class RecordingAnalysisReader {
         error: 'Stored analysis is stale and must be recomputed before it can be exported.',
       };
     }
-    if (outcome?.status === 'completed') {
+    if (currentOutcome?.status === 'completed') {
       return {
         status: 'failed',
         error: 'Analysis completed, but its stored result is unavailable.',
       };
+    }
+    if (await this.isCurrentWork(recordingId, work)
+      && (work!.disposition === 'pending'
+        || work!.disposition === 'claimed'
+        || work!.disposition === 'retry-wait'
+        || work!.disposition === 'hash-pending')) {
+      return { status: 'analyzing', ...(work!.error ? { error: work!.error } : {}) };
     }
     return { status: 'none' };
   }
@@ -115,6 +135,40 @@ export class RecordingAnalysisReader {
     return this.readTranscriptIdentity
       ? await this.readTranscriptIdentity(recordingId)
       : identityFromProvenance(this.currentEnvironment());
+  }
+
+  private async isCurrentOutcome(
+    recordingId: string,
+    outcome: RecordingAnalysisOutcome,
+    work?: RecordingAnalysisWork,
+  ): Promise<boolean> {
+    const transcript = await this.currentTranscriptIdentity(recordingId);
+    // Legacy/pre-transcript terminal rows are useful only while there still is
+    // no transcript they could be incorrectly attributed to.
+    if (!transcript) return !hasCompleteOutcomeBinding(outcome);
+    if (!hasCompleteOutcomeBinding(outcome)) return false;
+    if (!work || work.requestEpoch !== outcome.requestEpoch) return false;
+    const environment = requiredAnalysisEnvironment(this.currentEnvironment());
+    return outcome.transcriptGeneration === transcript.generation
+      && outcome.transcriptRevision === transcript.revision
+      && outcome.transcriptHash === transcript.contentHash
+      && sameRequiredAnalysisEnvironment(outcome.environment, environment);
+  }
+
+  private async isCurrentWork(
+    recordingId: string,
+    work?: RecordingAnalysisWork,
+  ): Promise<boolean> {
+    if (!work?.transcriptHash) return false;
+    const transcript = await this.currentTranscriptIdentity(recordingId);
+    if (!transcript) return false;
+    return work.transcriptGeneration === transcript.generation
+      && work.transcriptRevision === transcript.revision
+      && work.transcriptHash === transcript.contentHash
+      && sameRequiredAnalysisEnvironment(
+        work.environment,
+        requiredAnalysisEnvironment(this.currentEnvironment()),
+      );
   }
 }
 

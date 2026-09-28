@@ -11,6 +11,8 @@ import {
   openRecordingHistoryDatabase,
 } from '../RecordingLibraryDatabase';
 import {
+  bindOutcomeToProvenance,
+  bindOutcomeToWork,
   isOutcomeAtLeastAsRecent,
   normalizeRecordingAnalysisOutcome,
   type RecordingAnalysisOutcome,
@@ -49,10 +51,11 @@ export async function putCompletedAnalysis(
     const request = outcomes.get(recordingId);
     let committed = false;
     request.onsuccess = () => {
+      const boundOutcome = bindOutcomeToProvenance(checkedOutcome, checkedAnalysis.provenance);
       const current = normalizeRecordingAnalysisOutcome(request.result);
-      if (current && !isOutcomeAtLeastAsRecent(checkedOutcome, current)) return;
+      if (current && !isOutcomeAtLeastAsRecent(boundOutcome, current)) return;
       transaction.objectStore(ANALYSES_STORE).put({ recordingId, ...toDurableRow(checkedAnalysis) });
-      outcomes.put({ recordingId, ...checkedOutcome });
+      outcomes.put({ recordingId, ...boundOutcome });
       committed = true;
     };
     transaction.oncomplete = () => resolve(committed);
@@ -83,6 +86,7 @@ export async function putAttemptOutcome(
     workRequest.onsuccess = () => {
       const work = normalizeRecordingAnalysisWork(workRequest.result);
       if (!matchesAnalysisAttempt(work, job)) return;
+      const boundOutcome = bindOutcomeToWork(checkedOutcome, work);
 
       const currentOutcomeRequest = outcomes.get(recordingId);
       currentOutcomeRequest.onerror = () => reject(
@@ -90,10 +94,10 @@ export async function putAttemptOutcome(
       );
       currentOutcomeRequest.onsuccess = () => {
         const currentOutcome = normalizeRecordingAnalysisOutcome(currentOutcomeRequest.result);
-        if (!currentOutcome || isOutcomeAtLeastAsRecent(checkedOutcome, currentOutcome)) {
-          outcomes.put({ recordingId, ...checkedOutcome });
+        if (!currentOutcome || isOutcomeAtLeastAsRecent(boundOutcome, currentOutcome)) {
+          outcomes.put({ recordingId, ...boundOutcome });
         }
-        if (transition) workStore.put(applyAnalysisAttemptTransition(work, transition, checkedOutcome.updatedAt));
+        if (transition) workStore.put(applyAnalysisAttemptTransition(work, transition, boundOutcome.updatedAt));
         committed = true;
       };
     };
@@ -152,12 +156,13 @@ export async function publishAttemptResult(
         || !sameRequiredAnalysisEnvironment(work.environment, requiredAnalysisEnvironment(provenance))) return;
 
       try {
+        const boundOutcome = bindOutcomeToWork(checkedOutcome, work);
         transaction.objectStore(ANALYSES_STORE).put({ recordingId, ...toDurableRow(checkedAnalysis) });
-        transaction.objectStore(ANALYSIS_OUTCOMES_STORE).put({ recordingId, ...checkedOutcome });
+        transaction.objectStore(ANALYSIS_OUTCOMES_STORE).put({ recordingId, ...boundOutcome });
         const satisfied: RecordingAnalysisWork = {
           ...work,
           disposition: 'satisfied',
-          updatedAt: checkedOutcome.updatedAt,
+          updatedAt: boundOutcome.updatedAt,
         };
         delete satisfied.claim;
         delete satisfied.nextAttemptAt;
@@ -214,10 +219,12 @@ export async function cancelDesiredAnalysis(
       workStore.put(canceled);
       outcomes.put({
         recordingId,
-        status: 'canceled',
-        ...(attemptToken ? { jobId: attemptToken } : {}),
-        startedAt: now,
-        updatedAt: now,
+        ...bindOutcomeToWork({
+          status: 'canceled',
+          ...(attemptToken ? { jobId: attemptToken } : {}),
+          startedAt: now,
+          updatedAt: now,
+        }, current),
       });
       result = { changed: true, ...(attemptToken ? { attemptToken } : {}) };
     };

@@ -186,9 +186,14 @@ describe('RecordingAnalysisRepository', () => {
       provenance,
     )).resolves.toBe(false);
 
-    await expect(repository.getSnapshot('rec:1')).resolves.toEqual({
+    await expect(repository.getSnapshot('rec:1')).resolves.toMatchObject({
       analysis: undefined,
       outcome: undefined,
+      work: {
+        requestEpoch: 2,
+        transcriptHash: 'b'.repeat(64),
+        disposition: 'pending',
+      },
     });
     await expect(work.get('rec:1')).resolves.toMatchObject({
       requestEpoch: 2,

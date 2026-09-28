@@ -19,7 +19,13 @@ import {
 
 export type { ClaimedAnalysisWork } from './RecordingAnalysisWorkClaims';
 
-const DEFAULT_LEASE_MS = 2 * 60_000;
+/**
+ * The first lease has to cover the cold worker/model-open path, whose own
+ * bounded budget is two minutes before embedding even starts. Progress renews
+ * this lease after dispatch, but the initial claim must not expire while that
+ * first progress-capable worker is still opening.
+ */
+export const DEFAULT_ANALYSIS_LEASE_MS = 5 * 60_000;
 
 /**
  * Durable scheduler state for ADR-0009 TECH-04.
@@ -82,7 +88,7 @@ export class RecordingAnalysisWorkRepository {
   ): Promise<ClaimedAnalysisWork[]> {
     if (limit <= 0) return [];
     const now = options.now ?? this.now();
-    const leaseMs = Math.max(1, options.leaseMs ?? DEFAULT_LEASE_MS);
+    const leaseMs = Math.max(1, options.leaseMs ?? DEFAULT_ANALYSIS_LEASE_MS);
     const database = await this.open();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readwrite');
@@ -130,7 +136,7 @@ export class RecordingAnalysisWorkRepository {
     options: { now?: number; leaseMs?: number } = {},
   ): Promise<ClaimedAnalysisWork | undefined> {
     const now = options.now ?? this.now();
-    const leaseMs = Math.max(1, options.leaseMs ?? DEFAULT_LEASE_MS);
+    const leaseMs = Math.max(1, options.leaseMs ?? DEFAULT_ANALYSIS_LEASE_MS);
     const database = await this.open();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readwrite');

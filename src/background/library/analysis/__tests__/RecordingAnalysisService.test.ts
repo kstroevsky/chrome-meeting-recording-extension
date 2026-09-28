@@ -141,7 +141,7 @@ describe('RecordingAnalysisService', () => {
     await expect(service.state('rec:1')).resolves.toEqual({ status: 'stale' });
   });
 
-  it('exposes durable terminal outcomes without treating them as pending', async () => {
+  it('does not attribute an unbound legacy terminal outcome to a current transcript', async () => {
     const repository = fakeRepository();
     const service = new RecordingAnalysisService(repository, () => provenance());
     repository.outcomes.set('rec:1', {
@@ -152,15 +152,12 @@ describe('RecordingAnalysisService', () => {
       updatedAt: 20,
     });
 
-    await expect(service.exportState('rec:1')).resolves.toEqual({
-      status: 'failed',
-      error: 'backend unavailable',
-    });
+    await expect(service.exportState('rec:1')).resolves.toEqual({ status: 'none' });
   });
 
   it('persists terminal outcomes that happen before an analysis job exists', async () => {
     const repository = fakeRepository();
-    const service = new RecordingAnalysisService(repository, () => provenance());
+    const service = new RecordingAnalysisService(repository, () => provenance(), async () => undefined);
 
     await service.recordTerminalOutcome(
       'rec:1',

@@ -19,13 +19,16 @@ import {
   sameRequiredAnalysisEnvironment,
 } from './RecordingAnalysisWork';
 import {
+  DEFAULT_ANALYSIS_LEASE_MS,
   RecordingAnalysisWorkRepository,
   type ClaimedAnalysisWork,
 } from './RecordingAnalysisWorkRepository';
 import { AnalysisResultCommitter } from './AnalysisResultCommitter';
 
 const L = makeLogger('background');
-const DEFAULT_DISPATCH_BATCH = 4;
+// AnalysisManager has hard concurrency 1. The durable work table is already the
+// queue, so claiming more than one transcript only burns leases and memory.
+const DEFAULT_DISPATCH_BATCH = 1;
 const MAX_RETRY_MS = 60_000;
 
 export interface AnalysisDataPlane {
@@ -158,12 +161,13 @@ export class RecordingAnalysisCoordinator {
     }
 
     if (job.status === 'analyzing' || job.status === 'completed') {
+      const now = this.now();
       const committed = await this.deps.analyses.recordAttemptOutcome(
         job,
         'analyzing',
         undefined,
-        undefined,
-        this.now(),
+        { disposition: 'claimed', leaseUntil: now + DEFAULT_ANALYSIS_LEASE_MS },
+        now,
       );
       if (!committed) {
         if (job.status === 'analyzing') {

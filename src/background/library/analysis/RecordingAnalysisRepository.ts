@@ -26,6 +26,10 @@ import {
   type RecordingAnalysisOutcome,
 } from './RecordingAnalysisOutcome';
 import {
+  normalizeRecordingAnalysisWork,
+  type RecordingAnalysisWork,
+} from './RecordingAnalysisWork';
+import {
   cancelDesiredAnalysis,
   publishAttemptResult as publishFencedAttemptResult,
   putAttemptOutcome as putFencedAttemptOutcome,
@@ -38,6 +42,7 @@ export type { AnalysisAttemptTransition } from './RecordingAnalysisTransactions'
 export type RecordingAnalysisSnapshot = {
   analysis?: StoredAnalysis;
   outcome?: RecordingAnalysisOutcome;
+  work?: RecordingAnalysisWork;
 };
 
 export interface RecordingAnalysisRepositoryPort {
@@ -95,12 +100,14 @@ export class RecordingAnalysisRepository implements RecordingAnalysisRepositoryP
   async getSnapshot(recordingId: string): Promise<RecordingAnalysisSnapshot> {
     const database = await this.open();
     return await new Promise((resolve, reject) => {
-      const transaction = database.transaction([STORE_NAME, OUTCOMES_STORE], 'readonly');
+      const transaction = database.transaction([STORE_NAME, OUTCOMES_STORE, ANALYSIS_WORK_STORE], 'readonly');
       const analysisRequest = transaction.objectStore(STORE_NAME).get(recordingId);
       const outcomeRequest = transaction.objectStore(OUTCOMES_STORE).get(recordingId);
+      const workRequest = transaction.objectStore(ANALYSIS_WORK_STORE).get(recordingId);
       transaction.oncomplete = () => resolve({
         analysis: normalizeStoredAnalysis(analysisRequest.result),
         outcome: normalizeRecordingAnalysisOutcome(outcomeRequest.result),
+        work: normalizeRecordingAnalysisWork(workRequest.result),
       });
       transaction.onerror = () => reject(transaction.error ?? new Error('Could not read recording analysis state'));
       transaction.onabort = () => reject(transaction.error ?? new Error('Recording analysis state read aborted'));

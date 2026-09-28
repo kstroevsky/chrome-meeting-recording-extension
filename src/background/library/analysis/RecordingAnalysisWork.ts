@@ -129,7 +129,7 @@ export function normalizeRecordingAnalysisWork(value: unknown): RecordingAnalysi
   const requestEpoch = positiveInteger(raw.requestEpoch);
   const attemptCount = nonNegativeInteger(raw.attemptCount);
   const updatedAt = nonNegativeNumber(raw.updatedAt);
-  const environment = normalizeEnvironment(raw.environment);
+  const environment = normalizeRequiredAnalysisEnvironment(raw.environment);
   const disposition = normalizeDisposition(raw.disposition);
   if (!recordingId || !transcriptGeneration || transcriptRevision == null
     || requestEpoch == null || attemptCount == null || updatedAt == null
@@ -155,7 +155,7 @@ export function normalizeRecordingAnalysisWork(value: unknown): RecordingAnalysi
   };
 }
 
-function normalizeEnvironment(value: unknown): RequiredAnalysisEnvironment | undefined {
+export function normalizeRequiredAnalysisEnvironment(value: unknown): RequiredAnalysisEnvironment | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const raw = value as Record<string, unknown>;
   const pipelineVersion = nonNegativeInteger(raw.pipelineVersion);

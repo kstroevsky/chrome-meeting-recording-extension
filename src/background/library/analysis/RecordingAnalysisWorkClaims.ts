@@ -12,6 +12,7 @@ export type ClaimedAnalysisWork = RecordingAnalysisWork & {
 };
 
 export type AnalysisAttemptTransition =
+  | { disposition: 'claimed'; leaseUntil: number }
   | { disposition: 'retry-wait'; nextAttemptAt: number; error?: string }
   | { disposition: 'canceled' | 'unsupported'; error?: string };
 
@@ -97,6 +98,18 @@ export function applyAnalysisAttemptTransition(
   transition: AnalysisAttemptTransition,
   updatedAt: number,
 ): RecordingAnalysisWork {
+  if (transition.disposition === 'claimed') {
+    if (!work.claim) throw new Error('Cannot renew an analysis attempt without an active claim');
+    const leaseUntil = Math.max(updatedAt + 1, transition.leaseUntil);
+    return {
+      ...work,
+      disposition: 'claimed',
+      claim: { ...work.claim, leaseUntil },
+      nextAttemptAt: leaseUntil,
+      updatedAt,
+    };
+  }
+
   const next: RecordingAnalysisWork = {
     ...work,
     disposition: transition.disposition,

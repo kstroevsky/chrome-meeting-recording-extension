@@ -270,6 +270,55 @@ describe('RecordingAnalysisCoordinator durable dispatch', () => {
     expect(h.calls.wakeAt).toEqual([2_000]);
   });
 
+  it('renews the exact active lease so a long analysis publishes once', async () => {
+    const h = harness();
+    await h.transcripts.replace('rec:1', TRANSCRIPT);
+    await h.coordinator.wake('rec:1');
+    const call = h.calls.analyze[0];
+
+    h.setNow(250_000);
+    await h.coordinator.handleJobState(jobFor(call, 'analyzing'));
+    await expect(h.work.get('rec:1')).resolves.toMatchObject({
+      disposition: 'claimed',
+      requestEpoch: call.requestEpoch,
+      claim: { attemptToken: call.attemptToken, leaseUntil: 550_000 },
+      nextAttemptAt: 550_000,
+    });
+
+    // Past the original five-minute lease, the renewed attempt still owns the
+    // row and cannot be reclaimed as a second in-memory job.
+    await expect(h.work.claim('rec:1', { now: 350_001 })).resolves.toBeUndefined();
+
+    h.setNow(400_000);
+    await h.coordinator.handleResult(jobFor(call), toWireAnalysis(RESULT), call.provenance);
+    await expect(h.analysisRepository.get('rec:1')).resolves.toMatchObject({ utteranceCount: 1 });
+    await expect(h.work.get('rec:1')).resolves.toMatchObject({
+      disposition: 'satisfied',
+      requestEpoch: call.requestEpoch,
+    });
+    expect(h.calls.analyze).toHaveLength(1);
+  });
+
+  it('does not export A terminal state after transcript B becomes pending', async () => {
+    const h = harness();
+    await h.transcripts.replace('rec:1', TRANSCRIPT);
+    await h.coordinator.wake('rec:1');
+    const attemptA = h.calls.analyze[0];
+    await h.coordinator.handleJobState({
+      ...jobFor(attemptA, 'unsupported'),
+      error: 'A is unsupported',
+    });
+    await expect(h.analyses.exportState('rec:1')).resolves.toMatchObject({ status: 'unsupported' });
+
+    await h.transcripts.replace('rec:1', {
+      source: 'stt',
+      segments: [{ tStartMs: 0, tEndMs: 2_000, text: 'replacement B' }],
+    });
+
+    await expect(h.analyses.exportState('rec:1')).resolves.toEqual({ status: 'analyzing' });
+    await expect(h.work.get('rec:1')).resolves.toMatchObject({ requestEpoch: 2, disposition: 'pending' });
+  });
+
   it('does not let a late terminal A state overwrite desired work B', async () => {
     const h = harness();
     await h.transcripts.replace('rec:1', TRANSCRIPT);
@@ -451,9 +500,10 @@ describe('RecordingAnalysisCoordinator durable dispatch', () => {
 
     await h.coordinator.reconcile(['rec:1', 'rec:2', 'rec:3', 'rec:4', 'rec:5', 'rec:6']);
 
-    expect(h.calls.analyze).toHaveLength(4);
-    await expect(h.work.get('rec:5')).resolves.toMatchObject({ disposition: 'pending' });
-    await expect(h.work.get('rec:6')).resolves.toMatchObject({ disposition: 'pending' });
+    expect(h.calls.analyze).toHaveLength(1);
+    for (let index = 2; index <= 6; index += 1) {
+      await expect(h.work.get(`rec:${index}`)).resolves.toMatchObject({ disposition: 'pending' });
+    }
   });
 
   it('legacy terminal outbox rows are acknowledged and converted into current durable work', async () => {
