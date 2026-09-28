@@ -5,15 +5,11 @@
 
 import type { AnalysisJob, AnalysisJobStatus } from '../../../shared/analysis/job';
 import {
-  isStale,
   type AnalysisEnvironmentProvenance,
   type AnalysisProvenance,
 } from '../../../shared/analysis/provenance';
 import type { TranscriptIdentity } from '../../../shared/transcriptIdentity';
 import {
-  summarize,
-  toTopicSummary,
-  type AnalysisSummary,
   type RecordingTopicSummary,
   type StoredAnalysis,
 } from '../../../shared/analysis/storedAnalysis';
@@ -22,31 +18,26 @@ import type {
   RecordingAnalysisRepositoryPort,
 } from './RecordingAnalysisRepository';
 import type { RecordingAnalysisOutcome } from './RecordingAnalysisOutcome';
+import {
+  RecordingAnalysisReader,
+  type AnalysisExportState,
+  type AnalysisState,
+} from './RecordingAnalysisReader';
 
-/** Why a recording has no usable analysis, or that it has one. */
-export type AnalysisState =
-  | { status: 'ready'; summary: AnalysisSummary }
-  /** Never analysed. */
-  | { status: 'none' }
-  /** Analysed under conditions that no longer apply; recompute to replace it. */
-  | { status: 'stale' };
-
-/** Library-owned state for consumers that must distinguish waiting from terminal unavailability. */
-export type AnalysisExportState =
-  | { status: 'none' }
-  | { status: 'analyzing'; error?: string }
-  | { status: 'completed'; result: StoredAnalysis }
-  | { status: 'failed' | 'canceled' | 'unsupported'; error?: string }
-  | { status: 'stale'; error: string };
+export type { AnalysisExportState, AnalysisState } from './RecordingAnalysisReader';
 
 export class RecordingAnalysisService {
+  private readonly reader: RecordingAnalysisReader;
+
   constructor(
     private readonly repository: RecordingAnalysisRepositoryPort,
     /** The conditions a fresh run would use; compared against what is stored. */
-    private readonly currentEnvironment: () => AnalysisEnvironmentProvenance | AnalysisProvenance,
-    private readonly readTranscriptIdentity?: (recordingId: string) => Promise<TranscriptIdentity | undefined>,
+    currentEnvironment: () => AnalysisEnvironmentProvenance | AnalysisProvenance,
+    readTranscriptIdentity?: (recordingId: string) => Promise<TranscriptIdentity | undefined>,
     private readonly onChanged?: (recordingId: string) => void,
-  ) {}
+  ) {
+    this.reader = new RecordingAnalysisReader(repository, currentEnvironment, readTranscriptIdentity);
+  }
 
   /**
    * The stored analysis, or `undefined` when there is none **or it is stale**.
@@ -56,17 +47,12 @@ export class RecordingAnalysisService {
    * cares can ask {@link state}.
    */
   async get(recordingId: string): Promise<StoredAnalysis | undefined> {
-    const stored = await this.repository.get(recordingId);
-    if (!stored) return undefined;
-    return await this.isCurrent(recordingId, stored.provenance) ? stored : undefined;
+    return await this.reader.get(recordingId);
   }
 
   /** What a surface should render, including *why* there is nothing to render. */
   async state(recordingId: string): Promise<AnalysisState> {
-    const stored = await this.repository.get(recordingId);
-    if (!stored) return { status: 'none' };
-    if (!await this.isCurrent(recordingId, stored.provenance)) return { status: 'stale' };
-    return { status: 'ready', summary: summarize(stored) };
+    return await this.reader.state(recordingId);
   }
 
   /**
@@ -78,30 +64,7 @@ export class RecordingAnalysisService {
    * until somebody starts a recomputation.
    */
   async exportState(recordingId: string): Promise<AnalysisExportState> {
-    const { analysis, outcome } = await this.repository.getSnapshot(recordingId);
-    if (analysis && await this.isCurrent(recordingId, analysis.provenance)) {
-      return { status: 'completed', result: analysis };
-    }
-
-    if (outcome?.status === 'analyzing') {
-      return { status: 'analyzing', ...(outcome.error ? { error: outcome.error } : {}) };
-    }
-    if (outcome && (outcome.status === 'failed' || outcome.status === 'canceled' || outcome.status === 'unsupported')) {
-      return { status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) };
-    }
-    if (analysis) {
-      return {
-        status: 'stale',
-        error: 'Stored analysis is stale and must be recomputed before it can be exported.',
-      };
-    }
-    if (outcome?.status === 'completed') {
-      return {
-        status: 'failed',
-        error: 'Analysis completed, but its stored result is unavailable.',
-      };
-    }
-    return { status: 'none' };
+    return await this.reader.exportState(recordingId);
   }
 
   /** Persists a job state before its offscreen outbox row may be acknowledged. */
@@ -168,32 +131,16 @@ export class RecordingAnalysisService {
    * produced those vectors.
    */
   provenanceForNewRun(transcript?: TranscriptIdentity): AnalysisProvenance {
-    const environment = this.currentEnvironment();
-    const input = transcript ?? identityFromProvenance(environment);
-    if (!input) throw new Error('Transcript identity is required to start analysis');
-    return {
-      ...environment,
-      transcriptGeneration: input.generation,
-      transcriptRevision: input.revision,
-      transcriptHash: input.contentHash,
-    };
+    return this.reader.provenanceForNewRun(transcript);
   }
 
   async isCurrent(recordingId: string, provenance: AnalysisProvenance): Promise<boolean> {
-    const transcript = await this.currentTranscriptIdentity(recordingId);
-    if (!transcript) return false;
-    return !isStale(provenance, this.provenanceForNewRun(transcript));
+    return await this.reader.isCurrent(recordingId, provenance);
   }
 
   /** Checks only transcript identity; other provenance may legitimately become stale mid-run. */
   async isCurrentTranscript(recordingId: string, provenance: AnalysisProvenance): Promise<boolean> {
-    const transcript = await this.currentTranscriptIdentity(recordingId);
-    return Boolean(
-      transcript
-      && provenance.transcriptGeneration === transcript.generation
-      && provenance.transcriptRevision === transcript.revision
-      && provenance.transcriptHash === transcript.contentHash,
-    );
+    return await this.reader.isCurrentTranscript(recordingId, provenance);
   }
 
   /**
@@ -276,41 +223,11 @@ export class RecordingAnalysisService {
    * does not wait for.
    */
   async topicSummaries(recordingIds: string[]): Promise<Record<string, RecordingTopicSummary>> {
-    const summaries: Record<string, RecordingTopicSummary> = {};
-    for (const recordingId of recordingIds) {
-      const stored = await this.repository.get(recordingId);
-      if (!stored || !await this.isCurrent(recordingId, stored.provenance)) continue;
-      summaries[recordingId] = toTopicSummary(stored);
-    }
-    return summaries;
+    return await this.reader.topicSummaries(recordingIds);
   }
 
   /** Drops a recording's analysis — a discarded run, a deleted entry, or a recompute. */
   async removeAll(recordingId: string): Promise<void> {
     await this.repository.removeAll(recordingId);
   }
-
-  private async currentTranscriptIdentity(recordingId: string): Promise<TranscriptIdentity | undefined> {
-    return this.readTranscriptIdentity
-      ? await this.readTranscriptIdentity(recordingId)
-      : identityFromProvenance(this.currentEnvironment());
-  }
-}
-
-function identityFromProvenance(
-  value: AnalysisEnvironmentProvenance | AnalysisProvenance,
-): TranscriptIdentity | undefined {
-  const candidate = value as Partial<AnalysisProvenance>;
-  return typeof candidate.transcriptGeneration === 'string'
-    && candidate.transcriptGeneration.length > 0
-    && typeof candidate.transcriptRevision === 'number'
-    && candidate.transcriptRevision > 0
-    && typeof candidate.transcriptHash === 'string'
-    && candidate.transcriptHash
-    ? {
-        generation: candidate.transcriptGeneration,
-        revision: candidate.transcriptRevision,
-        contentHash: candidate.transcriptHash,
-      }
-    : undefined;
 }
