@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import type { IntegrationDataPolicy } from '../contracts';
+import { INTEGRATION_EVENT_TYPE_PREFIX } from '../config';
 import { IntegrationDeliveryRepository } from '../IntegrationDeliveryRepository';
 import { IntegrationDestinationRepository } from '../IntegrationDestinationRepository';
 import { IntegrationDispatcher } from '../IntegrationDispatcher';
@@ -78,7 +79,7 @@ function harness() {
     snapshots,
     transport,
     containsHostPermission: async () => true,
-    eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+    eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
     now: nowFn,
     random: () => 0.5,
   });
@@ -119,7 +120,7 @@ function harness() {
     const eventTime = 100 + revision;
     const externalRecordingId = `external_${recordingId}`;
     const snapshot = await snapshots.build(recordingId, allowedPolicy, {
-      eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventKind: revision === 1 ? 'recording.ready.v1' : 'recording.updated.v1',
       eventId,
       eventTime,

@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { INTEGRATION_EVENT_TYPE_PREFIX } from '../config';
 import { IDBFactory } from 'fake-indexeddb';
 import { IntegrationCoordinator } from '../IntegrationCoordinator';
 import { IntegrationDispatcher } from '../IntegrationDispatcher';
@@ -87,7 +88,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     snapshots,
     transport,
     containsHostPermission,
-    eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+    eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
     now: clock,
     random: () => 0.5,
   });
@@ -98,7 +99,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     unitOfWork,
     snapshots,
     isRecordingFinalized: async () => true,
-    eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+    eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
     now: clock,
   });
   const coordinator = new IntegrationCoordinator({
@@ -111,7 +112,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     transport,
     containsHostPermission,
     removeHostPermission,
-    eventTypePrefix: 'dev.workers.kstroevsky.meeting-recorder',
+    eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
     now: clock,
   });
   return {

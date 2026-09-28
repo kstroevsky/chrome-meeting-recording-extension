@@ -3,6 +3,7 @@ import path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import { buildRecordingCloudEvent } from '../CloudEventBuilder';
+import { INTEGRATION_EVENT_TYPE_PREFIX, integrationEventTypePrefix } from '../config';
 import type { IntegrationDataPolicy } from '../contracts';
 import {
   CONSERVATIVE_INTEGRATION_POLICY,
@@ -32,6 +33,11 @@ function recordingSnapshotSchemaValidator() {
 }
 
 describe('integration external contract', () => {
+  it('freezes the V1 event namespace for every official build', () => {
+    expect(INTEGRATION_EVENT_TYPE_PREFIX).toBe('io.github.kstroevsky.meeting-recorder');
+    expect(integrationEventTypePrefix()).toBe('io.github.kstroevsky.meeting-recorder');
+  });
+
   it('makes artifact links imply artifact metadata at the shared policy boundary', () => {
     expect(normalizeIntegrationDataPolicy({
       ...CONSERVATIVE_INTEGRATION_POLICY,
@@ -95,9 +101,9 @@ describe('integration external contract', () => {
     })).resolves.toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it('builds one CloudEvent/webhook identity with an injected owned-domain prefix', () => {
+  it('builds one CloudEvent/webhook identity with the frozen V1 namespace', () => {
     const event = buildRecordingCloudEvent({
-      eventTypePrefix: 'dev.project.recorder',
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventKind: 'recording.ready.v1',
       eventId: 'event_123',
       eventTime: Date.UTC(2026, 8, 24, 15, 15),
@@ -117,7 +123,7 @@ describe('integration external contract', () => {
       specversion: '1.0',
       id: 'event_123',
       source: 'urn:meeting-recorder:destination:producer_destination_a',
-      type: 'dev.project.recorder.recording.ready.v1',
+      type: 'io.github.kstroevsky.meeting-recorder.recording.ready.v1',
       subject: 'recording/recording_external_a',
       time: '2026-09-24T15:15:00.000Z',
       datacontenttype: 'application/json',
@@ -139,7 +145,7 @@ describe('integration external contract', () => {
           source: { kind: 'tab' },
         },
       } as const),
-    })).toThrow('project-controlled domain');
+    })).toThrow(`must be ${INTEGRATION_EVENT_TYPE_PREFIX}`);
   });
 
   it('keeps generated ready and updated events conformant with the checked-in V1 JSON Schemas', () => {
@@ -189,7 +195,7 @@ describe('integration external contract', () => {
       ['recording.updated.v1', 2],
     ] as const) {
       const event = buildRecordingCloudEvent({
-        eventTypePrefix: 'dev.project.recorder',
+        eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
         eventKind,
         eventId: `event_${revision}`,
         eventTime: Date.UTC(2026, 8, 24, 15, 45 + revision),
@@ -207,7 +213,7 @@ describe('integration external contract', () => {
     }
 
     const drifted = JSON.parse(stableJsonSerialize(buildRecordingCloudEvent({
-      eventTypePrefix: 'dev.project.recorder',
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventKind: 'recording.ready.v1',
       eventId: 'event_drift',
       eventTime: Date.UTC(2026, 8, 24, 15, 50),
@@ -223,7 +229,7 @@ describe('integration external contract', () => {
 
   it('measures the exact UTF-8 body and rejects oversized payloads without retry semantics', () => {
     const event = buildRecordingCloudEvent({
-      eventTypePrefix: 'dev.project.recorder',
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
       eventKind: 'recording.updated.v1',
       eventId: 'event_123',
       eventTime: 0,
