@@ -89,11 +89,16 @@ export class PopupStatusView {
     if (chip && chip.dataset.jobId === job.id) chip.hidden = true;
   }
 
-  /** A run that ended without being asked to (n4): the header says STOPPED. */
+  /**
+   * A run that ended without being asked to (n4): the header says STOPPED —
+   * unless its upload is still going, when the progress chip has that place
+   * (the label is pinned over it), as it does during a recording.
+   */
   syncHeaderInterrupted(): void {
     const label = document.getElementById('header-phase');
     if (!label) return;
-    label.hidden = false;
+    const uploadNavigation = document.getElementById('open-upload-navigation');
+    label.hidden = uploadNavigation != null && !uploadNavigation.hidden;
     label.textContent = 'STOPPED';
     label.dataset.tone = 'stopped';
     this.el.ppHeader?.classList.remove('recording-active', 'recording-paused', 'recording-saved');

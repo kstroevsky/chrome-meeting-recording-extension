@@ -141,13 +141,34 @@ export function viewForPhase(phase: RecordingPhase, interrupted = false): PopupV
   return 'config'; // idle, failed
 }
 
+/**
+ * Hides every screen the session can put up, so the caller can show the one it
+ * owns. The one list of them: a screen left off it stays up underneath
+ * whichever screen replaces it.
+ */
+export function hideSessionViews(elements: PopupElements): void {
+  for (const view of [
+    elements.viewConfig,
+    elements.viewPermission,
+    elements.viewRecording,
+    elements.viewFinalizing,
+    elements.viewInterrupted,
+    elements.viewUpload,
+  ]) {
+    if (view) view.hidden = true;
+  }
+}
+
 /** Shows the single view that matches the current phase and hides the others. */
 export function setActiveView(elements: PopupElements, phase: RecordingPhase, interrupted = false): PopupView {
   const view = viewForPhase(phase, interrupted);
-  if (elements.viewConfig) elements.viewConfig.hidden = view !== 'config';
-  if (elements.viewPermission) elements.viewPermission.hidden = true;
-  if (elements.viewRecording) elements.viewRecording.hidden = view !== 'recording';
-  if (elements.viewFinalizing) elements.viewFinalizing.hidden = view !== 'finalizing';
-  if (elements.viewInterrupted) elements.viewInterrupted.hidden = view !== 'interrupted';
+  hideSessionViews(elements);
+  const active = {
+    config: elements.viewConfig,
+    recording: elements.viewRecording,
+    finalizing: elements.viewFinalizing,
+    interrupted: elements.viewInterrupted,
+  }[view];
+  if (active) active.hidden = false;
   return view;
 }

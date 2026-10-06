@@ -44,7 +44,7 @@ import {
   buildSavedLocallyMessage,
   POPUP_TOAST_TEXT,
 } from './popupMessages';
-import { setActiveView, type PopupElements } from './popupView';
+import { hideSessionViews, setActiveView, type PopupElements } from './popupView';
 import { createExternalTab, createRuntimeTab } from '../platform/chrome/tabs';
 import { sendToBackground } from '../shared/messages';
 import type {
@@ -414,10 +414,7 @@ export class PopupController {
       this.notes.stop();
       this.captionPoller.stop();
       if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
-      if (this.el.viewConfig) this.el.viewConfig.hidden = true;
-      if (this.el.viewPermission) this.el.viewPermission.hidden = true;
-      if (this.el.viewRecording) this.el.viewRecording.hidden = true;
-      if (this.el.viewFinalizing) this.el.viewFinalizing.hidden = true;
+      hideSessionViews(this.el);
       if (this.el.viewUpload) this.el.viewUpload.hidden = false;
       this.status.setHeaderCompact(true);
       this.status.syncHeaderUpload(job);
@@ -425,7 +422,6 @@ export class PopupController {
       return;
     }
 
-    if (this.el.viewUpload) this.el.viewUpload.hidden = true;
     // The menu's "Cancel upload" belongs to the upload screen alone.
     if (this.el.uploadJobCancel) this.el.uploadJobCancel.hidden = true;
     const view = setActiveView(this.el, phase, session?.interruption != null);
@@ -566,10 +562,9 @@ export class PopupController {
     this.showingRecordings = true;
     if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
     if (this.el.ppHeader) this.el.ppHeader.hidden = true;
-    for (const id of ['view-config', 'view-permission', 'view-recording', 'view-finalizing', 'view-upload', 'view-recordings']) {
-      const view = document.getElementById(id);
-      if (view) view.hidden = true;
-    }
+    hideSessionViews(this.el);
+    const recordings = document.getElementById('view-recordings');
+    if (recordings) recordings.hidden = true;
     if (!this.detail.show(target)) this.showingRecordings = false;
   }
 
@@ -593,10 +588,7 @@ export class PopupController {
     if (detail) detail.hidden = true;
     if (this.el.ppHeader) this.el.ppHeader.hidden = false;
     if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
-    for (const id of ['view-config', 'view-permission', 'view-recording', 'view-finalizing', 'view-upload']) {
-      const view = document.getElementById(id);
-      if (view) view.hidden = true;
-    }
+    hideSessionViews(this.el);
     this.status.setHeaderCompact(false);
     const title = this.el.ppHeader?.querySelector<HTMLElement>('.brand-name');
     if (title) title.textContent = 'Recordings';
