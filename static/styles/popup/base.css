@@ -223,7 +223,6 @@ select { font: inherit; }
    or a setup form, 16px above a live or saving screen, 18px above paused (d3). */
 body:has(#view-recording:not([hidden])) .pp-header,
 body:has(#view-finalizing:not([hidden])) .pp-header,
-body:has(#view-interrupted:not([hidden])) .pp-header,
 body:has(#view-upload:not([hidden])) .pp-header { margin-bottom: 16px; }
 body:has(#view-recording:not([hidden]) .controls.paused) .pp-header { margin-bottom: 18px; }
 .brand { display: flex; align-items: center; gap: 9px; }
