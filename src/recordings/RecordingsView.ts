@@ -167,6 +167,8 @@ export class RecordingsView {
   private detailHost: HTMLElement | null = null;
   /** Which toolbar is mounted, so it is only rebuilt when the kind changes. */
   private toolbarKind: 'search' | 'bulk' | null = null;
+  /** The bulk toolbar's live parts, updated in place as the selection changes. */
+  private bulkParts: { count: HTMLElement; move: HTMLButtonElement; open: HTMLButtonElement } | null = null;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
   /** Watches the end of the list and asks for the next page as it comes near. */
   private moreObserver: IntersectionObserver | null = null;
@@ -258,7 +260,29 @@ export class RecordingsView {
     if (kind === 'search') {
       this.updateFolderFilterChip();
       this.updateSearchCount(visibleCount);
+    } else {
+      this.updateBulkToolbar();
     }
+  }
+
+  private selectedEntries(): RecordingHistoryEntry[] {
+    return this.entries.filter((entry) => this.selected.has(entry.id));
+  }
+
+  /**
+   * The bulk toolbar is built once per selection session, so what depends on
+   * the selection is refreshed here — built into it, the count and the buttons
+   * froze on the first recording selected.
+   */
+  private updateBulkToolbar(): void {
+    if (!this.bulkParts) return;
+    const selection = this.selectedEntries();
+    this.bulkParts.count.textContent = `${this.selected.size} SELECTED`;
+    this.bulkParts.open.disabled = !selection.some((entry) => entry.files.some((file) =>
+      (file.destination === 'drive' && file.webViewLink) || (file.destination === 'local' && file.downloadId && file.status === 'available')));
+    // Nothing to move when every file of every selected recording is on Drive.
+    this.bulkParts.move.hidden = selection.length > 0 && selection.every((entry) =>
+      entry.files.length > 0 && entry.files.every((file) => file.destination === 'drive'));
   }
 
   /** Says which folder the list is narrowed to, and undoes it in one click. */
@@ -388,18 +412,14 @@ export class RecordingsView {
   private bulkToolbar(): HTMLElement {
     const toolbar = $('div', 'bulk-toolbar');
     const count = $('span', 'bulk-toolbar__count');
-    count.textContent = `${this.selected.size} SELECTED`;
     const actions = $('div', 'bulk-toolbar__actions');
-    const selection = this.entries.filter((entry) => this.selected.has(entry.id));
-    const canOpen = selection.some((entry) => entry.files.some((file) =>
-      (file.destination === 'drive' && file.webViewLink) || (file.destination === 'local' && file.downloadId && file.status === 'available')));
 
     const share = document.createElement('button');
     share.className = 'bulk-button bulk-button--primary';
     share.type = 'button';
     share.textContent = 'Share';
     share.hidden = !this.callbacks.share;
-    share.addEventListener('click', () => this.openShareDialog(selection));
+    share.addEventListener('click', () => this.openShareDialog(this.selectedEntries()));
 
     const move = document.createElement('button');
     move.className = 'bulk-button bulk-button--ghost';
@@ -412,8 +432,7 @@ export class RecordingsView {
     open.className = 'bulk-button bulk-button--ghost';
     open.type = 'button';
     open.textContent = 'Download';
-    open.disabled = !canOpen;
-    open.addEventListener('click', () => this.openSelected(selection));
+    open.addEventListener('click', () => this.openSelected(this.selectedEntries()));
 
     const remove = document.createElement('button');
     remove.className = 'bulk-button bulk-button--ghost';
@@ -430,6 +449,7 @@ export class RecordingsView {
     clear.addEventListener('click', () => { this.selected.clear(); this.redraw(); });
     actions.append(share, move, open, remove, clear);
     toolbar.append(count, actions);
+    this.bulkParts = { count, move, open };
     return toolbar;
   }
 
@@ -586,19 +606,17 @@ export class RecordingsView {
     withHit(nameText, entry.name, this.query.trim().toLocaleLowerCase());
     name.append(nameText);
     const duration = $('span', 'recording-row__meta'); duration.textContent = formatDuration(entry);
-    // The count chip plus the first note is what makes a row worth opening; a
-    // recording with none shows a dash so the column never pads itself (f1).
+    // Only the count, so the name keeps the width; the first note is the
+    // tooltip. A recording with none shows a dash so the column never pads
+    // itself (f1).
     const notes = $('span', 'recording-row__notes');
     const summary = this.noteSummaries[entry.id];
     if (summary?.count) {
       const chip = $('span', 'recording-row__notes-chip');
       chip.innerHTML = NOTE_CHIP_ICON;
       chip.append(String(summary.count));
-      const preview = $('span', 'recording-row__notes-preview');
-      const label = summary.firstText || 'Unnamed';
-      withHit(preview, `${formatDurationMs(summary.firstAtMs)} ${label}`, this.query.trim().toLocaleLowerCase());
-      notes.append(chip, preview);
-      notes.title = summary.count === 1 ? '1 note' : `${summary.count} notes`;
+      notes.append(chip);
+      notes.title = `${summary.count === 1 ? '1 note' : `${summary.count} notes`} · first at ${formatDurationMs(summary.firstAtMs)}: ${summary.firstText || 'Unnamed'}`;
     } else if (this.noteSummariesRead) {
       notes.classList.add('recording-row__notes--none');
       notes.textContent = '—';

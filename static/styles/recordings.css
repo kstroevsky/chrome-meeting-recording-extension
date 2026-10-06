@@ -281,7 +281,7 @@ button { -webkit-font-smoothing: antialiased; }
 .shared-card__button:focus-visible { outline: var(--ring-outline); outline-offset: 2px; box-shadow: var(--ring); }
 
 .recording-table { overflow: hidden; }
-.recording-table__header, .recording-row { display: grid; grid-template-columns: 18px 8px minmax(0, 1fr) 88px 136px 50px 44px 30px 44px; align-items: center; column-gap: 9px; }
+.recording-table__header, .recording-row { display: grid; grid-template-columns: 18px 8px minmax(0, 1fr) 88px 48px 50px 44px 30px 44px; align-items: center; column-gap: 9px; }
 .recording-table__header { overflow: hidden; scrollbar-gutter: stable; min-height: 34px; padding: 8px 28px; border-bottom: 1px solid var(--border); background: var(--raised); }
 .table-header-button { display: inline-flex; align-items: center; gap: 3px; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--faint); cursor: pointer; font: 600 9px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; padding: 0; text-align: left; }
 .table-header-button--right { justify-content: flex-end; text-align: right; }
@@ -365,7 +365,7 @@ button { -webkit-font-smoothing: antialiased; }
   .recordings-header, .recordings-toolbar, .bulk-toolbar, .recording-table__header { padding-inline: 18px; }
   .recording-table__scroll { padding-inline: 18px; }
   /* DUR steps out; the other eight cells keep their order. */
-  .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(0, 1fr) 72px 96px 44px 30px 44px; column-gap: 7px; }
+  .recording-table__header, .recording-row { grid-template-columns: 18px 8px minmax(0, 1fr) 72px 48px 44px 30px 44px; column-gap: 7px; }
   .recording-table__header > :nth-child(6), .recording-row > :nth-child(6) { display: none; }
 }
 
@@ -374,7 +374,6 @@ button { -webkit-font-smoothing: antialiased; }
    pads itself. */
 .recording-row__notes { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .recording-row__notes-chip { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; height: 18px; padding: 0 5px; border-radius: 4px; background: var(--note-chip); color: var(--detail); font: 600 10px 'IBM Plex Mono', monospace; }
-.recording-row__notes-preview { overflow: hidden; min-width: 0; color: var(--faint); font: 10px 'IBM Plex Mono', monospace; white-space: nowrap; text-overflow: ellipsis; }
 .recording-row__notes--none { color: var(--note-dash); font: 10px 'IBM Plex Mono', monospace; }
 /* The new column reads as the accent one in both themes. */
 .table-header-button--notes { color: var(--detail); }

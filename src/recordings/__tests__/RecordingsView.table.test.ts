@@ -151,3 +151,58 @@ describe('RecordingsView folder tags', () => {
     expect(order(list)).toHaveLength(5);
   });
 });
+
+describe('RecordingsView selection toolbar', () => {
+  const driveEntry = (id: string) => entry(id, {
+    storageMode: 'drive',
+    files: [historyFile({ id: `${id}:tab`, stream: 'tab', filename: `${id}.webm`, destination: 'drive', status: 'available', driveFileId: `drive-${id}` })],
+  });
+  const select = (list: HTMLElement, id: string) =>
+    list.querySelector<HTMLElement>(`.recording-row[data-recording-id="${id}"] .selection-box`)!.click();
+  const move = (list: HTMLElement) =>
+    Array.from(list.querySelectorAll<HTMLButtonElement>('.bulk-toolbar button')).find((button) => button.textContent === 'Move to Drive')!;
+
+  it('offers no Move to Drive when everything selected is already on Drive', () => {
+    const { view, list } = mount();
+    view.render([driveEntry('a'), driveEntry('b')]);
+    select(list, 'a');
+    select(list, 'b');
+    expect(move(list).hidden).toBe(true);
+  });
+
+  it('follows the selection as it grows: the count, and what Download acts on', () => {
+    // Built into the toolbar once, these froze on the first recording selected.
+    const { view, list, callbacks } = mount();
+    const local = entry('b', { files: [historyFile({ id: 'b:tab', stream: 'tab', filename: 'b.webm', destination: 'local', status: 'available', downloadId: 7 })] });
+    view.render([driveEntry('a'), local]);
+    select(list, 'a');
+    expect(list.querySelector('.bulk-toolbar__count')!.textContent).toBe('1 SELECTED');
+    const download = () => Array.from(list.querySelectorAll<HTMLButtonElement>('.bulk-toolbar button')).find((button) => button.textContent === 'Download')!;
+    expect(download().disabled).toBe(true);
+
+    select(list, 'b');
+    expect(list.querySelector('.bulk-toolbar__count')!.textContent).toBe('2 SELECTED');
+    expect(download().disabled).toBe(false);
+    download().click();
+    expect(callbacks.openLocal).toHaveBeenCalledWith('b', 'b:tab');
+  });
+
+  it('keeps it in view when anything selected is local', () => {
+    const { view, list } = mount();
+    view.render([driveEntry('a'), entry('b')]);
+    select(list, 'a');
+    select(list, 'b');
+    expect(move(list).hidden).toBe(false);
+  });
+});
+
+describe('RecordingsView NOTES cell', () => {
+  it('shows only the count, with the first note as its tooltip', () => {
+    const { view, list } = mount();
+    view.setNoteSummaries({ a: { count: 3, search: '', firstAtMs: 48_000, firstText: 'Q3 target changed' } });
+    view.render([entry('a')]);
+    const cell = list.querySelector<HTMLElement>('.recording-row__notes')!;
+    expect(cell.textContent).toBe('3');
+    expect(cell.title).toBe('3 notes · first at 00:48: Q3 target changed');
+  });
+});

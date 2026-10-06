@@ -46,12 +46,13 @@ test.describe('recordings page notes (integration)', () => {
       const notesHeader = page.getByRole('button', { name: /NOTES/ });
       await expect(notesHeader).toBeVisible();
 
-      // The row shows a count chip plus the first note as a preview.
+      // The row shows only the count, leaving the width to the name; the
+      // first note is its tooltip.
       await expect.poll(async () => await page.locator('.recording-row__notes-chip').first().textContent(), {
         timeout: 20_000,
       }).toBe('1');
-      await expect(page.locator('.recording-row__notes-preview').first())
-        .toHaveText(/^\d{2}:\d{2} pricing objection$/);
+      await expect(page.locator('.recording-row__notes').first())
+        .toHaveAttribute('title', /^1 note · first at \d{2}:\d{2}: pricing objection$/);
 
       // Searching the note's text keeps the recording; searching for something
       // absent from name, note and notes alike drops it.
@@ -59,10 +60,10 @@ test.describe('recordings page notes (integration)', () => {
       await search.fill('pricing');
       await expect(page.locator('.recording-row')).toHaveCount(1);
 
-      // The result says where the hit landed, and marks it in gold (f2).
+      // The result says where the hit landed (f2); the note text itself is
+      // no longer on the row to mark.
       await expect(page.locator('.recording-day--match .recording-day__label').first())
         .toHaveText('MATCHED IN NOTES');
-      await expect(page.locator('.recording-row__hit').first()).toHaveText('pricing');
       await expect(page.locator('.recordings-count')).toContainText('IN NAMES, NOTES AND TOPICS');
 
       await search.fill('nothing matches this');
