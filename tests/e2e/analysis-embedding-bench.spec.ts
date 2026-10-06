@@ -22,6 +22,12 @@ test.setTimeout(900_000);
 
 /** The dtype this build packaged; the benchmark measures what is there. */
 const DTYPE = process.env.ANALYSIS_DTYPE ?? 'q8';
+const POOLING_MODE = process.env.ANALYSIS_POOLING === 'locality'
+  ? 'locality'
+  : process.env.ANALYSIS_POOLING === 'pooled-onnx'
+    ? 'pooled-onnx'
+    : 'transformers';
+const ALLOW_SLOW_REFERENCE_MACHINE = process.env.ANALYSIS_BENCH_ALLOW_SLOW === '1';
 /** EMB-06's upper reference: a three-hour conversation's worth of windows. */
 const WINDOWS = Number(process.env.BENCH_WINDOWS ?? 800);
 /** EMB-07, exact contract. */
@@ -123,7 +129,7 @@ test.describe('embedding throughput at realistic scale (ADR-0007 4A) @analysis-b
         waitUntil: 'domcontentloaded',
       });
 
-      const run = await page.evaluate(async ({ device, texts, batch, dtype }) => {
+      const run = await page.evaluate(async ({ device, texts, batch, dtype, poolingMode }) => {
         const heap = () => (performance as unknown as { memory?: { usedJSHeapSize: number } })
           .memory?.usedJSHeapSize ?? 0;
 
@@ -138,7 +144,11 @@ test.describe('embedding throughput at realistic scale (ADR-0007 4A) @analysis-b
           let startedAt = 0;
           let heapBeforeBytes = 0;
 
-          const send = () => worker.postMessage({ type: 'EMBED', seq: 100 + next, texts: batches[next] });
+          const send = () => worker.postMessage({
+            type: 'EMBED',
+            seq: 100 + next,
+            texts: batches[next],
+          });
 
           worker.onerror = (event) => reject(new Error((event as ErrorEvent).message || 'worker error'));
           worker.onmessage = (event: MessageEvent<any>) => {
@@ -179,9 +189,10 @@ test.describe('embedding throughput at realistic scale (ADR-0007 4A) @analysis-b
             modelId: 'Xenova/multilingual-e5-small',
             device,
             dtype,
+            poolingMode,
           });
         });
-      }, { device: requested, texts: windows, batch: BATCH, dtype: DTYPE });
+      }, { device: requested, texts: windows, batch: BATCH, dtype: DTYPE, poolingMode: POOLING_MODE });
 
       const adapter = await page.evaluate(async () => {
         const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<any> } }).gpu;
@@ -199,19 +210,12 @@ test.describe('embedding throughput at realistic scale (ADR-0007 4A) @analysis-b
       expect(run.batchMs.length).toBe(Math.ceil(WINDOWS / BATCH));
 
       const windowsPerSec = WINDOWS / (run.totalEmbedMs / 1000);
-      expect(
-        windowsPerSec,
-        `${run.device} embedded ${windowsPerSec.toFixed(1)} windows/sec, below the ${MIN_WINDOWS_PER_SEC} floor `
-        + 'calibrated on the reference machine. Before treating this as a regression, check that this '
-        + 'machine is comparable and not loaded; if it is, look at the ORT variant list, the dtype, '
-        + 'and EMB-07\'s batch size.',
-      ).toBeGreaterThan(MIN_WINDOWS_PER_SEC);
-
       const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
       // eslint-disable-next-line no-console
       console.log([
         '',
         `  ── requested ${requested} → ran on ${run.device} (${run.dtype}, ${run.dimensions}d)`,
+        `     pooling           ${POOLING_MODE}`,
         `     corpus            ${describeCorpus(windows)}`,
         `     model load        ${run.loadMs} ms`,
         `     total embedding   ${run.totalEmbedMs} ms for ${WINDOWS} windows in ${run.batchMs.length} batches`,
@@ -222,6 +226,16 @@ test.describe('embedding throughput at realistic scale (ADR-0007 4A) @analysis-b
         `     webgpu adapter    ${adapter}`,
         '',
       ].join('\n'));
+
+      if (!ALLOW_SLOW_REFERENCE_MACHINE) {
+        expect(
+          windowsPerSec,
+          `${run.device} embedded ${windowsPerSec.toFixed(1)} windows/sec, below the ${MIN_WINDOWS_PER_SEC} floor `
+          + 'calibrated on the reference machine. Before treating this as a regression, check that this '
+          + 'machine is comparable and not loaded; if it is, look at the ORT variant list, the dtype, '
+          + 'and EMB-07\'s batch size.',
+        ).toBeGreaterThan(MIN_WINDOWS_PER_SEC);
+      }
     });
   }
 });

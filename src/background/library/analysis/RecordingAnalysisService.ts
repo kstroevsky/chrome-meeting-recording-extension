@@ -1,50 +1,43 @@
 /**
- * @file background/library/analysis/RecordingAnalysisService.ts
- *
- * Owns every analysis transition, and decides when a stored one still counts.
- *
- * The interesting behaviour here is not storage, it is **staleness**. Four of
- * the scoring terms are provisional, every §9 value is still a candidate rather
- * than a frozen contract, and the embedding model and its quantization may
- * change. A stored analysis is therefore only meaningful alongside the
- * conditions that produced it, and this is the layer that compares them.
+ * Owns analysis transitions and decides whether stored output still matches
+ * the current transcript, pipeline, model, and configuration.
  */
 
 import type { AnalysisJob, AnalysisJobStatus } from '../../../shared/analysis/job';
-import { isStale, type AnalysisProvenance } from '../../../shared/analysis/provenance';
 import {
-  summarize,
-  toTopicSummary,
-  type AnalysisSummary,
+  type AnalysisEnvironmentProvenance,
+  type AnalysisProvenance,
+} from '../../../shared/analysis/provenance';
+import type { TranscriptIdentity } from '../../../shared/transcriptIdentity';
+import {
   type RecordingTopicSummary,
   type StoredAnalysis,
 } from '../../../shared/analysis/storedAnalysis';
-import type { RecordingAnalysisRepositoryPort } from './RecordingAnalysisRepository';
+import type {
+  AnalysisAttemptTransition,
+  RecordingAnalysisRepositoryPort,
+} from './RecordingAnalysisRepository';
 import type { RecordingAnalysisOutcome } from './RecordingAnalysisOutcome';
+import {
+  RecordingAnalysisReader,
+  type AnalysisExportState,
+  type AnalysisState,
+} from './RecordingAnalysisReader';
 
-/** Why a recording has no usable analysis, or that it has one. */
-export type AnalysisState =
-  | { status: 'ready'; summary: AnalysisSummary }
-  /** Never analysed. */
-  | { status: 'none' }
-  /** Analysed under conditions that no longer apply; recompute to replace it. */
-  | { status: 'stale' };
-
-/** Library-owned state for consumers that must distinguish waiting from terminal unavailability. */
-export type AnalysisExportState =
-  | { status: 'none' }
-  | { status: 'analyzing'; error?: string }
-  | { status: 'completed'; result: StoredAnalysis }
-  | { status: 'failed' | 'canceled' | 'unsupported'; error?: string }
-  | { status: 'stale'; error: string };
+export type { AnalysisExportState, AnalysisState } from './RecordingAnalysisReader';
 
 export class RecordingAnalysisService {
+  private readonly reader: RecordingAnalysisReader;
+
   constructor(
     private readonly repository: RecordingAnalysisRepositoryPort,
     /** The conditions a fresh run would use; compared against what is stored. */
-    private readonly currentProvenance: () => AnalysisProvenance,
+    currentEnvironment: () => AnalysisEnvironmentProvenance | AnalysisProvenance,
+    readTranscriptIdentity?: (recordingId: string) => Promise<TranscriptIdentity | undefined>,
     private readonly onChanged?: (recordingId: string) => void,
-  ) {}
+  ) {
+    this.reader = new RecordingAnalysisReader(repository, currentEnvironment, readTranscriptIdentity);
+  }
 
   /**
    * The stored analysis, or `undefined` when there is none **or it is stale**.
@@ -54,17 +47,12 @@ export class RecordingAnalysisService {
    * cares can ask {@link state}.
    */
   async get(recordingId: string): Promise<StoredAnalysis | undefined> {
-    const stored = await this.repository.get(recordingId);
-    if (!stored) return undefined;
-    return isStale(stored.provenance, this.currentProvenance()) ? undefined : stored;
+    return await this.reader.get(recordingId);
   }
 
   /** What a surface should render, including *why* there is nothing to render. */
   async state(recordingId: string): Promise<AnalysisState> {
-    const stored = await this.repository.get(recordingId);
-    if (!stored) return { status: 'none' };
-    if (isStale(stored.provenance, this.currentProvenance())) return { status: 'stale' };
-    return { status: 'ready', summary: summarize(stored) };
+    return await this.reader.state(recordingId);
   }
 
   /**
@@ -76,30 +64,7 @@ export class RecordingAnalysisService {
    * until somebody starts a recomputation.
    */
   async exportState(recordingId: string): Promise<AnalysisExportState> {
-    const { analysis, outcome } = await this.repository.getSnapshot(recordingId);
-    if (analysis && !isStale(analysis.provenance, this.currentProvenance())) {
-      return { status: 'completed', result: analysis };
-    }
-
-    if (outcome?.status === 'analyzing') {
-      return { status: 'analyzing', ...(outcome.error ? { error: outcome.error } : {}) };
-    }
-    if (outcome && (outcome.status === 'failed' || outcome.status === 'canceled' || outcome.status === 'unsupported')) {
-      return { status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) };
-    }
-    if (analysis) {
-      return {
-        status: 'stale',
-        error: 'Stored analysis is stale and must be recomputed before it can be exported.',
-      };
-    }
-    if (outcome?.status === 'completed') {
-      return {
-        status: 'failed',
-        error: 'Analysis completed, but its stored result is unavailable.',
-      };
-    }
-    return { status: 'none' };
+    return await this.reader.exportState(recordingId);
   }
 
   /** Persists a job state before its offscreen outbox row may be acknowledged. */
@@ -120,6 +85,26 @@ export class RecordingAnalysisService {
     };
     await this.repository.putOutcome(job.historyId, outcome);
     this.onChanged?.(job.historyId);
+  }
+
+  /** Persists state only if this job still owns the durable desired-work claim. */
+  async recordAttemptOutcome(
+    job: AnalysisJob,
+    status: AnalysisJobStatus = job.status,
+    error: string | undefined = job.error,
+    transition?: AnalysisAttemptTransition,
+    now: number = Date.now(),
+  ): Promise<boolean> {
+    const outcome: RecordingAnalysisOutcome = {
+      status,
+      jobId: job.id,
+      startedAt: job.startedAt,
+      updatedAt: now,
+      ...(error ? { error } : {}),
+    };
+    const committed = await this.repository.putAttemptOutcome(job.historyId, job, outcome, transition);
+    if (committed) this.onChanged?.(job.historyId);
+    return committed;
   }
 
   /** Persists a terminal attempt that ended before the data plane created a job. */
@@ -145,8 +130,17 @@ export class RecordingAnalysisService {
    * carried with the job, so what is stored describes the run that actually
    * produced those vectors.
    */
-  provenanceForNewRun(): AnalysisProvenance {
-    return this.currentProvenance();
+  provenanceForNewRun(transcript?: TranscriptIdentity): AnalysisProvenance {
+    return this.reader.provenanceForNewRun(transcript);
+  }
+
+  async isCurrent(recordingId: string, provenance: AnalysisProvenance): Promise<boolean> {
+    return await this.reader.isCurrent(recordingId, provenance);
+  }
+
+  /** Checks only transcript identity; other provenance may legitimately become stale mid-run. */
+  async isCurrentTranscript(recordingId: string, provenance: AnalysisProvenance): Promise<boolean> {
+    return await this.reader.isCurrentTranscript(recordingId, provenance);
   }
 
   /**
@@ -181,6 +175,42 @@ export class RecordingAnalysisService {
     return analysis;
   }
 
+  /** Publishes only if transcript, environment, epoch and attempt token still match. */
+  async saveAttempt(
+    recordingId: string,
+    result: Omit<StoredAnalysis, 'provenance' | 'completedAt'>,
+    provenance: AnalysisProvenance,
+    job: AnalysisJob,
+    now: number = Date.now(),
+  ): Promise<{ analysis: StoredAnalysis; committed: boolean }> {
+    const analysis: StoredAnalysis = { ...result, provenance, completedAt: now };
+    const outcome: RecordingAnalysisOutcome = {
+      status: 'completed',
+      jobId: job.id,
+      startedAt: job.startedAt,
+      updatedAt: now,
+    };
+    const committed = await this.repository.publishAttemptResult(
+      recordingId,
+      job,
+      analysis,
+      outcome,
+      provenance,
+    );
+    if (committed) this.onChanged?.(recordingId);
+    return { analysis, committed };
+  }
+
+  /** Cancels durable desired work before the data-plane cancellation is attempted. */
+  async cancelDesired(
+    recordingId: string,
+    now: number = Date.now(),
+  ): Promise<{ changed: boolean; attemptToken?: string }> {
+    const result = await this.repository.cancelDesired(recordingId, now);
+    if (result.changed) this.onChanged?.(recordingId);
+    return result;
+  }
+
   /**
    * Topic digests for a page of the library, keyed by recording id.
    *
@@ -193,14 +223,7 @@ export class RecordingAnalysisService {
    * does not wait for.
    */
   async topicSummaries(recordingIds: string[]): Promise<Record<string, RecordingTopicSummary>> {
-    const current = this.currentProvenance();
-    const summaries: Record<string, RecordingTopicSummary> = {};
-    for (const recordingId of recordingIds) {
-      const stored = await this.repository.get(recordingId);
-      if (!stored || isStale(stored.provenance, current)) continue;
-      summaries[recordingId] = toTopicSummary(stored);
-    }
-    return summaries;
+    return await this.reader.topicSummaries(recordingIds);
   }
 
   /** Drops a recording's analysis — a discarded run, a deleted entry, or a recompute. */

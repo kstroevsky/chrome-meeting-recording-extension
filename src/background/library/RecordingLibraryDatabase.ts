@@ -23,8 +23,9 @@ const DATABASE_NAME = 'recording-history';
  * v5 → v6 adds the `analyses` store (ADR-0007).
  * v6 → v7 adds the `recordingContexts` store (ADR-0008).
  * v7 → v8 adds durable `analysisOutcomes` (ADR-0008 readiness semantics).
+ * v8 → v9 adds durable desired analysis work (ADR-0009 TECH-04).
  */
-const DATABASE_VERSION = 8;
+const DATABASE_VERSION = 9;
 
 export const RECORDINGS_STORE = 'recordings';
 export const RECORDING_CONTEXTS_STORE = 'recordingContexts';
@@ -32,6 +33,8 @@ export const NOTATIONS_STORE = 'notations';
 export const TRANSCRIPTS_STORE = 'transcripts';
 export const ANALYSES_STORE = 'analyses';
 export const ANALYSIS_OUTCOMES_STORE = 'analysisOutcomes';
+export const ANALYSIS_WORK_STORE = 'analysisWork';
+export const ANALYSIS_WORK_DUE_INDEX = 'analysisWorkDue';
 export const CREATED_AT_ID_INDEX = 'createdAtId';
 export const ACTIVE_CREATED_AT_ID_INDEX = 'activeCreatedAtId';
 
@@ -96,10 +99,20 @@ export function openRecordingHistoryDatabase(factory?: IDBFactory): Promise<IDBD
 function isSatisfied(database: IDBDatabase): boolean {
   // Every store `upgrade` creates belongs here: one left out is one a profile
   // from another branch can lack while this build opens it as-is.
-  const stores = [RECORDINGS_STORE, RECORDING_CONTEXTS_STORE, NOTATIONS_STORE, TRANSCRIPTS_STORE, ANALYSES_STORE, ANALYSIS_OUTCOMES_STORE];
+  const stores = [
+    RECORDINGS_STORE,
+    RECORDING_CONTEXTS_STORE,
+    NOTATIONS_STORE,
+    TRANSCRIPTS_STORE,
+    ANALYSES_STORE,
+    ANALYSIS_OUTCOMES_STORE,
+    ANALYSIS_WORK_STORE,
+  ];
   if (!hasStores(database, stores)) return false;
   const indexes = database.transaction(RECORDINGS_STORE, 'readonly').objectStore(RECORDINGS_STORE).indexNames;
-  return indexes.contains(CREATED_AT_ID_INDEX) && indexes.contains(ACTIVE_CREATED_AT_ID_INDEX);
+  if (!indexes.contains(CREATED_AT_ID_INDEX) || !indexes.contains(ACTIVE_CREATED_AT_ID_INDEX)) return false;
+  const workIndexes = database.transaction(ANALYSIS_WORK_STORE, 'readonly').objectStore(ANALYSIS_WORK_STORE).indexNames;
+  return workIndexes.contains(ANALYSIS_WORK_DUE_INDEX);
 }
 
 function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
@@ -144,6 +157,13 @@ function upgrade(database: IDBDatabase, transaction: IDBTransaction): void {
   // unsupported states after the offscreen outbox entry has been acknowledged.
   if (!database.objectStoreNames.contains(ANALYSIS_OUTCOMES_STORE)) {
     database.createObjectStore(ANALYSIS_OUTCOMES_STORE, { keyPath: 'recordingId' });
+  }
+
+  const analysisWork = database.objectStoreNames.contains(ANALYSIS_WORK_STORE)
+    ? transaction.objectStore(ANALYSIS_WORK_STORE)
+    : database.createObjectStore(ANALYSIS_WORK_STORE, { keyPath: 'recordingId' });
+  if (!analysisWork.indexNames.contains(ANALYSIS_WORK_DUE_INDEX)) {
+    analysisWork.createIndex(ANALYSIS_WORK_DUE_INDEX, ['nextAttemptAt', 'recordingId'], { unique: true });
   }
 }
 

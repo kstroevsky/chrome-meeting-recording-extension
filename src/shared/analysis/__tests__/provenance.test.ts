@@ -16,6 +16,9 @@ const CONFIG: AnalysisConfig = {
 };
 
 const provenance = (over: Partial<AnalysisProvenance> = {}): AnalysisProvenance => ({
+  transcriptGeneration: 'transcript-generation-1',
+  transcriptRevision: 1,
+  transcriptHash: 'transcript-hash-1',
   pipelineVersion: PIPELINE_VERSION,
   embeddingModel: 'Xenova/multilingual-e5-small',
   embeddingModelRevision: 'abc1234',
@@ -66,6 +69,12 @@ describe('hashAnalysisConfig', () => {
 describe('isStale', () => {
   it('accepts a result computed under identical conditions', () => {
     expect(isStale(provenance(), provenance())).toBe(false);
+  });
+
+  it('rejects a result from a different transcript generation, revision or content', () => {
+    expect(isStale(provenance({ transcriptGeneration: 'transcript-generation-2' }), provenance())).toBe(true);
+    expect(isStale(provenance({ transcriptRevision: 2 }), provenance())).toBe(true);
+    expect(isStale(provenance({ transcriptHash: 'transcript-hash-2' }), provenance())).toBe(true);
   });
 
   it('rejects a result from an earlier pipeline', () => {
@@ -119,10 +128,15 @@ describe('isStale', () => {
     expect(isStale(onGpu, provenance())).toBe(false);
   });
 
-  it('is at the version that includes the tail-window and centroid corrections', () => {
-    // D-22 and D-23 changed what the pipeline outputs without changing any
-    // threshold, so only the version can make earlier rows read as stale.
-    expect(PIPELINE_VERSION).toBe(2);
+  it('is at the version that includes token-safe windows, length batching, and logical-window chunk aggregation', () => {
+    // D-22/D-23 established v2. ADR-0009 TECH-02 changes the exact windows and
+    // their batching without adding a config threshold, so it advances v3.
+    // Token-limit chunks are now aggregated back to one logical temporal
+    // window before boundary detection, which changes analysis semantics and
+    // therefore advances the persisted pipeline identity again.
+    expect(PIPELINE_VERSION).toBe(4);
     expect(isStale(provenance({ pipelineVersion: 1 }), provenance())).toBe(true);
+    expect(isStale(provenance({ pipelineVersion: 2 }), provenance())).toBe(true);
+    expect(isStale(provenance({ pipelineVersion: 3 }), provenance())).toBe(true);
   });
 });

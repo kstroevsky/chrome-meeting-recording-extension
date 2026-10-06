@@ -11,9 +11,14 @@
  */
 
 import type { EmbeddingDtype } from '../../shared/analysis/provenance';
+import type { AnalysisResult, AnalysisProgress } from '../../shared/analysis/analyzeTranscript';
+import type { AnalysisConfig, ContextWindow } from '../../shared/analysis/types';
+import type { WindowConfig } from '../../shared/analysis/windows';
+import type { TranscriptSegment } from '../../shared/transcript';
 
 /** Which backend to attempt. `wasm` is the floor every machine has (RES-06). */
 export type EmbeddingDevice = 'webgpu' | 'wasm';
+export type AnalysisPoolingMode = 'transformers' | 'locality' | 'pooled-onnx';
 
 export type AnalysisWorkerOpen = {
   type: 'OPEN';
@@ -27,6 +32,8 @@ export type AnalysisWorkerOpen = {
   /** Production sets false so the parent can retry each backend in a fresh worker. */
   allowFallback?: boolean;
   dtype: EmbeddingDtype;
+  /** Research-only graph/kernel selector; production clients omit it. */
+  poolingMode?: AnalysisPoolingMode;
 };
 
 export type AnalysisWorkerEmbed = {
@@ -35,7 +42,25 @@ export type AnalysisWorkerEmbed = {
   texts: string[];
 };
 
-export type AnalysisWorkerRequest = AnalysisWorkerOpen | AnalysisWorkerEmbed;
+export type AnalysisWorkerPrepareWindows = {
+  type: 'PREPARE_WINDOWS';
+  seq: number;
+  segments: TranscriptSegment[];
+  config: WindowConfig;
+};
+
+export type AnalysisWorkerAnalyze = {
+  type: 'ANALYZE';
+  seq: number;
+  transcript: TranscriptSegment[];
+  config: AnalysisConfig;
+};
+
+export type AnalysisWorkerRequest =
+  | AnalysisWorkerOpen
+  | AnalysisWorkerPrepareWindows
+  | AnalysisWorkerEmbed
+  | AnalysisWorkerAnalyze;
 
 export type AnalysisWorkerOpened = {
   type: 'OPENED';
@@ -45,7 +70,15 @@ export type AnalysisWorkerOpened = {
   dimensions: number;
   /** The quantization that loaded, for `AnalysisProvenance`. */
   dtype: EmbeddingDtype;
+  /** Exact maximum sequence length accepted by both packaged tokenizer and graph. */
+  maxTokens: number;
   loadMs: number;
+};
+
+export type AnalysisWorkerPreparedWindows = {
+  type: 'PREPARED_WINDOWS';
+  seq: number;
+  windows: ContextWindow[];
 };
 
 export type AnalysisWorkerEmbedded = {
@@ -58,9 +91,24 @@ export type AnalysisWorkerEmbedded = {
   embedMs: number;
 };
 
+export type AnalysisWorkerProgress = {
+  type: 'ANALYSIS_PROGRESS';
+  seq: number;
+  progress: AnalysisProgress;
+};
+
+export type AnalysisWorkerAnalyzed = {
+  type: 'ANALYZED';
+  seq: number;
+  result: AnalysisResult;
+};
+
 export type AnalysisWorkerError = { type: 'ERROR'; seq: number; error: string };
 
 export type AnalysisWorkerResponse =
   | AnalysisWorkerOpened
+  | AnalysisWorkerPreparedWindows
   | AnalysisWorkerEmbedded
+  | AnalysisWorkerProgress
+  | AnalysisWorkerAnalyzed
   | AnalysisWorkerError;

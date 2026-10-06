@@ -8,6 +8,8 @@
  */
 
 import type { Embedding } from '../../shared/analysis/types';
+import { buildContextWindows, type WindowConfig } from '../../shared/analysis/windows';
+import type { TranscriptSegment } from '../../shared/transcript';
 import type { AnalysisEmbeddingEngine } from './AnalysisManager';
 
 const DIMENSIONS = 384;
@@ -30,8 +32,13 @@ export class AnalysisE2EMockEngine implements AnalysisEmbeddingEngine {
     device: 'wasm' as const,
     dimensions: DIMENSIONS,
     dtype: 'q8' as const,
+    maxTokens: 512,
     loadMs: 0,
   };
+
+  async prepareWindows(transcript: TranscriptSegment[], config: WindowConfig) {
+    return buildContextWindows(transcript, config);
+  }
 
   encoder() {
     return async (texts: string[]): Promise<Embedding[]> => texts.map(deterministicEmbedding);

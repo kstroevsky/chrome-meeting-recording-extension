@@ -53,6 +53,7 @@ export type RpcHandlerDeps = {
     transcript: import('../shared/transcript').TranscriptSegment[],
     config: import('../shared/analysis/types').AnalysisConfig,
     provenance: import('../shared/analysis/provenance').AnalysisProvenance,
+    request: { attemptToken: string; requestEpoch: number },
   ) => string;
   /** Ids of every job still making the data plane busy, held results included. */
   listAnalysisWork?: () => string[];
@@ -297,6 +298,8 @@ async function handleOffscreenAnalyzeTranscript(
   deps: RpcHandlerDeps,
 ): Promise<{ ok: boolean; jobId?: string; error?: string }> {
   if (!deps.analyzeTranscript) return { ok: false, error: 'Topic analysis is unavailable' };
+  if (typeof msg.attemptToken !== 'string' || !msg.attemptToken.trim()) return { ok: false, error: 'Missing attempt token' };
+  if (!Number.isSafeInteger(msg.requestEpoch) || msg.requestEpoch <= 0) return { ok: false, error: 'Invalid request epoch' };
   if (typeof msg.historyId !== 'string' || !msg.historyId) return { ok: false, error: 'Missing historyId' };
   if (!Array.isArray(msg.transcript)) return { ok: false, error: 'Missing transcript' };
   if (!msg.config || typeof msg.config !== 'object') return { ok: false, error: 'Missing analysis configuration' };
@@ -304,7 +307,16 @@ async function handleOffscreenAnalyzeTranscript(
   // would come back unable to say what produced it.
   if (!msg.provenance || typeof msg.provenance !== 'object') return { ok: false, error: 'Missing analysis provenance' };
   try {
-    return { ok: true, jobId: deps.analyzeTranscript(msg.historyId, msg.transcript, msg.config, msg.provenance) };
+    return {
+      ok: true,
+      jobId: deps.analyzeTranscript(
+        msg.historyId,
+        msg.transcript,
+        msg.config,
+        msg.provenance,
+        { attemptToken: msg.attemptToken, requestEpoch: msg.requestEpoch },
+      ),
+    };
   } catch (error) {
     // A rejected config (an out-of-range window, say) is a caller error, not a
     // session failure: answer it rather than throwing into the RPC server.

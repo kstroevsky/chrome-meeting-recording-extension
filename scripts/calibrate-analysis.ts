@@ -13,6 +13,12 @@ import { readFileSync } from 'node:fs';
 import { scoreBoundaries, findBoundaryPeaks } from '../src/shared/analysis/boundaries';
 import { buildConversationSegments } from '../src/shared/analysis/segments';
 import { clusterSegments } from '../src/shared/analysis/clusters';
+import {
+  boundaryAgreement,
+  clusterAgreement,
+  finalTemporalBoundariesOnAxis,
+  projectTopicAssignmentsToAxis,
+} from '../src/shared/analysis/evaluation';
 import type { ContextWindow } from '../src/shared/analysis/types';
 
 type Shape = { windowUtterances: number; windowStride: number };
@@ -31,60 +37,6 @@ type Corpus = {
 };
 
 const corpus: Corpus = JSON.parse(readFileSync('output/analysis-calibration/corpus.json', 'utf8'));
-
-/** The true topic a window mostly covers. */
-function windowTopic(window: ContextWindow, topicOfUtterance: string[]): string {
-  const counts = new Map<string, number>();
-  for (let i = window.startIndex; i < window.endIndex; i += 1) {
-    const t = topicOfUtterance[i];
-    counts.set(t, (counts.get(t) ?? 0) + 1);
-  }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-}
-
-/** F1 of detected boundaries against true ones, allowing ±1 window of slack. */
-function boundaryF1(detected: number[], truth: number[]): number {
-  if (!truth.length) return detected.length ? 0 : 1;
-  const hit = (a: number[], b: number[]) => a.filter((x) => b.some((y) => Math.abs(x - y) <= 1)).length;
-  const tp = hit(detected, truth);
-  const precision = detected.length ? tp / detected.length : truth.length ? 0 : 1;
-  const recall = hit(truth, detected) / truth.length;
-  return precision + recall ? (2 * precision * recall) / (precision + recall) : 0;
-}
-
-/**
- * Pairwise clustering F1: over every pair of segments, did the pipeline put
- * them together exactly when their true topics match?
- *
- * This is what measures *recurrence* — a pipeline that never merges scores well
- * on boundaries and badly here, because the two Redis stretches end up apart.
- */
-function clusterScores(assigned: string[], truth: string[]): { precision: number; recall: number; f1: number } {
-  let tp = 0, fp = 0, fn = 0;
-  for (let i = 0; i < truth.length; i += 1) {
-    for (let j = i + 1; j < truth.length; j += 1) {
-      const same = assigned[i] === assigned[j];
-      const shouldBe = truth[i] === truth[j];
-      if (same && shouldBe) tp += 1;
-      else if (same && !shouldBe) fp += 1;
-      else if (!same && shouldBe) fn += 1;
-    }
-  }
-  // Precision falls when unrelated topics are folded together; recall falls
-  // when a recurring subject is left split. They are not symmetric in cost:
-  // an over-tight assignment threshold over-splits, and the merge sweep can
-  // still repair that — an over-loose one contaminates a cluster and nothing
-  // downstream can undo it. So precision is the tie-breaker below.
-  const precision = tp + fp ? tp / (tp + fp) : 1;
-  const recall = tp + fn ? tp / (tp + fn) : 1;
-  const f1 = precision + recall ? (2 * precision * recall) / (precision + recall) : 0;
-  // `falseMerges` is reported on its own, not folded into F1, because an
-  // aggregate hides the error that matters most here: a pipeline that joins two
-  // subjects cannot be repaired downstream, while one that splits a subject can
-  // be — the merge sweep exists for exactly that. A configuration with a better
-  // F1 and more false merges is the worse configuration.
-  return { precision, recall, f1, falseMerges: fp };
-}
 
 const GRID = {
   peakNeighbourhood: [1, 2, 3],
@@ -127,7 +79,9 @@ type Scored = {
   cluster: number;
   clusterPrecision: number;
   clusterRecall: number;
-  falseMerges: number;
+  falseMergePairs: number;
+  predictedPositivePairs: number;
+  falseMergeRate: number | null;
 };
 
 type Result = Scored & {
@@ -153,41 +107,44 @@ function scoreCases(cases: Corpus['cases'], config: Config, shape: Shape): Score
   let clusterTotal = 0;
   let precisionTotal = 0;
   let recallTotal = 0;
-  let falseMerges = 0;
+  let falseMergePairs = 0;
+  let predictedPositivePairs = 0;
 
   for (const testCase of cases) {
     const entry = testCase.shapes.find((s) =>
       s.shape.windowUtterances === shape.windowUtterances && s.shape.windowStride === shape.windowStride)!;
     const windows = entry.windows;
     const embeddings = entry.embeddings.map((v) => Float32Array.from(v));
-    const topics = windows.map((w) => windowTopic(w, testCase.topicOfUtterance));
 
     const truthBoundaries: number[] = [];
-    for (let i = 0; i < windows.length - 1; i += 1) if (topics[i] !== topics[i + 1]) truthBoundaries.push(i);
+    for (let i = 0; i < testCase.topicOfUtterance.length - 1; i += 1) {
+      if (testCase.topicOfUtterance[i] !== testCase.topicOfUtterance[i + 1]) truthBoundaries.push(i);
+    }
 
     const scores = scoreBoundaries(windows, embeddings, config);
     const peaks = findBoundaryPeaks(scores, config);
-    boundaryTotal += boundaryF1(peaks.map((p) => p.index), truthBoundaries);
+    const temporal = buildConversationSegments(windows, embeddings, peaks, config);
+    const predictedBoundaries = finalTemporalBoundariesOnAxis(
+      temporal,
+      windows,
+      testCase.topicOfUtterance.length,
+    );
+    // A one-utterance tolerance is retained as this harness's diagnostic slack,
+    // but both truth and predictions now live on the same immutable axis.
+    boundaryTotal += boundaryAgreement(predictedBoundaries, truthBoundaries, 1).f1;
 
-    const segments = buildConversationSegments(windows, embeddings, peaks, config);
-    const { segments: assigned } = clusterSegments(segments, config);
-
-    // Score clustering at window resolution, so long segments weigh more.
-    const assignedPerWindow: string[] = [];
-    const truthPerWindow: string[] = [];
-    for (const segment of assigned) {
-      for (let i = 0; i < windows.length; i += 1) {
-        if (windows[i].tStartMs >= segment.tStartMs && windows[i].tEndMs <= segment.tEndMs) {
-          assignedPerWindow.push(segment.localTopicId);
-          truthPerWindow.push(topics[i]);
-        }
-      }
-    }
-    const scored = clusterScores(assignedPerWindow, truthPerWindow);
+    const { segments: assigned } = clusterSegments(temporal, config);
+    const assignedOnAxis = projectTopicAssignmentsToAxis(
+      windows,
+      assigned,
+      testCase.topicOfUtterance.length,
+    );
+    const scored = clusterAgreement(assignedOnAxis, testCase.topicOfUtterance);
     clusterTotal += scored.f1;
     precisionTotal += scored.precision;
     recallTotal += scored.recall;
-    falseMerges += scored.falseMerges;
+    falseMergePairs += scored.falseMergePairs;
+    predictedPositivePairs += scored.predictedPositivePairs;
   }
 
   const n = Math.max(1, cases.length);
@@ -196,7 +153,9 @@ function scoreCases(cases: Corpus['cases'], config: Config, shape: Shape): Score
     cluster: clusterTotal / n,
     clusterPrecision: precisionTotal / n,
     clusterRecall: recallTotal / n,
-    falseMerges,
+    falseMergePairs,
+    predictedPositivePairs,
+    falseMergeRate: predictedPositivePairs ? falseMergePairs / predictedPositivePairs : null,
   };
 }
 
@@ -225,14 +184,19 @@ for (const shape of corpus.cases[0].shapes.map((s) => s.shape)) {
   }
 }
 
-// Rank by score, but break near-ties toward precision: two configurations that
-// score alike are not equally safe, because over-splitting is repairable and
-// contamination is not. Where precision ties too, fewer false merges wins for
-// the same reason.
+// Exact lexicographic ordering is transitive. The old pairwise 0.002 "near tie"
+// rule could form preference cycles and therefore made Array.sort traversal part
+// of the experiment. Quality score remains primary; precision and false-merge
+// rate are deterministic secondary diagnostics until a frozen EVAL-06 manifest
+// supplies explicit eligibility gates and tie bands.
 results.sort((a, b) => {
-  if (Math.abs(b.score - a.score) > 0.002) return b.score - a.score;
-  if (Math.abs(b.clusterPrecision - a.clusterPrecision) > 0.002) return b.clusterPrecision - a.clusterPrecision;
-  return a.falseMerges - b.falseMerges;
+  if (b.score !== a.score) return b.score - a.score;
+  if (b.clusterPrecision !== a.clusterPrecision) return b.clusterPrecision - a.clusterPrecision;
+  const aFalseMerge = a.falseMergeRate ?? Number.POSITIVE_INFINITY;
+  const bFalseMerge = b.falseMergeRate ?? Number.POSITIVE_INFINITY;
+  if (aFalseMerge !== bFalseMerge) return aFalseMerge - bFalseMerge;
+  if (b.clusterRecall !== a.clusterRecall) return b.clusterRecall - a.clusterRecall;
+  return JSON.stringify([a.shape, a.config]).localeCompare(JSON.stringify([b.shape, b.config]));
 });
 
 const describeCase = (c: Corpus['cases'][number]) => `${c.name}${c.holdout ? ' [holdout]' : ''}`;
@@ -257,14 +221,15 @@ if (!tuningCases.length) {
   );
 }
 
-console.log('  rank  score  bound  clustF1  cPrec  cRec   fMerge  win/str  peak(n,prom)  pause  minSeg  assign  merge  every');
+console.log('  rank  score  bound  clustF1  cPrec  cRec   fmRate  win/str  peak(n,prom)  pause  minSeg  assign  merge  every');
 for (const r of results.slice(0, 12)) {
   const c = r.config;
+  const falseMerge = r.falseMergeRate == null ? 'n/a' : r.falseMergeRate.toFixed(3);
   console.log(
     `  ${String(results.indexOf(r) + 1).padStart(4)}  ${r.score.toFixed(3)}  ${r.boundary.toFixed(3)}`
     + `  ${r.cluster.toFixed(3)}`.padEnd(9)
     + `  ${r.clusterPrecision.toFixed(3)}  ${r.clusterRecall.toFixed(3)}`
-    + `  ${String(r.falseMerges)}`.padEnd(8)
+    + `  ${falseMerge}`.padEnd(8)
     + `  ${r.shape.windowUtterances}/${r.shape.windowStride}`.padEnd(9)
     + `  ${c.peakNeighbourhood},${c.peakMinProminence}`.padEnd(14)
     + `  ${c.longPauseMs / 1000}s`.padEnd(7)
@@ -291,7 +256,7 @@ if (winner && holdoutCases.length) {
     + `\n    score ${((held.boundary + held.cluster) / 2).toFixed(3)}`
     + `   bound ${held.boundary.toFixed(3)}   clustF1 ${held.cluster.toFixed(3)}`
     + `   cPrec ${held.clusterPrecision.toFixed(3)}   cRec ${held.clusterRecall.toFixed(3)}`
-    + `   falseMerges ${held.falseMerges}`
+    + `   falseMergeRate ${held.falseMergeRate == null ? 'n/a' : held.falseMergeRate.toFixed(3)}`
     + `\n    tuning score was ${winner.score.toFixed(3)}`
     + ` (${(((held.boundary + held.cluster) / 2) - winner.score >= 0 ? '+' : '')}`
     + `${((((held.boundary + held.cluster) / 2) - winner.score)).toFixed(3)} on held-out data)`,
@@ -302,7 +267,7 @@ if (winner && syntheticCases.length && tuningCases.length) {
   const synthetic = scoreCases(syntheticCases, winner.config as unknown as Config, winner.shape);
   console.log(
     `\n  synthetic cases, winning configuration: score ${((synthetic.boundary + synthetic.cluster) / 2).toFixed(3)}`
-    + `   falseMerges ${synthetic.falseMerges}`
+    + `   falseMergeRate ${synthetic.falseMergeRate == null ? 'n/a' : synthetic.falseMergeRate.toFixed(3)}`
     + '\n    (mechanics check only — clean topic blocks, so a high score here proves little)',
   );
 }

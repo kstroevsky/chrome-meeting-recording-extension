@@ -15,30 +15,66 @@
  */
 
 import { normalizeTranscript, type Transcript } from '../../../shared/transcript';
-import { TRANSCRIPTS_STORE as STORE_NAME, openRecordingHistoryDatabase } from '../RecordingLibraryDatabase';
+import type { AnalysisEnvironmentProvenance } from '../../../shared/analysis/provenance';
+import {
+  TRANSCRIPT_CANONICALIZATION_VERSION,
+  TRANSCRIPT_SCHEMA_VERSION,
+  type TranscriptSnapshot,
+} from '../../../shared/transcriptIdentity';
+import {
+  ANALYSIS_WORK_STORE,
+  TRANSCRIPTS_STORE as STORE_NAME,
+  openRecordingHistoryDatabase,
+} from '../RecordingLibraryDatabase';
+import {
+  cacheTranscriptContentHash,
+  replaceTranscriptAndRequestAnalysis,
+  requestCurrentTranscriptAnalysis,
+} from './RecordingTranscriptAnalysisRequests';
+import {
+  createTranscriptGeneration,
+  readStoredTranscript,
+  sameTranscript,
+  toDurableTranscript,
+} from './RecordingTranscriptCodec';
 
 export type RecordingTranscriptMutation = (current: Transcript | undefined) => Transcript | undefined;
 
 export interface RecordingTranscriptRepositoryPort {
-  get(recordingId: string): Promise<Transcript | undefined>;
-  update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<Transcript | undefined>;
+  get(recordingId: string): Promise<TranscriptSnapshot | undefined>;
+  update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<TranscriptSnapshot | undefined>;
+  replaceAndRequestAnalysis(
+    recordingId: string,
+    transcript: Transcript,
+    contentHash: string,
+    environment: AnalysisEnvironmentProvenance,
+  ): Promise<TranscriptSnapshot>;
+  requestCurrentAnalysis(
+    recordingId: string,
+    environment: AnalysisEnvironmentProvenance,
+    options?: { force?: boolean },
+  ): Promise<TranscriptSnapshot | undefined>;
+  cacheContentHash(recordingId: string, generation: string, revision: number, contentHash: string): Promise<void>;
+  listRecordingIds(limit: number, after?: string): Promise<{
+    recordingIds: string[];
+    nextCursor?: string;
+  }>;
   remove(recordingId: string): Promise<void>;
 }
-
-type StoredTranscript = Transcript & { recordingId: string; updatedAt: number };
 
 export class RecordingTranscriptRepository implements RecordingTranscriptRepositoryPort {
   constructor(
     private readonly factory?: IDBFactory,
     private readonly now: () => number = () => Date.now(),
+    private readonly makeGeneration: () => string = createTranscriptGeneration,
   ) {}
 
-  async get(recordingId: string): Promise<Transcript | undefined> {
+  async get(recordingId: string): Promise<TranscriptSnapshot | undefined> {
     const database = await this.open();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readonly');
       const request = transaction.objectStore(STORE_NAME).get(recordingId);
-      request.onsuccess = () => resolve(readStored(request.result));
+      request.onsuccess = () => resolve(readStoredTranscript(request.result));
       request.onerror = () => reject(request.error ?? new Error('Could not read recording transcript'));
     });
   }
@@ -47,13 +83,13 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
    * Read-modify-write in a single `readwrite` transaction. A throwing mutator
    * aborts the transaction and rejects rather than committing a partial write.
    */
-  async update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<Transcript | undefined> {
+  async update(recordingId: string, mutate: RecordingTranscriptMutation): Promise<TranscriptSnapshot | undefined> {
     const database = await this.open();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
       const request = store.get(recordingId);
-      let result: Transcript | undefined;
+      let result: TranscriptSnapshot | undefined;
       let settled = false;
       const fail = (error: unknown) => {
         if (settled) return;
@@ -63,14 +99,27 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
       request.onerror = () => fail(request.error ?? new Error('Could not read recording transcript'));
       request.onsuccess = () => {
         try {
-          // Normalize on the way back out too: the mutator's result is durable
-          // data, so it goes through the same decode as anything read from disk.
-          const next = normalizeTranscript(mutate(readStored(request.result)));
-          result = next;
+          const current = readStoredTranscript(request.result);
+          const next = normalizeTranscript(mutate(current?.transcript));
           if (next && next.segments.length) {
-            store.put({ recordingId, ...next, updatedAt: this.now() } satisfies StoredTranscript);
+            if (current && sameTranscript(current.transcript, next)) {
+              result = current;
+              return;
+            }
+            const committedAt = this.now();
+            result = {
+              schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+              canonicalizationVersion: TRANSCRIPT_CANONICALIZATION_VERSION,
+              generation: this.makeGeneration(),
+              revision: (current?.revision ?? 0) + 1,
+              contentHash: '',
+              committedAt,
+              transcript: next,
+            };
+            store.put(toDurableTranscript(recordingId, result));
           } else {
             // A transcript with no words is a deletion, not an empty row to read.
+            result = undefined;
             store.delete(recordingId);
           }
         } catch (error) {
@@ -81,18 +130,103 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
       transaction.oncomplete = () => {
         if (settled) return;
         settled = true;
-        resolve(result && result.segments.length ? result : undefined);
+        resolve(result);
       };
       transaction.onerror = () => fail(transaction.error ?? new Error('Could not write recording transcript'));
       transaction.onabort = () => fail(transaction.error ?? new Error('Recording transcript write aborted'));
     });
   }
 
+  /**
+   * Replaces the canonical transcript and requests analysis in one transaction.
+   *
+   * Computing the hash happens before this boundary. Once the transaction
+   * commits, the exact transcript identity and its desired analysis request are
+   * durable together.
+   */
+  async replaceAndRequestAnalysis(
+    recordingId: string,
+    transcript: Transcript,
+    contentHash: string,
+    environment: AnalysisEnvironmentProvenance,
+  ): Promise<TranscriptSnapshot> {
+    return await replaceTranscriptAndRequestAnalysis(
+      this.factory,
+      this.now,
+      this.makeGeneration,
+      recordingId,
+      transcript,
+      contentHash,
+      environment,
+    );
+  }
+
+  /** Requests analysis for the exact transcript row observed by this transaction. */
+  async requestCurrentAnalysis(
+    recordingId: string,
+    environment: AnalysisEnvironmentProvenance,
+    options: { force?: boolean } = {},
+  ): Promise<TranscriptSnapshot | undefined> {
+    return await requestCurrentTranscriptAnalysis(
+      this.factory,
+      this.now,
+      recordingId,
+      environment,
+      options,
+    );
+  }
+
+  /** Caches a derived hash only if the exact transcript mutation is still current. */
+  async cacheContentHash(
+    recordingId: string,
+    generation: string,
+    revision: number,
+    contentHash: string,
+  ): Promise<void> {
+    await cacheTranscriptContentHash(
+      this.factory,
+      this.now,
+      recordingId,
+      generation,
+      revision,
+      contentHash,
+    );
+  }
+
+  async listRecordingIds(limit: number, after?: string): Promise<{
+    recordingIds: string[];
+    nextCursor?: string;
+  }> {
+    if (limit <= 0) return { recordingIds: [] };
+    const database = await this.open();
+    return await new Promise((resolve, reject) => {
+      const ids: string[] = [];
+      const transaction = database.transaction(STORE_NAME, 'readonly');
+      const range = after ? IDBKeyRange.lowerBound(after, true) : undefined;
+      const request = transaction.objectStore(STORE_NAME).openKeyCursor(range);
+      request.onerror = () => reject(request.error ?? new Error('Could not list recording transcripts'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve({ recordingIds: ids });
+          return;
+        }
+        if (ids.length >= limit) {
+          resolve({ recordingIds: ids, nextCursor: ids[ids.length - 1] });
+          return;
+        }
+        if (typeof cursor.primaryKey === 'string') ids.push(cursor.primaryKey);
+        cursor.continue();
+      };
+    });
+  }
+
   async remove(recordingId: string): Promise<void> {
     const database = await this.open();
     await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, 'readwrite');
+      const transaction = database.transaction([STORE_NAME, ANALYSIS_WORK_STORE], 'readwrite');
       transaction.objectStore(STORE_NAME).delete(recordingId);
+      transaction.objectStore(ANALYSIS_WORK_STORE).delete(recordingId);
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error('Could not delete recording transcript'));
       transaction.onabort = () => reject(transaction.error ?? new Error('Recording transcript delete aborted'));
@@ -102,9 +236,4 @@ export class RecordingTranscriptRepository implements RecordingTranscriptReposit
   private open(): Promise<IDBDatabase> {
     return openRecordingHistoryDatabase(this.factory);
   }
-}
-
-function readStored(value: unknown): Transcript | undefined {
-  const transcript = normalizeTranscript(value);
-  return transcript && transcript.segments.length ? transcript : undefined;
 }

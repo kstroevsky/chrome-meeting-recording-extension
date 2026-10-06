@@ -99,16 +99,8 @@ export function wireRecordingSessionRuntime(deps: SessionRuntimeDeps): void {
       if (ending === 'discarded') {
         return;
       }
-      void deps.analysisCoordinator.analyze(historyId)
-        .then((started) => {
-          if (!started.ok && started.reason !== 'no-transcript') {
-            deps.logger.warn(
-              `Topic analysis did not start for ${historyId}: ${started.reason}`,
-              started.error ?? '',
-            );
-          }
-        })
-        .catch((error) => deps.logger.warn('Could not start topic analysis for the run:', error));
+      void deps.transcripts.commit(historyId)
+        .catch((error) => deps.logger.warn('Could not commit the finished transcript:', error));
     },
   });
 

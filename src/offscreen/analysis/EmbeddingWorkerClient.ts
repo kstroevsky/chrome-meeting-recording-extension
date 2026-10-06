@@ -19,7 +19,11 @@
  */
 
 import type { Embedding } from '../../shared/analysis/types';
+import type { AnalysisConfig, ContextWindow } from '../../shared/analysis/types';
+import type { AnalysisProgress, AnalysisResult } from '../../shared/analysis/analyzeTranscript';
 import type { EmbeddingDtype } from '../../shared/analysis/provenance';
+import type { WindowConfig } from '../../shared/analysis/windows';
+import type { TranscriptSegment } from '../../shared/transcript';
 import type {
   AnalysisWorkerRequest,
   AnalysisWorkerResponse,
@@ -45,6 +49,8 @@ export type EmbeddingWorkerDeps = {
   openTimeoutMs?: number;
   /** Bounds a single batch. Generous: a WASM batch on a cold machine is slow. */
   embedTimeoutMs?: number;
+  /** Bounds one complete transcript analysis in the worker. */
+  analysisTimeoutMs?: number;
 };
 
 /** What the worker answered with when it opened — the provenance-bearing facts. */
@@ -52,11 +58,13 @@ export type EmbeddingEngineInfo = {
   device: EmbeddingDevice;
   dimensions: number;
   dtype: EmbeddingDtype;
+  maxTokens: number;
   loadMs: number;
 };
 
 const DEFAULT_OPEN_TIMEOUT_MS = 120_000;
 const DEFAULT_EMBED_TIMEOUT_MS = 120_000;
+const DEFAULT_ANALYSIS_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * Session-wide latch: once the worker path has been probed and found unusable
@@ -70,6 +78,7 @@ type PendingRequest = {
   resolve: (response: AnalysisWorkerResponse) => void;
   reject: (error: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
+  onProgress?: (progress: AnalysisProgress) => void;
 };
 
 export class EmbeddingWorkerClient {
@@ -208,9 +217,74 @@ export class EmbeddingWorkerClient {
     return vectors;
   }
 
+  /** Uses the already-loaded packaged tokenizer to make lossless token-safe windows. */
+  async prepareWindows(segments: TranscriptSegment[], config: WindowConfig): Promise<ContextWindow[]> {
+    if (this.failure) throw this.failure;
+    if (this.disposed) throw new Error('The embedding worker client is disposed');
+    if (!segments.length) return [];
+
+    const response = await this.request({
+      type: 'PREPARE_WINDOWS',
+      seq: this.nextSeq(),
+      segments,
+      config,
+    });
+    if (response.type === 'ERROR') throw new Error(response.error);
+    if (response.type !== 'PREPARED_WINDOWS') {
+      throw new Error(`Unexpected embedding reply: ${response.type}`);
+    }
+    for (const window of response.windows) {
+      if (window.embeddingChunks?.length) {
+        if (window.embeddingChunks.length < 2
+          || window.embeddingChunks.some((chunk) => (
+            !chunk.tokenLength || chunk.tokenLength > this.info.maxTokens || !chunk.text
+          ))) {
+          throw new Error('The embedding worker returned an invalid token-bounded chunk');
+        }
+      } else if (!window.tokenLength || window.tokenLength > this.info.maxTokens) {
+        throw new Error('The embedding worker returned a window outside the packaged token limit');
+      }
+    }
+    return response.windows;
+  }
+
   /** An `EncodeBatch` bound to this client, for `analyzeTranscript`. */
   encoder(): (texts: string[]) => Promise<Embedding[]> {
     return (texts) => this.embed(texts);
+  }
+
+  /** Runs the complete deterministic pipeline in the worker, off the media-control thread. */
+  async analyze(
+    transcript: TranscriptSegment[],
+    config: AnalysisConfig,
+    options: { signal?: AbortSignal; onProgress?: (progress: AnalysisProgress) => void } = {},
+  ): Promise<AnalysisResult> {
+    if (this.failure) throw this.failure;
+    if (this.disposed) throw new Error('The embedding worker client is disposed');
+    const seq = this.nextSeq();
+    const abort = () => {
+      this.fail(new Error('Analysis was cancelled'));
+      this.worker.terminate();
+    };
+    if (options.signal?.aborted) {
+      abort();
+      throw new Error('Analysis was cancelled');
+    }
+    options.signal?.addEventListener('abort', abort, { once: true });
+    try {
+      const response = await this.request(
+        { type: 'ANALYZE', seq, transcript, config },
+        {
+          timeoutMs: this.deps.analysisTimeoutMs ?? DEFAULT_ANALYSIS_TIMEOUT_MS,
+          onProgress: options.onProgress,
+        },
+      );
+      if (response.type === 'ERROR') throw new Error(response.error);
+      if (response.type !== 'ANALYZED') throw new Error(`Unexpected analysis reply: ${response.type}`);
+      return response.result;
+    } finally {
+      options.signal?.removeEventListener('abort', abort);
+    }
   }
 
   /** Terminates the worker and rejects anything still in flight. */
@@ -226,8 +300,11 @@ export class EmbeddingWorkerClient {
     return this.seq;
   }
 
-  private request(message: AnalysisWorkerRequest): Promise<AnalysisWorkerResponse> {
-    const timeoutMs = this.deps.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
+  private request(
+    message: AnalysisWorkerRequest,
+    options: { timeoutMs?: number; onProgress?: (progress: AnalysisProgress) => void } = {},
+  ): Promise<AnalysisWorkerResponse> {
+    const timeoutMs = options.timeoutMs ?? this.deps.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
     return new Promise<AnalysisWorkerResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(message.seq);
@@ -235,7 +312,7 @@ export class EmbeddingWorkerClient {
         // forever and its outbox entry would never reach a terminal state.
         this.fail(new Error(`The embedding worker did not answer within ${timeoutMs} ms`));
       }, timeoutMs);
-      this.pending.set(message.seq, { resolve, reject, timer });
+      this.pending.set(message.seq, { resolve, reject, timer, onProgress: options.onProgress });
       try {
         this.worker.postMessage(message);
       } catch (error) {
@@ -249,6 +326,10 @@ export class EmbeddingWorkerClient {
   private settle(response: AnalysisWorkerResponse): void {
     const pending = this.pending.get(response.seq);
     if (!pending) return;
+    if (response.type === 'ANALYSIS_PROGRESS') {
+      pending.onProgress?.(response.progress);
+      return;
+    }
     this.pending.delete(response.seq);
     clearTimeout(pending.timer);
     pending.resolve(response);
@@ -288,7 +369,13 @@ function openHandshake(
       const data = event.data;
       if (data?.type === 'OPENED') {
         cleanup();
-        resolve({ device: data.device, dimensions: data.dimensions, dtype: data.dtype, loadMs: data.loadMs });
+        resolve({
+          device: data.device,
+          dimensions: data.dimensions,
+          dtype: data.dtype,
+          maxTokens: data.maxTokens,
+          loadMs: data.loadMs,
+        });
       } else if (data?.type === 'ERROR') {
         cleanup();
         reject(new Error(`The embedding worker could not open: ${data.error}`));

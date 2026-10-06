@@ -15,22 +15,49 @@
 import {
   MAX_TRANSCRIPT_SEGMENTS,
   sortTranscriptSegments,
+  validateTranscriptForWrite,
+  validateTranscriptSegmentForWrite,
   type Transcript,
   type TranscriptSegment,
   type TranscriptSource,
 } from '../../../shared/transcript';
 import type { TranscriptStatus } from '../../../shared/playback';
+import type { AnalysisEnvironmentProvenance } from '../../../shared/analysis/provenance';
+import { hashTranscript, type TranscriptSnapshot } from '../../../shared/transcriptIdentity';
 import type { RecordingTranscriptRepositoryPort } from './RecordingTranscriptRepository';
+
+type TranscriptCommitListener = (recordingId: string, snapshot: TranscriptSnapshot) => void | Promise<void>;
 
 /** Owns every transcript transition for a recording, keyed by its history id. */
 export class RecordingTranscriptService {
+  private onCommitted?: TranscriptCommitListener;
+
   constructor(
     private readonly repository: RecordingTranscriptRepositoryPort,
+    onCommitted?: TranscriptCommitListener,
+    /** Any change to the stored transcript; integrations re-read the recording. */
     private readonly onChanged?: (recordingId: string) => void,
-  ) {}
+    /** Output-affecting conditions for durable desired-analysis work. */
+    private readonly currentAnalysisEnvironment?: () => AnalysisEnvironmentProvenance,
+  ) {
+    this.onCommitted = onCommitted;
+  }
+
+  setCommitListener(listener: TranscriptCommitListener): void {
+    this.onCommitted = listener;
+  }
 
   async get(recordingId: string): Promise<Transcript | undefined> {
-    return await this.repository.get(recordingId);
+    return (await this.getSnapshot(recordingId))?.transcript;
+  }
+
+  async getSnapshot(recordingId: string): Promise<TranscriptSnapshot | undefined> {
+    const stored = await this.repository.get(recordingId);
+    if (!stored) return undefined;
+    if (stored.contentHash) return stored;
+    const contentHash = await hashTranscript(stored.transcript);
+    await this.repository.cacheContentHash(recordingId, stored.generation, stored.revision, contentHash).catch(() => {});
+    return { ...stored, contentHash };
   }
 
   /**
@@ -43,8 +70,7 @@ export class RecordingTranscriptService {
    * player branches on data rather than on a feature flag.
    */
   async status(recordingId: string): Promise<TranscriptStatus> {
-    const transcript = await this.repository.get(recordingId);
-    return transcript ? 'ready' : 'none';
+    return await this.repository.get(recordingId) ? 'ready' : 'none';
   }
 
   /**
@@ -59,6 +85,7 @@ export class RecordingTranscriptService {
     segments: TranscriptSegment[],
   ): Promise<number> {
     if (!segments.length) return 0;
+    const validatedSegments = segments.map(validateTranscriptSegmentForWrite);
 
     let added = 0;
     await this.repository.update(recordingId, (current) => {
@@ -73,7 +100,7 @@ export class RecordingTranscriptService {
 
       const existing = current?.segments ?? [];
       const seen = new Set(existing.map(segmentKey));
-      const fresh = segments.filter((segment) => {
+      const fresh = validatedSegments.filter((segment) => {
         const key = segmentKey(segment);
         if (seen.has(key)) return false;
         seen.add(key);
@@ -92,9 +119,80 @@ export class RecordingTranscriptService {
     return added;
   }
 
+  /** Replaces the canonical transcript and announces the committed revision. */
+  async replace(recordingId: string, transcript: Transcript): Promise<TranscriptSnapshot> {
+    const validated = validateTranscriptForWrite(transcript);
+    const environment = this.currentAnalysisEnvironment?.();
+    const snapshot = environment
+      ? await this.repository.replaceAndRequestAnalysis(
+        recordingId,
+        validated,
+        await hashTranscript(validated),
+        environment,
+      )
+      : await this.replaceWithoutAnalysisRequest(recordingId, validated);
+    this.onChanged?.(recordingId);
+    await this.notifyCommitted(recordingId, snapshot);
+    return snapshot;
+  }
+
+  /** Announces that the current transcript is complete enough for derived work. */
+  async commit(recordingId: string): Promise<TranscriptSnapshot | undefined> {
+    const snapshot = await this.requestAnalysis(recordingId);
+    if (snapshot) await this.notifyCommitted(recordingId, snapshot);
+    return snapshot;
+  }
+
+  /** Durably requests analysis for the current exact transcript identity. */
+  async requestAnalysis(
+    recordingId: string,
+    options: { force?: boolean } = {},
+  ): Promise<TranscriptSnapshot | undefined> {
+    const environment = this.currentAnalysisEnvironment?.();
+    let snapshot = environment
+      ? await this.repository.requestCurrentAnalysis(recordingId, environment, options)
+      : await this.getSnapshot(recordingId);
+    if (snapshot && !snapshot.contentHash) {
+      snapshot = await this.requireHash(recordingId, snapshot);
+    }
+    return snapshot;
+  }
+
+  async listRecordingIds(limit: number, after?: string): Promise<{
+    recordingIds: string[];
+    nextCursor?: string;
+  }> {
+    return await this.repository.listRecordingIds(limit, after);
+  }
+
   /** Drops a recording's transcript — a discarded run, or a deleted entry. */
   async removeAll(recordingId: string): Promise<void> {
     await this.repository.remove(recordingId);
+  }
+
+  private async requireHash(recordingId: string, stored: TranscriptSnapshot): Promise<TranscriptSnapshot> {
+    if (stored.contentHash) return stored;
+    const contentHash = await hashTranscript(stored.transcript);
+    await this.repository.cacheContentHash(recordingId, stored.generation, stored.revision, contentHash);
+    return { ...stored, contentHash };
+  }
+
+  private async replaceWithoutAnalysisRequest(
+    recordingId: string,
+    transcript: Transcript,
+  ): Promise<TranscriptSnapshot> {
+    const stored = await this.repository.update(recordingId, () => transcript);
+    if (!stored) throw new Error('Transcript replacement did not persist');
+    return await this.requireHash(recordingId, stored);
+  }
+
+  private async notifyCommitted(recordingId: string, snapshot: TranscriptSnapshot): Promise<void> {
+    try {
+      await this.onCommitted?.(recordingId, snapshot);
+    } catch {
+      // Durable desired work is already committed. This callback only wakes the
+      // dispatcher, so a transient wake-up failure cannot roll back the write.
+    }
   }
 }
 

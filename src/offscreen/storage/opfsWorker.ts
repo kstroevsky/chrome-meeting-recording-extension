@@ -20,6 +20,7 @@
 import fixWebmDuration from 'webm-duration-fix';
 import { FlushPolicy } from './FlushPolicy';
 import { fileHandleForKey, removeByKey } from './opfsLayout';
+import { writeSyncFully } from './syncAccessWrite';
 
 // FileSystemSyncAccessHandle is worker-only and absent from the DOM lib we
 // target, so declare the minimal surface we use.
@@ -79,8 +80,8 @@ ctx.onmessage = async (event) => {
       case 'write': {
         if (!accessHandle) throw new Error('write before open');
         const view = new Uint8Array(msg.buffer);
-        accessHandle.write(view, { at: offset });
-        offset += view.byteLength;
+        const bytesWritten = writeSyncFully(accessHandle, view, offset);
+        offset += bytesWritten;
         // Periodically force the page cache to disk so a hard power cut loses at
         // most ~one flush interval of recording, not the whole unflushed tail.
         // Best-effort: close() still does the authoritative flush, so a transient
@@ -92,7 +93,7 @@ ctx.onmessage = async (event) => {
             /* best-effort; close() will flush again */
           }
         }
-        ctx.postMessage({ type: 'written', seq: msg.seq, bytes: view.byteLength });
+        ctx.postMessage({ type: 'written', seq: msg.seq, bytes: bytesWritten });
         break;
       }
       case 'close': {

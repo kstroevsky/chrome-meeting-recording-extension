@@ -1,5 +1,7 @@
 import { listLibraryFiles } from '../../offscreen/storage/opfsLayout';
 import { reloadRuntime } from '../../platform/chrome/runtime';
+import { createAlarm, getAlarm } from '../../platform/chrome/alarms';
+import { getLocalStorageValues, setLocalStorageValues } from '../../platform/chrome/storage';
 import { makeLogger } from '../../shared/logger';
 import { getPerfSettingsSnapshot } from '../../shared/perf';
 import { DriveLibraryCoordinator } from '../drive/DriveLibraryCoordinator';
@@ -25,9 +27,16 @@ import { UploadStatePersistence } from './UploadStatePersistence';
 import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
+import {
+  ANALYSIS_RECONCILIATION_ALARM,
+  ANALYSIS_RECONCILIATION_CURSOR_KEY,
+  AnalysisReconciliationScheduler,
+} from './AnalysisReconciliationScheduler';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 import { BackgroundIntegrationRuntime } from '../integrations/BackgroundIntegrationRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
+
+const ANALYSIS_RETRY_ALARM = 'analysis-retry:v1';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
@@ -47,6 +56,13 @@ export function createBackgroundRuntime() {
     logger,
   });
   const { playbackLeases, driveAuthLease } = createPlaybackSupportRuntime(logger);
+  const scheduleAnalysisWake = (when: number) => {
+    void (async () => {
+      const existing = await getAlarm(ANALYSIS_RETRY_ALARM);
+      if (existing?.scheduledTime != null && existing.scheduledTime <= when) return;
+      await createAlarm(ANALYSIS_RETRY_ALARM, { when });
+    })().catch((error) => logger.warn('Could not schedule analysis retry:', error));
+  };
 
   let notifyIntegrationChanged: (recordingId: string) => void = () => {};
   const library = createLibraryRuntime({
@@ -54,31 +70,37 @@ export function createBackgroundRuntime() {
     playbackLeases,
     logger,
     onAnalysisSettled: () => criticalWork.sync(),
+    scheduleAnalysisWake,
     onIntegrationChanged: (recordingId) => notifyIntegrationChanged(recordingId),
+  });
+  const analysisReconciliation = new AnalysisReconciliationScheduler({
+    listRecordingIds: (limit, after) => library.transcripts.listRecordingIds(limit, after),
+    reconcile: (recordingIds) => library.analysisCoordinator.reconcile(recordingIds),
+    readCursor: async () => {
+      const stored = await getLocalStorageValues(ANALYSIS_RECONCILIATION_CURSOR_KEY);
+      const value = stored[ANALYSIS_RECONCILIATION_CURSOR_KEY];
+      return typeof value === 'string' && value ? value : undefined;
+    },
+    writeCursor: (cursor) => setLocalStorageValues({
+      [ANALYSIS_RECONCILIATION_CURSOR_KEY]: cursor ?? '',
+    }),
+    createAlarm,
+    getAlarm,
   });
   const integrations = new BackgroundIntegrationRuntime({
     listHistory: () => library.history.list(),
     getHistory: (recordingId) => library.historyRepository.get(recordingId),
     getContext: (recordingId) => library.recordingContexts.get(recordingId),
     listNotations: (recordingId) => library.notations.list(recordingId),
-    getTranscript: (recordingId) => library.transcripts.get(recordingId),
+    getTranscriptSnapshot: (recordingId) => library.transcripts.getSnapshot(recordingId),
     getAnalysisState: (recordingId) => library.analyses.exportState(recordingId),
   });
   notifyIntegrationChanged = (recordingId) => {
     void integrations.consider(recordingId)
       .catch((error) => logger.warn('Integration recording consideration deferred:', error));
   };
-  wireAnalysisRuntime({
-    offscreen,
-    analysisCoordinator: library.analysisCoordinator,
-    criticalWork,
-    logger,
-  });
-  const driveLibrary = new DriveLibraryCoordinator(
-    library.historyRepository,
-    library.history,
-    logger,
-  );
+  wireAnalysisRuntime({ offscreen, analysisCoordinator: library.analysisCoordinator, criticalWork, logger });
+  const driveLibrary = new DriveLibraryCoordinator(library.historyRepository, library.history, logger);
   const transcriptCapture = createTranscriptCapture(session, library.transcripts, logger);
 
   let sessionHydrated = false;
@@ -198,6 +220,11 @@ export function createBackgroundRuntime() {
       });
       await sharing.resumeIfPending().catch((error) => logger.warn('Pending sharing recovery deferred:', error));
       await integrations.reconcile().catch((error) => logger.warn('Integration delivery recovery deferred:', error));
+      try {
+        await analysisReconciliation.runSlice();
+      } catch (error) {
+        logger.warn('Analysis reconciliation deferred:', error);
+      }
     } catch (error) {
       if (!sessionHydrated) readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);
@@ -216,6 +243,14 @@ export function createBackgroundRuntime() {
     handleAlarm: (alarm: chrome.alarms.Alarm) => {
       localDelivery.handleAlarm(alarm);
       integrations.handleAlarm(alarm);
+      if (alarm.name === ANALYSIS_RETRY_ALARM) {
+        void library.analysisCoordinator.dispatchDue()
+          .catch((error) => logger.warn('Analysis retry wake failed:', error));
+      }
+      if (alarm.name === ANALYSIS_RECONCILIATION_ALARM) {
+        void analysisReconciliation.runSlice()
+          .catch((error) => logger.warn('Analysis reconciliation wake failed:', error));
+      }
     },
     handleConnect: (port: chrome.runtime.Port) => {
       if (port.name === 'offscreen') offscreen.attachPort(port);

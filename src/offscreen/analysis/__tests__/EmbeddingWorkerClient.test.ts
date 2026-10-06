@@ -1,5 +1,6 @@
 import { EmbeddingWorkerClient } from '../EmbeddingWorkerClient';
 import type { AnalysisWorkerRequest, AnalysisWorkerResponse } from '../analysisWorkerProtocol';
+import type { AnalysisConfig } from '../../../shared/analysis/types';
 
 /**
  * A worker double that records what it was asked and answers on demand. Using
@@ -59,6 +60,19 @@ const CONFIG = {
   dtype: 'q8' as const,
 };
 
+const ANALYSIS_CONFIG: AnalysisConfig = {
+  windowUtterances: 4,
+  windowStride: 4,
+  longPauseMs: 3_000,
+  peakNeighbourhood: 2,
+  peakMinProminence: 0.05,
+  minSegmentMs: 1_000,
+  assignmentThreshold: 0.93,
+  mergeThreshold: 0.95,
+  mergeEverySegments: 12,
+  keywordsPerTopic: 3,
+};
+
 function opened(overrides: Partial<Extract<AnalysisWorkerResponse, { type: 'OPENED' }>> = {}) {
   return {
     type: 'OPENED' as const,
@@ -66,6 +80,7 @@ function opened(overrides: Partial<Extract<AnalysisWorkerResponse, { type: 'OPEN
     device: 'webgpu' as const,
     dimensions: 4,
     dtype: 'q8' as const,
+    maxTokens: 512,
     loadMs: 12,
     ...overrides,
   };
@@ -170,6 +185,108 @@ describe('EmbeddingWorkerClient', () => {
     // Each vector owns its bytes: mutating one cannot reach another.
     result[0][0] = 99;
     expect(result[1][0]).toBe(1);
+  });
+
+  it('prepares windows in the same worker that owns the packaged tokenizer', async () => {
+    const worker = new FakeWorker();
+    const client = await openClient(worker);
+    const segment = { tStartMs: 0, tEndMs: 1_000, speaker: 'Ada', text: 'hello world' };
+
+    const promise = client.prepareWindows([segment], { windowUtterances: 4, windowStride: 4 });
+    await Promise.resolve();
+    expect(worker.sent[1]).toMatchObject({
+      type: 'PREPARE_WINDOWS',
+      seq: 1,
+      segments: [segment],
+    });
+    worker.reply({
+      type: 'PREPARED_WINDOWS',
+      seq: 1,
+      windows: [{
+        startIndex: 0,
+        endIndex: 1,
+        tStartMs: 0,
+        tEndMs: 1_000,
+        text: 'hello world',
+        sourceSpans: [{
+          segmentIndex: 0,
+          textStart: 0,
+          textEnd: 11,
+          tStartMs: 0,
+          tEndMs: 1_000,
+          speaker: 'Ada',
+          timingFidelity: 'segment',
+        }],
+        tokenLength: 5,
+        speakers: ['Ada'],
+        opensWithDiscourseCue: false,
+      }],
+    });
+
+    await expect(promise).resolves.toMatchObject([{ text: 'hello world', tokenLength: 5 }]);
+  });
+
+  it('runs the complete pipeline in the worker and forwards progress without settling early', async () => {
+    const worker = new FakeWorker();
+    const client = await openClient(worker);
+    const segment = { tStartMs: 0, tEndMs: 1_000, speaker: 'Ada', text: 'hello world' };
+    const progress: Array<{ windowsEncoded: number; windowsTotal: number }> = [];
+
+    const promise = client.analyze([segment], ANALYSIS_CONFIG, {
+      onProgress: (value) => progress.push(value),
+    });
+    await Promise.resolve();
+    expect(worker.sent[1]).toMatchObject({
+      type: 'ANALYZE',
+      seq: 1,
+      transcript: [segment],
+      config: ANALYSIS_CONFIG,
+    });
+
+    worker.reply({
+      type: 'ANALYSIS_PROGRESS',
+      seq: 1,
+      progress: { windowsEncoded: 1, windowsTotal: 2 },
+    });
+    expect(progress).toEqual([{ windowsEncoded: 1, windowsTotal: 2 }]);
+
+    const result = { segments: [], topics: [], utteranceCount: 1 };
+    worker.reply({ type: 'ANALYZED', seq: 1, result });
+    await expect(promise).resolves.toEqual(result);
+  });
+
+  it('rejects a prepared window beyond the packaged model limit', async () => {
+    const worker = new FakeWorker();
+    const client = await openClient(worker);
+    const promise = client.prepareWindows(
+      [{ tStartMs: 0, tEndMs: 1, text: 'too long' }],
+      { windowUtterances: 4, windowStride: 4 },
+    );
+    await Promise.resolve();
+    worker.reply({
+      type: 'PREPARED_WINDOWS',
+      seq: 1,
+      windows: [{
+        startIndex: 0,
+        endIndex: 1,
+        tStartMs: 0,
+        tEndMs: 1,
+        text: 'too long',
+        sourceSpans: [{
+          segmentIndex: 0,
+          textStart: 0,
+          textEnd: 8,
+          tStartMs: 0,
+          tEndMs: 1,
+          timingFidelity: 'segment',
+        }],
+        tokenLength: 513,
+        speakers: [],
+        opensWithDiscourseCue: false,
+      }],
+    });
+
+    await expect(promise).rejects.toThrow(/outside the packaged token limit/);
   });
 
   it('refuses a reply whose vector count does not match the batch', async () => {

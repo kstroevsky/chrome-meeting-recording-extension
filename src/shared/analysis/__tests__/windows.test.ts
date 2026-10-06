@@ -88,6 +88,22 @@ describe('buildContextWindows', () => {
     expect(window.tStartMs).toBe(0);
     expect(window.tEndMs).toBe(2_800);
     expect(window.text).toBe('line 0 line 1 line 2');
+    expect(window.sourceSpans).toEqual([
+      expect.objectContaining({ segmentIndex: 0, textStart: 0, textEnd: 6, timingFidelity: 'segment' }),
+      expect.objectContaining({ segmentIndex: 1, textStart: 0, textEnd: 6, timingFidelity: 'segment' }),
+      expect.objectContaining({ segmentIndex: 2, textStart: 0, textEnd: 6, timingFidelity: 'segment' }),
+    ]);
+  });
+
+  it('covers the full media interval when later utterances overlap a longer earlier one', () => {
+    const [window] = buildContextWindows([
+      { tStartMs: 0, tEndMs: 60_000, speaker: 'Ada', text: 'long explanation' },
+      { tStartMs: 2_000, tEndMs: 4_000, speaker: 'Grace', text: 'short interjection' },
+      { tStartMs: 6_000, tEndMs: 8_000, speaker: 'Linus', text: 'another interjection' },
+    ], CONFIG);
+
+    expect(window.tStartMs).toBe(0);
+    expect(window.tEndMs).toBe(60_000);
   });
 
   it('lists distinct speakers in order of first appearance', () => {

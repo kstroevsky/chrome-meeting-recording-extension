@@ -9,6 +9,7 @@ const window = (over: Partial<ContextWindow> = {}): ContextWindow => ({
   tStartMs: 0,
   tEndMs: 1_000,
   text: 'words',
+  sourceSpans: [],
   speakers: ['Ada'],
   opensWithDiscourseCue: false,
   ...over,

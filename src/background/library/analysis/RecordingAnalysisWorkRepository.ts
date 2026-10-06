@@ -1,0 +1,230 @@
+import {
+  ANALYSIS_WORK_DUE_INDEX,
+  ANALYSIS_WORK_STORE,
+  openRecordingHistoryDatabase,
+} from '../RecordingLibraryDatabase';
+import {
+  normalizeRecordingAnalysisWork,
+  type AnalysisWorkDisposition,
+  type RecordingAnalysisWork,
+} from './RecordingAnalysisWork';
+import {
+  claimWork,
+  cleanAnalysisWorkError,
+  createAttemptToken,
+  isClaimable,
+  transitionClaim,
+  type ClaimedAnalysisWork,
+} from './RecordingAnalysisWorkClaims';
+
+export type { ClaimedAnalysisWork } from './RecordingAnalysisWorkClaims';
+
+/**
+ * The first lease has to cover the cold worker/model-open path, whose own
+ * bounded budget is two minutes before embedding even starts. Progress renews
+ * this lease after dispatch, but the initial claim must not expire while that
+ * first progress-capable worker is still opening.
+ */
+export const DEFAULT_ANALYSIS_LEASE_MS = 5 * 60_000;
+
+/**
+ * Durable scheduler state for ADR-0009 TECH-04.
+ *
+ * Claims are leases, not locks. A worker may outlive its lease, so every later
+ * transition still compares requestEpoch + attemptToken before changing state.
+ */
+export class RecordingAnalysisWorkRepository {
+  constructor(
+    private readonly factory?: IDBFactory,
+    private readonly now: () => number = () => Date.now(),
+    private readonly makeAttemptToken: () => string = createAttemptToken,
+  ) {}
+
+  async get(recordingId: string): Promise<RecordingAnalysisWork | undefined> {
+    const database = await this.open();
+    return await new Promise((resolve, reject) => {
+      const request = database.transaction(ANALYSIS_WORK_STORE, 'readonly')
+        .objectStore(ANALYSIS_WORK_STORE)
+        .get(recordingId);
+      request.onsuccess = () => resolve(normalizeRecordingAnalysisWork(request.result));
+      request.onerror = () => reject(request.error ?? new Error('Could not read desired analysis work'));
+    });
+  }
+
+  /** Earliest future retry/lease expiry, excluding rows already due now. */
+  async nextAttemptAfter(now: number): Promise<number | undefined> {
+    const database = await this.open();
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readonly');
+      const index = transaction.objectStore(ANALYSIS_WORK_STORE).index(ANALYSIS_WORK_DUE_INDEX);
+      const request = index.openCursor(IDBKeyRange.lowerBound([now + 1, '']));
+      let result: number | undefined;
+      request.onerror = () => reject(request.error ?? new Error('Could not inspect future analysis work'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const work = normalizeRecordingAnalysisWork(cursor.value);
+        if (work && (work.disposition === 'retry-wait' || work.disposition === 'claimed')) {
+          result = work.nextAttemptAt;
+          return;
+        }
+        cursor.continue();
+      };
+      transaction.oncomplete = () => resolve(result);
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not inspect future analysis work'));
+    });
+  }
+
+  /**
+   * Claims at most the requested number of rows that are due now.
+   *
+   * Claimed rows remain on the due index at lease expiry. Reclaiming an expired
+   * attempt creates a new token; the old worker may still finish, but its token
+   * can no longer publish or retire the row.
+   */
+  async claimDue(
+    limit: number,
+    options: { now?: number; leaseMs?: number } = {},
+  ): Promise<ClaimedAnalysisWork[]> {
+    if (limit <= 0) return [];
+    const now = options.now ?? this.now();
+    const leaseMs = Math.max(1, options.leaseMs ?? DEFAULT_ANALYSIS_LEASE_MS);
+    const database = await this.open();
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readwrite');
+      const store = transaction.objectStore(ANALYSIS_WORK_STORE);
+      const index = store.index(ANALYSIS_WORK_DUE_INDEX);
+      const range = IDBKeyRange.bound([0, ''], [now, '\uffff']);
+      const request = index.openCursor(range);
+      const claimed: ClaimedAnalysisWork[] = [];
+      let settled = false;
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      request.onerror = () => fail(request.error ?? new Error('Could not scan due analysis work'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || claimed.length >= limit) return;
+        const current = normalizeRecordingAnalysisWork(cursor.value);
+        if (current && isClaimable(current, now) && current.transcriptHash) {
+          const next = claimWork(
+            { ...current, transcriptHash: current.transcriptHash },
+            now,
+            leaseMs,
+            this.makeAttemptToken(),
+          );
+          cursor.update(next);
+          claimed.push(next);
+        }
+        cursor.continue();
+      };
+      transaction.oncomplete = () => {
+        if (settled) return;
+        settled = true;
+        resolve(claimed);
+      };
+      transaction.onerror = () => fail(transaction.error ?? new Error('Could not claim analysis work'));
+      transaction.onabort = () => fail(transaction.error ?? new Error('Analysis work claim aborted'));
+    });
+  }
+
+  /** Claims one known recording without scanning unrelated due work. */
+  async claim(
+    recordingId: string,
+    options: { now?: number; leaseMs?: number } = {},
+  ): Promise<ClaimedAnalysisWork | undefined> {
+    const now = options.now ?? this.now();
+    const leaseMs = Math.max(1, options.leaseMs ?? DEFAULT_ANALYSIS_LEASE_MS);
+    const database = await this.open();
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction(ANALYSIS_WORK_STORE, 'readwrite');
+      const store = transaction.objectStore(ANALYSIS_WORK_STORE);
+      const request = store.get(recordingId);
+      let claimed: ClaimedAnalysisWork | undefined;
+      request.onerror = () => reject(request.error ?? new Error('Could not read desired analysis work'));
+      request.onsuccess = () => {
+        const current = normalizeRecordingAnalysisWork(request.result);
+        if (!current
+          || !current.transcriptHash
+          || (current.nextAttemptAt ?? Number.POSITIVE_INFINITY) > now
+          || !isClaimable(current, now)) return;
+        claimed = claimWork(
+          { ...current, transcriptHash: current.transcriptHash },
+          now,
+          leaseMs,
+          this.makeAttemptToken(),
+        );
+        store.put(claimed);
+      };
+      transaction.oncomplete = () => resolve(claimed);
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not claim recording analysis work'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Recording analysis claim aborted'));
+    });
+  }
+
+  /** Returns a failed attempt to the due queue only if it still owns the row. */
+  async retryClaim(
+    recordingId: string,
+    requestEpoch: number,
+    attemptToken: string,
+    error: string,
+    nextAttemptAt: number,
+  ): Promise<boolean> {
+    return await transitionClaim(this.factory, recordingId, requestEpoch, attemptToken, (current) => ({
+      ...current,
+      disposition: 'retry-wait',
+      nextAttemptAt: Math.max(0, nextAttemptAt),
+      error: cleanAnalysisWorkError(error),
+      updatedAt: this.now(),
+      claim: undefined,
+    }));
+  }
+
+  /** Records an explicit terminal disposition for the exact claimed request. */
+  async finishClaim(
+    recordingId: string,
+    requestEpoch: number,
+    attemptToken: string,
+    disposition: Extract<AnalysisWorkDisposition, 'canceled' | 'unsupported'>,
+    error?: string,
+  ): Promise<boolean> {
+    return await transitionClaim(this.factory, recordingId, requestEpoch, attemptToken, (current) => {
+      const next: RecordingAnalysisWork = {
+        ...current,
+        disposition,
+        updatedAt: this.now(),
+      };
+      delete next.claim;
+      delete next.nextAttemptAt;
+      if (error) next.error = cleanAnalysisWorkError(error);
+      else delete next.error;
+      return next;
+    });
+  }
+
+  /** Releases a claim that was selected but should not be dispatched yet. */
+  async releaseClaim(
+    recordingId: string,
+    requestEpoch: number,
+    attemptToken: string,
+  ): Promise<boolean> {
+    return await transitionClaim(this.factory, recordingId, requestEpoch, attemptToken, (current) => {
+      const next: RecordingAnalysisWork = {
+        ...current,
+        disposition: 'pending',
+        attemptCount: Math.max(0, current.attemptCount - 1),
+        nextAttemptAt: 0,
+        updatedAt: this.now(),
+      };
+      delete next.claim;
+      delete next.error;
+      return next;
+    });
+  }
+
+  private open(): Promise<IDBDatabase> {
+    return openRecordingHistoryDatabase(this.factory);
+  }
+}

@@ -12,6 +12,12 @@ import 'fake-indexeddb/auto';
 /** The popup, as Chrome identifies it: privileged requests are accepted only from extension pages. */
 const POPUP_SENDER = { url: 'chrome-extension://mock-id/popup.html' } as chrome.runtime.MessageSender;
 
+// Importing the real background initializes IndexedDB-backed recovery and can
+// exceed Jest's 5 s default when this file runs late in the full serial suite.
+// A timed-out bootstrap keeps running and can consume the next test's storage
+// mock, so give this integration-style file a bounded but realistic budget.
+jest.setTimeout(15_000);
+
 describe('background notation commands', () => {
   let stopBackgroundKeepAlive: (() => void) | undefined;
 

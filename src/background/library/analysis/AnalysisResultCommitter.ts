@@ -1,5 +1,4 @@
 import type { AnalysisJob } from '../../../shared/analysis/job';
-import type { AnalysisProvenance } from '../../../shared/analysis/provenance';
 import {
   fromWireAnalysis,
   fromWireProvenance,
@@ -12,75 +11,53 @@ const L = makeLogger('background');
 
 export type AnalysisResultCommitterDeps = {
   analyses: RecordingAnalysisService;
-  isRecordingDeleted: (historyId: string) => Promise<boolean>;
-  isPurged: (historyId: string) => boolean;
-  fallbackProvenance: (jobId: string) => AnalysisProvenance | undefined;
+  retry: (job: AnalysisJob, error: string) => Promise<boolean>;
   settle: (job: AnalysisJob) => void;
+  wake: (historyId: string) => void;
   now?: () => number;
 };
 
 /**
- * Persists completed analysis results before allowing their offscreen state to
- * be acknowledged. A transient storage failure is the only path that keeps a
- * valid result unacknowledged so replay can retry it after reconnect.
+ * Publishes results through the repository's single fenced transaction.
+ * Storage failures remain unacknowledged so the offscreen-held payload can be
+ * replayed; incoherent payloads are retried as fresh work.
  */
 export class AnalysisResultCommitter {
   constructor(private readonly deps: AnalysisResultCommitterDeps) {}
 
   async commit(job: AnalysisJob, wire: WireAnalysis, wireProvenance?: unknown): Promise<void> {
-    if (this.deps.isPurged(job.historyId) || await this.deps.isRecordingDeleted(job.historyId)) {
-      L.log(`Discarding an analysis for deleted recording ${job.historyId}`);
+    if (!job.requestEpoch) {
       this.deps.settle(job);
+      this.deps.wake(job.historyId);
       return;
     }
 
     const result = fromWireAnalysis(wire);
-    if (!result) {
+    const provenance = fromWireProvenance(wireProvenance);
+    if (!result || !provenance) {
+      const error = !result
+        ? 'The completed analysis result was invalid and could not be stored.'
+        : 'The completed analysis result did not include valid input provenance.';
       L.warn('Discarding an incoherent analysis result', job.historyId, job.id);
-      await this.deps.analyses.recordJobOutcome(
-        job,
-        'failed',
-        'The completed analysis result was invalid and could not be stored.',
-        this.deps.now?.(),
-      );
+      await this.deps.retry(job, error);
       this.deps.settle(job);
       return;
     }
-
-    const provenance = fromWireProvenance(wireProvenance)
-      ?? this.deps.fallbackProvenance(job.id)
-      ?? this.deps.analyses.provenanceForNewRun();
 
     try {
-      await this.deps.analyses.save(job.historyId, result, provenance, this.deps.now?.(), job);
-    } catch (error) {
-      if (!isQuotaExceeded(error)) {
-        L.warn('Could not store an analysis result', job.historyId, error);
-        return;
-      }
-      L.warn(
-        `Discarding the analysis for ${job.historyId}: storage is full. `
-        + 'The recording is unaffected and can be analysed again after freeing space.',
-      );
-      await this.deps.analyses.recordJobOutcome(
+      const { committed } = await this.deps.analyses.saveAttempt(
+        job.historyId,
+        result,
+        provenance,
         job,
-        'failed',
-        'Analysis completed, but its result could not be stored because storage is full.',
         this.deps.now?.(),
-      ).catch(() => {});
+      );
       this.deps.settle(job);
-      return;
+      if (!committed) this.deps.wake(job.historyId);
+    } catch (error) {
+      // The held result and terminal outbox row remain unacknowledged. Replay
+      // retries the exact same fenced transaction after a worker restart.
+      L.warn('Could not store an analysis result', job.historyId, error);
     }
-
-    // Deletion can race the write, so fence once more before acknowledging.
-    if (await this.deps.isRecordingDeleted(job.historyId)) {
-      await this.deps.analyses.removeAll(job.historyId).catch(() => {});
-    }
-    this.deps.settle(job);
   }
-}
-
-function isQuotaExceeded(error: unknown): boolean {
-  const name = (error as { name?: unknown } | null)?.name;
-  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED';
 }

@@ -12,6 +12,7 @@ const windows = (count: number): ContextWindow[] =>
     tStartMs: i * 10_000,
     tEndMs: i * 10_000 + 9_000,
     text: `window ${i}`,
+    sourceSpans: [],
     speakers: ['Ada'],
     opensWithDiscourseCue: false,
   }));
