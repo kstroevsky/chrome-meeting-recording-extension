@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createPopupController } from '../popupBootstrap';
+import type { PopupPreviewState } from '../popupPreviewState';
 import type { RecordingStatusView, UploadJob } from '../../shared/recording';
 
 const popupMarkup = readFileSync(resolve(process.cwd(), 'static/popup.html'), 'utf8');
@@ -11,7 +12,6 @@ const SCREENS = [
   'view-permission',
   'view-recording',
   'view-finalizing',
-  'view-interrupted',
   'view-upload',
   'view-recordings',
   'view-recording-detail',
@@ -19,7 +19,6 @@ const SCREENS = [
 const visibleScreens = () => SCREENS.filter((id) => !document.getElementById(id)?.hidden);
 const visible = (id: string) => !document.getElementById(id)?.hidden;
 
-/** A closed meeting tab: the run is sealed, and its upload is still on its way. */
 const upload: UploadJob = {
   id: 'job-1',
   historyId: 'recording-1',
@@ -33,57 +32,48 @@ const upload: UploadJob = {
     { stream: 'tab', filename: 'tab.webm', status: 'uploading', bytes: 2_000, uploadedBytes: 100 },
   ],
 };
-const stoppedWhileUploading: RecordingStatusView = {
-  phase: 'idle',
-  runConfig: null,
-  updatedAt: 0,
+/** Stopped with the Stop button: the run is sealed and its upload is on its way. */
+const stopped: RecordingStatusView = { phase: 'idle', runConfig: null, updatedAt: 0, uploadJobs: [upload] };
+/** The same run, finished by closing the meeting tab instead. */
+const tabClosed: RecordingStatusView = {
+  ...stopped,
   interruption: { reason: 'tab-closed', atMs: 3_620_000, historyId: 'recording-1' },
-  uploadJobs: [upload],
 };
 
-describe('PopupController — one screen at a time after the meeting tab closed', () => {
-  beforeEach(() => {
-    document.body.innerHTML = popupBody;
+/** What the popup shows: which screen, and what its header says. */
+function render(preview: PopupPreviewState) {
+  document.body.innerHTML = popupBody;
+  createPopupController(document).renderPreview(preview);
+  return {
+    screens: visibleScreens(),
+    phaseLabel: visible('header-phase') ? document.getElementById('header-phase')!.textContent : null,
+    uploadChip: visible('open-upload-navigation'),
+  };
+}
+
+describe('PopupController — closing the meeting tab finishes the recording', () => {
+  it('like Stop: the same screen, its upload in the header chip, and nothing asked', () => {
+    const afterTabClosed = render({ screen: 'session', session: tabClosed });
+
+    expect(afterTabClosed).toEqual(render({ screen: 'session', session: stopped }));
+    expect(afterTabClosed).toEqual({ screens: ['view-config'], phaseLabel: null, uploadChip: true });
   });
 
-  it('shows the notice alone, its upload in the header chip rather than under STOPPED', () => {
-    createPopupController(document).renderPreview({ screen: 'session', session: stoppedWhileUploading });
+  it('like Stop when there is nothing left to upload', () => {
+    const quiet = { ...tabClosed, uploadJobs: [] };
 
-    expect(visibleScreens()).toEqual(['view-interrupted']);
-    expect(visible('open-upload-navigation')).toBe(true);
-    // The label is pinned over the chip's place, so the two never show together.
-    expect(visible('header-phase')).toBe(false);
+    expect(render({ screen: 'session', session: quiet }))
+      .toEqual(render({ screen: 'session', session: { ...stopped, uploadJobs: [] } }));
+    expect(visibleScreens()).toEqual(['view-config']);
   });
 
-  it('says STOPPED once nothing is uploading', () => {
-    createPopupController(document).renderPreview({
-      screen: 'session',
-      session: { ...stoppedWhileUploading, uploadJobs: [] },
-    });
-
-    expect(visibleScreens()).toEqual(['view-interrupted']);
-    expect(visible('open-upload-navigation')).toBe(false);
-    expect(visible('header-phase')).toBe(true);
-    expect(document.getElementById('header-phase')!.textContent).toBe('STOPPED');
+  it('opens its upload alone', () => {
+    expect(render({ screen: 'session', session: tabClosed, selectedUploadJobId: upload.id }).screens)
+      .toEqual(['view-upload']);
   });
 
-  it('opens the upload in place of the notice, not under it', () => {
-    createPopupController(document).renderPreview({
-      screen: 'session',
-      session: stoppedWhileUploading,
-      selectedUploadJobId: upload.id,
-    });
-
-    expect(visibleScreens()).toEqual(['view-upload']);
-  });
-
-  it('opens Recordings in place of the notice, not under it', () => {
-    createPopupController(document).renderPreview({
-      screen: 'recordings',
-      session: stoppedWhileUploading,
-      entries: [],
-    });
-
-    expect(visibleScreens()).toEqual(['view-recordings']);
+  it('opens Recordings alone', () => {
+    expect(render({ screen: 'recordings', session: tabClosed, entries: [] }).screens)
+      .toEqual(['view-recordings']);
   });
 });

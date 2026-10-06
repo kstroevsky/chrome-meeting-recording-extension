@@ -3,10 +3,9 @@
  *
  * Draws notation spans onto a track.
  *
- * Three surfaces show the same ribbon against three different clocks — the live
- * recording (scaled to elapsed time with headroom), a finished recording
- * (scaled to its own duration), and a run that was interrupted (scaled to where
- * capture stopped). Only the clock differs, so the placement rule, the state
+ * Two surfaces show the same ribbon against two different clocks — the live
+ * recording (scaled to elapsed time with headroom) and a finished recording
+ * (scaled to its own duration). Only the clock differs, so the placement rule, the state
  * classes and the span's label live here rather than once per screen.
  *
  * What genuinely varies is named in {@link NotationRibbonOptions} and
