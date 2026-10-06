@@ -184,6 +184,19 @@ export const POPUP_STORIES: PopupStory[] = [
     },
   },
   {
+    id: 'recording-interrupted-uploading', title: 'Interrupted while uploading', group: 'Saving',
+    description: 'n4 over a running upload — the notice alone, its upload in the header chip where STOPPED would sit.',
+    preview: {
+      screen: 'session',
+      session: session({
+        phase: 'idle',
+        interruption: { reason: 'tab-closed', atMs: 3_620_000, historyId: 'gallery-history-alex' },
+        uploadJobs: [{ ...uploadJob('uploading', 0.04), historyId: 'gallery-history-alex' }],
+      }),
+      notations: [],
+    },
+  },
+  {
     id: 'recording-notes-empty', title: 'Notes · nothing yet', group: 'Recording',
     description: 'marks-e5 — the "Make a note" capture row and the ⌥M shortcut tip, before any note exists.',
     preview: { screen: 'session', session: activeRecording, transcriptActive: true, notations: [] },
