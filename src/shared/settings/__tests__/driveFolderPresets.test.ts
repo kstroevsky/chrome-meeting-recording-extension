@@ -14,7 +14,12 @@ const preset = (id: string, name: string) => ({ id, name });
 describe('drive folder presets', () => {
   it('defaults to none, which is the pre-presets behaviour', () => {
     expect(normalizeExtensionSettings({}).storage)
-      .toEqual({ driveRootFolderName: LEGACY_DRIVE_ROOT_FOLDER_NAME, driveFolderPresets: [], localFolderPresets: [] });
+      .toEqual({
+        driveRootFolderName: LEGACY_DRIVE_ROOT_FOLDER_NAME,
+        driveFolderPresets: [],
+        localFolderPresets: [],
+        recordingDestinations: [],
+      });
   });
 
   it('keeps well-formed destinations in order', () => {

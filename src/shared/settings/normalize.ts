@@ -7,6 +7,7 @@
  * module index.
  */
 
+import { normalizeRecordingDestinationProfiles } from '../recordingDestinations';
 import { isRecord } from '../typeGuards';
 import {
   DEFAULT_EXTENSION_SETTINGS,
@@ -94,6 +95,11 @@ export function cloneSettings(settings: ExtensionSettings): ExtensionSettings {
       ...settings.storage,
       driveFolderPresets: settings.storage.driveFolderPresets.map((preset) => ({ ...preset })),
       localFolderPresets: settings.storage.localFolderPresets.map((preset) => ({ ...preset })),
+      recordingDestinations: settings.storage.recordingDestinations.map((profile) => ({
+        ...profile,
+        mediaTarget: { ...profile.mediaTarget },
+        dataRoutes: profile.dataRoutes.map((route) => ({ ...route })),
+      })),
     },
     professional: { ...settings.professional },
   };
@@ -252,6 +258,7 @@ export function normalizeExtensionSettings(value: unknown): ExtensionSettings {
     ),
     driveFolderPresets,
     localFolderPresets,
+    recordingDestinations: normalizeRecordingDestinationProfiles(storageCandidate.recordingDestinations),
   };
 
   return { privacy, appearance, basic, storage, professional };

@@ -8,6 +8,7 @@
 
 import type { MicMode } from '../recordingTypes';
 import type { MicrophoneRecordingFormat, VideoRecordingFormat } from '../recordingFormats';
+import type { RecordingDestinationProfile } from '../recordingDestinations';
 
 export type RecordingModeDefault = 'opfs' | 'drive';
 export type ResolutionPreset = '640x360' | '854x480' | '1280x720' | '1920x1080';
@@ -74,6 +75,12 @@ export type ExtensionSettings = {
      * is chosen before the bytes are written.
      */
     localFolderPresets: FolderPreset[];
+    /**
+     * User-defined "Save to" destinations (integration profiles in V1). The
+     * built-in Google Drive and Local downloads entries are not stored: they
+     * are derived, so they can never go missing or drift.
+     */
+    recordingDestinations: RecordingDestinationProfile[];
   };
   professional: {
     selfVideoFrameRate: number;

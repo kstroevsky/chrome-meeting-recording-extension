@@ -129,6 +129,7 @@ export const DEFAULT_EXTENSION_SETTINGS: Readonly<ExtensionSettings> = Object.fr
     // destination, exactly as it did before destinations existed.
     driveFolderPresets: Object.freeze([]) as unknown as ExtensionSettings['storage']['driveFolderPresets'],
     localFolderPresets: Object.freeze([]) as unknown as ExtensionSettings['storage']['localFolderPresets'],
+    recordingDestinations: Object.freeze([]) as unknown as ExtensionSettings['storage']['recordingDestinations'],
   }),
   professional: Object.freeze({
     selfVideoFrameRate: EXTENSION_DEFAULTS.capture.selfVideo.frameRate,

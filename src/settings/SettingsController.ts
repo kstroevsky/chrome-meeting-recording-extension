@@ -137,6 +137,23 @@ export class SettingsController {
     });
   }
 
+  /**
+   * "Save to" destinations are written by the integrations owner (background
+   * commands), never by this form, so every save re-reads them from storage
+   * instead of writing back the copy loaded when the page opened.
+   */
+  private async withStoredDestinations(settings: unknown): Promise<Record<string, unknown>> {
+    const stored = await loadExtensionSettingsFromStorage();
+    const draft = (settings ?? {}) as Record<string, unknown>;
+    return {
+      ...draft,
+      storage: {
+        ...(draft.storage as Record<string, unknown> | undefined),
+        recordingDestinations: stored.storage.recordingDestinations,
+      },
+    };
+  }
+
   /** Loads saved settings into the form and wires save/reset + the tooltip controller. */
   async init(): Promise<void> {
     this.wireConsoleControls();
@@ -164,7 +181,7 @@ export class SettingsController {
         // Drive first: the setting is only true once the folder actually
         // carries the name, and a rename that fails must not be recorded.
         if (!await this.renameRootFolderInDrive()) return;
-        const saved = await saveExtensionSettingsToStorage(this.readSettingsFromForm());
+        const saved = await saveExtensionSettingsToStorage(await this.withStoredDestinations(this.readSettingsFromForm()));
         this.applySettings(saved);
         this.setStatus('Saved');
       } catch (error) {
@@ -179,10 +196,12 @@ export class SettingsController {
         // pointer to a folder that exists in Drive and holds the user's
         // recordings. Resetting it would not move them — it would only stop
         // us finding them — so it survives the reset.
-        const defaults = await saveExtensionSettingsToStorage({
+        // "Save to" destinations survive too: they reference integrations that
+        // a reset does not delete, and dropping them would silently stop routing.
+        const defaults = await saveExtensionSettingsToStorage(await this.withStoredDestinations({
           ...DEFAULT_EXTENSION_SETTINGS,
           storage: { ...DEFAULT_EXTENSION_SETTINGS.storage, driveRootFolderName: this.savedRootFolderName },
-        });
+        }));
         this.applySettings(defaults);
         this.setStatus('Reset to defaults');
       } catch (error) {

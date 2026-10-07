@@ -10,7 +10,7 @@ const settingsHtml = readFileSync(
 
 describe('settings page', () => {
   const savedSettings: ExtensionSettings = {
-    storage: { driveRootFolderName: 'Recordings', driveFolderPresets: [], localFolderPresets: [] },
+    storage: { driveRootFolderName: 'Recordings', driveFolderPresets: [], localFolderPresets: [], recordingDestinations: [] },
     privacy: {
       anonymousDiagnostics: true,
     },
@@ -49,7 +49,17 @@ describe('settings page', () => {
   });
 
   it('applies stored preset settings and saves updated preset fields', async () => {
-    const loadExtensionSettingsFromStorage = jest.fn().mockResolvedValue(savedSettings);
+    // A destination added from the popup while this page was open: the form never
+    // saw it, and saving the form must not erase it.
+    const addedMeanwhile = {
+      id: 'profile-crm',
+      name: 'CheekyCheeseIT',
+      mediaTarget: { kind: 'local' as const },
+      dataRoutes: [{ destinationId: 'destination_crm', mode: 'auto' as const }],
+    };
+    const loadExtensionSettingsFromStorage = jest.fn()
+      .mockResolvedValueOnce(savedSettings)
+      .mockResolvedValue({ ...savedSettings, storage: { ...savedSettings.storage, recordingDestinations: [addedMeanwhile] } });
     const saveExtensionSettingsToStorage = jest.fn().mockImplementation(async (value: unknown) => value);
     const resetExtensionSettingsToDefaults = jest.fn().mockResolvedValue(savedSettings);
 
@@ -83,10 +93,15 @@ describe('settings page', () => {
     (document.getElementById('tab-resolution-preset') as HTMLSelectElement).value = '1920x1080';
     (document.getElementById('save-settings') as HTMLButtonElement).click();
     // Saving now asks Drive about the root folder before it writes anything.
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
 
     expect(saveExtensionSettingsToStorage).toHaveBeenCalledWith({
-      storage: { driveRootFolderName: 'Recordings', driveFolderPresets: [], localFolderPresets: [] },
+      storage: {
+        driveRootFolderName: 'Recordings',
+        driveFolderPresets: [],
+        localFolderPresets: [],
+        recordingDestinations: [addedMeanwhile],
+      },
       privacy: {
         anonymousDiagnostics: false,
       },
