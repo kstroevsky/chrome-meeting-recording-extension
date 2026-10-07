@@ -67,7 +67,8 @@ function harness() {
     consider,
     now: () => 100,
   });
-  return { destinations, routing, streams, deliveries, consider, service };
+  const unitOfWork = new IntegrationUnitOfWork(factory);
+  return { destinations, routing, streams, deliveries, consider, service, unitOfWork };
 }
 
 describe('RecordingRoutingService', () => {
@@ -185,6 +186,34 @@ describe('RecordingRoutingService', () => {
     await expect(ctx.service.routes('recording_1')).resolves.toEqual([
       { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM', state: 'skipped' },
     ]);
+  });
+
+  it('does not write a route whose destination was deleted after it was looked up', async () => {
+    const ctx = harness();
+    // The lookup still sees the destination; the store no longer has it.
+    const service = new RecordingRoutingService({
+      destinations: { get: async () => destination() },
+      routing: ctx.routing,
+      unitOfWork: ctx.unitOfWork,
+      consider: ctx.consider,
+    });
+    await service.begin('recording_1', ROUTE);
+    await expect(ctx.routing.get('recording_1')).resolves.toBeUndefined();
+    await expect(ctx.streams.list()).resolves.toEqual([]);
+  });
+
+  it('does not bring back a route whose destination was deleted before the confirmation', async () => {
+    const ctx = harness();
+    const crm = destination();
+    await ctx.destinations.put(crm);
+    await ctx.destinations.put(destination({ id: 'destination_journal', producerId: 'producer_journal', name: 'Journal' }));
+    await ctx.service.begin('recording_1', [...ROUTE, { destinationId: 'destination_journal', mode: 'auto' }]);
+    await ctx.unitOfWork.deleteDestination(crm, 50);
+
+    await ctx.service.confirm('recording_1', []);
+    const intent = await ctx.routing.get('recording_1');
+    expect(intent?.destinations.map((entry) => entry.destinationId)).toEqual(['destination_journal']);
+    expect(ctx.consider).toHaveBeenCalledWith('recording_1');
   });
 
   it('forgets a removed recording: intent gone, unsent work canceled, unattempted streams dropped', async () => {

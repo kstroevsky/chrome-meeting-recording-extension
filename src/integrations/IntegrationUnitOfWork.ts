@@ -16,7 +16,7 @@ import {
   type IntegrationDestination,
   type IntegrationSecret,
   type IntegrationStream,
-  type RecordingIntegrationIntent,
+  type RecordingIntegrationIntentDestination,
 } from './persistence';
 
 /**
@@ -102,36 +102,102 @@ export class IntegrationUnitOfWork {
   }
 
   /**
-   * Writes the routing intent chosen at recording start together with the
-   * stream identities its new routes need. A stream that already exists keeps
-   * its identity and revision: the receiver may have seen it.
+   * Adds the routes chosen at recording start to the recording's intent, with
+   * the stream identities they need, in one transaction. Each destination is
+   * re-read inside it, so a destination deleted or disabled meanwhile is not
+   * written back. An entry already present for a destination wins, and a stream
+   * that already exists keeps its identity and revision: the receiver may have
+   * seen it. Resolves to the destinations actually added.
    */
   async beginRecordingRouting(
-    intent: RecordingIntegrationIntent,
+    recordingId: string,
+    entries: RecordingIntegrationIntentDestination[],
     streams: IntegrationStream[],
-  ): Promise<void> {
-    const normalizedIntent = normalizeRecordingIntegrationIntent(intent);
+  ): Promise<string[]> {
+    const normalizedIntent = normalizeRecordingIntegrationIntent({ recordingId, destinations: entries });
     const normalizedStreams = streams.map(normalizeIntegrationStream);
     if (!normalizedIntent || normalizedStreams.some((stream) => !stream)) {
       throw new Error('Invalid recording routing transaction');
     }
 
+    const added: string[] = [];
     const database = await openIntegrationDatabase(this.factory);
     await runTransaction(
       database,
-      [INTEGRATION_ROUTING_INTENTS_STORE, INTEGRATION_STREAMS_STORE],
+      [INTEGRATION_DESTINATIONS_STORE, INTEGRATION_ROUTING_INTENTS_STORE, INTEGRATION_STREAMS_STORE],
       (transaction) => {
-        transaction.objectStore(INTEGRATION_ROUTING_INTENTS_STORE).put(normalizedIntent);
+        const destinationStore = transaction.objectStore(INTEGRATION_DESTINATIONS_STORE);
+        const intentStore = transaction.objectStore(INTEGRATION_ROUTING_INTENTS_STORE);
         const streamStore = transaction.objectStore(INTEGRATION_STREAMS_STORE);
-        for (const stream of normalizedStreams as IntegrationStream[]) {
-          const existing = streamStore.get([stream.destinationId, stream.recordingId]);
-          existing.onsuccess = () => {
-            if (existing.result === undefined) streamStore.put(stream);
+        const existingIntent = intentStore.get(recordingId);
+        existingIntent.onsuccess = () => {
+          const kept = normalizeRecordingIntegrationIntent(existingIntent.result)?.destinations ?? [];
+          const candidates = normalizedIntent.destinations
+            .filter((entry) => !kept.some((row) => row.destinationId === entry.destinationId));
+          const live: RecordingIntegrationIntentDestination[] = [];
+          let remaining = candidates.length;
+          const finish = () => {
+            if (!live.length) return;
+            intentStore.put({ recordingId, destinations: [...kept, ...live] });
+            for (const entry of live) {
+              added.push(entry.destinationId);
+              const stream = (normalizedStreams as IntegrationStream[])
+                .find((candidate) => candidate.destinationId === entry.destinationId);
+              if (!stream) continue;
+              const existingStream = streamStore.get([stream.destinationId, stream.recordingId]);
+              existingStream.onsuccess = () => {
+                if (existingStream.result === undefined) streamStore.put(stream);
+              };
+            }
           };
-        }
+          if (!remaining) return;
+          for (const entry of candidates) {
+            const destination = destinationStore.get(entry.destinationId);
+            destination.onsuccess = () => {
+              if ((destination.result as IntegrationDestination | undefined)?.enabled) live.push(entry);
+              remaining -= 1;
+              if (!remaining) finish();
+            };
+          }
+        };
       },
       'Could not write recording routing',
     );
+    return added;
+  }
+
+  /**
+   * The end dialog's answer: every held route is released, and the removed ones
+   * are skipped for this recording. One transaction, so a destination deleted
+   * meanwhile is not written back. Resolves to whether anything was held.
+   */
+  async confirmRecordingRouting(recordingId: string, removedDestinationIds: readonly string[]): Promise<boolean> {
+    const removed = new Set(removedDestinationIds);
+    let changed = false;
+    const database = await openIntegrationDatabase(this.factory);
+    await runTransaction(
+      database,
+      [INTEGRATION_ROUTING_INTENTS_STORE],
+      (transaction) => {
+        const store = transaction.objectStore(INTEGRATION_ROUTING_INTENTS_STORE);
+        const request = store.get(recordingId);
+        request.onsuccess = () => {
+          const intent = normalizeRecordingIntegrationIntent(request.result);
+          if (!intent?.destinations.some((entry) => entry.releaseAfter)) return;
+          changed = true;
+          store.put({
+            recordingId,
+            destinations: intent.destinations.map((entry) => {
+              if (!entry.releaseAfter) return entry;
+              const { releaseAfter: _released, ...rest } = entry;
+              return removed.has(entry.destinationId) ? { ...rest, state: 'skipped' as const } : rest;
+            }),
+          });
+        };
+      },
+      'Could not confirm recording routing',
+    );
+    return changed;
   }
 
   /**

@@ -33,12 +33,14 @@ export type RecordingRoutingBeginResult = {
 
 type Deps = {
   destinations: { get(id: string): Promise<IntegrationDestination | undefined> };
-  routing: {
-    get(recordingId: string): Promise<RecordingIntegrationIntent | undefined>;
-    put(intent: RecordingIntegrationIntent): Promise<void>;
-  };
+  routing: { get(recordingId: string): Promise<RecordingIntegrationIntent | undefined> };
   unitOfWork: {
-    beginRecordingRouting(intent: RecordingIntegrationIntent, streams: IntegrationStream[]): Promise<void>;
+    beginRecordingRouting(
+      recordingId: string,
+      entries: RecordingIntegrationIntentDestination[],
+      streams: IntegrationStream[],
+    ): Promise<string[]>;
+    confirmRecordingRouting(recordingId: string, removedDestinationIds: readonly string[]): Promise<boolean>;
     forgetRecordingRouting(recordingId: string, updatedAt: number): Promise<void>;
   };
   /** Hands a recording to the planner after its routing changed. */
@@ -84,10 +86,8 @@ export class RecordingRoutingService {
     }
     if (!entries.length) return { scheduled, unavailable };
 
-    const existing = await this.deps.routing.get(recordingId);
-    const kept = existing?.destinations ?? [];
-    const added = entries.filter((entry) => !kept.some((row) => row.destinationId === entry.destinationId));
-    const streams: IntegrationStream[] = added.map((entry) => ({
+    // Every candidate gets a fresh identity; the transaction keeps an existing one.
+    const streams: IntegrationStream[] = entries.map((entry) => ({
       destinationId: entry.destinationId,
       recordingId,
       externalRecordingId: createIntegrationId('recording'),
@@ -95,27 +95,14 @@ export class RecordingRoutingService {
       readyCreated: false,
       everAttempted: false,
     }));
-    await this.deps.unitOfWork.beginRecordingRouting(
-      { recordingId, destinations: [...kept, ...added] },
-      streams,
-    );
+    await this.deps.unitOfWork.beginRecordingRouting(recordingId, entries, streams);
     return { scheduled, unavailable };
   }
 
   async confirm(recordingId: string, removedDestinationIds: readonly string[]): Promise<void> {
-    const intent = await this.deps.routing.get(recordingId);
-    if (!intent) return;
-    const removed = new Set(removedDestinationIds);
-    let changed = false;
-    const destinations = intent.destinations.map((entry) => {
-      if (!entry.releaseAfter) return entry;
-      changed = true;
-      const { releaseAfter: _released, ...rest } = entry;
-      return removed.has(entry.destinationId) ? { ...rest, state: 'skipped' as const } : rest;
-    });
-    if (!changed) return;
-    await this.deps.routing.put({ recordingId, destinations });
-    await this.deps.consider(recordingId);
+    if (await this.deps.unitOfWork.confirmRecordingRouting(recordingId, removedDestinationIds)) {
+      await this.deps.consider(recordingId);
+    }
   }
 
   forget(recordingId: string): Promise<void> {
