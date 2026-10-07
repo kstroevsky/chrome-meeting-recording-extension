@@ -21,11 +21,10 @@ const containsPermission = containsHostPermission as jest.MockedFunction<typeof 
 const removePermission = removeHostPermission as jest.MockedFunction<typeof removeHostPermission>;
 const send = sendToBackground as jest.MockedFunction<typeof sendToBackground>;
 
-function mount(): IntegrationSettingsController {
+function mount(onDestinationsChanged?: () => void): IntegrationSettingsController {
   document.body.innerHTML = `
     <input id="integration-name">
     <input id="integration-endpoint">
-    <select id="integration-routing"><option value="manual">Manual</option></select>
     <select id="integration-auth-type">
       <option value="none">None</option>
       <option value="api-key">API key</option>
@@ -41,7 +40,7 @@ function mount(): IntegrationSettingsController {
     <div id="integration-secret-panel" hidden></div>
     <input id="integration-signing-secret">
   `;
-  return IntegrationSettingsController.fromDocument(document);
+  return IntegrationSettingsController.fromDocument(document, onDestinationsChanged);
 }
 
 function destination() {
@@ -117,13 +116,18 @@ describe('IntegrationSettingsController', () => {
   });
 
   it('requests only the endpoint origin and exposes the generated signing secret once', async () => {
-    const controller = mount();
+    const onDestinationsChanged = jest.fn();
+    const controller = mount(onDestinationsChanged);
     await controller.init();
     (document.getElementById('integration-name') as HTMLInputElement).value = 'CRM';
     (document.getElementById('integration-endpoint') as HTMLInputElement).value = 'https://crm.example.test/hooks/recordings';
     send.mockImplementation(async (message: any) => {
       if (message.type === 'CREATE_INTEGRATION') {
-        return { ok: true, created: { destination: destination(), signingSecret: 'whsec_generated' } } as any;
+        return {
+          ok: true,
+          created: { destination: destination(), signingSecret: 'whsec_generated' },
+          profile: { id: 'profile-crm', name: 'CRM', mediaTarget: { kind: 'local' }, dataRoutes: [] },
+        } as any;
       }
       if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
       if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
@@ -139,10 +143,13 @@ describe('IntegrationSettingsController', () => {
     expect(permission).toHaveBeenCalledWith('https://crm.example.test/*');
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       type: 'CREATE_INTEGRATION',
-      input: expect.objectContaining({ endpoint: 'https://crm.example.test/hooks/recordings' }),
+      // Sending automatically is a per-recording pick under Save to (E8), never the integration's default.
+      input: expect.objectContaining({ endpoint: 'https://crm.example.test/hooks/recordings', routingDefault: 'manual' }),
     }));
     expect((document.getElementById('integration-signing-secret') as HTMLInputElement).value).toBe('whsec_generated');
     expect((document.getElementById('integration-secret-panel') as HTMLElement).hidden).toBe(false);
+    expect(document.getElementById('integration-status')?.textContent).toContain('It is now under Save to as CRM.');
+    expect(onDestinationsChanged).toHaveBeenCalledTimes(1);
   });
 
   it('rolls back a newly granted host permission when destination creation fails', async () => {

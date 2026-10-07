@@ -85,6 +85,28 @@ describe('destination and routing messages', () => {
     expect(isPopupToBgMessage({ type: 'LIST_HELD_RECORDING_ROUTES' })).toBe(true);
   });
 
+  it('adds a new integration to Save to, and still reports the integration when that fails', async () => {
+    const created = { destination: { id: 'destination_new', name: 'Journal' }, signingSecret: 'whsec_x' };
+    const ctx = deps();
+    const warn = jest.fn();
+    const all = {
+      ...(ctx.all as object),
+      L: { log: jest.fn(), warn, error: jest.fn() },
+      integrations: { ...ctx.integrations, createDestination: jest.fn(async () => created) },
+    } as never;
+    const respond = jest.fn();
+    const message = { type: 'CREATE_INTEGRATION' as const, input: {} as never };
+
+    await handleIntegrationMessage(message, respond, all);
+    expect(ctx.destinations.save).toHaveBeenCalledWith({ destinationId: 'destination_new' });
+    expect(respond).toHaveBeenLastCalledWith({ ok: true, created, profile: { id: 'profile-crm' } });
+
+    ctx.destinations.save.mockRejectedValueOnce(new Error('settings unwritable'));
+    await handleIntegrationMessage(message, respond, all);
+    expect(respond).toHaveBeenLastCalledWith({ ok: true, created });
+    expect(warn).toHaveBeenCalled();
+  });
+
   it('validates the new messages at the protocol boundary', () => {
     expect(isPopupToBgMessage({ type: 'LIST_RECORDING_DESTINATIONS' })).toBe(true);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: 'd', name: 'CRM' } })).toBe(true);

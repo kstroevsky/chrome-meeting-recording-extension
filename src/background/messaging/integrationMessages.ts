@@ -25,9 +25,16 @@ export async function handleIntegrationMessage(
     case 'LIST_INTEGRATIONS':
       sendResponse({ ok: true, destinations: await integrations.listDestinations() });
       return true;
-    case 'CREATE_INTEGRATION':
-      sendResponse({ ok: true, created: await integrations.createDestination(msg.input) });
+    case 'CREATE_INTEGRATION': {
+      const created = await integrations.createDestination(msg.input);
+      // The new integration is offered in "Save to" straight away (plan E4). The two
+      // live in different stores, so a failure here leaves the integration in place
+      // and the settings page offers to add the destination by hand.
+      const profile = await deps.destinations?.save({ destinationId: created.destination.id })
+        .catch((error) => { deps.L.warn('Could not add the integration to Save to:', error); return undefined; });
+      sendResponse({ ok: true, created, ...(profile ? { profile } : {}) });
       return true;
+    }
     case 'DELETE_INTEGRATION':
       sendResponse({ ok: true, ...(await integrations.deleteDestination(msg.destinationId)) });
       return true;

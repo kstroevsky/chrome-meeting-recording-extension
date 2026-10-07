@@ -187,6 +187,24 @@
         <p id="storage-usage" class="storage-usage">Checking…</p>
       </section>
 
+      <!-- The popup's "+ Add destination…" opens this page at #destinations (plan E4). -->
+      <section id="destinations" class="settings-section save-to-settings" aria-labelledby="save-to-heading">
+        <h2 id="save-to-heading" class="section-eyebrow">DESTINATIONS</h2>
+        <p class="destinations-intro">
+          What you can pick under <strong>Save to</strong> before you record. Google Drive and Local
+          downloads are always there. Connecting an integration below adds one more: the files are
+          saved to this computer, and the recording's data is sent to the integration once you
+          confirm it at the end.
+        </p>
+        <div id="save-to-list" class="save-to-list"></div>
+        <div id="save-to-add-row" class="save-to-add" hidden>
+          <select id="save-to-integration" aria-label="Integration that receives the data"></select>
+          <select id="save-to-folder" aria-label="Folder for the files"></select>
+          <button id="save-to-add" class="destination-add" type="button">Add destination</button>
+        </div>
+        <p id="save-to-status" class="destinations-note destinations-note--quiet" role="status" aria-live="polite"></p>
+      </section>
+
       <section class="settings-section integrations-settings" aria-labelledby="integrations-heading">
         <h2 id="integrations-heading" class="section-eyebrow">INTEGRATIONS</h2>
         <p class="destinations-intro">
@@ -197,13 +215,6 @@
         <div class="integration-editor">
           <label><span>Name</span><input id="integration-name" type="text" placeholder="Internal CRM"></label>
           <label><span>Webhook endpoint</span><input id="integration-endpoint" type="url" placeholder="https://crm.example.com/hooks/recordings"></label>
-          <label><span>Default routing</span>
-            <select id="integration-routing">
-              <option value="manual">Manual</option>
-              <option value="review">Review</option>
-              <option value="auto">Auto</option>
-            </select>
-          </label>
           <label><span>Request auth</span>
             <select id="integration-auth-type">
               <option value="none">None</option>

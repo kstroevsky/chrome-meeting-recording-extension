@@ -12,23 +12,13 @@
 
 import type { RecordingDestinationOption } from '../background/destinations/RecordingDestinationsRuntime';
 import { saveToValueOf } from '../shared/recordingDestinations';
+import { describeDestination } from '../shared/recordingDestinationLabels';
+
+export { describeDestination };
 
 const RENDERED = 'data-destination-profile';
 /** A plain arrow-into-box glyph: "this also sends somewhere". */
 const ROUTE_ICON = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 8h7.5M7.5 5l3 3-3 3M11.5 3.5h1A1.5 1.5 0 0114 5v6a1.5 1.5 0 01-1.5 1.5h-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-const UNAVAILABLE_TEXT: Record<NonNullable<RecordingDestinationOption['unavailableReason']>, string> = {
-  'destination-missing': 'Integration deleted · fix in Settings',
-  'destination-disabled': 'Integration disabled · fix in Settings',
-  'permission-missing': 'Needs site access · fix in Settings',
-};
-
-/** One line under the name: where files go and where data goes, or why it cannot be picked. */
-export function describeDestination(option: RecordingDestinationOption): string {
-  if (!option.available && option.unavailableReason) return UNAVAILABLE_TEXT[option.unavailableReason];
-  const data = option.dataRoutes.map((route) => route.destinationName ?? 'deleted integration').join(', ');
-  return data ? `Files: ${option.filesLabel} · Data: ${data}` : `Files: ${option.filesLabel}`;
-}
 
 /** Replaces previously rendered integration entries with the current ones. */
 export function renderSaveToDestinations(

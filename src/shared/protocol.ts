@@ -394,7 +394,12 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupListIntegrations
     ? { ok: true; destinations: IntegrationDestination[] } | { ok: false; error: string } :
   T extends PopupCreateIntegration
-    ? { ok: true; created: CreatedIntegrationDestination } | { ok: false; error: string } :
+    ? {
+        ok: true;
+        created: CreatedIntegrationDestination;
+        /** The "Save to" destination made for it; absent when that could not be saved. */
+        profile?: import('./recordingDestinations').RecordingDestinationProfile;
+      } | { ok: false; error: string } :
   T extends PopupDeleteIntegration
     ? {
         ok: true;

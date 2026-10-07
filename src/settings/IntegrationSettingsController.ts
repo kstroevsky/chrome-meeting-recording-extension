@@ -16,7 +16,6 @@ type Elements = {
   document: Document;
   name: HTMLInputElement | null;
   endpoint: HTMLInputElement | null;
-  routing: HTMLSelectElement | null;
   authType: HTMLSelectElement | null;
   authHeader: HTMLInputElement | null;
   authValue: HTMLInputElement | null;
@@ -31,14 +30,17 @@ type Elements = {
 };
 
 export class IntegrationSettingsController {
-  constructor(private readonly el: Elements) {}
+  constructor(
+    private readonly el: Elements,
+    /** Integrations decide what *Save to* can offer; that section re-reads after a change. */
+    private readonly onDestinationsChanged: () => void = () => {},
+  ) {}
 
-  static fromDocument(doc: Document): IntegrationSettingsController {
+  static fromDocument(doc: Document, onDestinationsChanged?: () => void): IntegrationSettingsController {
     return new IntegrationSettingsController({
       document: doc,
       name: doc.getElementById('integration-name') as HTMLInputElement | null,
       endpoint: doc.getElementById('integration-endpoint') as HTMLInputElement | null,
-      routing: doc.getElementById('integration-routing') as HTMLSelectElement | null,
       authType: doc.getElementById('integration-auth-type') as HTMLSelectElement | null,
       authHeader: doc.getElementById('integration-auth-header') as HTMLInputElement | null,
       authValue: doc.getElementById('integration-auth-value') as HTMLInputElement | null,
@@ -50,7 +52,7 @@ export class IntegrationSettingsController {
       status: doc.getElementById('integration-status'),
       secretPanel: doc.getElementById('integration-secret-panel'),
       secretValue: doc.getElementById('integration-signing-secret') as HTMLInputElement | null,
-    });
+    }, onDestinationsChanged);
   }
 
   async init(): Promise<void> {
@@ -91,7 +93,9 @@ export class IntegrationSettingsController {
         input: {
           name,
           endpoint: endpoint.endpoint,
-          routingDefault: normalizeRouting(this.el.routing?.value),
+          // Automatic sending is chosen per recording, under Save to (plan E8); an
+          // integration never sends every recording on its own.
+          routingDefault: 'manual',
           dataPolicy: this.readPolicy(),
           requestAuth,
         },
@@ -100,7 +104,11 @@ export class IntegrationSettingsController {
       if (this.el.secretValue) this.el.secretValue.value = response.created.signingSecret;
       if (this.el.secretPanel) this.el.secretPanel.hidden = false;
       if (this.el.authValue) this.el.authValue.value = '';
-      this.setStatus(`Added ${response.created.destination.name}. Save the signing secret now; later it can only be rotated.`);
+      const offered = response.profile
+        ? ` It is now under Save to as ${response.profile.name}.`
+        : ' Add it under Save to above to record with it.';
+      this.setStatus(`Added ${response.created.destination.name}. Save the signing secret now; later it can only be rotated.${offered}`);
+      this.onDestinationsChanged();
       await this.refresh();
     } catch (error) {
       if (grantedByThisCreate) {
@@ -155,7 +163,7 @@ export class IntegrationSettingsController {
     const delivery = latest
       ? ` · last ${latest.state} r${latest.revision}${latest.lastStatus ? ` · HTTP ${latest.lastStatus}` : ''}`
       : '';
-    meta.textContent = `${destination.routingDefault.toUpperCase()} · ${destination.enabled ? 'Active' : 'Disabled'}${delivery}`;
+    meta.textContent = `${destination.enabled ? 'Active' : 'Disabled'}${delivery}`;
     copy.append(title, endpoint, meta);
 
     const actions = this.el.document.createElement('div');
@@ -287,6 +295,7 @@ export class IntegrationSettingsController {
       } else {
         this.setStatus(`Deleted ${destination.name} and its stored credentials.`);
       }
+      this.onDestinationsChanged();
       await this.refresh();
     } catch (error) {
       this.setStatus(`Delete failed: ${String(error)}`, true);
@@ -386,10 +395,6 @@ export class IntegrationSettingsController {
     this.el.status.textContent = message;
     this.el.status.dataset.error = String(error);
   }
-}
-
-function normalizeRouting(value: string | undefined): 'manual' | 'auto' | 'review' {
-  return value === 'auto' || value === 'review' ? value : 'manual';
 }
 
 function normalizeSpeakerPolicy(value: string | undefined): TranscriptSpeakerPolicy {

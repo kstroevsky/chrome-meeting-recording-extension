@@ -156,3 +156,12 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
 .folder-row--fixed { padding-right: 40px; }
 .folder-name--fixed { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); }
 .destination-fixed-tag { flex-shrink: 0; color: var(--subtle); font: 600 9px 'Space Grotesk', sans-serif; letter-spacing: .12em; }
+
+/* Save to (plan E3/E4): the destinations offered in the popup, as rows like the
+   integrations below, and one row to add a destination for an integration. */
+.save-to-list { display: grid; gap: 8px; margin: 12px 0 12px; }
+.save-to-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.save-to-add[hidden] { display: none; }
+.save-to-add select { flex: 1 1 160px; min-width: 0; min-height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink); }
+.integration-destination--unavailable .integration-destination__copy small { color: var(--accent); }
+#save-to-status[data-error='true'] { color: var(--accent); }
