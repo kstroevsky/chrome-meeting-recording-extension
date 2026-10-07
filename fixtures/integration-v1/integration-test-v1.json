@@ -1,0 +1,1 @@
+{"data":{"test":true},"datacontenttype":"application/json","id":"event_contract_test_v1","source":"urn:meeting-recorder:destination:producer_contract_fixture_v1","specversion":"1.0","subject":"integration/test","time":"2026-10-07T12:00:00.000Z","type":"io.github.kstroevsky.meeting-recorder.integration.test.v1"}

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "testSigningSecret": "whsec_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "fixtures": [
+    {
+      "filename": "integration-test-v1.json",
+      "sha256": "fa58a8f323614c7c48956e6420b3a8bd9291fa61a46203576dfc97dec8133085",
+      "headers": {
+        "content-type": "application/cloudevents+json",
+        "webhook-id": "event_contract_test_v1",
+        "webhook-timestamp": "1791374400",
+        "webhook-signature": "v1,49/Ve2ukdVMdpRXqarrpQADhUtTGetBw6jJAT5Rw3+Y="
+      }
+    },
+    {
+      "filename": "recording-ready-v1.json",
+      "sha256": "ca7419cde00216b573c93794e4bfa6e5fb7b652fefbadce07153ff28e72225b6",
+      "headers": {
+        "content-type": "application/cloudevents+json",
+        "webhook-id": "event_contract_ready_v1",
+        "webhook-timestamp": "1791374460",
+        "webhook-signature": "v1,dCC4KpZKYtNPUNHq4MnBYdk964lFOUF4kUdCT3322EI="
+      }
+    },
+    {
+      "filename": "recording-updated-v1.json",
+      "sha256": "0884a1fc93eab833735fbcd8d56775abdccffdcb067276aee8b89c409c3e203b",
+      "headers": {
+        "content-type": "application/cloudevents+json",
+        "webhook-id": "event_contract_updated_v1",
+        "webhook-timestamp": "1791374520",
+        "webhook-signature": "v1,2IzPw4onkdgegIunazQyZN/I4zN5sphE+Ngba3lsn6U="
+      }
+    }
+  ]
+}
