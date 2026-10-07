@@ -114,6 +114,17 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
       expect(act.notify).toHaveBeenCalledWith('Disk full');
     });
 
+    it('starts on the folder the Save to destination files into', async () => {
+      const { dialog, asks } = answeringDialog([{ outcome: 'dismissed' }]);
+      const act = actions({
+        pendingLocal: jest.fn(() => [{ ...pending[0]!, folderId: 'local-b' }]),
+        localFolders: jest.fn(() => [{ id: 'local-a', name: 'Therapy' }, { id: 'local-b', name: 'Interviews' }]),
+      });
+      new CompletedNamingPrompt(dialog, act).queue('idle', localOnly());
+      await flush();
+      expect(asks[0]!.destinations?.initialId).toBe('local-b');
+    });
+
     it('shows no rows and confirms nothing when the routes cannot be read', async () => {
       const route = routing({ routes: jest.fn(async () => { throw new Error('offline'); }) });
       const { dialog, asks } = answeringDialog([{ outcome: 'saved' }]);

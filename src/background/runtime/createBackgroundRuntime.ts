@@ -104,6 +104,7 @@ export function createBackgroundRuntime() {
     library.historyRepository,
     (historyId) => session.runDurationMs(historyId),
     logger,
+    (recordingId) => destinations.localFolderFor(recordingId),
   );
   const startupRecovery = new StartupRecovery(
     library.historyRepository,

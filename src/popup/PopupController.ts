@@ -29,6 +29,7 @@ import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import type { DriveFolderPreset } from '../shared/settings';
+import type { PendingLocalDelivery } from '../shared/recordingHistory';
 import {
   DEFAULT_DRIVE_ROOT_FOLDER_NAME,
   loadExtensionSettingsFromStorage,
@@ -130,7 +131,7 @@ export class PopupController {
   /** Download sub-folders offered when naming a local recording. */
   private localFolders: DriveFolderPreset[] = [];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
-  private pendingLocal: { id: string; name: string }[] = [];
+  private pendingLocal: PendingLocalDelivery[] = [];
 
   constructor(el: PopupElements) {
     this.el = el;

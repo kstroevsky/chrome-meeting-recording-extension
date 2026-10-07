@@ -4,6 +4,12 @@ import { LocalDeliveryOrchestrator } from '../LocalDeliveryOrchestrator';
 jest.mock('../LocalDeliveryRuntime', () => ({
   registerSaveHandler: jest.fn(),
 }));
+jest.mock('../../../shared/settings', () => ({
+  ...jest.requireActual('../../../shared/settings'),
+  loadExtensionSettingsFromStorage: jest.fn(async () => ({
+    storage: { localFolderPresets: [{ id: 'folder-1', name: 'Interviews' }] },
+  })),
+}));
 
 describe('LocalDeliveryOrchestrator', () => {
   let deliverDeferred: jest.Mock;
@@ -16,15 +22,21 @@ describe('LocalDeliveryOrchestrator', () => {
     });
   });
 
-  function create(overrides: { get?: jest.Mock; history?: Record<string, jest.Mock> } = {}) {
+  function create(overrides: {
+    get?: jest.Mock;
+    history?: Record<string, jest.Mock>;
+    listPage?: jest.Mock;
+    destinationFolderId?: (recordingId: string) => Promise<string | undefined>;
+  } = {}) {
     const history = overrides.history ?? { setLocalFolder: jest.fn() };
     const get = overrides.get ?? jest.fn();
     return new LocalDeliveryOrchestrator(
       {} as never,
       history as never,
-      { listPage: jest.fn(), get } as never,
+      { listPage: overrides.listPage ?? jest.fn(), get } as never,
       () => undefined,
       { log: jest.fn(), warn: jest.fn() },
+      overrides.destinationFolderId,
     );
   }
 
@@ -107,5 +119,37 @@ describe('LocalDeliveryOrchestrator', () => {
 
     await expect(orchestrator.reconcileAbandoned()).resolves.toBe(true);
     expect(deliverDeferred).toHaveBeenCalledTimes(1);
+  });
+
+  describe('the folder a Save to destination files into', () => {
+    const pendingEntry = (id: string) => ({
+      id, name: id, status: 'complete', files: [{ kind: 'tab', delivery: { status: 'pending' }, locations: [{ kind: 'opfs' }] }],
+    });
+    const listPage = () => jest.fn().mockResolvedValue({ entries: [pendingEntry('r1'), pendingEntry('r2'), pendingEntry('r3')] });
+
+    it('names it for each pending recording, while that folder still exists', async () => {
+      const folders: Record<string, string | undefined> = { r1: 'folder-1', r2: 'folder-gone', r3: undefined };
+      const orchestrator = create({ listPage: listPage(), destinationFolderId: async (id) => folders[id] });
+
+      await expect(orchestrator.listPending()).resolves.toEqual([
+        { id: 'r1', name: 'r1', folderId: 'folder-1' },
+        { id: 'r2', name: 'r2' },
+        { id: 'r3', name: 'r3' },
+      ]);
+    });
+
+    it('is where a recording nobody was asked about lands', async () => {
+      deliverDeferred.mockResolvedValue([{ status: 'complete', downloadId: 1 }]);
+      const history = { setLocalFolder: jest.fn().mockResolvedValue(undefined) };
+      const entry = { id: 'r1', files: [], name: 'demo' };
+      const orchestrator = create({ get: jest.fn().mockResolvedValue(entry), history });
+      jest.spyOn(orchestrator, 'listPending')
+        .mockResolvedValueOnce([{ id: 'r1', name: 'demo', folderId: 'folder-1' }])
+        .mockResolvedValueOnce([]);
+
+      await expect(orchestrator.reconcileAbandoned()).resolves.toBe(true);
+      expect(deliverDeferred).toHaveBeenCalledWith(entry, 'Interviews');
+      expect(history.setLocalFolder).toHaveBeenCalledWith('r1', 'Interviews');
+    });
   });
 });

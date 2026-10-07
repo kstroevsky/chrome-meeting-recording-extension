@@ -120,6 +120,16 @@ export class RecordingDestinationsRuntime {
     return profile ? [...profile.dataRoutes] : [];
   }
 
+  /**
+   * The local folder preset the recording's destination files into. Undefined
+   * for the download directory, a Drive destination, or a profile removed since.
+   */
+  async localFolderFor(recordingId: string): Promise<string | undefined> {
+    const context = await this.deps.getRecordingContext?.(recordingId).catch(() => undefined);
+    const profile = await this.find(context?.destinationProfileId).catch(() => undefined);
+    return profile?.mediaTarget.kind === 'local' ? profile.mediaTarget.folderPresetId : undefined;
+  }
+
   async save(input: SaveRecordingDestinationInput): Promise<RecordingDestinationProfile> {
     const integrations = await this.deps.listIntegrationDestinations();
     const destination = integrations.find((candidate) => candidate.id === input.destinationId);

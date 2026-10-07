@@ -416,6 +416,17 @@ export function awaitsLocalDelivery(file: RecordingHistoryFile): boolean {
   return file.locations.some((location) => location.kind === 'opfs');
 }
 
+/** A recording whose files still wait for the end dialog to say where they go. */
+export type PendingLocalDelivery = {
+  id: string;
+  name: string;
+  /**
+   * The local folder its *Save to* destination files into, when that folder
+   * still exists: the dialog's starting choice, and where an unanswered one lands.
+   */
+  folderId?: string;
+};
+
 /** The media files of an entry that are still owed to the download directory. */
 export function pendingLocalDeliveries(entry: RecordingHistoryEntry): RecordingHistoryFile[] {
   if (entry.deletedAt) return [];

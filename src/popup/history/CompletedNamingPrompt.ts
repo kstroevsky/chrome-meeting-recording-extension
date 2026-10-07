@@ -36,6 +36,7 @@ import type { DriveFolderPreset } from '../../shared/settings';
 import { DEFAULT_DRIVE_ROOT_FOLDER_NAME, DRIVE_DEFAULT_DESTINATION_NAME } from '../../shared/settings';
 import { suffixedRecordingName } from '../../shared/recordingNames';
 import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
+import type { PendingLocalDelivery } from '../../shared/recordingHistory';
 
 export type CompletedNamingActions = {
   notify: (message: string) => void;
@@ -54,7 +55,7 @@ export type CompletedNamingActions = {
   /** Local folders offered to a recording that has not been written yet. */
   localFolders: () => DriveFolderPreset[];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
-  pendingLocal: () => { id: string; name: string }[];
+  pendingLocal: () => PendingLocalDelivery[];
   /** Writes one of those into the chosen folder; null means the download directory. */
   deliverLocal: (historyId: string, folderId: string | null) => Promise<unknown>;
   applySession: (session: RecordingStatusView) => void;
@@ -124,7 +125,8 @@ export class CompletedNamingPrompt {
         saveLabel: 'Save recording',
         cancelLabel: 'Keep the default name',
         destinations: presets.length
-          ? { presets, unfiledLabel: 'Downloads', initialId: null }
+          // The folder the Save to destination files into starts selected.
+          ? { presets, unfiledLabel: 'Downloads', initialId: presets.some((preset) => preset.id === next.folderId) ? next.folderId! : null }
           : undefined,
         ...(routes.options ? { routes: routes.options } : {}),
         onSave: async (name, folderId) => {

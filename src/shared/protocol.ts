@@ -369,7 +369,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
       | { ok: false; error: string } :
   T extends PopupResolveUnsavedRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupListPendingLocalDeliveries
-    ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
+    ? { ok: true; recordings: import('./recordingHistory').PendingLocalDelivery[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupFileRecordingToDestination ? { ok: true } | { ok: false; error: string } :
   T extends PopupSyncDrivePlan ? { ok: true; plan: DriveSyncPlan } | { ok: false; error: string } :

@@ -23,7 +23,12 @@ function integration(overrides: Partial<IntegrationDestination> = {}): Integrati
   };
 }
 
-function harness(options: { integrations?: IntegrationDestination[]; permitted?: boolean; pick?: string } = {}) {
+function harness(options: {
+  integrations?: IntegrationDestination[];
+  permitted?: boolean;
+  pick?: string;
+  contexts?: Record<string, string>;
+} = {}) {
   let settings: ExtensionSettings = normalizeExtensionSettings({
     storage: { localFolderPresets: [{ id: 'folder-1', name: 'Interviews' }] },
   } as never);
@@ -37,6 +42,10 @@ function harness(options: { integrations?: IntegrationDestination[]; permitted?:
     loadPick: async () => pick,
     rememberPick: async (id) => { pick = id; },
     createId: () => `profile-${++ids}`,
+    getRecordingContext: async (recordingId) => {
+      const destinationProfileId = options.contexts?.[recordingId];
+      return destinationProfileId ? { destinationProfileId } as never : undefined;
+    },
   });
   return { runtime, settings: () => settings, pick: () => pick };
 }
@@ -122,5 +131,15 @@ describe('RecordingDestinationsRuntime', () => {
     await expect(ctx.runtime.resolveForStart(undefined, 'local')).resolves.toEqual(expect.objectContaining({
       profile: expect.objectContaining({ id: BUILTIN_LOCAL_PROFILE_ID }), available: true,
     }));
+  });
+
+  it('names the local folder a recording\'s destination files into', async () => {
+    const ctx = harness({ contexts: { r1: 'profile-1', r2: BUILTIN_LOCAL_PROFILE_ID, r3: 'profile-removed' } });
+    await ctx.runtime.save({ destinationId: 'destination_crm', localFolderPresetId: 'folder-1' });
+
+    await expect(ctx.runtime.localFolderFor('r1')).resolves.toBe('folder-1');
+    await expect(ctx.runtime.localFolderFor('r2')).resolves.toBeUndefined();
+    await expect(ctx.runtime.localFolderFor('r3')).resolves.toBeUndefined();
+    await expect(ctx.runtime.localFolderFor('unknown')).resolves.toBeUndefined();
   });
 });

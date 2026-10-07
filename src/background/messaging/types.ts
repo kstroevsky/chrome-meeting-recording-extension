@@ -52,7 +52,7 @@ export type MessageHandlersDeps = {
     name?: string,
   ) => Promise<void>;
   storageUsage?: () => Promise<import('../../shared/playback').StorageUsage>;
-  listPendingLocal?: () => Promise<{ id: string; name: string }[]>;
+  listPendingLocal?: () => Promise<import('../../shared/recordingHistory').PendingLocalDelivery[]>;
   deliverLocal?: (recordingId: string, folderId: string | null) => Promise<void>;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
