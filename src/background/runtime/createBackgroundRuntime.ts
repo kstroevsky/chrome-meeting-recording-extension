@@ -26,7 +26,7 @@ import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
-import { BackgroundIntegrationRuntime } from '../integrations/BackgroundIntegrationRuntime';
+import { createIntegrationRuntime } from '../integrations/createIntegrationRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
@@ -56,14 +56,7 @@ export function createBackgroundRuntime() {
     onAnalysisSettled: () => criticalWork.sync(),
     onIntegrationChanged: (recordingId) => notifyIntegrationChanged(recordingId),
   });
-  const integrations = new BackgroundIntegrationRuntime({
-    listHistory: () => library.history.list(),
-    getHistory: (recordingId) => library.historyRepository.get(recordingId),
-    getContext: (recordingId) => library.recordingContexts.get(recordingId),
-    listNotations: (recordingId) => library.notations.list(recordingId),
-    getTranscript: (recordingId) => library.transcripts.get(recordingId),
-    getAnalysisState: (recordingId) => library.analyses.exportState(recordingId),
-  });
+  const { integrations, destinations, routing: recordingRouting } = createIntegrationRuntime(library);
   notifyIntegrationChanged = (recordingId) => {
     void integrations.consider(recordingId)
       .catch((error) => logger.warn('Integration recording consideration deferred:', error));
@@ -130,6 +123,8 @@ export function createBackgroundRuntime() {
     notations: library.notations,
     transcripts: library.transcripts,
     transcriptCapture,
+    destinations,
+    routing: recordingRouting,
   });
 
   const messageListener = createMessageListener({
@@ -161,6 +156,7 @@ export function createBackgroundRuntime() {
     telemetry,
     sharing,
     integrations,
+    destinations,
     e2eAnalysisWork: () => offscreen.refreshAnalysisWork(),
     waitUntilReady: () => readiness.wait(),
   });

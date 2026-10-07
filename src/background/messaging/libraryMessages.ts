@@ -5,6 +5,16 @@ import { createRecordingFileDeletionPorts } from '../drive/recordingFileDeletion
 import { deleteRecordingFiles } from '../library/history/RecordingFileDeletion';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
+/**
+ * A removed recording stops being routed: held or unsent work is canceled.
+ * Copies a receiver already has are not recalled (that needs a deletion event).
+ * Best effort: the removal itself already happened and must still be reported.
+ */
+async function forgetRouting(recordingId: string, deps: MessageHandlersDeps): Promise<void> {
+  await deps.integrations?.forgetRecordingRouting(recordingId)
+    .catch((error) => console.warn('[library] could not forget recording routing:', error));
+}
+
 export async function handleLibraryMessage(
   msg: PopupToBg,
   sendResponse: RuntimeSendResponse,
@@ -48,7 +58,9 @@ export async function handleLibraryMessage(
   if (msg.type === 'REMOVE_RECORDING_HISTORY') {
     if (!history) throw new Error('Recording history is unavailable');
     if (!msg.deleteFiles) {
-      sendResponse({ ok: true, removed: await history.remove(msg.id) });
+      const removed = await history.remove(msg.id);
+      if (removed) await forgetRouting(msg.id, deps);
+      sendResponse({ ok: true, removed });
       return true;
     }
     const entry = await history.get(msg.id);
@@ -56,6 +68,7 @@ export async function handleLibraryMessage(
     // ended, nothing is removed or deleted.
     const sharesEnded = entry && deps.sharing ? await deps.sharing.revokeSharesOf(msg.id) : 0;
     const removed = await history.remove(msg.id);
+    if (removed) await forgetRouting(msg.id, deps);
     const files = removed && entry
       ? await deleteRecordingFiles(entry, createRecordingFileDeletionPorts())
       : { deleted: 0, errors: [] };

@@ -2,6 +2,11 @@ import type { PopupToBg } from '../../shared/protocol';
 import { IntegrationPayloadTooLargeError } from '../../integrations/payload';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
+function requireDestinations(deps: MessageHandlersDeps) {
+  if (!deps.destinations) throw new Error('Recording destinations are unavailable');
+  return deps.destinations;
+}
+
 export async function handleIntegrationMessage(
   msg: PopupToBg,
   sendResponse: RuntimeSendResponse,
@@ -53,6 +58,32 @@ export async function handleIntegrationMessage(
     case 'RETRY_INTEGRATION_DELIVERY':
       sendResponse({ ok: true, delivery: await integrations.retryDelivery(msg.deliveryId) });
       return true;
+    case 'LIST_RECORDING_DESTINATIONS':
+      sendResponse({ ok: true, ...(await requireDestinations(deps).list()) });
+      return true;
+    case 'SAVE_RECORDING_DESTINATION':
+      sendResponse({ ok: true, profile: await requireDestinations(deps).save(msg.input) });
+      return true;
+    case 'REMOVE_RECORDING_DESTINATION':
+      sendResponse({ ok: true, removed: await requireDestinations(deps).remove(msg.profileId) });
+      return true;
+    case 'GET_RECORDING_ROUTES':
+    case 'CONFIRM_RECORDING_ROUTES':
+    case 'RETRY_RECORDING_ROUTING': {
+      const recordingId = msg.recordingId ?? deps.session.getSnapshot().historyId;
+      if (!recordingId) {
+        sendResponse({ ok: true, routes: [] });
+        return true;
+      }
+      const expected = await deps.destinations?.routesForRecording(recordingId) ?? [];
+      if (msg.type === 'CONFIRM_RECORDING_ROUTES') {
+        await integrations.confirmRecordingRoutes(recordingId, msg.removedDestinationIds);
+      } else if (msg.type === 'RETRY_RECORDING_ROUTING' && expected.length) {
+        await integrations.beginRecordingRouting(recordingId, expected);
+      }
+      sendResponse({ ok: true, recordingId, routes: await integrations.recordingRoutes(recordingId, expected) });
+      return true;
+    }
     default:
       return false;
   }

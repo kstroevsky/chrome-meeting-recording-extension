@@ -10,6 +10,11 @@ export type RecordingContext = {
   startedAt: number;
   endedAt?: number;
   source: RecordingSourceContext;
+  /**
+   * The "Save to" destination picked at Start. Kept so the end dialog can tell
+   * a recording that was never routed from one whose routing failed to write.
+   */
+  destinationProfileId?: string;
 };
 
 const MAX_PROVIDER_LENGTH = 128;
@@ -25,11 +30,13 @@ export function normalizeRecordingContext(value: unknown): RecordingContext | un
   if (!recordingId || startedAt == null || !source) return undefined;
 
   const endedAt = normalizeTimestamp(candidate.endedAt);
+  const destinationProfileId = normalizeString(candidate.destinationProfileId, 128);
   return {
     recordingId,
     startedAt,
     ...(endedAt != null && endedAt >= startedAt ? { endedAt } : {}),
     source,
+    ...(destinationProfileId ? { destinationProfileId } : {}),
   };
 }
 

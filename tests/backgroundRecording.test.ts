@@ -146,6 +146,8 @@ describe('background runtime messages', () => {
         micMode: 'off',
         recordSelfVideo: false,
         tabContentType: 'screen',
+        // A start without a pick records the built-in matching its storage mode.
+        destinationProfileId: 'builtin:local',
       },
       recorderSettings,
       perfSettings: expect.objectContaining({
@@ -210,7 +212,9 @@ describe('background runtime messages', () => {
       ok: true,
       session: expect.objectContaining({
         phase: 'starting',
-        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen' },
+        runConfig: {
+          storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen', destinationProfileId: 'builtin:local',
+        },
       }),
     }));
   });

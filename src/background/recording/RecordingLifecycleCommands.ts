@@ -30,6 +30,7 @@ export class RecordingLifecycleCommands {
       notations?: RecordingNotationService;
       transcripts?: RecordingTranscriptService;
       transcriptCapture?: RecordingTranscriptCapture;
+      routing?: Pick<import('./recordingRoutingPorts').RecordingRoutingPort, 'forget'>;
       sidecars: RecordingSidecars;
       result: ResultFactory;
     },

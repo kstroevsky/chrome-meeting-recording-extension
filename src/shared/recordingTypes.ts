@@ -61,6 +61,13 @@ export type RecordingRunConfig = {
    * canonical paths (`parseRunConfig`, `DEFAULT_RECORDING_RUN_CONFIG`) always set it.
    */
   tabContentType?: TabContentType;
+  /**
+   * The "Save to" destination picked before Start (see shared/recordingDestinations).
+   * Absent on runs started before destinations existed; the background start
+   * command resolves it against stored profiles and never trusts `storageMode`
+   * alone for routing.
+   */
+  destinationProfileId?: string;
 };
 
 /** Delivered dimensions of the captured meeting-tab video track. */

@@ -18,8 +18,14 @@ export class RecordingContextService {
     recordingId: string,
     startedAt: number,
     source: RecordingSourceContext,
+    destinationProfileId?: string,
   ): Promise<void> {
-    await this.repository.put({ recordingId, startedAt, source });
+    await this.repository.put({
+      recordingId,
+      startedAt,
+      source,
+      ...(destinationProfileId ? { destinationProfileId } : {}),
+    });
   }
 
   async finish(recordingId: string, endedAt: number): Promise<RecordingContext | undefined> {

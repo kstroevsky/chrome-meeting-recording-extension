@@ -58,6 +58,8 @@ export type MessageHandlersDeps = {
   telemetry?: TelemetryRuntime;
   sharing?: BackgroundSharingRuntime;
   integrations?: BackgroundIntegrationRuntime;
+  /** "Save to" destination profiles (plan E1). */
+  destinations?: import('../destinations/RecordingDestinationsRuntime').RecordingDestinationsRuntime;
   /** E2E-only probe for real offscreen analysis work; never routed in production builds. */
   e2eAnalysisWork?: () => Promise<boolean>;
   waitUntilReady?: () => Promise<void>;

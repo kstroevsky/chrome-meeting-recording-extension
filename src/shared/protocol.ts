@@ -238,6 +238,23 @@ export type PopupRetryIntegrationDelivery = {
   type: 'RETRY_INTEGRATION_DELIVERY';
   deliveryId: string;
 };
+/** The "Save to" list: built-ins plus integration profiles, with availability. */
+export type PopupListRecordingDestinations = { type: 'LIST_RECORDING_DESTINATIONS' };
+export type PopupSaveRecordingDestination = {
+  type: 'SAVE_RECORDING_DESTINATION';
+  input: import('../background/destinations/RecordingDestinationsRuntime').SaveRecordingDestinationInput;
+};
+export type PopupRemoveRecordingDestination = { type: 'REMOVE_RECORDING_DESTINATION'; profileId: string };
+/** Routes of one recording; without `recordingId`, of the run in progress. */
+export type PopupGetRecordingRoutes = { type: 'GET_RECORDING_ROUTES'; recordingId?: string };
+/** The end dialog's answer: every held route is released except the removed ones. */
+export type PopupConfirmRecordingRoutes = {
+  type: 'CONFIRM_RECORDING_ROUTES';
+  recordingId: string;
+  removedDestinationIds: string[];
+};
+/** Writes again the routing that failed at Start; without `recordingId`, for the run in progress. */
+export type PopupRetryRecordingRouting = { type: 'RETRY_RECORDING_ROUTING'; recordingId?: string };
 
 export type PopupToBg =
   | PopupStartRecording
@@ -296,7 +313,13 @@ export type PopupToBg =
   | PopupTestIntegration
   | PopupSendRecordingToIntegration
   | PopupListIntegrationDeliveries
-  | PopupRetryIntegrationDelivery;
+  | PopupRetryIntegrationDelivery
+  | PopupListRecordingDestinations
+  | PopupSaveRecordingDestination
+  | PopupRemoveRecordingDestination
+  | PopupGetRecordingRoutes
+  | PopupConfirmRecordingRoutes
+  | PopupRetryRecordingRouting;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -386,6 +409,19 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ? { ok: true; deliveries: IntegrationDelivery[] } | { ok: false; error: string } :
   T extends PopupRetryIntegrationDelivery
     ? { ok: true; delivery: IntegrationDelivery } | { ok: false; error: string } :
+  T extends PopupListRecordingDestinations
+    ? {
+        ok: true;
+        destinations: import('../background/destinations/RecordingDestinationsRuntime').RecordingDestinationOption[];
+        rememberedId?: string;
+      } | { ok: false; error: string } :
+  T extends PopupSaveRecordingDestination
+    ? { ok: true; profile: import('./recordingDestinations').RecordingDestinationProfile } | { ok: false; error: string } :
+  T extends PopupRemoveRecordingDestination
+    ? { ok: true; removed: boolean } | { ok: false; error: string } :
+  T extends PopupGetRecordingRoutes | PopupConfirmRecordingRoutes | PopupRetryRecordingRouting
+    ? { ok: true; recordingId?: string; routes: import('../integrations/RecordingRoutingService').RecordingRouteView[] }
+      | { ok: false; error: string } :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -693,9 +729,32 @@ function isIntegrationPopupMessage(value: unknown): boolean {
       return nonEmptyText(value.destinationId) && nonEmptyText(value.recordingId);
     case 'RETRY_INTEGRATION_DELIVERY':
       return nonEmptyText(value.deliveryId);
+    case 'LIST_RECORDING_DESTINATIONS':
+      return true;
+    case 'SAVE_RECORDING_DESTINATION':
+      return isSaveRecordingDestinationInput(value.input);
+    case 'REMOVE_RECORDING_DESTINATION':
+      return nonEmptyText(value.profileId);
+    case 'GET_RECORDING_ROUTES':
+    case 'RETRY_RECORDING_ROUTING':
+      return value.recordingId === undefined || nonEmptyText(value.recordingId);
+    case 'CONFIRM_RECORDING_ROUTES':
+      return nonEmptyText(value.recordingId)
+        && Array.isArray(value.removedDestinationIds)
+        && value.removedDestinationIds.length <= 20
+        && value.removedDestinationIds.every(nonEmptyText);
     default:
       return false;
   }
+}
+
+function isSaveRecordingDestinationInput(value: unknown): boolean {
+  if (!isRecord(value) || Array.isArray(value)) return false;
+  const optionalText = (field: unknown) => field === undefined || nonEmptyText(field);
+  return nonEmptyText(value.destinationId)
+    && optionalText(value.id)
+    && (value.name === undefined || typeof value.name === 'string')
+    && optionalText(value.localFolderPresetId);
 }
 
 function nonEmptyText(value: unknown): value is string {

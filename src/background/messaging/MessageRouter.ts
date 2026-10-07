@@ -87,6 +87,12 @@ export const POPUP_ROUTE_OWNERS = {
   SEND_RECORDING_TO_INTEGRATION: 'integrations',
   LIST_INTEGRATION_DELIVERIES: 'integrations',
   RETRY_INTEGRATION_DELIVERY: 'integrations',
+  LIST_RECORDING_DESTINATIONS: 'integrations',
+  SAVE_RECORDING_DESTINATION: 'integrations',
+  REMOVE_RECORDING_DESTINATION: 'integrations',
+  GET_RECORDING_ROUTES: 'integrations',
+  CONFIRM_RECORDING_ROUTES: 'integrations',
+  RETRY_RECORDING_ROUTING: 'integrations',
 } satisfies Record<PopupToBg['type'], PopupRouteOwner>;
 
 const SESSION_FAILURE_MESSAGE_TYPES = [
