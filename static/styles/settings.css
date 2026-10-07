@@ -84,16 +84,27 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
 .integration-destination__actions button:hover:not(:disabled), .integration-add:hover:not(:disabled) { background: var(--raised); }
 .integration-destination__actions button:disabled, .integration-add:disabled { opacity: .45; cursor: default; }
 .integration-editor { display: grid; gap: 8px; padding: 14px 0; border-top: 1px solid var(--divider); }
-.integration-editor > label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.integration-editor > label > span { color: var(--body); }
+.integration-editor > label, .integration-advanced > label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.integration-editor > label > span, .integration-advanced > label > span { color: var(--body); }
 .integration-editor input, .integration-editor select, .integration-secret-panel input { min-height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink); }
-.integration-editor > label > input, .integration-editor > label > select { width: 58%; }
+.integration-editor > label > input, .integration-editor > label > select,
+.integration-advanced > label > input, .integration-advanced > label > select { width: 58%; }
 .integration-auth-fields { display: flex; justify-content: flex-end; gap: 8px; }
 .integration-auth-fields input { width: calc(29% - 4px); }
 .integration-add { justify-self: end; margin-top: 4px; }
 .integration-secret-panel { display: grid; gap: 7px; margin: 4px 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--raised); }
 .integration-secret-panel strong { color: var(--ink); }
 .integration-secret-panel input { width: 100%; font: 500 10px 'IBM Plex Mono', monospace; }
+/* E4: the secret with its Copy beside it, then the connection test. */
+.integration-secret-row { display: flex; gap: 8px; }
+.integration-secret-row input { flex: 1 1 auto; min-width: 0; }
+.integration-secret-row button { flex: 0 0 auto; min-height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--tile); color: var(--ink); font-weight: 600; }
+.integration-secret-panel .integration-add { justify-self: start; }
+/* The normal setup is a name and a URL; everything else is folded here. */
+.integration-advanced { display: grid; gap: 8px; }
+.integration-advanced[open] { padding-bottom: 4px; }
+.integration-advanced > summary { color: var(--body); font-size: 12px; cursor: pointer; }
+.integration-advanced > :not(summary) { margin-top: 8px; }
 .integration-secret-panel small { color: var(--subtle); }
 #integration-status[data-error='true'] { color: var(--accent); }
 .integration-preview-field { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 46px; border-top: 1px solid var(--divider); }

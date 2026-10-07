@@ -27,9 +27,14 @@ type Elements = {
   status: HTMLElement | null;
   secretPanel: HTMLElement | null;
   secretValue: HTMLInputElement | null;
+  secretCopy?: HTMLButtonElement | null;
+  secretTest?: HTMLButtonElement | null;
 };
 
 export class IntegrationSettingsController {
+  /** The integration just connected, which the wizard's last step tests (E4). */
+  private connected: IntegrationDestination | null = null;
+
   constructor(
     private readonly el: Elements,
     /** Integrations decide what *Save to* can offer; that section re-reads after a change. */
@@ -52,12 +57,18 @@ export class IntegrationSettingsController {
       status: doc.getElementById('integration-status'),
       secretPanel: doc.getElementById('integration-secret-panel'),
       secretValue: doc.getElementById('integration-signing-secret') as HTMLInputElement | null,
+      secretCopy: doc.getElementById('integration-secret-copy') as HTMLButtonElement | null,
+      secretTest: doc.getElementById('integration-secret-test') as HTMLButtonElement | null,
     }, onDestinationsChanged);
   }
 
   async init(): Promise<void> {
     this.el.add?.addEventListener('click', () => void this.create());
     this.el.authType?.addEventListener('change', () => this.syncAuthFields());
+    this.el.secretCopy?.addEventListener('click', () => void this.copySecret());
+    this.el.secretTest?.addEventListener('click', () => {
+      if (this.connected && this.el.secretTest) void this.test(this.connected, this.el.secretTest, true);
+    });
     this.syncAuthFields();
     await this.loadRecordings();
     await this.refresh();
@@ -101,6 +112,7 @@ export class IntegrationSettingsController {
         },
       });
       if (!response.ok) throw new Error(response.error);
+      this.connected = response.created.destination;
       if (this.el.secretValue) this.el.secretValue.value = response.created.signingSecret;
       if (this.el.secretPanel) this.el.secretPanel.hidden = false;
       if (this.el.authValue) this.el.authValue.value = '';
@@ -219,14 +231,30 @@ export class IntegrationSettingsController {
     }
   }
 
-  private async test(destination: IntegrationDestination, button: HTMLButtonElement): Promise<void> {
+  /** The wizard's copy step; a browser that refuses the clipboard gets the text selected instead. */
+  private async copySecret(): Promise<void> {
+    const input = this.el.secretValue;
+    if (!input?.value) return;
+    try {
+      await navigator.clipboard.writeText(input.value);
+      this.setStatus('Signing secret copied. Paste it into the receiver, then test the connection.');
+    } catch {
+      input.focus();
+      input.select();
+      this.setStatus('Copy the selected signing secret into the receiver, then test the connection.');
+    }
+  }
+
+  private async test(destination: IntegrationDestination, button: HTMLButtonElement, wizard = false): Promise<void> {
     button.disabled = true;
     this.setStatus(`Testing ${destination.name}…`);
     try {
       const response = await sendToBackground({ type: 'TEST_INTEGRATION', destinationId: destination.id });
       if (!response.ok) throw new Error(response.error);
       this.setStatus(response.result.ok
-        ? `${destination.name}: connection test succeeded (HTTP ${response.result.status}).`
+        ? wizard
+          ? `\u2713 ${destination.name} connected`
+          : `${destination.name}: connection test succeeded (HTTP ${response.result.status}).`
         : `${destination.name}: receiver returned HTTP ${response.result.status}.`, !response.result.ok);
     } catch (error) {
       this.setStatus(`Test failed: ${String(error)}`, true);

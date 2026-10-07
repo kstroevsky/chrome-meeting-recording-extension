@@ -39,6 +39,8 @@ function mount(onDestinationsChanged?: () => void): IntegrationSettingsControlle
     <p id="integration-status"></p>
     <div id="integration-secret-panel" hidden></div>
     <input id="integration-signing-secret">
+    <button id="integration-secret-copy" type="button">Copy</button>
+    <button id="integration-secret-test" type="button">Test connection</button>
   `;
   return IntegrationSettingsController.fromDocument(document, onDestinationsChanged);
 }
@@ -150,6 +152,48 @@ describe('IntegrationSettingsController', () => {
     expect((document.getElementById('integration-secret-panel') as HTMLElement).hidden).toBe(false);
     expect(document.getElementById('integration-status')?.textContent).toContain('It is now under Save to as CRM.');
     expect(onDestinationsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('walks the setup to the end: copy the secret, then test the new connection (E4)', async () => {
+    const controller = mount();
+    await controller.init();
+    (document.getElementById('integration-name') as HTMLInputElement).value = 'CRM';
+    (document.getElementById('integration-endpoint') as HTMLInputElement).value = 'https://crm.example.test/hooks/recordings';
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    send.mockImplementation(async (message: any) => {
+      switch (message.type) {
+        case 'CREATE_INTEGRATION':
+          return { ok: true, created: { destination: destination(), signingSecret: 'whsec_generated' } } as any;
+        case 'TEST_INTEGRATION': return { ok: true, result: { ok: true, status: 204 } } as any;
+        case 'LIST_INTEGRATIONS': return { ok: true, destinations: [destination()] } as any;
+        case 'LIST_INTEGRATION_DELIVERIES': return { ok: true, deliveries: [] } as any;
+        default: throw new Error(`Unexpected message ${message.type}`);
+      }
+    });
+    (document.getElementById('integration-add') as HTMLButtonElement).click();
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+
+    (document.getElementById('integration-secret-copy') as HTMLButtonElement).click();
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    expect(writeText).toHaveBeenCalledWith('whsec_generated');
+
+    (document.getElementById('integration-secret-test') as HTMLButtonElement).click();
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(send).toHaveBeenCalledWith({ type: 'TEST_INTEGRATION', destinationId: 'destination_1' });
+    expect(document.getElementById('integration-status')?.textContent).toBe('\u2713 CRM connected');
+  });
+
+  it('selects the secret for a manual copy when the clipboard is refused', async () => {
+    const controller = mount();
+    await controller.init();
+    const secret = document.getElementById('integration-signing-secret') as HTMLInputElement;
+    secret.value = 'whsec_generated';
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: jest.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
+    (document.getElementById('integration-secret-copy') as HTMLButtonElement).click();
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    expect(document.activeElement).toBe(secret);
+    expect(document.getElementById('integration-status')?.textContent).toContain('Copy the selected signing secret');
   });
 
   it('rolls back a newly granted host permission when destination creation fails', async () => {
