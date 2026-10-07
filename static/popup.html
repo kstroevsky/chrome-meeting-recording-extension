@@ -230,6 +230,13 @@
         <span id="rec-timer" class="rec-timer">0:00</span>
       </div>
 
+      <!-- Where this run's data goes (E3), for an integration destination only;
+           or why it will not go there, with a retry (E7). -->
+      <div id="rec-route" class="rec-route" role="status" hidden>
+        <span id="rec-route-label" class="rec-route-label"></span>
+        <button id="rec-route-retry" class="rec-route-retry" type="button" hidden>Retry automation</button>
+      </div>
+
       <!-- Note ribbon (marks-2a): spans drawn to scale over the recorded timeline.
            Hidden until the run has at least one note. -->
       <div id="note-ribbon" class="note-ribbon" hidden>

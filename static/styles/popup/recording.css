@@ -231,3 +231,14 @@
 .upload-notes--saved .upload-notes-state { color: var(--ready); }
 .upload-notes:not(.upload-notes--saved) .upload-notes-state svg { opacity: .35; }
 
+
+/* Where this run's data goes (E3), a quiet line under the timer; in the caution
+   tone, with its retry, when the send could not be scheduled (E7). */
+.rec-route { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 8px; margin: -6px 0 14px; color: var(--ink-3); font-size: 12px; text-align: center; }
+.rec-route[hidden] { display: none; }
+.rec-route-label { overflow-wrap: anywhere; }
+.rec-route--warn { color: var(--warn-label); }
+.rec-route-retry { height: 24px; padding: 0 9px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font: 600 11.5px 'Space Grotesk', system-ui, sans-serif; cursor: pointer; }
+.rec-route-retry:hover:not(:disabled) { background: color-mix(in srgb, var(--warn-label) 12%, transparent); }
+.rec-route-retry:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.rec-route-retry:disabled { opacity: .5; cursor: progress; }

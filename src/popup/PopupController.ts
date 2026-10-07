@@ -22,6 +22,7 @@ import { PopupStatusView } from './recording/PopupStatusView';
 import { PopupNotations } from './notes/PopupNotations';
 import { CompletedNamingPrompt, previewDriveNaming } from './history/CompletedNamingPrompt';
 import { backgroundRecordingRouteActions } from './history/recordingRouteActions';
+import { findRecordingRouteChip, RecordingRouteChip } from './recording/RecordingRouteChip';
 import { UnsavedRecordingPrompt } from './history/UnsavedRecordingPrompt';
 import { suffixedRecordingName } from '../shared/recordingNames';
 import { RecordingCommands } from './recording/RecordingCommands';
@@ -98,6 +99,7 @@ export class PopupController {
   private readonly devicePicker: DevicePickerView;
   private readonly commands: RecordingCommands;
   private readonly naming: CompletedNamingPrompt;
+  private readonly routeChip = new RecordingRouteChip(findRecordingRouteChip(document));
   /** Offers back a recording a crash left behind (8D). */
   private readonly unsaved: UnsavedRecordingPrompt;
   private readonly notations: PopupNotations;
@@ -381,6 +383,7 @@ export class PopupController {
     this.lastPhase = phase;
     this.lastSession = session;
     this.devicePicker.sync(session);
+    this.routeChip.sync(phase, session);
     this.naming.queue(phase, session);
     writeCachedPhase(phase);
     this.status.syncUploadNavigation(session);
