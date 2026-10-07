@@ -94,6 +94,8 @@ test.describe('Save to destinations @integration-e2e', () => {
       expect(receiver.verify(sent, signingSecret)).toBe(true);
       expect(JSON.parse(sent.body).type).toMatch(/\.recording\.ready\.v1$/);
       expect(await routes(page, kept)).toEqual([expect.objectContaining({ state: 'released' })]);
+      // Sending to an integration is independent from public Sharing (Joint Test 14).
+      expect(await sharePublications(page)).toEqual([]);
       // Confirming again changes nothing.
       await confirm(page, kept, []);
       await page.waitForTimeout(1_000);
@@ -145,6 +147,36 @@ async function prepareIntegrationExtension(destination: string): Promise<string>
   manifest.host_permissions = Array.from(new Set([...(manifest.host_permissions ?? []), 'https://127.0.0.1/*']));
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return destination;
+}
+
+async function sharePublications(page: Page): Promise<unknown[]> {
+  return page.evaluate(async () => {
+    const databases = await indexedDB.databases();
+    if (!databases.some((database) => database.name === 'published-share-publications')) return [];
+
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('published-share-publications');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    if (!db.objectStoreNames.contains('publications')) {
+      db.close();
+      return [];
+    }
+    const tx = db.transaction('publications', 'readonly');
+    const values = await new Promise<unknown[]>((resolve, reject) => {
+      const request = tx.objectStore('publications').getAll();
+      request.onsuccess = () => resolve(request.result as unknown[]);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+    return values;
+  });
 }
 
 async function createIntegration(page: Page, endpoint: string, name: string): Promise<{
