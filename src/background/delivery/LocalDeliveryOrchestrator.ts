@@ -44,6 +44,7 @@ export class LocalDeliveryOrchestrator {
         }
       },
       () => { void this.scheduleAbandonedSweep(); },
+      async (historyId) => (await this.destinationFolder(historyId, await this.localFolders()))?.name,
     );
     this.deliverDeferred = registered.deliverDeferred;
   }
