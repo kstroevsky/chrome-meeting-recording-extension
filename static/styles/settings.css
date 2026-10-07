@@ -93,6 +93,7 @@ h1 { margin: 0 0 7px; color: var(--ink); font-size: 22px; font-weight: 700; lett
 .integration-auth-fields input { width: calc(29% - 4px); }
 .integration-add { justify-self: end; margin-top: 4px; }
 .integration-secret-panel { display: grid; gap: 7px; margin: 4px 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--raised); }
+.integration-secret-panel[hidden] { display: none; }
 .integration-secret-panel strong { color: var(--ink); }
 .integration-secret-panel input { width: 100%; font: 500 10px 'IBM Plex Mono', monospace; }
 /* E4: the secret with its Copy beside it, then the connection test. */
