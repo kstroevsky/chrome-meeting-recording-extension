@@ -17,6 +17,8 @@ import { IntegrationStreamRepository } from '../../integrations/IntegrationStrea
 import { KeyedCoalescer } from '../../integrations/KeyedCoalescer';
 import { IntegrationUnitOfWork } from '../../integrations/IntegrationUnitOfWork';
 import { IntegrationScheduler } from '../../integrations/IntegrationScheduler';
+import { RecordingRoutingService } from '../../integrations/RecordingRoutingService';
+import type { RecordingDestinationRoute } from '../../shared/recordingDestinations';
 import type { CreateIntegrationDestinationInput } from '../../integrations/management';
 import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../../integrations/contracts';
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
@@ -41,6 +43,7 @@ export class BackgroundIntegrationRuntime {
   private readonly readinessScheduler: IntegrationReadinessScheduler;
   private readonly planner: IntegrationEventPlanner;
   private readonly routing: IntegrationRoutingRepository;
+  private readonly recordingRouting: RecordingRoutingService;
   /** Upload progress and captions notify in bursts; each recording is considered once at a time. */
   private readonly considerations = new KeyedCoalescer((recordingId) => this.considerRecording(recordingId));
 
@@ -92,6 +95,12 @@ export class BackgroundIntegrationRuntime {
       getAlarm,
       clearAlarm,
       warn: (...args) => console.warn('[integrations]', ...args),
+    });
+    this.recordingRouting = new RecordingRoutingService({
+      destinations,
+      routing,
+      unitOfWork,
+      consider: (recordingId) => this.consider(recordingId),
     });
     this.coordinator = new IntegrationCoordinator({
       destinations,
@@ -154,6 +163,25 @@ export class BackgroundIntegrationRuntime {
 
   retryDelivery(deliveryId: string) {
     return this.dispatcher.retry(deliveryId);
+  }
+
+  /** Holds the routes of a "Save to" destination for a recording that is starting. */
+  beginRecordingRouting(recordingId: string, routes: readonly RecordingDestinationRoute[]) {
+    return this.recordingRouting.begin(recordingId, routes);
+  }
+
+  /** The end dialog's answer: release the held routes, except the removed ones. */
+  confirmRecordingRoutes(recordingId: string, removedDestinationIds: readonly string[]) {
+    return this.recordingRouting.confirm(recordingId, removedDestinationIds);
+  }
+
+  /** A discarded run or a removed recording: nothing about it leaves the browser any more. */
+  forgetRecordingRouting(recordingId: string): Promise<void> {
+    return this.recordingRouting.forget(recordingId);
+  }
+
+  recordingRoutes(recordingId: string, expected: readonly RecordingDestinationRoute[] = []) {
+    return this.recordingRouting.routes(recordingId, expected);
   }
 
   consider(recordingId: string): Promise<void> {

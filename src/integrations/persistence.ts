@@ -39,6 +39,12 @@ export type RecordingIntegrationIntentDestination = {
   allowedPolicy: IntegrationDataPolicy;
   connectionVersion: number;
   approvedPolicyHash?: string;
+  /**
+   * Holds an entry written when the recording started until the user confirms
+   * the save at the end. A held entry is inactive: nothing is planned for it,
+   * and no readiness deadline starts.
+   */
+  releaseAfter?: 'save-confirmed';
 };
 
 export type RecordingIntegrationIntent = {
@@ -285,6 +291,7 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
   const approvedPolicyHash = optionalText(value.approvedPolicyHash);
   if (!destinationId || !allowedPolicy || connectionVersion == null) return undefined;
   if ((value.mode !== 'auto' && value.mode !== 'review') || !isIntentState(value.state)) return undefined;
+  if (value.releaseAfter != null && value.releaseAfter !== 'save-confirmed') return undefined;
   return {
     destinationId,
     mode: value.mode,
@@ -292,6 +299,7 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
     allowedPolicy,
     connectionVersion,
     ...(approvedPolicyHash ? { approvedPolicyHash } : {}),
+    ...(value.releaseAfter === 'save-confirmed' ? { releaseAfter: 'save-confirmed' as const } : {}),
   };
 }
 

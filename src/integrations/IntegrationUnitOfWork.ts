@@ -11,10 +11,12 @@ import {
   normalizeIntegrationDestination,
   normalizeIntegrationSecret,
   normalizeIntegrationStream,
+  normalizeRecordingIntegrationIntent,
   type IntegrationDelivery,
   type IntegrationDestination,
   type IntegrationSecret,
   type IntegrationStream,
+  type RecordingIntegrationIntent,
 } from './persistence';
 
 /**
@@ -99,6 +101,58 @@ export class IntegrationUnitOfWork {
     );
   }
 
+  /**
+   * Writes the routing intent chosen at recording start together with the
+   * stream identities its new routes need. A stream that already exists keeps
+   * its identity and revision: the receiver may have seen it.
+   */
+  async beginRecordingRouting(
+    intent: RecordingIntegrationIntent,
+    streams: IntegrationStream[],
+  ): Promise<void> {
+    const normalizedIntent = normalizeRecordingIntegrationIntent(intent);
+    const normalizedStreams = streams.map(normalizeIntegrationStream);
+    if (!normalizedIntent || normalizedStreams.some((stream) => !stream)) {
+      throw new Error('Invalid recording routing transaction');
+    }
+
+    const database = await openIntegrationDatabase(this.factory);
+    await runTransaction(
+      database,
+      [INTEGRATION_ROUTING_INTENTS_STORE, INTEGRATION_STREAMS_STORE],
+      (transaction) => {
+        transaction.objectStore(INTEGRATION_ROUTING_INTENTS_STORE).put(normalizedIntent);
+        const streamStore = transaction.objectStore(INTEGRATION_STREAMS_STORE);
+        for (const stream of normalizedStreams as IntegrationStream[]) {
+          const existing = streamStore.get([stream.destinationId, stream.recordingId]);
+          existing.onsuccess = () => {
+            if (existing.result === undefined) streamStore.put(stream);
+          };
+        }
+      },
+      'Could not write recording routing',
+    );
+  }
+
+  /**
+   * Forgets a recording the user removed: its routing intent goes, work not yet
+   * delivered is canceled, and streams never attempted are dropped. A stream the
+   * receiver already saw is kept, so its identity is never reused by accident.
+   */
+  async forgetRecordingRouting(recordingId: string, updatedAt: number): Promise<void> {
+    const database = await openIntegrationDatabase(this.factory);
+    await runTransaction(
+      database,
+      [INTEGRATION_ROUTING_INTENTS_STORE, INTEGRATION_STREAMS_STORE, INTEGRATION_DELIVERIES_STORE],
+      (transaction) => {
+        transaction.objectStore(INTEGRATION_ROUTING_INTENTS_STORE).delete(recordingId);
+        deleteUnattemptedStreams(transaction, recordingId);
+        cancelRecordingDeliveries(transaction, recordingId, updatedAt);
+      },
+      'Could not forget recording routing',
+    );
+  }
+
   async deleteDestination(destination: IntegrationDestination, updatedAt: number): Promise<void> {
     const normalizedDestination = normalizeIntegrationDestination(destination);
     if (!normalizedDestination) throw new Error('Invalid integration destination deletion');
@@ -168,6 +222,38 @@ function deleteMatchingStreams(transaction: IDBTransaction, destinationId: strin
     if (!cursor) return;
     if ((cursor.value as { destinationId?: unknown }).destinationId === destinationId) {
       cursor.delete();
+    }
+    cursor.continue();
+  };
+}
+
+function deleteUnattemptedStreams(transaction: IDBTransaction, recordingId: string): void {
+  const request = transaction.objectStore(INTEGRATION_STREAMS_STORE).openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const row = cursor.value as { recordingId?: unknown; everAttempted?: unknown };
+    if (row.recordingId === recordingId && row.everAttempted !== true) cursor.delete();
+    cursor.continue();
+  };
+}
+
+function cancelRecordingDeliveries(
+  transaction: IDBTransaction,
+  recordingId: string,
+  updatedAt: number,
+): void {
+  const request = transaction.objectStore(INTEGRATION_DELIVERIES_STORE).openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const row = cursor.value as IntegrationDelivery;
+    const unresolved = row.recordingId === recordingId
+      && ['pending', 'delivering', 'retrying', 'action-required'].includes(row.state);
+    if (unresolved) {
+      const next = { ...row, state: 'canceled' as const, lastErrorCode: 'recording-removed', updatedAt };
+      delete next.nextAttemptAt;
+      cursor.update(next);
     }
     cursor.continue();
   };

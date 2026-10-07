@@ -366,3 +366,60 @@ describe('IntegrationEventPlanner', () => {
     expect(await ctx.deliveries.list()).toHaveLength(0);
   });
 });
+
+describe('IntegrationEventPlanner — routes held until the save is confirmed', () => {
+  const hold = async (ctx: ReturnType<typeof harness>, releaseAfter?: 'save-confirmed') => {
+    await ctx.routing.put({
+      recordingId: 'recording_1',
+      destinations: [{
+        destinationId: 'destination_1',
+        mode: 'auto',
+        state: 'selected',
+        allowedPolicy: BASE_POLICY,
+        connectionVersion: 1,
+        ...(releaseAfter ? { releaseAfter } : {}),
+      }],
+    });
+  };
+
+  it('plans nothing and starts no readiness deadline while the route is held', async () => {
+    const ctx = harness({ ...BASE_POLICY, analysis: true });
+    ctx.source.analysis = 'analyzing';
+    await ctx.seed();
+    await hold(ctx, 'save-confirmed');
+
+    await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual({ kind: 'noop' });
+    await expect(ctx.deliveries.list()).resolves.toEqual([]);
+    await expect(ctx.streams.get('destination_1', 'recording_1')).resolves.toBeUndefined();
+  });
+
+  it('keeps the stream identity created at Start once the hold is released', async () => {
+    const ctx = harness(BASE_POLICY);
+    await ctx.seed();
+    await hold(ctx, 'save-confirmed');
+    await ctx.streams.put({
+      destinationId: 'destination_1',
+      recordingId: 'recording_1',
+      externalRecordingId: 'recording_created-at-start',
+      nextRevision: 1,
+      readyCreated: false,
+      everAttempted: false,
+    });
+    await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual({ kind: 'noop' });
+
+    await hold(ctx);
+    const planned = await ctx.planner.consider('destination_1', 'recording_1');
+    expect(planned).toEqual(expect.objectContaining({
+      kind: 'planned',
+      delivery: expect.objectContaining({ externalRecordingId: 'recording_created-at-start', revision: 1 }),
+    }));
+  });
+
+  it('round-trips releaseAfter through the routing repository', async () => {
+    const ctx = harness(BASE_POLICY);
+    await hold(ctx, 'save-confirmed');
+    await expect(ctx.routing.get('recording_1')).resolves.toEqual(expect.objectContaining({
+      destinations: [expect.objectContaining({ releaseAfter: 'save-confirmed' })],
+    }));
+  });
+});
