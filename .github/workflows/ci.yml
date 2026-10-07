@@ -236,7 +236,7 @@ jobs:
       - run: node --test tests/scripts/validation-plan.test.mjs
       - run: npx playwright install --with-deps chromium
       - run: npm run build:e2e:mock
-      - run: npx playwright test --config=playwright.config.ts tests/e2e/integration-delivery.spec.ts
+      - run: npx playwright test --config=playwright.config.ts tests/e2e/integration-delivery.spec.ts tests/e2e/integration-save-to.spec.ts
 
       - name: Write integration success marker
         run: >-
