@@ -251,6 +251,7 @@ export class PopupController {
     this.controls.wire();
     this.devicePicker.wire();
     this.wireSettingsLink();
+    this.wireAddDestination();
     this.wireRecordingsLink();
     this.wireUploadNavigation();
     this.detail.wire();
@@ -501,6 +502,16 @@ export class PopupController {
     this.el.openSettingsBtn.addEventListener('click', async () => {
       await createRuntimeTab('settings.html');
     });
+  }
+
+  /**
+   * "+ Add destination…" opens the integrations setup in a full tab, not in the
+   * popup: Chrome closes a popup when the host-permission prompt takes focus,
+   * and the signing secret has to be copied from a page that stays open (E4).
+   */
+  private wireAddDestination() {
+    document.querySelector<HTMLButtonElement>('#storage-mode-options .select-add')
+      ?.addEventListener('click', () => void createRuntimeTab('settings.html#destinations'));
   }
 
   private wireRecordingsLink() {

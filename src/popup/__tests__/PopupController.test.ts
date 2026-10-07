@@ -772,6 +772,7 @@ describe('PopupController', () => {
       tabId: 101,
       runConfig: {
         storageMode: 'drive',
+        destinationProfileId: 'builtin:drive',
         micMode: 'mixed',
         recordSelfVideo: true,
         tabContentType: 'screen',
@@ -835,6 +836,7 @@ describe('PopupController', () => {
       tabId: 101,
       runConfig: {
         storageMode: 'local',
+        destinationProfileId: 'builtin:local',
         micMode: 'mixed',
         recordSelfVideo: true,
         tabContentType: 'screen',
@@ -897,6 +899,7 @@ describe('PopupController', () => {
       tabId: 101,
       runConfig: {
         storageMode: 'drive',
+        destinationProfileId: 'builtin:drive',
         micMode: 'separate',
         recordSelfVideo: false,
         tabContentType: 'screen',
@@ -933,6 +936,7 @@ describe('PopupController', () => {
       tabId: 101,
       runConfig: {
         storageMode: 'local',
+        destinationProfileId: 'builtin:local',
         micMode: 'off',
         recordSelfVideo: false,
         tabContentType: 'screen',

@@ -11,6 +11,20 @@ import {
   type RecordingRunConfig,
 } from '../shared/recording';
 import type { PopupElements } from './popupView';
+import {
+  BUILTIN_DRIVE_PROFILE_ID,
+  BUILTIN_LOCAL_PROFILE_ID,
+  parseSaveToValue,
+  saveToValueOf,
+} from '../shared/recordingDestinations';
+
+/** The Save to value for a run config, falling back to the built-in when its profile is not listed. */
+function saveToValueFor(select: HTMLSelectElement, config: RecordingRunConfig): string {
+  const builtin = config.storageMode === 'drive' ? BUILTIN_DRIVE_PROFILE_ID : BUILTIN_LOCAL_PROFILE_ID;
+  const wanted = saveToValueOf(config.destinationProfileId ?? builtin);
+  const listed = Array.from(select.options).some((option) => option.value === wanted && !option.disabled);
+  return listed ? wanted : config.storageMode;
+}
 
 /** Mirrors a recording run config into the popup form controls. */
 export function applyRunConfigToForm(
@@ -20,8 +34,9 @@ export function applyRunConfigToForm(
   if (!config) return;
 
   if (elements.storageModeSelect) {
-    if (elements.storageModeSelect.value !== config.storageMode) {
-      elements.storageModeSelect.value = config.storageMode;
+    const value = saveToValueFor(elements.storageModeSelect, config);
+    if (elements.storageModeSelect.value !== value) {
+      elements.storageModeSelect.value = value;
       // The accessible selector is a styled mirror of this native control. Notify
       // it when a restored session/default changes the value so label, icon, and
       // selected checkmark can never disagree.
@@ -52,8 +67,12 @@ export function buildRunConfigFromForm(elements: PopupElements): RecordingRunCon
   const tabContentType = elements.tabContentTypeGroup
     ?.querySelector<HTMLInputElement>('input:checked')?.value;
 
+  // "Save to" holds a destination; the storage mode follows from it. The
+  // background re-derives both from the stored profile at Start.
+  const saveTo = elements.storageModeSelect ? parseSaveToValue(elements.storageModeSelect.value) : null;
   return getRunConfigOrDefault({
-    storageMode: elements.storageModeSelect?.value,
+    storageMode: saveTo?.storageMode,
+    ...(saveTo ? { destinationProfileId: saveTo.profileId } : {}),
     micMode: elements.micModeSelect?.value,
     recordSelfVideo,
     tabContentType,

@@ -27,6 +27,11 @@
 .select-options button:focus-visible { background: var(--secondary-hover); color: var(--ink); outline: 0; }
 .select-divider { display: block; height: 1px; margin: 4px 8px; background: var(--divider); }
 .select-options .select-add { color: var(--ink-3); }
+/* Integration destinations: name plus a "Files · Data" line (plan E1, E3). */
+.select-options button[data-destination-profile] { height: auto; min-height: 38px; padding-block: 6px; }
+.select-option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.select-option-detail { color: var(--ink-3); font-weight: 400; font-size: 10px; white-space: normal; }
+.select-options button:disabled { cursor: not-allowed; opacity: 0.6; }
 /* A setup row's trigger pads both sides evenly, so its hover/open pill frames
    the label; pulling it (and its menu) 8px outward keeps the resting label and
    chevron flush with the row edge. */
