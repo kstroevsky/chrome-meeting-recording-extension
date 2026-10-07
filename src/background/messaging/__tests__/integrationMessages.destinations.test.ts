@@ -58,6 +58,33 @@ describe('destination and routing messages', () => {
     expect(ctx.integrations.beginRecordingRouting).toHaveBeenCalledWith('r1', ROUTES);
   });
 
+  it('lists finished recordings whose routes still wait, leaving out ones another prompt owns', async () => {
+    const entries: Record<string, object> = {
+      done: { id: 'done', name: 'Acme interview', status: 'complete', files: [] },
+      saving: { id: 'saving', name: 'Still saving', status: 'saving', files: [] },
+      removed: { id: 'removed', name: 'Removed', status: 'complete', files: [], deletedAt: 5 },
+      awaiting: {
+        id: 'awaiting', name: 'Awaiting the dialog', status: 'complete',
+        files: [{ id: 'f1', kind: 'tab', delivery: { status: 'pending' }, locations: [{ kind: 'opfs' }] }],
+      },
+    };
+    const ctx = deps('live');
+    const all = {
+      ...(ctx.all as object),
+      session: { getSnapshot: () => ({ historyId: 'live', phase: 'recording' }) },
+      integrations: { ...ctx.integrations, heldRecordings: jest.fn(async () => ['live', 'done', 'saving', 'removed', 'awaiting', 'gone']) },
+      history: { get: jest.fn(async (id: string) => entries[id]) },
+    } as never;
+    const respond = jest.fn();
+
+    await handleIntegrationMessage({ type: 'LIST_HELD_RECORDING_ROUTES' }, respond, all);
+    expect(respond).toHaveBeenCalledWith({
+      ok: true,
+      recordings: [{ recordingId: 'done', name: 'Acme interview', routes: VIEW }],
+    });
+    expect(isPopupToBgMessage({ type: 'LIST_HELD_RECORDING_ROUTES' })).toBe(true);
+  });
+
   it('validates the new messages at the protocol boundary', () => {
     expect(isPopupToBgMessage({ type: 'LIST_RECORDING_DESTINATIONS' })).toBe(true);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: 'd', name: 'CRM' } })).toBe(true);

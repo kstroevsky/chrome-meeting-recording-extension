@@ -169,6 +169,15 @@ describe('RecordingRoutingService', () => {
     await expect(ctx.service.confirm('recording_none', [])).resolves.toBeUndefined();
   });
 
+  it('lists recordings whose routes still wait for a confirmation', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination());
+    await ctx.service.begin('recording_1', ROUTE);
+    await ctx.service.begin('recording_2', ROUTE);
+    await ctx.service.confirm('recording_2', []);
+    await expect(ctx.service.held()).resolves.toEqual(['recording_1']);
+  });
+
   it('describes routes for the end dialog, including ones that could not be scheduled', async () => {
     const ctx = harness();
     await ctx.destinations.put(destination());

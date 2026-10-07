@@ -253,6 +253,11 @@ export type PopupConfirmRecordingRoutes = {
   recordingId: string;
   removedDestinationIds: string[];
 };
+/**
+ * Finished recordings whose routes still wait for a confirmation, because the
+ * end dialog never appeared (the files were saved without asking) or was dismissed.
+ */
+export type PopupListHeldRecordingRoutes = { type: 'LIST_HELD_RECORDING_ROUTES' };
 /** Writes again the routing that failed at Start; without `recordingId`, for the run in progress. */
 export type PopupRetryRecordingRouting = { type: 'RETRY_RECORDING_ROUTING'; recordingId?: string };
 
@@ -319,7 +324,8 @@ export type PopupToBg =
   | PopupRemoveRecordingDestination
   | PopupGetRecordingRoutes
   | PopupConfirmRecordingRoutes
-  | PopupRetryRecordingRouting;
+  | PopupRetryRecordingRouting
+  | PopupListHeldRecordingRoutes;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -419,6 +425,15 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ? { ok: true; profile: import('./recordingDestinations').RecordingDestinationProfile } | { ok: false; error: string } :
   T extends PopupRemoveRecordingDestination
     ? { ok: true; removed: boolean } | { ok: false; error: string } :
+  T extends PopupListHeldRecordingRoutes
+    ? {
+        ok: true;
+        recordings: Array<{
+          recordingId: string;
+          name: string;
+          routes: import('../integrations/RecordingRoutingService').RecordingRouteView[];
+        }>;
+      } | { ok: false; error: string } :
   T extends PopupGetRecordingRoutes | PopupConfirmRecordingRoutes | PopupRetryRecordingRouting
     ? { ok: true; recordingId?: string; routes: import('../integrations/RecordingRoutingService').RecordingRouteView[] }
       | { ok: false; error: string } :
@@ -730,6 +745,7 @@ function isIntegrationPopupMessage(value: unknown): boolean {
     case 'RETRY_INTEGRATION_DELIVERY':
       return nonEmptyText(value.deliveryId);
     case 'LIST_RECORDING_DESTINATIONS':
+    case 'LIST_HELD_RECORDING_ROUTES':
       return true;
     case 'SAVE_RECORDING_DESTINATION':
       return isSaveRecordingDestinationInput(value.input);

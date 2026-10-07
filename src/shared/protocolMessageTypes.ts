@@ -68,6 +68,7 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'GET_RECORDING_ROUTES',
   'CONFIRM_RECORDING_ROUTES',
   'RETRY_RECORDING_ROUTING',
+  'LIST_HELD_RECORDING_ROUTES',
 ] as const;
 
 /** The subset of popup commands validated by `isRecordingHistoryMessage`. */
@@ -131,6 +132,7 @@ export const INTEGRATION_MESSAGE_TYPES = [
   'GET_RECORDING_ROUTES',
   'CONFIRM_RECORDING_ROUTES',
   'RETRY_RECORDING_ROUTING',
+  'LIST_HELD_RECORDING_ROUTES',
 ] as const;
 
 /**

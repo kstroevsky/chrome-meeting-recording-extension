@@ -89,7 +89,7 @@ describe('RecordingNameDialog', () => {
     expect(overlay().hidden).toBe(true);
   });
 
-  it('cancels on Escape and restores the previously focused element', async () => {
+  it('dismisses on Escape, apart from the skip button, and restores the previously focused element', async () => {
     const prior = document.createElement('button');
     document.body.appendChild(prior);
     prior.focus();
@@ -97,7 +97,7 @@ describe('RecordingNameDialog', () => {
     const outcome = dialog.ask({ title: 'Name recording', message: 'Choose a name', initialValue: 'Default', onSave: async () => {} });
     overlay().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 
-    await expect(outcome).resolves.toBe('canceled');
+    await expect(outcome).resolves.toBe('dismissed');
     expect(document.activeElement).toBe(prior);
   });
 
@@ -241,5 +241,85 @@ describe('RecordingNameDialog when that name is taken', () => {
     void dialog.ask({ title: 'Name', message: '', initialValue: 'Team sync', onSave: jest.fn() });
     expect(line()!.hidden).toBe(true);
   });
-});
 
+  describe('where the data goes (E7)', () => {
+    const routeRows = () => Array.from(document.querySelectorAll<HTMLElement>('.recording-name-route'));
+    const rowText = () => routeRows().map((row) => row.querySelector('.recording-name-route__text')?.textContent);
+    const held = { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM', state: 'held' as const };
+
+    it('shows no route rows for a recording that goes nowhere', () => {
+      void new RecordingNameDialog().ask({ title: 'Name', message: '', initialValue: 'Team sync', onSave: jest.fn() });
+      expect(document.querySelector<HTMLElement>('.recording-name-routes')!.hidden).toBe(true);
+    });
+
+    it('removes a route for this recording with ×, and Undo takes it back', () => {
+      const onChange = jest.fn();
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [held], onChange },
+      });
+      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith(['destination_crm']);
+      expect(rowText()).toEqual(["Won't send to CheekyCheeseIT CRM"]);
+      expect(document.activeElement?.textContent).toBe('Undo');
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith([]);
+      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+    });
+
+    it('says when automation could not be scheduled, and retries it in place', async () => {
+      const onRetry = jest.fn().mockResolvedValue([held]);
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [{ ...held, state: 'not-scheduled' }], onChange: jest.fn(), onRetry },
+      });
+      expect(rowText()).toEqual(['Automation for CheekyCheeseIT CRM could not be scheduled']);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(routeRows()[0]!.querySelector('button')!.disabled).toBe(true);
+      await flush();
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+    });
+
+    it('keeps the row and shows the error when the retry fails', async () => {
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: {
+          items: [{ ...held, state: 'not-scheduled' }],
+          onChange: jest.fn(),
+          onRetry: jest.fn().mockRejectedValue(new Error('IndexedDB unavailable')),
+        },
+      });
+      routeRows()[0]!.querySelector('button')!.click();
+      await flush();
+      expect(document.querySelector('.recording-name-error')?.textContent).toBe('IndexedDB unavailable');
+      expect(routeRows()[0]!.dataset.routeState).toBe('not-scheduled');
+    });
+
+    it('says plainly that nothing is sent when the integration was deleted', () => {
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [{ destinationId: 'gone', destinationName: null, state: 'not-scheduled' }], onChange: jest.fn(), onRetry: jest.fn() },
+      });
+      expect(rowText()).toEqual(['Its integration was deleted · nothing will be sent']);
+      expect(routeRows()[0]!.querySelector('button')).toBeNull();
+    });
+
+    it('starts each ask with nothing removed', () => {
+      const dialog = new RecordingNameDialog();
+      const options = {
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [held], onChange: jest.fn() },
+      };
+      void dialog.ask(options);
+      routeRows()[0]!.querySelector('button')!.click();
+      dialog.dismiss();
+      void dialog.ask(options);
+      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+    });
+  });
+});

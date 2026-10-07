@@ -180,6 +180,10 @@ export class BackgroundIntegrationRuntime {
     return this.recordingRouting.forget(recordingId);
   }
 
+  heldRecordings(): Promise<string[]> {
+    return this.recordingRouting.held();
+  }
+
   recordingRoutes(recordingId: string, expected: readonly RecordingDestinationRoute[] = []) {
     return this.recordingRouting.routes(recordingId, expected);
   }

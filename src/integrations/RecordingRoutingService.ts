@@ -33,7 +33,10 @@ export type RecordingRoutingBeginResult = {
 
 type Deps = {
   destinations: { get(id: string): Promise<IntegrationDestination | undefined> };
-  routing: { get(recordingId: string): Promise<RecordingIntegrationIntent | undefined> };
+  routing: {
+    get(recordingId: string): Promise<RecordingIntegrationIntent | undefined>;
+    list(): Promise<RecordingIntegrationIntent[]>;
+  };
   unitOfWork: {
     beginRecordingRouting(
       recordingId: string,
@@ -103,6 +106,13 @@ export class RecordingRoutingService {
     if (await this.deps.unitOfWork.confirmRecordingRouting(recordingId, removedDestinationIds)) {
       await this.deps.consider(recordingId);
     }
+  }
+
+  /** Recordings with a route still waiting for its confirmation. */
+  async held(): Promise<string[]> {
+    return (await this.deps.routing.list())
+      .filter((intent) => intent.destinations.some((entry) => entry.releaseAfter))
+      .map((intent) => intent.recordingId);
   }
 
   forget(recordingId: string): Promise<void> {

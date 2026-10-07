@@ -21,6 +21,7 @@ import { RecordingControlsView } from './recording/RecordingControlsView';
 import { PopupStatusView } from './recording/PopupStatusView';
 import { PopupNotations } from './notes/PopupNotations';
 import { CompletedNamingPrompt, previewDriveNaming } from './history/CompletedNamingPrompt';
+import { backgroundRecordingRouteActions } from './history/recordingRouteActions';
 import { UnsavedRecordingPrompt } from './history/UnsavedRecordingPrompt';
 import { suffixedRecordingName } from '../shared/recordingNames';
 import { RecordingCommands } from './recording/RecordingCommands';
@@ -161,6 +162,7 @@ export class PopupController {
       reveal: (jobId) => this.sessionTabs.select(jobId),
       latest: () => ({ phase: this.lastPhase, session: this.lastSession }),
       suspended: () => this.previewing || this.destroyed,
+      routing: backgroundRecordingRouteActions(),
     });
     this.notations = new PopupNotations({
       notify: (message) => this.toast(message),

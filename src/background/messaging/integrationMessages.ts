@@ -1,5 +1,6 @@
 import type { PopupToBg } from '../../shared/protocol';
 import { IntegrationPayloadTooLargeError } from '../../integrations/payload';
+import { pendingLocalDeliveries } from '../../shared/recordingHistory';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 function requireDestinations(deps: MessageHandlersDeps) {
@@ -67,6 +68,9 @@ export async function handleIntegrationMessage(
     case 'REMOVE_RECORDING_DESTINATION':
       sendResponse({ ok: true, removed: await requireDestinations(deps).remove(msg.profileId) });
       return true;
+    case 'LIST_HELD_RECORDING_ROUTES':
+      sendResponse({ ok: true, recordings: await listHeldRecordings(deps) });
+      return true;
     case 'GET_RECORDING_ROUTES':
     case 'CONFIRM_RECORDING_ROUTES':
     case 'RETRY_RECORDING_ROUTING': {
@@ -87,4 +91,24 @@ export async function handleIntegrationMessage(
     default:
       return false;
   }
+}
+
+/**
+ * Finished recordings still waiting for the routes they started with to be
+ * confirmed. The run in progress, a recording still saving, and one whose files
+ * still wait for the end dialog are left out: their own prompt asks first.
+ */
+async function listHeldRecordings(deps: MessageHandlersDeps) {
+  const integrations = deps.integrations!;
+  const snapshot = deps.session.getSnapshot();
+  const running = snapshot.phase === 'idle' || snapshot.phase === 'failed' ? undefined : snapshot.historyId;
+  const recordings = [];
+  for (const recordingId of await integrations.heldRecordings()) {
+    if (recordingId === running) continue;
+    const entry = await deps.history?.get(recordingId);
+    if (!entry || entry.deletedAt || entry.status === 'saving' || pendingLocalDeliveries(entry).length) continue;
+    const expected = await deps.destinations?.routesForRecording(recordingId) ?? [];
+    recordings.push({ recordingId, name: entry.name, routes: await integrations.recordingRoutes(recordingId, expected) });
+  }
+  return recordings;
 }
