@@ -102,8 +102,8 @@ export async function handleIntegrationMessage(
 
 /**
  * Finished recordings still waiting for the routes they started with to be
- * confirmed. The run in progress, a recording still saving, and one whose files
- * still wait for the end dialog are left out: their own prompt asks first.
+ * confirmed. The run in progress, a recording still saving or not fully saved,
+ * and one whose files still wait for the end dialog are left out.
  */
 async function listHeldRecordings(deps: MessageHandlersDeps) {
   const integrations = deps.integrations!;
@@ -113,7 +113,9 @@ async function listHeldRecordings(deps: MessageHandlersDeps) {
   for (const recordingId of await integrations.heldRecordings()) {
     if (recordingId === running) continue;
     const entry = await deps.history?.get(recordingId);
-    if (!entry || entry.deletedAt || entry.status === 'saving' || pendingLocalDeliveries(entry).length) continue;
+    // Only once the files are saved: data is not released for a recording whose
+    // files were not (E7). A failed save stays held until saving again completes it.
+    if (!entry || entry.deletedAt || entry.status !== 'complete' || pendingLocalDeliveries(entry).length) continue;
     const expected = await deps.destinations?.routesForRecording(recordingId) ?? [];
     recordings.push({ recordingId, name: entry.name, routes: await integrations.recordingRoutes(recordingId, expected) });
   }

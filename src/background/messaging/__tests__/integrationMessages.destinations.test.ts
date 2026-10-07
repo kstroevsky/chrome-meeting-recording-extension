@@ -62,6 +62,7 @@ describe('destination and routing messages', () => {
     const entries: Record<string, object> = {
       done: { id: 'done', name: 'Acme interview', status: 'complete', files: [] },
       saving: { id: 'saving', name: 'Still saving', status: 'saving', files: [] },
+      partial: { id: 'partial', name: 'Download failed', status: 'partial', files: [] },
       removed: { id: 'removed', name: 'Removed', status: 'complete', files: [], deletedAt: 5 },
       awaiting: {
         id: 'awaiting', name: 'Awaiting the dialog', status: 'complete',
@@ -72,7 +73,7 @@ describe('destination and routing messages', () => {
     const all = {
       ...(ctx.all as object),
       session: { getSnapshot: () => ({ historyId: 'live', phase: 'recording' }) },
-      integrations: { ...ctx.integrations, heldRecordings: jest.fn(async () => ['live', 'done', 'saving', 'removed', 'awaiting', 'gone']) },
+      integrations: { ...ctx.integrations, heldRecordings: jest.fn(async () => ['live', 'done', 'saving', 'partial', 'removed', 'awaiting', 'gone']) },
       history: { get: jest.fn(async (id: string) => entries[id]) },
     } as never;
     const respond = jest.fn();
