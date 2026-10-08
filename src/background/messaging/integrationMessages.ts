@@ -41,6 +41,10 @@ export async function handleIntegrationMessage(
     case 'TEST_INTEGRATION':
       sendResponse({ ok: true, result: await integrations.testDestination(msg.destinationId) });
       return true;
+    case 'CONFIGURE_INTEGRATION_MEDIA':
+      await integrations.configureMedia(msg.destinationId, msg.bearer);
+      sendResponse({ ok: true });
+      return true;
     case 'SEND_RECORDING_TO_INTEGRATION':
       try {
         sendResponse({

@@ -20,6 +20,8 @@ import type { RecordingNotation } from './notations';
 export type PlaybackSource =
   | { kind: 'opfs'; key: string }
   | { kind: 'drive'; fileId: string }
+  /** Receiver-specific opaque ID; the signed URL is requested only at playback. */
+  | { kind: 'external'; destinationId: string; artifactId: string }
   /** Protected HTTP endpoint returned by the sharing service. */
   | { kind: 'remote'; url: string }
   | { kind: 'download'; downloadId: number; playableInExtension: false };
@@ -95,7 +97,7 @@ export function topicSeekMs(topic: PlaybackTopic): number {
 
 /** True for a source the player can actually feed to a media element. */
 export function isStreamableSource(source: PlaybackSource): boolean {
-  return source.kind === 'opfs' || source.kind === 'drive' || source.kind === 'remote';
+  return source.kind === 'opfs' || source.kind === 'drive' || source.kind === 'external' || source.kind === 'remote';
 }
 
 /**

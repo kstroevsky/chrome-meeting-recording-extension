@@ -4,8 +4,12 @@ import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 function isExtensionPlayerSender(sender: chrome.runtime.MessageSender): boolean {
   if (sender.id !== getRuntimeId()) return false;
-  const url = sender.url ?? '';
-  return url.startsWith(getRuntimeUrl('')) && url.includes('recordings.html');
+  try {
+    const url = new URL(sender.url ?? '');
+    const expected = new URL(getRuntimeUrl('recordings.html'));
+    return url.protocol === expected.protocol && url.host === expected.host &&
+      url.pathname === expected.pathname && !url.username && !url.password;
+  } catch { return false; }
 }
 
 export async function handlePlaybackMessage(
@@ -16,6 +20,33 @@ export async function handlePlaybackMessage(
 ): Promise<boolean> {
   const { driveAuthLease, history, playback, playbackLeases } = deps;
   const driveArtifacts = deps.driveLibrary?.artifacts;
+
+  if (msg.type === 'PREPARE_EXTERNAL_PLAYBACK_SOURCE') {
+    if (sender.tab?.id == null || !isExtensionPlayerSender(sender)) {
+      sendResponse({ ok: false, error: 'Playback can only be prepared by the recordings page' });
+      return true;
+    }
+    if (!playback || !deps.integrations) throw new Error('External playback is unavailable');
+    if (![msg.recordingId, msg.fileId, msg.destinationId, msg.artifactId]
+      .every((field) => typeof field === 'string' && field.length > 0 && field.length <= 256)) {
+      sendResponse({ ok: false, error: 'Invalid media playback request' });
+      return true;
+    }
+    const manifest = await playback.getManifest(msg.recordingId);
+    const track = manifest?.recordingId === msg.recordingId
+      ? manifest.tracks.find((candidate) => candidate.fileId === msg.fileId)
+      : undefined;
+    if (!track?.sources.some((source) => source.kind === 'external' &&
+      source.destinationId === msg.destinationId && source.artifactId === msg.artifactId)) {
+      sendResponse({ ok: false, error: 'This recording no longer owns this media artifact' });
+      return true;
+    }
+    const client = await deps.integrations.mediaClient(msg.destinationId);
+    const signed = await client.playback(msg.artifactId);
+    // The token stays in background; the page receives only the short-lived media URL.
+    sendResponse({ ok: true, url: signed.url });
+    return true;
+  }
 
   if (msg.type === 'GET_RECORDING_PLAYBACK_MANIFEST') {
     if (!playback) throw new Error('Playback is unavailable');

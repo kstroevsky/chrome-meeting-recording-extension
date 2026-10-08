@@ -63,6 +63,8 @@ if (list && empty && error) {
       playback: {
         getManifest: (recordingId) => controller.playback.getManifest(recordingId),
         prepareDriveSource: (recordingId, fileId, refresh) => controller.playback.prepareDriveSource(recordingId, fileId, refresh),
+        prepareExternalSource: (recordingId, fileId, destinationId, artifactId, refresh) =>
+          controller.playback.prepareExternalSource(recordingId, fileId, destinationId, artifactId, refresh),
         warn: (...args) => controller.playback.warn(...args),
       },
       notesChanged: () => controller.notesChanged(),

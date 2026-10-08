@@ -11,6 +11,77 @@ function fixedSecret(): string {
 }
 
 describe('webhook transport', () => {
+  const endpoint = 'https://crm.example.test/integrations/meeting-recorder/webhook';
+  const capability = {
+    protocol: 'io.github.kstroevsky.meeting-recorder.service.v1',
+    capabilities: { media: {
+      version: 1,
+      apiBase: 'https://crm.example.test/api/integrations/meeting-recorder/media',
+      upload: { strategy: 'multipart-put-v1', origins: ['https://bucket.r2.cloudflarestorage.com'] },
+      playback: { strategy: 'refreshable-url-v1' },
+    } },
+  };
+  const testInput = () => ({
+    endpoint, eventId: 'evt_test', body: '{}', signingSecret: fixedSecret(),
+    requestAuth: { type: 'none' as const }, discoverCapabilities: true,
+  });
+  function jsonReply(value: unknown, status = 200): Response {
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    let consumed = false;
+    return {
+      status,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      body: { getReader: () => ({
+        read: async () => {
+          if (consumed) return { done: true, value: undefined };
+          consumed = true;
+          return { done: false, value: bytes };
+        },
+        cancel: async () => undefined,
+      }) },
+    } as unknown as Response;
+  }
+
+  it('discovers only a strictly scoped capability in a signed connection test', async () => {
+    const fetcher = jest.fn(async () => jsonReply(capability));
+    const transport = new WebhookTransport({ fetch: fetcher as typeof fetch });
+    await expect(transport.send(testInput())).resolves.toEqual({
+      ok: true, status: 200,
+      mediaCapability: {
+        version: 1, apiBase: capability.capabilities.media.apiBase,
+        upload: capability.capabilities.media.upload, playback: capability.capabilities.media.playback,
+      },
+    });
+    await expect(transport.send({ ...testInput(), discoverCapabilities: false })).resolves.toEqual({ ok: true, status: 200 });
+    expect((fetcher.mock.calls[0] as unknown as [unknown, RequestInit])[1].redirect).toBe('manual');
+  });
+
+  it('keeps events-only 204 compatible and refuses wrong-origin or invalid receiver instructions', async () => {
+    const replies = [
+      { status: 204, headers: new Headers() } as Response,
+      jsonReply({ ...capability, capabilities: { media: { ...capability.capabilities.media, apiBase: 'https://attacker.test/media' } } }),
+      jsonReply({ ...capability, capabilities: { media: { ...capability.capabilities.media,
+        upload: { strategy: 'multipart-put-v1', origins: ['https://*.example.test'] },
+      } } }),
+      jsonReply({ ...capability, capabilities: { media: { ...capability.capabilities.media,
+        upload: { strategy: 'multipart-put-v1', origins: ['https://bucket.r2.cloudflarestorage.com/path'] },
+      } } }),
+    ];
+    const fetcher = jest.fn(async () => replies.shift()!);
+    const transport = new WebhookTransport({ fetch: fetcher as typeof fetch });
+    await expect(transport.send(testInput())).resolves.toEqual({ ok: true, status: 204 });
+    for (let i = 0; i < 3; i += 1) {
+      await expect(transport.send(testInput())).resolves.toEqual({ ok: true, status: 200, capabilityError: 'invalid-response' });
+    }
+  });
+
+  it('rejects oversized capability responses even without Content-Length', async () => {
+    const tooLarge = 'x'.repeat(16 * 1024 + 1);
+    const response = jsonReply({ padding: tooLarge });
+    const transport = new WebhookTransport({ fetch: jest.fn(async () => response) as typeof fetch });
+    await expect(transport.send(testInput())).resolves.toEqual({ ok: true, status: 200, capabilityError: 'invalid-response' });
+  });
+
   it('normalizes only HTTPS endpoints and derives exact host permission', () => {
     expect(normalizeWebhookEndpoint('https://hooks.example.test:8443/events?id=1')).toEqual({
       endpoint: 'https://hooks.example.test:8443/events?id=1',

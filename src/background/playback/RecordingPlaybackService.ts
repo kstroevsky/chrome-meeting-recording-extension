@@ -111,6 +111,11 @@ function toSources(file: RecordingHistoryFile): PlaybackSource[] {
     if (location.kind === 'drive') sources.push({ kind: 'drive', fileId: location.fileId });
   }
   for (const location of file.locations) {
+    if (location.kind === 'external') sources.push({
+      kind: 'external', destinationId: location.destinationId, artifactId: location.artifactId,
+    });
+  }
+  for (const location of file.locations) {
     if (location.kind === 'download') {
       sources.push({ kind: 'download', downloadId: location.downloadId, playableInExtension: false });
     }

@@ -1,12 +1,16 @@
 import { signStandardWebhook } from './StandardWebhookSigner';
 import { applyWebhookRequestAuth, type ResolvedWebhookRequestAuth } from './WebhookAuth';
 import { clampRetryAfterMs } from '../IntegrationRetryPolicy';
+import { parseMediaCapability, type MediaCapability } from '../media/MediaCapability';
 
 export type WebhookTransportResult = {
   ok: boolean;
   status: number;
   /** Normalized relative delay; arbitrary receiver headers never cross this seam. */
   retryAfterMs?: number;
+  /** Only populated for a signed, successful connection-test response. */
+  mediaCapability?: MediaCapability;
+  capabilityError?: 'invalid-response';
 };
 
 export class WebhookTransportError extends Error {
@@ -30,6 +34,7 @@ export class WebhookTransport {
     body: string;
     signingSecret: string;
     requestAuth: ResolvedWebhookRequestAuth;
+    discoverCapabilities?: boolean;
   }): Promise<WebhookTransportResult> {
     const timestamp = Math.floor((this.deps.now?.() ?? Date.now()) / 1_000);
     const headers = new Headers({
@@ -60,10 +65,26 @@ export class WebhookTransport {
         referrerPolicy: 'no-referrer',
       });
       const retryAfterMs = parseRetryAfter(response.headers?.get?.('retry-after') ?? null, this.deps.now?.() ?? Date.now());
+      let capability: Pick<WebhookTransportResult, 'mediaCapability' | 'capabilityError'> = {};
+      if (input.discoverCapabilities && response.status === 200) {
+        const contentType = response.headers?.get?.('content-type') ?? '';
+        if (/^application\/json\s*(?:;|$)/i.test(contentType)) {
+          try {
+            const json = JSON.parse(await readBoundedResponse(response));
+            const mediaCapability = parseMediaCapability(json, input.endpoint);
+            capability = mediaCapability ? { mediaCapability } : { capabilityError: 'invalid-response' };
+          } catch {
+            capability = { capabilityError: 'invalid-response' };
+          }
+        } else {
+          capability = { capabilityError: 'invalid-response' };
+        }
+      }
       return {
         ok: response.status >= 200 && response.status < 300,
         status: response.status,
         ...(retryAfterMs != null ? { retryAfterMs } : {}),
+        ...capability,
       };
     } catch (error) {
       if (controller.signal.aborted) throw new WebhookTransportError('timeout', error);
@@ -72,6 +93,31 @@ export class WebhookTransport {
       clearTimeout(timer);
     }
   }
+}
+
+/** Cap receiver-controlled capability JSON at 16 KiB even with chunked encoding. */
+async function readBoundedResponse(response: Response): Promise<string> {
+  const limit = 16 * 1024;
+  if (Number(response.headers.get('content-length')) > limit) throw new Error('Capability response too large');
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > limit) throw new Error('Capability response too large');
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; }
+  return new TextDecoder('utf-8', { fatal: true }).decode(result);
 }
 
 export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {

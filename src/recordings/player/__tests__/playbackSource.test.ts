@@ -76,6 +76,29 @@ describe('resolveTrackSource', () => {
 });
 
 describe('createPlaybackTrackResolver', () => {
+  it('mints a short-lived external URL and refreshes it with the exact destination and artifact', async () => {
+    const prepareExternalSource = jest.fn(async (_recording: string, _file: string, _destination: string, _artifact: string, refresh?: boolean) =>
+      refresh ? 'https://storage.example/fresh' : 'https://storage.example/initial');
+    const resolve = createPlaybackTrackResolver({ prepareExternalSource });
+    const resolved = await resolve('r1', track([{ kind: 'external', destinationId: 'd1', artifactId: 'media_1' }]));
+    expect(resolved?.url).toBe('https://storage.example/initial');
+    expect(prepareExternalSource).toHaveBeenCalledWith('r1', 'r1:tab', 'd1', 'media_1', false);
+    await expect(resolved?.refresh?.()).resolves.toMatchObject({ url: 'https://storage.example/fresh' });
+    expect(prepareExternalSource).toHaveBeenLastCalledWith('r1', 'r1:tab', 'd1', 'media_1', true);
+  });
+
+  it('tries a second external destination if the first fails', async () => {
+    const prepareExternalSource = jest.fn(async (_r: string, _f: string, destination: string) => {
+      if (destination === 'd1') throw new Error('revoked');
+      return 'https://archive.example/second';
+    });
+    const result = await playbackUrl('r1', track([
+      { kind: 'external', destinationId: 'd1', artifactId: 'media_1' },
+      { kind: 'external', destinationId: 'd2', artifactId: 'media_2' },
+    ]), { prepareExternalSource, warn: jest.fn() });
+    expect(result).toEqual({ url: 'https://archive.example/second' });
+    expect(prepareExternalSource).toHaveBeenCalledTimes(2);
+  });
   it('keeps Drive refresh mechanics inside the extension adapter', async () => {
     const prepareDriveSource = jest.fn(async (_recordingId: string, _fileId: string, refresh?: boolean) =>
       refresh ? 'https://drive.example/fresh' : 'https://drive.example/initial');

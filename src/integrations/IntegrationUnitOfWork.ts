@@ -18,6 +18,7 @@ import {
   type IntegrationStream,
   type RecordingIntegrationIntentDestination,
 } from './persistence';
+import type { MediaCapability } from './media/MediaCapability';
 
 /**
  * Multi-store mutations whose invariants would be broken by separate
@@ -49,6 +50,33 @@ export class IntegrationUnitOfWork {
       },
       'Could not create integration destination',
     );
+  }
+
+  /** Rotate the media bearer and capability together. Re-read the live destination
+   * inside the transaction so a racing delete cannot resurrect credentials. */
+  async configureMedia(destinationId: string, secret: IntegrationSecret, capability: MediaCapability, updatedAt: number): Promise<void> {
+    const normalizedSecret = normalizeIntegrationSecret(secret);
+    if (!normalizedSecret || normalizedSecret.kind !== 'media-auth') throw new Error('Invalid media credential');
+    const database = await openIntegrationDatabase(this.factory);
+    await runTransaction(database, [INTEGRATION_DESTINATIONS_STORE, INTEGRATION_SECRETS_STORE], (transaction) => {
+      const destinations = transaction.objectStore(INTEGRATION_DESTINATIONS_STORE);
+      const secrets = transaction.objectStore(INTEGRATION_SECRETS_STORE);
+      const request = destinations.get(destinationId);
+      request.onsuccess = () => {
+        const current = normalizeIntegrationDestination(request.result);
+        if (!current || !current.enabled) {
+          transaction.abort();
+          return;
+        }
+        const updated = normalizeIntegrationDestination({
+          ...current, media: { secretId: normalizedSecret.id, capability }, updatedAt,
+        });
+        if (!updated) { transaction.abort(); return; }
+        secrets.put(normalizedSecret);
+        destinations.put(updated);
+        if (current.media) secrets.delete(current.media.secretId);
+      };
+    }, 'Could not configure media connection');
   }
 
   async planDelivery(delivery: IntegrationDelivery, stream: IntegrationStream): Promise<void> {
@@ -222,12 +250,6 @@ export class IntegrationUnitOfWork {
   async deleteDestination(destination: IntegrationDestination, updatedAt: number): Promise<void> {
     const normalizedDestination = normalizeIntegrationDestination(destination);
     if (!normalizedDestination) throw new Error('Invalid integration destination deletion');
-    const secretIds = [
-      normalizedDestination.signingSecretId,
-      ...(normalizedDestination.requestAuth.type === 'none'
-        ? []
-        : [normalizedDestination.requestAuth.secretId]),
-    ];
 
     const database = await openIntegrationDatabase(this.factory);
     await runTransaction(
@@ -240,9 +262,20 @@ export class IntegrationUnitOfWork {
         INTEGRATION_DELIVERIES_STORE,
       ],
       (transaction) => {
-        transaction.objectStore(INTEGRATION_DESTINATIONS_STORE).delete(normalizedDestination.id);
-        const secrets = transaction.objectStore(INTEGRATION_SECRETS_STORE);
-        for (const secretId of secretIds) secrets.delete(secretId);
+        const destinations = transaction.objectStore(INTEGRATION_DESTINATIONS_STORE);
+        const request = destinations.get(normalizedDestination.id);
+        request.onsuccess = () => {
+          // A media token can rotate between the coordinator's initial read and
+          // this transaction. Delete credentials from the live row, not its snapshot.
+          const current = normalizeIntegrationDestination(request.result);
+          if (current) {
+            const secrets = transaction.objectStore(INTEGRATION_SECRETS_STORE);
+            secrets.delete(current.signingSecretId);
+            if (current.media) secrets.delete(current.media.secretId);
+            if (current.requestAuth.type !== 'none') secrets.delete(current.requestAuth.secretId);
+          }
+          destinations.delete(normalizedDestination.id);
+        };
         deleteMatchingStreams(transaction, normalizedDestination.id);
         removeDestinationFromRouting(transaction, normalizedDestination.id);
         cancelDestinationDeliveries(transaction, normalizedDestination.id, updatedAt);

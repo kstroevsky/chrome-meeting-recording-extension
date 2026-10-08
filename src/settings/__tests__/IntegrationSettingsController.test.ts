@@ -3,6 +3,7 @@ import {
   containsHostPermission,
   removeHostPermission,
   requestHostPermission,
+  requestHostPermissions,
 } from '../../platform/chrome/permissions';
 import { sendToBackground } from '../../shared/messages';
 
@@ -10,6 +11,7 @@ jest.mock('../../platform/chrome/permissions', () => ({
   containsHostPermission: jest.fn(),
   removeHostPermission: jest.fn(),
   requestHostPermission: jest.fn(),
+  requestHostPermissions: jest.fn(),
 }));
 
 jest.mock('../../shared/messages', () => ({
@@ -17,6 +19,7 @@ jest.mock('../../shared/messages', () => ({
 }));
 
 const permission = requestHostPermission as jest.MockedFunction<typeof requestHostPermission>;
+const mediaPermission = requestHostPermissions as jest.MockedFunction<typeof requestHostPermissions>;
 const containsPermission = containsHostPermission as jest.MockedFunction<typeof containsHostPermission>;
 const removePermission = removeHostPermission as jest.MockedFunction<typeof removeHostPermission>;
 const send = sendToBackground as jest.MockedFunction<typeof sendToBackground>;
@@ -78,6 +81,7 @@ describe('IntegrationSettingsController', () => {
     containsPermission.mockReset().mockResolvedValue(false);
     removePermission.mockReset().mockResolvedValue(true);
     permission.mockReset().mockResolvedValue(true);
+    mediaPermission.mockReset().mockResolvedValue(true);
     send.mockReset().mockImplementation(async (message: any) => {
       switch (message.type) {
         case 'LIST_INTEGRATION_RECORDINGS':
@@ -99,6 +103,127 @@ describe('IntegrationSettingsController', () => {
       .find((button) => button.textContent === 'Send recording')!;
     expect(sendButton.disabled)
       .toBe(false);
+  });
+
+  it('shows media access separately and only requests R2 hosts after a user click', async () => {
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200,
+        mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api/integrations/meeting-recorder/media',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test', 'https://second.example.test:8443'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    const test = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Test')!;
+    test.click();
+    for (let i = 0; i < 15; i += 1) await Promise.resolve();
+    expect(mediaPermission).not.toHaveBeenCalled();
+    expect(document.getElementById('integration-status')?.textContent).toContain('Grant storage access');
+    const grant = Array.from(document.querySelectorAll<HTMLButtonElement>('#integration-status button'))
+      .find((button) => button.textContent === 'Grant storage access')!;
+    grant.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(mediaPermission).toHaveBeenCalledWith([
+      'https://storage.example.test/*', 'https://second.example.test/*',
+    ]);
+    expect(document.getElementById('integration-status')?.textContent).toContain('storage access granted');
+  });
+
+  it('provisions a separate media bearer after successful discovery and granted storage access', async () => {
+    containsPermission.mockResolvedValue(true);
+    const sends: Array<{ type: string; bearer?: string }> = [];
+    send.mockImplementation(async (message: any) => {
+      sends.push(message);
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200, mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'CONFIGURE_INTEGRATION_MEDIA') return { ok: true } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    const row = document.querySelector('.integration-destination')!;
+    const media = row.querySelector<HTMLElement>('.integration-media')!;
+    expect(media.hidden).toBe(true);
+    Array.from(row.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Test')!.click();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(media.hidden).toBe(false);
+    const token = media.querySelector<HTMLInputElement>('input')!;
+    token.value = 'mrmt_secret';
+    media.querySelector('button')!.click();
+    expect(token.value).toBe('');
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+    expect(sends.filter((msg) => msg.type === 'CONFIGURE_INTEGRATION_MEDIA')).toEqual([{
+      type: 'CONFIGURE_INTEGRATION_MEDIA', destinationId: 'destination_1', bearer: 'mrmt_secret',
+    }]);
+    expect(mediaPermission).not.toHaveBeenCalled();
+    expect(document.getElementById('integration-status')?.textContent).toContain('credential saved');
+    expect(document.body.textContent).not.toContain('mrmt_secret');
+  });
+
+  it('does not persist a media credential without storage access', async () => {
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200, mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [{
+        ...destination(), media: { secretId: 'secret_media', capability: { version: 1 } },
+      }] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    const media = document.querySelector<HTMLElement>('.integration-media')!;
+    media.querySelector<HTMLInputElement>('input')!.value = 'mrmt_secret';
+    media.querySelector<HTMLButtonElement>('button')!.click();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(media.querySelector<HTMLInputElement>('input')!.value).toBe('');
+    expect(document.getElementById('integration-status')?.textContent).toContain('Grant storage access');
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CONFIGURE_INTEGRATION_MEDIA' }));
+  });
+
+  it('keeps uploads disabled when storage permission is declined', async () => {
+    mediaPermission.mockResolvedValue(false);
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200, mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Test')!.click();
+    for (let i = 0; i < 15; i += 1) await Promise.resolve();
+    document.querySelector<HTMLButtonElement>('#integration-status button')!.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(document.getElementById('integration-status')?.textContent).toContain('declined');
   });
 
   it('rejects reserved API-key headers before requesting host permission', async () => {

@@ -8,6 +8,7 @@ import {
   containsHostPermission,
   removeHostPermission,
   requestHostPermission,
+  requestHostPermissions,
 } from '../platform/chrome/permissions';
 import { sendToBackground } from '../shared/messages';
 import { formatBytes } from '../shared/format';
@@ -183,7 +184,23 @@ export class IntegrationSettingsController {
     const test = this.el.document.createElement('button');
     test.type = 'button';
     test.textContent = 'Test';
-    test.addEventListener('click', () => void this.test(destination, test));
+    const media = this.el.document.createElement('div');
+    media.className = 'integration-media';
+    media.hidden = !destination.media || !destination.enabled;
+    const mediaLabel = this.el.document.createElement('label');
+    mediaLabel.textContent = 'Media bearer (issued separately by the receiver)';
+    const mediaBearer = this.el.document.createElement('input');
+    mediaBearer.type = 'password';
+    mediaBearer.autocomplete = 'new-password';
+    mediaBearer.placeholder = 'Paste dedicated media token';
+    mediaBearer.setAttribute('aria-label', `Media bearer for ${destination.name}`);
+    mediaLabel.append(mediaBearer);
+    const saveMedia = this.el.document.createElement('button');
+    saveMedia.type = 'button';
+    saveMedia.textContent = destination.media ? 'Replace media token' : 'Enable media';
+    saveMedia.addEventListener('click', () => void this.configureMedia(destination, mediaBearer, saveMedia));
+    media.append(mediaLabel, saveMedia);
+    test.addEventListener('click', () => void this.test(destination, test, false, media));
     const send = this.el.document.createElement('button');
     send.type = 'button';
     send.textContent = 'Send recording';
@@ -201,8 +218,41 @@ export class IntegrationSettingsController {
     remove.textContent = 'Delete';
     remove.addEventListener('click', () => void this.remove(destination, remove));
     actions.append(test, send, retry, remove);
-    row.append(copy, actions);
+    row.append(copy, actions, media);
     return row;
+  }
+
+  private async configureMedia(destination: IntegrationDestination, input: HTMLInputElement, button: HTMLButtonElement): Promise<void> {
+    // Remove the plaintext from the page immediately; only the background's
+    // integration secret store receives it, after a fresh signed discovery.
+    const bearer = input.value;
+    input.value = '';
+    if (!bearer.trim()) {
+      this.setStatus('Enter the dedicated media token issued by the receiver.', true);
+      return;
+    }
+    button.disabled = true;
+    try {
+      const discovery = await sendToBackground({ type: 'TEST_INTEGRATION', destinationId: destination.id });
+      if (!discovery.ok || !discovery.result.ok || !discovery.result.mediaCapability) {
+        throw new Error('Test this media-capable receiver before saving its token.');
+      }
+      const patterns = discovery.result.mediaCapability.upload.origins
+        .map((origin) => `https://${new URL(origin).hostname}/*`);
+      for (const pattern of patterns) {
+        if (!await containsHostPermission(pattern)) {
+          throw new Error('Grant storage access with Test → Grant storage access before enabling media.');
+        }
+      }
+      const response = await sendToBackground({ type: 'CONFIGURE_INTEGRATION_MEDIA', destinationId: destination.id, bearer });
+      if (!response.ok) throw new Error(response.error);
+      this.setStatus(`${destination.name}: media credential saved. The previous token, if any, was replaced.`);
+      await this.refresh();
+    } catch (error) {
+      this.setStatus(`Could not configure media: ${String(error)}`, true);
+    } finally {
+      button.disabled = false;
+    }
   }
 
   private async retry(
@@ -245,12 +295,42 @@ export class IntegrationSettingsController {
     }
   }
 
-  private async test(destination: IntegrationDestination, button: HTMLButtonElement, wizard = false): Promise<void> {
+  private async test(destination: IntegrationDestination, button: HTMLButtonElement, wizard = false, media?: HTMLElement): Promise<void> {
     button.disabled = true;
     this.setStatus(`Testing ${destination.name}…`);
     try {
       const response = await sendToBackground({ type: 'TEST_INTEGRATION', destinationId: destination.id });
       if (!response.ok) throw new Error(response.error);
+      if (response.result.ok && response.result.mediaCapability) {
+        if (media && destination.enabled) media.hidden = false;
+        const origins = response.result.mediaCapability.upload.origins;
+        const patterns = origins.map((origin) => `https://${new URL(origin).hostname}/*`);
+        const missing: string[] = [];
+        for (const pattern of patterns) {
+          if (!await containsHostPermission(pattern)) missing.push(pattern);
+        }
+        this.setStatus(`${destination.name}: media-capable connection verified (HTTP 200).`
+          + (missing.length ? ' Grant storage access before enabling media uploads.' : ' Storage access granted.'));
+        if (missing.length && this.el.status) {
+          const grant = this.el.document.createElement('button');
+          grant.type = 'button';
+          grant.textContent = 'Grant storage access';
+          grant.addEventListener('click', () => {
+            // Call Chrome's permission API directly from this user gesture.
+            void requestHostPermissions(missing).then((allowed) => {
+              this.setStatus(allowed
+                ? `${destination.name}: storage access granted.`
+                : `${destination.name}: storage access declined; media uploads remain disabled.`, !allowed);
+            }).catch((error) => this.setStatus(`Storage permission failed: ${String(error)}`, true));
+          });
+          this.el.status.append(' ', grant);
+        }
+        return;
+      }
+      if (response.result.capabilityError) {
+        this.setStatus(`${destination.name}: receiver returned an unsupported media capability document.`, true);
+        return;
+      }
       this.setStatus(response.result.ok
         ? wizard
           ? `\u2713 ${destination.name} connected`

@@ -169,6 +169,12 @@ export class RecordingsController {
         : { type: 'PREPARE_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId, source: 'drive' });
       return response.ok ? response.url : undefined;
     },
+    prepareExternalSource: async (recordingId: string, fileId: string, destinationId: string, artifactId: string, _refresh?: boolean) => {
+      const response = await sendToBackground({
+        type: 'PREPARE_EXTERNAL_PLAYBACK_SOURCE', recordingId, fileId, destinationId, artifactId,
+      });
+      return response.ok ? response.url : undefined;
+    },
     warn: (...args: unknown[]) => console.warn('[recordings]', ...args),
   };
 

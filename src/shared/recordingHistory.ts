@@ -7,12 +7,14 @@ import { contentTypeForRecordingFile, normalizeRecordingFileContentType } from '
  * Where a logical artifact physically exists. A recording artifact is immutable
  * logical media; OPFS, Downloads and Drive are *replicas* of it (ADR-0006), so
  * one file can hold several at once — a Drive upload that fell back locally has
- * both. At most one replica per `kind`.
+ * both. At most one replica per `kind`, except external, which is keyed by
+ * destinationId: separate receivers may retain independent copies.
  */
 export type ArtifactLocation =
   | { kind: 'opfs'; key: string; retainedAt: number }
   | { kind: 'download'; downloadId: number }
-  | { kind: 'drive'; fileId: string; webViewLink?: string };
+  | { kind: 'drive'; fileId: string; webViewLink?: string }
+  | { kind: 'external'; destinationId: string; artifactId: string };
 
 export type ArtifactDeliveryStatus = 'pending' | 'downloaded' | 'uploaded' | 'local-fallback' | 'failed';
 
@@ -257,6 +259,15 @@ function normalizeArtifactLocation(value: unknown): ArtifactLocation | undefined
       : undefined;
     return fileId ? { kind: 'drive', fileId, ...(webViewLink ? { webViewLink } : {}) } : undefined;
   }
+  if (candidate.kind === 'external') {
+    const destinationId = typeof candidate.destinationId === 'string' ? candidate.destinationId.trim() : '';
+    const artifactId = typeof candidate.artifactId === 'string' ? candidate.artifactId.trim() : '';
+    // Stored identifiers are opaque; reject control characters and excessively
+    // large/corrupted values without assuming the identifier scheme of a receiver.
+    if (!destinationId || !artifactId || destinationId.length > 200 || artifactId.length > 200 ||
+        /[\x00-\x1f\x7f]/.test(destinationId) || /[\x00-\x1f\x7f]/.test(artifactId)) return undefined;
+    return { kind: 'external', destinationId, artifactId };
+  }
   return undefined;
 }
 
@@ -318,9 +329,11 @@ export function deliveryFromLegacyFields(file: LegacyDeliveryFields, requested: 
   return { requested, status, ...(file.error ? { error: file.error } : {}) };
 }
 
-/** Adds or replaces the replica of `next.kind`, leaving the other kinds in place. */
+/** Adds or replaces a replica, scoped by receiver for external destinations. */
 export function upsertArtifactLocation(locations: ArtifactLocation[], next: ArtifactLocation): ArtifactLocation[] {
-  return [...locations.filter((location) => location.kind !== next.kind), next];
+  return [...locations.filter((location) => location.kind !== next.kind ||
+    (location.kind === 'external' && next.kind === 'external' &&
+      location.destinationId !== next.destinationId)), next];
 }
 
 /** ADR-0006 fields for a freshly created row that has no replicas yet. */

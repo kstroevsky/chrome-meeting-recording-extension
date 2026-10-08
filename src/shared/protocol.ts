@@ -198,6 +198,14 @@ export type PopupRefreshPlaybackSource = {
   recordingId: string;
   fileId: string;
 };
+/** An exact artifact association is checked again against the live manifest in background. */
+export type PopupPrepareExternalPlaybackSource = {
+  type: 'PREPARE_EXTERNAL_PLAYBACK_SOURCE';
+  recordingId: string;
+  fileId: string;
+  destinationId: string;
+  artifactId: string;
+};
 /** Adds a notation to a finished recording at an explicit media offset. */
 export type PopupAddRecordingNotation = {
   type: 'ADD_RECORDING_NOTATION';
@@ -228,6 +236,7 @@ export type PopupListIntegrations = { type: 'LIST_INTEGRATIONS' };
 export type PopupCreateIntegration = { type: 'CREATE_INTEGRATION'; input: CreateIntegrationDestinationInput };
 export type PopupDeleteIntegration = { type: 'DELETE_INTEGRATION'; destinationId: string };
 export type PopupTestIntegration = { type: 'TEST_INTEGRATION'; destinationId: string };
+export type PopupConfigureIntegrationMedia = { type: 'CONFIGURE_INTEGRATION_MEDIA'; destinationId: string; bearer: string };
 export type PopupSendRecordingToIntegration = {
   type: 'SEND_RECORDING_TO_INTEGRATION';
   destinationId: string;
@@ -304,6 +313,7 @@ export type PopupToBg =
   | PopupDeliverLocalRecording
   | PopupPreparePlaybackSource
   | PopupRefreshPlaybackSource
+  | PopupPrepareExternalPlaybackSource
   | PopupListRecordingNotationSummaries
   | PopupListRecordingTopicSummaries
   | PopupAddRecordingNotation
@@ -316,6 +326,7 @@ export type PopupToBg =
   | PopupCreateIntegration
   | PopupDeleteIntegration
   | PopupTestIntegration
+  | PopupConfigureIntegrationMedia
   | PopupSendRecordingToIntegration
   | PopupListIntegrationDeliveries
   | PopupRetryIntegrationDelivery
@@ -378,6 +389,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
     { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :
   T extends PopupPreparePlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupRefreshPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
+  T extends PopupPrepareExternalPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupListRecordingNotationSummaries ?
     { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
   T extends PopupListRecordingTopicSummaries ?
@@ -409,6 +421,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
       } | { ok: false; error: string } :
   T extends PopupTestIntegration
     ? { ok: true; result: IntegrationConnectionTestResult } | { ok: false; error: string } :
+  T extends PopupConfigureIntegrationMedia ? { ok: true } | { ok: false; error: string } :
   T extends PopupSendRecordingToIntegration
     ? { ok: true; delivery: IntegrationDelivery }
       | {
@@ -745,6 +758,9 @@ function isIntegrationPopupMessage(value: unknown): boolean {
     case 'DELETE_INTEGRATION':
     case 'TEST_INTEGRATION':
       return nonEmptyText(value.destinationId);
+    case 'CONFIGURE_INTEGRATION_MEDIA':
+      return nonEmptyText(value.destinationId) && typeof value.bearer === 'string'
+        && value.bearer.length > 0 && value.bearer.length <= 4096 && !/[\r\n]/.test(value.bearer);
     case 'SEND_RECORDING_TO_INTEGRATION':
       return nonEmptyText(value.destinationId) && nonEmptyText(value.recordingId);
     case 'RETRY_INTEGRATION_DELIVERY':

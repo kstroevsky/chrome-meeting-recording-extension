@@ -1,5 +1,6 @@
 import type { IntegrationDataPolicy, IntegrationEventKind, IntegrationReadiness } from './contracts';
 import { normalizeIntegrationDataPolicy } from './policy';
+import { normalizeStoredMediaCapability, type MediaCapability } from './media/MediaCapability';
 
 export type IntegrationRoutingDefault = 'manual' | 'auto' | 'review';
 export type IntegrationRequestAuth =
@@ -18,6 +19,8 @@ export type IntegrationDestination = {
   dataPolicy: IntegrationDataPolicy;
   requestAuth: IntegrationRequestAuth;
   signingSecretId: string;
+  /** Dedicated media credential; never reuse a webhook signing/request credential. */
+  media?: { secretId: string; capability: MediaCapability };
   connectionVersion: number;
   createdAt: number;
   updatedAt: number;
@@ -26,7 +29,7 @@ export type IntegrationDestination = {
 /** Plaintext is intentionally accessible only through the secret repository. */
 export type IntegrationSecret = {
   id: string;
-  kind: 'signing' | 'request-auth';
+  kind: 'signing' | 'request-auth' | 'media-auth';
   value: string;
   createdAt: number;
   updatedAt: number;
@@ -121,8 +124,13 @@ export function normalizeIntegrationDestination(value: unknown): IntegrationDest
   const connectionVersion = positiveInteger(value.connectionVersion);
   const createdAt = timestamp(value.createdAt);
   const updatedAt = timestamp(value.updatedAt);
+  const media = value.media == null ? undefined : isRecord(value.media) ? {
+    secretId: text(value.media.secretId),
+    capability: normalizeStoredMediaCapability(value.media.capability, endpoint ?? ''),
+  } : undefined;
   if (!id || !producerId || !name || !endpoint || !signingSecretId || !dataPolicy || !requestAuth) return undefined;
   if (value.type !== 'webhook' || typeof value.enabled !== 'boolean') return undefined;
+  if (value.media != null && (!media?.secretId || !media.capability)) return undefined;
   if (!isRoutingDefault(value.routingDefault) || connectionVersion == null || createdAt == null || updatedAt == null) {
     return undefined;
   }
@@ -137,6 +145,7 @@ export function normalizeIntegrationDestination(value: unknown): IntegrationDest
     dataPolicy,
     requestAuth,
     signingSecretId,
+    ...(media?.secretId && media.capability ? { media: { secretId: media.secretId, capability: media.capability } } : {}),
     connectionVersion,
     createdAt,
     updatedAt,
@@ -150,7 +159,7 @@ export function normalizeIntegrationSecret(value: unknown): IntegrationSecret | 
   const createdAt = timestamp(value.createdAt);
   const updatedAt = timestamp(value.updatedAt);
   if (!id || !secretValue || createdAt == null || updatedAt == null) return undefined;
-  if (value.kind !== 'signing' && value.kind !== 'request-auth') return undefined;
+  if (value.kind !== 'signing' && value.kind !== 'request-auth' && value.kind !== 'media-auth') return undefined;
   return { id, kind: value.kind, value: secretValue, createdAt, updatedAt };
 }
 

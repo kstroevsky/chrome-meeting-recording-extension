@@ -17,6 +17,8 @@ import { createStandardWebhookSecret } from './webhook/StandardWebhookSigner';
 import { normalizeWebhookEndpoint } from './webhook/WebhookEndpoint';
 import { normalizeWebhookApiKeyHeader, type ResolvedWebhookRequestAuth } from './webhook/WebhookAuth';
 import type { WebhookTransportResult } from './webhook/WebhookTransport';
+import { ExternalMediaClient } from './media/ExternalMediaClient';
+import type { MediaCapability } from './media/MediaCapability';
 
 type CoordinatorDeps = {
   destinations: {
@@ -31,6 +33,7 @@ type CoordinatorDeps = {
   };
   unitOfWork: {
     createDestination(destination: IntegrationDestination, secrets: IntegrationSecret[]): Promise<void>;
+    configureMedia(destinationId: string, secret: IntegrationSecret, capability: MediaCapability, updatedAt: number): Promise<void>;
     deleteDestination(destination: IntegrationDestination, updatedAt: number): Promise<void>;
   };
   planner: {
@@ -46,6 +49,7 @@ type CoordinatorDeps = {
       body: string;
       signingSecret: string;
       requestAuth: ResolvedWebhookRequestAuth;
+      discoverCapabilities?: boolean;
     }): Promise<WebhookTransportResult>;
   };
   containsHostPermission(pattern: string): Promise<boolean>;
@@ -119,8 +123,37 @@ export class IntegrationCoordinator {
       body,
       signingSecret: await this.requireSecretValue(destination.signingSecretId),
       requestAuth: await this.resolveRequestAuth(destination.requestAuth),
+      discoverCapabilities: true,
     });
     return { ...result, eventId };
+  }
+
+  /** The receiver issues this token separately from the webhook signing secret. */
+  async configureMedia(destinationId: string, bearer: string): Promise<void> {
+    if (typeof bearer !== 'string' || !bearer.trim() || bearer.length > 4096 || /[\r\n]/.test(bearer)) {
+      throw new Error('Invalid media bearer token');
+    }
+    const destination = await this.requireDestination(destinationId);
+    if (!destination.enabled) throw new Error('Integration destination is disabled');
+    const test = await this.testDestination(destinationId);
+    if (!test.ok || !test.mediaCapability) throw new Error('Receiver did not advertise a valid media capability');
+    const now = this.now();
+    await this.deps.unitOfWork.configureMedia(destinationId, {
+      id: createIntegrationId('secret'), kind: 'media-auth', value: bearer,
+      createdAt: now, updatedAt: now,
+    }, test.mediaCapability, now);
+  }
+
+  async mediaClient(destinationId: string, hasUploadHostPermission: (origin: string) => Promise<boolean>): Promise<ExternalMediaClient> {
+    const destination = await this.requireDestination(destinationId);
+    if (!destination.enabled || !destination.media) throw new Error('Media connection is unavailable');
+    await this.assertDestinationPermission(destination);
+    const secret = await this.deps.secrets.get(destination.media.secretId);
+    if (!secret || secret.kind !== 'media-auth') throw new Error('Media credential is missing');
+    return new ExternalMediaClient(
+      destination.media.capability, destination.endpoint,
+      async () => secret.value, fetch, hasUploadHostPermission,
+    );
   }
 
   async deleteDestination(destinationId: string): Promise<{

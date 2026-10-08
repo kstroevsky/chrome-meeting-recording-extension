@@ -147,6 +147,14 @@ export class BackgroundIntegrationRuntime {
     return this.coordinator.testDestination(destinationId);
   }
 
+  configureMedia(destinationId: string, bearer: string) {
+    return this.coordinator.configureMedia(destinationId, bearer);
+  }
+
+  mediaClient(destinationId: string) {
+    return this.coordinator.mediaClient(destinationId, async (origin) => containsHostPermission(`${origin}/*`));
+  }
+
   async deleteDestination(destinationId: string) {
     const result = await this.coordinator.deleteDestination(destinationId);
     await this.readinessScheduler.stateChanged();

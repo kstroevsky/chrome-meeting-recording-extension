@@ -117,6 +117,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
   });
   return {
     coordinator,
+    unitOfWork,
     destinations,
     secrets,
     streams,
@@ -336,6 +337,38 @@ describe('IntegrationCoordinator', () => {
     await expect(ctx.destinations.get(destination.id)).resolves.toBeUndefined();
     await expect(ctx.secrets.get(signingSecretId)).resolves.toBeUndefined();
     await expect(ctx.secrets.get(requestSecretId)).resolves.toBeUndefined();
+  });
+
+  it('atomically rotates media credentials and deletes the live token even with a stale destination snapshot', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+    const capability = {
+      version: 1 as const,
+      apiBase: 'https://crm.example.test/api/media',
+      upload: { strategy: 'multipart-put-v1' as const, origins: ['https://bucket.r2.cloudflarestorage.com'] },
+      playback: { strategy: 'refreshable-url-v1' as const },
+    };
+    ctx.transport.send.mockImplementation(async () => ({ ok: true, status: 200, mediaCapability: capability }));
+
+    await ctx.coordinator.configureMedia(destination.id, 'first-media-token');
+    const first = (await ctx.destinations.get(destination.id))!.media!.secretId;
+    await ctx.coordinator.configureMedia(destination.id, 'second-media-token');
+    const second = (await ctx.destinations.get(destination.id))!.media!.secretId;
+    expect(second).not.toBe(first);
+    await expect(ctx.secrets.get(first)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(second)).resolves.toMatchObject({ kind: 'media-auth', value: 'second-media-token' });
+
+    // The snapshot predates both rotations; the delete must still revoke the current token.
+    await ctx.unitOfWork.deleteDestination(destination, Date.now());
+    await expect(ctx.destinations.get(destination.id)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(second)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(destination.signingSecretId)).resolves.toBeUndefined();
   });
 
   it('keeps an in-flight delivery canceled when its transport rejects after destination deletion', async () => {
