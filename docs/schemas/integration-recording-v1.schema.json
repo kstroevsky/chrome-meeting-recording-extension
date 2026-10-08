@@ -19,7 +19,7 @@
         "kind": { "enum": ["meeting", "tab"] },
         "provider": { "type": "string" },
         "meetingId": { "type": "string", "maxLength": 512 },
-        "meetingUrl": { "type": "string", "format": "uri" }
+        "meetingUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
       }
     },
     "note": { "type": "string" },

@@ -27,4 +27,9 @@ describe('recording context URL minimization', () => {
       'other-provider',
     )).toBe('https://meetings.example.test/join?room=private-id#client-state');
   });
+
+  it('drops non-HTTPS meeting URLs before they enter durable context', () => {
+    expect(normalizeMeetingUrl('http://meet.google.com/abc-defg-hij', 'google-meet')).toBeUndefined();
+    expect(normalizeMeetingUrl('javascript:alert(1)', 'google-meet')).toBeUndefined();
+  });
 });

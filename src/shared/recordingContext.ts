@@ -71,7 +71,7 @@ export function normalizeMeetingUrl(
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+    if (url.protocol !== 'https:') return undefined;
     if (provider === 'google-meet' && url.hostname === 'meet.google.com') {
       url.search = '';
       url.hash = '';

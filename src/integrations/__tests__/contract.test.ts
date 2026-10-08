@@ -59,6 +59,7 @@ describe('integration external contract', () => {
     expect(recordingSchema.properties.source.properties.meetingId.maxLength).toBe(
       INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS,
     );
+    expect(recordingSchema.properties.source.properties.meetingUrl.pattern).toBe('^https://');
     expect(snapshotSchema.properties.id.maxLength).toBe(INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS);
   });
 
