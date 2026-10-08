@@ -53,6 +53,7 @@ export type HarnessLaunchOptions = {
   extensionPath?: string;
   deviceMode?: DeviceMode;
   headless?: boolean;
+  ignoreHTTPSErrors?: boolean;
   viewport?: { width: number; height: number };
 };
 
@@ -112,6 +113,7 @@ export async function launchExtensionHarness(
     '--autoplay-policy=no-user-gesture-required',
     '--enable-precise-memory-info',
   ];
+  if (options.ignoreHTTPSErrors) args.push('--ignore-certificate-errors');
   if (deviceMode === 'fake') {
     args.push('--use-fake-device-for-media-stream', '--mute-audio');
   }
@@ -119,6 +121,7 @@ export async function launchExtensionHarness(
   const context = await chromium.launchPersistentContext(userDataDir, {
     headless: options.headless ?? process.env.PW_HEADLESS !== '0',
     channel: 'chromium',
+    ignoreHTTPSErrors: options.ignoreHTTPSErrors ?? false,
     acceptDownloads: true,
     downloadsPath: downloadsDir,
     viewport: options.viewport ?? { width: 1280, height: 900 },
@@ -152,6 +155,47 @@ export async function launchExtensionHarness(
     extensionPath,
     deviceMode,
   };
+}
+
+/** Relaunches Chrome against the same profile so extension IndexedDB/OPFS survive. */
+export async function restartExtensionHarness(
+  harness: ExtensionHarness,
+  options: Omit<HarnessLaunchOptions, 'extensionPath' | 'deviceMode'> = {},
+): Promise<ExtensionHarness> {
+  await harness.context.close();
+  const mockMeetHtml = await fs.readFile(mockMeetFixturePath, 'utf8');
+  const args = [
+    `--disable-extensions-except=${harness.extensionPath}`,
+    `--load-extension=${harness.extensionPath}`,
+    '--use-fake-ui-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required',
+    '--enable-precise-memory-info',
+  ];
+  if (options.ignoreHTTPSErrors) args.push('--ignore-certificate-errors');
+  if (harness.deviceMode === 'fake') args.push('--use-fake-device-for-media-stream', '--mute-audio');
+
+  const context = await chromium.launchPersistentContext(harness.userDataDir, {
+    headless: options.headless ?? process.env.PW_HEADLESS !== '0',
+    channel: 'chromium',
+    ignoreHTTPSErrors: options.ignoreHTTPSErrors ?? false,
+    acceptDownloads: true,
+    downloadsPath: harness.downloadsDir,
+    viewport: options.viewport ?? { width: 1280, height: 900 },
+    args,
+  });
+  await context.route('https://meet.google.com/**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html; charset=utf-8',
+    body: mockMeetHtml,
+  }));
+  const extensionId = await waitForExtensionId(context);
+  if (extensionId !== harness.extensionId) throw new Error('Extension id changed across browser restart');
+  await context.grantPermissions(['camera', 'microphone'], {
+    origin: `chrome-extension://${extensionId}`,
+  }).catch(() => {});
+  const controlPage = await context.newPage();
+  await controlPage.goto(`chrome-extension://${extensionId}/settings.html`, { waitUntil: 'domcontentloaded' });
+  return { ...harness, context, controlPage };
 }
 
 export async function probeHardwareMedia(

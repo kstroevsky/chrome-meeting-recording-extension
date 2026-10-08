@@ -21,12 +21,90 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      verify_relevant: ${{ steps.plan.outputs.verify_relevant }}
+      verify_fingerprint: ${{ steps.plan.outputs.verify_fingerprint }}
+      verify_cache_key: ${{ steps.plan.outputs.verify_cache_key }}
+      verify_cached: ${{ steps.cache-verify.outputs.cache-hit }}
+      mock_e2e_relevant: ${{ steps.plan.outputs.mock_e2e_relevant }}
+      mock_e2e_fingerprint: ${{ steps.plan.outputs.mock_e2e_fingerprint }}
+      mock_e2e_cache_key: ${{ steps.plan.outputs.mock_e2e_cache_key }}
+      mock_e2e_cached: ${{ steps.cache-mock-e2e.outputs.cache-hit }}
+      sharing_relevant: ${{ steps.plan.outputs.sharing_relevant }}
+      sharing_fingerprint: ${{ steps.plan.outputs.sharing_fingerprint }}
+      sharing_cache_key: ${{ steps.plan.outputs.sharing_cache_key }}
+      sharing_cached: ${{ steps.cache-sharing.outputs.cache-hit }}
+      production_e2e_relevant: ${{ steps.plan.outputs.production_e2e_relevant }}
+      production_e2e_fingerprint: ${{ steps.plan.outputs.production_e2e_fingerprint }}
+      production_e2e_cache_key: ${{ steps.plan.outputs.production_e2e_cache_key }}
+      production_e2e_cached: ${{ steps.cache-production-e2e.outputs.cache-hit }}
+      unknown_paths_json: ${{ steps.plan.outputs.unknown_paths_json }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Plan validation domains
+        id: plan
+        run: node scripts/ci/plan-validation.mjs
+
+      - name: Verify release-version history
+        run: npm run -s release:version > /dev/null
+
+      - name: Look up verify validation
+        id: cache-verify
+        if: github.event_name == 'pull_request' && steps.plan.outputs.verify_relevant == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/verify.json
+          key: ${{ steps.plan.outputs.verify_cache_key }}
+          lookup-only: true
+
+      - name: Look up mock E2E validation
+        id: cache-mock-e2e
+        if: github.event_name == 'pull_request' && steps.plan.outputs.mock_e2e_relevant == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/mock-e2e.json
+          key: ${{ steps.plan.outputs.mock_e2e_cache_key }}
+          lookup-only: true
+
+      - name: Look up sharing validation
+        id: cache-sharing
+        if: github.event_name == 'pull_request' && steps.plan.outputs.sharing_relevant == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/sharing.json
+          key: ${{ steps.plan.outputs.sharing_cache_key }}
+          lookup-only: true
+
+      - name: Look up production E2E validation
+        id: cache-production-e2e
+        if: github.event_name == 'pull_request' && steps.plan.outputs.production_e2e_relevant == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/production-e2e.json
+          key: ${{ steps.plan.outputs.production_e2e_cache_key }}
+          lookup-only: true
+
+  verify:
+    needs: plan
+    if: needs.plan.outputs.verify_relevant == 'true' && needs.plan.outputs.verify_cached != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
     env:
       TELEMETRY_ENDPOINT: https://recording-extension-telemetry.kstroevsky.workers.dev/api/telemetry/batches
-      FULL_VALIDATION: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,50 +115,46 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run check:ci-domains
       - run: npm run typecheck
       - run: npm run typecheck:e2e
+      - run: npm run test:unit:jest
+      - run: npm run test:unit:node
 
-      - name: Select draft Jest scope
-        if: env.FULL_VALIDATION != 'true'
-        id: jest-scope
-        shell: bash
-        run: |
-          git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" > "$RUNNER_TEMP/changed-files.txt"
-          if grep -Eq '^(package(-lock)?\.json|jest\.config\.js|tests/setup\.ts|tsconfig[^/]*\.json|webpack\.config\.js)$' "$RUNNER_TEMP/changed-files.txt"; then
-            echo "full=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "full=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run full Jest suite
-        if: env.FULL_VALIDATION == 'true' || steps.jest-scope.outputs.full == 'true'
-        run: npm run test:unit:jest
-
-      - name: Run affected Jest tests
-        if: env.FULL_VALIDATION != 'true' && steps.jest-scope.outputs.full != 'true'
-        run: npm run test:unit:jest -- --changedSince="origin/${GITHUB_BASE_REF}" --passWithNoTests
-
-      - name: Run Node tests
-        run: npm run test:unit:node
-
-      - name: Run draft architecture guard
-        if: env.FULL_VALIDATION != 'true'
-        run: npm run check:background-architecture
+      - name: Install telemetry Worker dependencies
+        run: npm ci --prefix telemetry-worker
+      - name: Typecheck telemetry Worker
+        run: npm --prefix telemetry-worker run typecheck
+      - name: Run telemetry Worker tests
+        run: npm --prefix telemetry-worker test
+      - name: Dry-run telemetry Worker deployment
+        run: npm --prefix telemetry-worker run dry-run
 
       - name: Build production extension
-        if: env.FULL_VALIDATION == 'true'
         run: npm run build
-
       - name: Run production guards
-        if: env.FULL_VALIDATION == 'true'
         run: npm run test:production-guards
 
+      - name: Write verify success marker
+        run: >-
+          node scripts/ci/plan-validation.mjs mark
+          verify
+          "${{ needs.plan.outputs.verify_fingerprint }}"
+          .ci-validation-cache/verify.json
+      - name: Save verify success marker
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/verify.json
+          key: ${{ needs.plan.outputs.verify_cache_key }}
+
   mock-e2e:
+    needs: plan
+    if: needs.plan.outputs.mock_e2e_relevant == 'true' && needs.plan.outputs.mock_e2e_cached != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       TELEMETRY_ENDPOINT: https://recording-extension-telemetry.kstroevsky.workers.dev/api/telemetry/batches
-      FULL_VALIDATION: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,22 +169,13 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run build:e2e:mock
 
-      - name: Run affected draft mock E2E tests
-        if: env.FULL_VALIDATION != 'true'
-        run: >-
-          npx playwright test --config=playwright.config.ts
-          --only-changed="origin/${GITHUB_BASE_REF}"
-          --pass-with-no-tests
-          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
-
       - name: Run mandatory mock E2E smoke tests
         run: npx playwright test --config=playwright.config.ts --grep "@smoke"
 
-      - name: Run remaining full mock E2E suite
-        if: env.FULL_VALIDATION == 'true'
+      - name: Run remaining core mock E2E suite
         run: >-
           npx playwright test --config=playwright.config.ts
-          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench"
+          --grep-invert "@production-build|@smoke|@perf-(full|endurance|hardware|contention)|@analysis-bench|@sharing-e2e"
 
       - name: Upload Playwright diagnostics
         if: ${{ !cancelled() }}
@@ -123,8 +188,73 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Write mock E2E success marker
+        run: >-
+          node scripts/ci/plan-validation.mjs mark
+          mock-e2e
+          "${{ needs.plan.outputs.mock_e2e_fingerprint }}"
+          .ci-validation-cache/mock-e2e.json
+      - name: Save mock E2E success marker
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/mock-e2e.json
+          key: ${{ needs.plan.outputs.mock_e2e_cache_key }}
+
+  sharing:
+    needs: plan
+    if: needs.plan.outputs.sharing_relevant == 'true' && needs.plan.outputs.sharing_cached != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      SHARING_SERVICE_ORIGIN: https://127.0.0.1:8791
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix sharing-worker
+      - run: npm --prefix sharing-worker run typecheck
+      - run: npm --prefix sharing-worker test
+      - name: Verify generated viewer is committed
+        run: git diff --exit-code -- sharing-worker/src/viewer/app.generated.ts
+      - run: npm --prefix sharing-worker run dry-run
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build:e2e:mock
+      - run: npx playwright test tests/e2e/sharing-lifecycle.spec.ts --config=playwright.config.ts
+
+      - name: Upload sharing Playwright diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sharing-playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/playwright/html-report/
+            output/playwright/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Write sharing success marker
+        run: >-
+          node scripts/ci/plan-validation.mjs mark
+          sharing
+          "${{ needs.plan.outputs.sharing_fingerprint }}"
+          .ci-validation-cache/sharing.json
+      - name: Save sharing success marker
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/sharing.json
+          key: ${{ needs.plan.outputs.sharing_cache_key }}
+
   production-e2e:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: plan
+    if: needs.plan.outputs.production_e2e_relevant == 'true' && needs.plan.outputs.production_e2e_cached != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -158,3 +288,70 @@ jobs:
             output/playwright/test-results/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Write production E2E success marker
+        run: >-
+          node scripts/ci/plan-validation.mjs mark
+          production-e2e
+          "${{ needs.plan.outputs.production_e2e_fingerprint }}"
+          .ci-validation-cache/production-e2e.json
+      - name: Save production E2E success marker
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-validation-cache/production-e2e.json
+          key: ${{ needs.plan.outputs.production_e2e_cache_key }}
+
+  ci-gate:
+    if: always()
+    needs:
+      - plan
+      - verify
+      - mock-e2e
+      - sharing
+      - production-e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce validation plan
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          VERIFY_RELEVANT: ${{ needs.plan.outputs.verify_relevant }}
+          VERIFY_CACHED: ${{ needs.plan.outputs.verify_cached }}
+          MOCK_E2E_RESULT: ${{ needs['mock-e2e'].result }}
+          MOCK_E2E_RELEVANT: ${{ needs.plan.outputs.mock_e2e_relevant }}
+          MOCK_E2E_CACHED: ${{ needs.plan.outputs.mock_e2e_cached }}
+          SHARING_RESULT: ${{ needs.sharing.result }}
+          SHARING_RELEVANT: ${{ needs.plan.outputs.sharing_relevant }}
+          SHARING_CACHED: ${{ needs.plan.outputs.sharing_cached }}
+          PRODUCTION_E2E_RESULT: ${{ needs['production-e2e'].result }}
+          PRODUCTION_E2E_RELEVANT: ${{ needs.plan.outputs.production_e2e_relevant }}
+          PRODUCTION_E2E_CACHED: ${{ needs.plan.outputs.production_e2e_cached }}
+        run: |
+          node <<'NODE'
+          if (process.env.PLAN_RESULT !== 'success') {
+            throw new Error(`plan finished as ${process.env.PLAN_RESULT}`);
+          }
+
+          const domains = [
+            ['verify', 'VERIFY'],
+            ['mock-e2e', 'MOCK_E2E'],
+            ['sharing', 'SHARING'],
+            ['production-e2e', 'PRODUCTION_E2E'],
+          ];
+
+          for (const [domain, prefix] of domains) {
+            const result = process.env[`${prefix}_RESULT`];
+            const relevant = process.env[`${prefix}_RELEVANT`] === 'true';
+            const cached = process.env[`${prefix}_CACHED`] === 'true';
+            const safelySkipped = result === 'skipped' && (!relevant || cached);
+            if (result !== 'success' && !safelySkipped) {
+              throw new Error(
+                `${domain} finished as ${result}; relevant=${relevant}; cached=${cached}`,
+              );
+            }
+          }
+
+          console.log('All required validation domains passed or were safely reused.');
+          NODE

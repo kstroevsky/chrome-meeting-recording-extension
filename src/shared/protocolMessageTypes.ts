@@ -10,6 +10,11 @@ export const POPUP_TO_BG_MESSAGE_TYPES = [
   'DISCARD_RECORDING',
   'GET_RECORDING_STATUS',
   'GET_DRIVE_TOKEN',
+  'GET_SHARE_IDENTITY_TOKEN',
+  'PUBLISH_SHARE',
+  'LIST_SHARES',
+  'REVOKE_SHARE',
+  'DELETE_SHARE',
   'SET_MIC_MUTED',
   'SET_CAMERA_MUTED',
   'SET_INPUT_DEVICE',
@@ -85,6 +90,14 @@ export const RECORDING_ANALYSIS_MESSAGE_TYPES = [
   'LIST_RECORDING_TOPIC_SUMMARIES',
 ] as const;
 
+/** Owner-side publication commands. They never mutate the recording session. */
+export const SHARING_MESSAGE_TYPES = [
+  'PUBLISH_SHARE',
+  'LIST_SHARES',
+  'REVOKE_SHARE',
+  'DELETE_SHARE',
+] as const;
+
 /**
  * Library aggregate commands whose failures answer `{ ok: false, error }`.
  * Recording-session failure policy is deliberately owned by MessageRouter;
@@ -96,6 +109,7 @@ export const NON_SESSION_RESPONSE_MESSAGE_TYPES = [
   ...RECORDING_NOTATION_MESSAGE_TYPES,
   ...RECORDING_TRANSCRIPT_MESSAGE_TYPES,
   ...RECORDING_ANALYSIS_MESSAGE_TYPES,
+  ...SHARING_MESSAGE_TYPES,
 ] as const;
 
 /**

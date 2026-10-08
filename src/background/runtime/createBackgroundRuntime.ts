@@ -29,14 +29,15 @@ import { UploadStatePersistence } from './UploadStatePersistence';
 import { wireAnalysisRuntime } from './AnalysisRuntime';
 import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
+import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 
 const PLAYBACK_LEASE_STORAGE_KEY = 'playbackLeases';
-
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
   const logger = makeLogger('background');
   const readiness = new BackgroundReadiness();
   const offscreen = new OffscreenManager();
+  const sharing = new BackgroundSharingRuntime(offscreen);
   const telemetry = new TelemetryRuntime();
   const perfDebugStore = new PerfDebugStore(getPerfSettingsSnapshot(), logger.warn);
   const session = new RecordingSession(createSessionPersistor(logger));
@@ -48,7 +49,6 @@ export function createBackgroundRuntime() {
     reload: reloadRuntime,
     logger,
   });
-
   const playbackLeases = new PlaybackLeaseManager({
     read: async () => (
       await getSessionStorageValues(PLAYBACK_LEASE_STORAGE_KEY)
@@ -167,6 +167,7 @@ export function createBackgroundRuntime() {
     }),
     driveAuthLease,
     telemetry,
+    sharing,
     e2eAnalysisWork: () => offscreen.refreshAnalysisWork(),
     waitUntilReady: () => readiness.wait(),
   });
@@ -189,7 +190,6 @@ export function createBackgroundRuntime() {
     offscreen.releaseBufferedIngress();
     readiness.markReady();
   };
-
   const bootstrap = async () => {
     try {
       await bootstrapBackground({
@@ -203,6 +203,7 @@ export function createBackgroundRuntime() {
         resumePendingFinalization: () => controller.resumePendingFinalization(),
         logger,
       });
+      await sharing.resumeIfPending().catch((error) => logger.warn('Pending sharing recovery deferred:', error));
     } catch (error) {
       if (!sessionHydrated) readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);

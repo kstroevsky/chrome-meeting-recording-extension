@@ -1,0 +1,25 @@
+{
+  "name": "recording-extension-sharing",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "viewer:build": "node scripts/build-viewer.mjs",
+    "pretest": "npm run viewer:build",
+    "test": "vitest run",
+    "pretypecheck": "npm run viewer:build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.viewer.json --noEmit",
+    "types": "wrangler types",
+    "predry-run": "npm run viewer:build",
+    "dry-run": "wrangler deploy --dry-run --env="
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.2.1",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.136.1"
+  }
+}
