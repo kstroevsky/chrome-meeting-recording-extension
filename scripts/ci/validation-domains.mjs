@@ -191,7 +191,10 @@ export const RELEVANCE_RULES = [
   {
     name: 'integration-contract-schemas',
     domains: VERIFY_INTEGRATION,
-    match: [regex(/^docs\/schemas\/integration-.*\.json$/)],
+    match: [
+      prefix('fixtures/integration-v1/'),
+      regex(/^docs\/schemas\/integration-.*\.json$/),
+    ],
   },
   {
     name: 'sharing-worker',

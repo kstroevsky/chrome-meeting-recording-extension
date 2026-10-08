@@ -16,6 +16,7 @@ test('classifies representative repository paths conservatively', () => {
   const cases = new Map([
     ['docs/sharing-operations.md', []],
     ['docs/schemas/integration-recording-ready-v1.json', ['verify', 'integration']],
+    ['fixtures/integration-v1/recording-ready-v1.json', ['verify', 'integration']],
     ['src/sharing/README.md', []],
     ['src/integrations/IntegrationCoordinator.ts', ['verify', 'integration']],
     ['src/background/integrations/BackgroundIntegrationRuntime.ts', ['verify', 'integration']],
