@@ -4,7 +4,10 @@ import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import { buildRecordingCloudEvent } from '../CloudEventBuilder';
 import { INTEGRATION_EVENT_TYPE_PREFIX, integrationEventTypePrefix } from '../config';
-import type { IntegrationDataPolicy } from '../contracts';
+import {
+  INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS,
+  type IntegrationDataPolicy,
+} from '../contracts';
 import {
   CONSERVATIVE_INTEGRATION_POLICY,
   integrationPolicyHash,
@@ -52,6 +55,47 @@ describe('integration external contract', () => {
       'io.github.kstroevsky.meeting-recorder.recording.updated.v1',
     ]);
     expect(snapshotSchema.properties.data.properties.recording.$ref).toBe(recordingSchemaId);
+    expect(recordingSchema.properties.id.maxLength).toBe(INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS);
+    expect(recordingSchema.properties.source.properties.meetingId.maxLength).toBe(
+      INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS,
+    );
+    expect(snapshotSchema.properties.id.maxLength).toBe(INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS);
+  });
+
+  it('bounds identifiers that receivers persist in B-tree indexes', () => {
+    const atLimit = 'x'.repeat(INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS);
+    const overLimit = `${atLimit}x`;
+    const input = {
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
+      eventKind: 'recording.ready.v1' as const,
+      eventId: atLimit,
+      eventTime: 0,
+      producerId: 'producer',
+      externalRecordingId: atLimit,
+      revision: 1,
+      readiness: { complete: true, release: 'complete' as const, pending: [] },
+      recording: {
+        id: atLimit,
+        title: 'Boundary',
+        startedAt: '1970-01-01T00:00:00.000Z',
+        source: { kind: 'meeting' as const, meetingId: atLimit },
+      },
+    };
+
+    expect(() => buildRecordingCloudEvent(input)).not.toThrow();
+    expect(() => buildRecordingCloudEvent({ ...input, eventId: overLimit })).toThrow();
+    expect(() => buildRecordingCloudEvent({ ...input, externalRecordingId: overLimit })).toThrow();
+    expect(() => buildRecordingCloudEvent({
+      ...input,
+      recording: { ...input.recording, id: overLimit },
+    })).toThrow();
+    expect(() => buildRecordingCloudEvent({
+      ...input,
+      recording: {
+        ...input.recording,
+        source: { ...input.recording.source, meetingId: overLimit },
+      },
+    })).toThrow();
   });
 
   it('makes artifact links imply artifact metadata at the shared policy boundary', () => {
