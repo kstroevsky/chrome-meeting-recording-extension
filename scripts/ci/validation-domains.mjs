@@ -221,6 +221,12 @@ export const RELEVANCE_RULES = [
     ],
   },
   {
+    name: 'shared-artifact-byte-source',
+    // Both sharing and integration media uploads use this boundary.
+    domains: ['verify', 'integration', 'sharing', 'mock-e2e'],
+    match: [prefix('src/media/')],
+  },
+  {
     name: 'shared-offscreen-entrypoint',
     domains: VERIFY_SHARING_MOCK_PRODUCTION,
     match: [exact('src/offscreen.ts')],

@@ -45,7 +45,7 @@ A share can contain multiple recordings and each publication gets fresh public i
 For every track, `DriveOriginPreparer` then establishes an immutable Drive origin:
 
 1. If the track already has a Drive location, reuse that file. Publication does not download or re-upload its media bytes.
-2. If the track is OPFS-only, read it through `ShareMediaSourceResolver` and create a user-owned Drive file with the resumable Drive uploader.
+2. If the track is OPFS-only, read it through `ArtifactByteSourceResolver` and create a user-owned Drive file with the resumable Drive uploader.
 3. Read file metadata and verify size, MIME type, checksum when available, and `canDownload`.
 4. Pin `headRevisionId` with Keep Forever.
 5. Grant the configured sharing-reader service account an explicit `reader` permission on that file.
@@ -185,8 +185,8 @@ D1 stores lifecycle/control state, canonical public manifests, private media-ass
 | `SharePublicationCoordinator.ts` | publication/revocation state machine and restart replay |
 | `SharePublicationStore.ts` | durable local publication phase/error/origin state |
 | `DriveOriginPreparer.ts` | ensures Drive origin, pins revision, manages reader permission, registers origin |
-| `ShareMediaSource.ts` | random-access owner media interface used when a Drive copy must be created |
-| `ShareMediaSourceResolver.ts` | resolves OPFS first and can read Drive ranges when bytes are explicitly needed |
+| `../media/ArtifactByteSource.ts` | random-access owner media interface used when a Drive copy must be created |
+| `../media/ArtifactByteSourceResolver.ts` | resolves OPFS first and can read Drive ranges when bytes are explicitly needed |
 | `ShareUploadStore.ts` | compatibility-named durable Drive preparation/resumable-upload state |
 | `ShareOriginCleanupQueue.ts` | crash-safe revoke/delete Drive cleanup, including remote-only shares |
 | `ShareServiceClient.ts` | authenticated owner HTTP boundary |

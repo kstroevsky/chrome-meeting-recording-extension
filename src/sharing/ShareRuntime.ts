@@ -17,7 +17,7 @@ import {
 import { SharePublisher } from './SharePublisher';
 import { ShareRegistry } from './ShareRegistry';
 import { ShareServiceClient } from './ShareServiceClient';
-import { createShareMediaSourceResolver } from './ShareMediaSourceResolver';
+import { createArtifactByteSourceResolver } from '../media/ArtifactByteSourceResolver';
 import { createShareDriveOriginRegistry } from './ShareDriveOriginRegistry';
 import { createShareUploadStore } from './ShareUploadStore';
 import type { RemoteShareSummary } from './ShareServiceClient';
@@ -51,7 +51,7 @@ export function createShareRuntime(serviceOrigin: string, auth: ShareRuntimeAuth
   const cleanupStore = createShareOriginCleanupStore();
   const origins = new DriveOriginPreparer({
     store: uploadStore,
-    source: createShareMediaSourceResolver({ getDriveToken: auth.getDriveToken }),
+    source: createArtifactByteSourceResolver({ getDriveToken: auth.getDriveToken }),
     api: service,
     registry: driveOriginRegistry,
     getDriveToken: auth.getDriveToken,
