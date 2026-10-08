@@ -44,20 +44,8 @@ describe('notationRow', () => {
     expect(at(notationRow(note(48_000)), '.detail-notes-length').textContent).toBe('—');
   });
 
-  it('reports where a note ended, not how long it ran, when the run sealed it', () => {
-    const row = notationRow(note(372_000, 401_000, 'Renewal date', 'auto'), { sealedAtMs: 401_000 });
-
-    expect(at(row, '.detail-notes-length').textContent).toBe('ENDED AT 06:41');
-  });
-
-  it('still reports a length for a note the user closed on that same screen', () => {
-    const row = notationRow(note(48_000, 85_000, 'Q3 target changed', 'user'), { sealedAtMs: 401_000 });
-
-    expect(at(row, '.detail-notes-length').textContent).toBe('0:37');
-  });
-
   it('is inert, and carries no actions wrapper, where the screen only reports', () => {
-    const row = notationRow(note(48_000, 85_000, 'first', 'user'), { sealedAtMs: 401_000 });
+    const row = notationRow(note(48_000, 85_000, 'first', 'user'));
 
     expect(at(row, '.detail-notes-row-main').tagName).toBe('SPAN');
     expect(row.querySelector('.detail-notes-actions')).toBeNull();

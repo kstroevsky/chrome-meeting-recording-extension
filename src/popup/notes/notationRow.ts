@@ -2,9 +2,8 @@
  * @file popup/notes/notationRow.ts
  *
  * One line of a notes list: when the note starts, what it says, and how long it
- * ran. Two surfaces show it — a finished recording's detail view, where the row
- * is selectable and can be renamed or deleted, and the interrupted-run notice,
- * where it is a read-only report.
+ * ran. Where the row is given actions — a finished recording's detail view — it
+ * is selectable and can be renamed or deleted; without them it is read-only.
  *
  * A note nobody named reads as an invitation rather than a label — the design's
  * "Name this one" — because on this row the length column already says how long
@@ -30,11 +29,6 @@ export type NotationRowActions = {
 
 export type NotationRowOptions = {
   selected?: boolean;
-  /**
-   * Where capture stopped. A span the run sealed then reports where it ended
-   * rather than how long it ran — on that screen the end is the news.
-   */
-  sealedAtMs?: number;
   /** Present = the row is selectable and carries its rename/delete controls. */
   actions?: NotationRowActions;
 };
@@ -46,9 +40,6 @@ export function notationRow(notation: RecordingNotation, options: NotationRowOpt
   // The whole row is tinted, not just its text — the design bands an unnamed
   // note so it reads as an open item in a list of finished ones.
   row.classList.toggle('untitled', !notation.text);
-  // The note the run sealed on its way out is the news on the interrupted screen:
-  // its row is banded so it reads apart from the notes the user closed (n4).
-  row.classList.toggle('sealed', options.sealedAtMs != null && notation.endedBy === 'auto');
 
   const main = document.createElement(options.actions ? 'button' : 'span');
   main.className = 'detail-notes-row-main';
@@ -74,7 +65,7 @@ export function notationRow(notation: RecordingNotation, options: NotationRowOpt
 
   const length = document.createElement('span');
   length.className = 'detail-notes-length';
-  length.textContent = lengthLabel(notation, options.sealedAtMs);
+  length.textContent = lengthLabel(notation);
 
   // The actions wrapper only exists where there are actions to hold: it carries
   // its own padding, so an empty one would shift the read-only row.
@@ -96,8 +87,7 @@ export function notationRow(notation: RecordingNotation, options: NotationRowOpt
   return row;
 }
 
-function lengthLabel(notation: RecordingNotation, sealedAtMs?: number): string {
-  if (sealedAtMs != null && notation.endedBy === 'auto') return `ENDED AT ${formatPosition(sealedAtMs)}`;
+function lengthLabel(notation: RecordingNotation): string {
   return notation.tEndMs == null ? '—' : formatDuration(notation.tEndMs - notation.tStartMs);
 }
 

@@ -8,7 +8,7 @@ import type { RecordingNotesElements } from './notes/RecordingNotesView';
 import type { RecordingPhase } from '../shared/recording';
 
 /** Which top-level popup layout a phase maps to. */
-export type PopupView = 'config' | 'recording' | 'finalizing' | 'interrupted';
+export type PopupView = 'config' | 'recording' | 'finalizing';
 
 export type PopupElements = {
   // Header + config view
@@ -31,16 +31,6 @@ export type PopupElements = {
   viewPermission: HTMLElement | null;
   viewRecording: HTMLElement | null;
   viewFinalizing: HTMLElement | null;
-  viewInterrupted: HTMLElement | null;
-  interruptedTitle: HTMLElement | null;
-  interruptedSub: HTMLElement | null;
-  interruptedRibbon: HTMLElement | null;
-  interruptedTrack: HTMLElement | null;
-  interruptedNotes: HTMLElement | null;
-  interruptedCount: HTMLElement | null;
-  interruptedList: HTMLElement | null;
-  interruptedDiscard: HTMLButtonElement | null;
-  interruptedDone: HTMLButtonElement | null;
 
   // Permission interstitial
   permMicState: HTMLElement | null;
@@ -133,21 +123,38 @@ export type PopupElements = {
 };
 
 /** Maps a recording phase to the top-level view it should display. */
-export function viewForPhase(phase: RecordingPhase, interrupted = false): PopupView {
+export function viewForPhase(phase: RecordingPhase): PopupView {
   if (phase === 'starting' || phase === 'recording') return 'recording';
   if (phase === 'stopping') return 'finalizing';
-  // The capture is saved by now; this reports what happened to it (n4).
-  if (interrupted) return 'interrupted';
   return 'config'; // idle, failed
 }
 
+/**
+ * Hides every screen the session can put up, so the caller can show the one it
+ * owns. The one list of them: a screen left off it stays up underneath
+ * whichever screen replaces it.
+ */
+export function hideSessionViews(elements: PopupElements): void {
+  for (const view of [
+    elements.viewConfig,
+    elements.viewPermission,
+    elements.viewRecording,
+    elements.viewFinalizing,
+    elements.viewUpload,
+  ]) {
+    if (view) view.hidden = true;
+  }
+}
+
 /** Shows the single view that matches the current phase and hides the others. */
-export function setActiveView(elements: PopupElements, phase: RecordingPhase, interrupted = false): PopupView {
-  const view = viewForPhase(phase, interrupted);
-  if (elements.viewConfig) elements.viewConfig.hidden = view !== 'config';
-  if (elements.viewPermission) elements.viewPermission.hidden = true;
-  if (elements.viewRecording) elements.viewRecording.hidden = view !== 'recording';
-  if (elements.viewFinalizing) elements.viewFinalizing.hidden = view !== 'finalizing';
-  if (elements.viewInterrupted) elements.viewInterrupted.hidden = view !== 'interrupted';
+export function setActiveView(elements: PopupElements, phase: RecordingPhase): PopupView {
+  const view = viewForPhase(phase);
+  hideSessionViews(elements);
+  const active = {
+    config: elements.viewConfig,
+    recording: elements.viewRecording,
+    finalizing: elements.viewFinalizing,
+  }[view];
+  if (active) active.hidden = false;
   return view;
 }

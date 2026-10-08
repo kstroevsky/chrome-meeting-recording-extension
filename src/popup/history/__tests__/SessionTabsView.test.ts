@@ -198,6 +198,25 @@ describe('SessionTabsView', () => {
     expect(el.uploadJobNewRecording!.textContent).toBe('Keep uploading in background');
   });
 
+  it('calls a file SAVED once Drive has all of it, while the rest of the job still uploads', () => {
+    view.wireEvents();
+    // The job settles its files' statuses only at the end; until then, a file
+    // Drive has every byte of is on Drive, not at "99%".
+    view.renderJobView(job({
+      status: 'uploading',
+      progress: 0.04,
+      files: [
+        { stream: 'mic', filename: 'mic.webm', status: 'uploading', bytes: 100, uploadedBytes: 100 },
+        { stream: 'tab', filename: 'tab.webm', status: 'uploading', bytes: 100, uploadedBytes: 5 },
+        { stream: 'self-video', filename: 'camera.webm', status: 'uploading', bytes: 100 },
+      ],
+    }));
+
+    expect(el.uploadJobSub!.textContent).toBe('1 OF 3 FILES');
+    const states = Array.from(el.uploadJobFiles!.querySelectorAll('.up-file-state')).map((s) => s.textContent);
+    expect(states).toEqual(['SAVED', 'UPLOADING 5%', 'QUEUED']);
+  });
+
   it('leads a failed job with where it stopped, and says each file is still safe (8A)', () => {
     view.renderJobView(job({
       status: 'failed',

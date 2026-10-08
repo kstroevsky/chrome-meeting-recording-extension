@@ -36,7 +36,23 @@ export type TrackRow = {
   mime_type: string;
   bytes: number | null;
   object_key: string;
+  media_asset_id: string | null;
   status: 'pending' | 'uploading' | 'complete';
+};
+
+export type MediaAssetRow = {
+  id: string;
+  share_id: string;
+  recording_id: string;
+  track_id: string;
+  drive_file_id: string;
+  revision_id: string;
+  bytes: number;
+  mime_type: string;
+  md5_checksum: string | null;
+  permission_id: string | null;
+  created_at: number;
+  updated_at: number;
 };
 
 export async function getShare(db: D1Database, shareId: string): Promise<ShareRow | null> {

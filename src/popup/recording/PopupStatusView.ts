@@ -89,17 +89,6 @@ export class PopupStatusView {
     if (chip && chip.dataset.jobId === job.id) chip.hidden = true;
   }
 
-  /** A run that ended without being asked to (n4): the header says STOPPED. */
-  syncHeaderInterrupted(): void {
-    const label = document.getElementById('header-phase');
-    if (!label) return;
-    label.hidden = false;
-    label.textContent = 'STOPPED';
-    label.dataset.tone = 'stopped';
-    this.el.ppHeader?.classList.remove('recording-active', 'recording-paused', 'recording-saved');
-    this.el.ppHeader?.classList.add('recording-stopped');
-  }
-
   /** Header-level one-tap return to the latest in-flight upload. */
   syncUploadNavigation(session?: RecordingStatusView): void {
     const button = document.getElementById('open-upload-navigation') as HTMLButtonElement | null;

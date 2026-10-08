@@ -7,7 +7,7 @@
  */
 
 import { detailPercent, recordingDetailWhen } from './historyChrome';
-import { uploadingRow } from './uploadJobPanel';
+import { onDrive, uploadingRow } from './uploadJobPanel';
 import type { UploadJob } from '../../shared/recording';
 
 export function renderUploadDetail(
@@ -17,7 +17,7 @@ onCancel: (job: UploadJob, button: HTMLButtonElement) => void,
 ): void {
   // The header already names the upload; the body is d4's progress list.
   const media = job.files.filter((file) => file.kind !== 'notes');
-  const landed = media.filter((file) => file.status === 'uploaded').length;
+  const landed = media.filter(onDrive).length;
   const meta = document.createElement('p');
   meta.className = 'recording-detail-meta';
   meta.textContent = `${landed} OF ${media.length} ${media.length === 1 ? 'FILE' : 'FILES'} · ${job.status === 'uploading' ? `${detailPercent(job.progress)}%` : job.status.toUpperCase()} · ${recordingDetailWhen(job.startedAt)}`;

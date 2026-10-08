@@ -1,12 +1,13 @@
 import { PayloadTooLargeError, json, withSecurityHeaders } from './http/responses';
 import { withOwnerCors } from './http/cors';
+import { cleanupExpiredMediaCache } from './cache/mediaCache';
 import { cleanupExpiredShares } from './maintenance/cleanup';
 import { route } from './router';
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     try {
-      return withSecurityHeaders(await route(request, env));
+      return withSecurityHeaders(await route(request, env, ctx));
     } catch (error) {
       if (error instanceof PayloadTooLargeError) {
         return withSecurityHeaders(withOwnerCors(json({ code: 'PAYLOAD_TOO_LARGE' }, 413), request, env));
@@ -20,9 +21,12 @@ export default {
     }
   },
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
-    ctx.waitUntil(cleanupExpiredShares(env)
-      .then((result) => {
-        console.log(JSON.stringify({ event: 'sharing_cleanup', ...result }));
+    ctx.waitUntil(Promise.all([
+      cleanupExpiredMediaCache(env),
+      cleanupExpiredShares(env),
+    ])
+      .then(([cache, shares]) => {
+        console.log(JSON.stringify({ event: 'sharing_cleanup', cache, shares }));
       })
       .catch(() => {
         console.error(JSON.stringify({ event: 'sharing_cleanup_failed' }));

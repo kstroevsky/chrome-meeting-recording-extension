@@ -61,6 +61,20 @@ describe('DriveTarget', () => {
     expect(mockOnDone).toHaveBeenCalledWith('test.webm');
   });
 
+  it('labels a retried microphone upload as audio when the re-read file carries no type', async () => {
+    // A file re-read from OPFS for a retry has an empty type; the name alone
+    // would label the microphone video/webm, and a share would then fail.
+    mockFetch.mockResolvedValueOnce({ ok: true, headers: new Headers({ Location: 'https://googleapis.com/upload/session-uri' }) });
+    mockFetch.mockResolvedValueOnce({ status: 200 });
+    const mic = new DriveTarget('meeting-mic.webm', mockGetToken, mockOnDone, { stream: 'mic' });
+
+    await mic.upload(new Blob(['1234']));
+
+    const init = mockFetch.mock.calls[0][1];
+    expect(new Headers(init.headers).get('X-Upload-Content-Type')).toBe('audio/webm');
+    expect(JSON.parse(init.body).mimeType).toBe('audio/webm');
+  });
+
   it('uploads large files in sequential 2MB chunks', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

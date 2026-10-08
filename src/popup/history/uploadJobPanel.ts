@@ -27,6 +27,16 @@ export function uploadPanelState(job: UploadJob): UploadPanelState {
   return job.status === 'partial' ? 'partial' : 'failed';
 }
 
+/**
+ * A file on Drive. A job settles its files' statuses only when the whole job
+ * ends, so while it is still uploading, a file Drive has every byte of is
+ * already there rather than at "99%".
+ */
+export function onDrive(file: UploadJobFile): boolean {
+  if (file.status === 'uploaded') return true;
+  return file.status === 'uploading' && !!file.bytes && (file.uploadedBytes ?? 0) >= file.bytes;
+}
+
 /** A file that did not reach Drive: it fell back, is waiting on a retry, or lost its source. */
 function missedDrive(file: UploadJobFile): boolean {
   return file.status === 'fallback' || file.status === 'retry-pending' || file.status === 'unavailable';
@@ -97,7 +107,7 @@ export function uploadingRow(file: UploadJobFile): HTMLLIElement {
   let state: string;
   let fraction = 0;
   let tone: 'ink' | 'saved' = 'ink';
-  if (file.status === 'uploaded') {
+  if (onDrive(file)) {
     state = 'SAVED';
     fraction = 1;
     tone = 'saved';
@@ -202,7 +212,7 @@ export function renderUploadJobPanel(
   }
   if (el.uploadJobLabel) el.uploadJobLabel.textContent = state === 'saved' ? 'Recording saved' : 'Uploading to Drive';
   if (el.uploadJobSub) {
-    const landed = mediaFiles.filter((file) => file.status === 'uploaded').length;
+    const landed = mediaFiles.filter(onDrive).length;
     const base = state === 'uploading'
       ? `${landed} OF ${fileCountText(mediaFiles.length)}`
       : `${fileCountText(mediaFiles.length)}${totalBytes > 0 ? ` · ${formatBytes(totalBytes).toUpperCase()}` : ''}`;

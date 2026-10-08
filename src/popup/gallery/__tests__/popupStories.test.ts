@@ -11,7 +11,6 @@ const POPUP_VIEW_IDS = [
   'view-permission',
   'view-recording',
   'view-finalizing',
-  'view-interrupted',
   'view-upload',
   'view-recordings',
   'view-recording-detail',
@@ -46,6 +45,9 @@ describe('popup gallery stories', () => {
       expect(document.documentElement.dataset.popupStory).toBe(storyId);
       const visibleViews = POPUP_VIEW_IDS.filter((viewId) => !document.getElementById(viewId)?.hidden);
       expect(visibleViews).toHaveLength(1);
+      // The header's phase label is pinned over the upload chip's place: one or the other.
+      const shown = (id: string) => !document.getElementById(id)?.hidden;
+      expect(shown('header-phase') && shown('open-upload-navigation')).toBe(false);
     },
   );
 

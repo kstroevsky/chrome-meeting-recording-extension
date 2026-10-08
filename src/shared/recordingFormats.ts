@@ -4,6 +4,8 @@
  * recorder tasks use the same resolver immediately before construction.
  */
 
+import type { RecordingStream } from './recordingTypes';
+
 export type VideoRecordingFormat = 'webm' | 'mp4';
 export type MicrophoneRecordingFormat = 'webm' | 'm4a';
 export type RecordingFileExtension = 'webm' | 'mp4' | 'm4a';
@@ -125,6 +127,35 @@ export function contentTypeForRecordingFilename(filename: string): string {
   // The notes sidecar is the one non-media artifact delivered with a recording.
   if (extension === 'vtt') return 'text/vtt';
   return 'video/webm';
+}
+
+/**
+ * The content type a recording file actually carries. The extension alone
+ * cannot tell the microphone's audio-only WebM or MP4 from a picture; its
+ * stream can. Drive stores the type the recorder uploaded, and a share must
+ * name exactly that type, so this must agree with what the recorder produces.
+ */
+export function contentTypeForRecordingFile(filename: string, stream?: RecordingStream): string {
+  return asStreamContentType(contentTypeForRecordingFilename(filename), stream);
+}
+
+/**
+ * A stored content type, or the derived one when none was stored. Microphone
+ * rows written before the stream was considered say `video/…`; they are read
+ * as the `audio/…` the file really is.
+ */
+export function normalizeRecordingFileContentType(
+  stored: string | undefined,
+  filename: string,
+  stream?: RecordingStream,
+): string {
+  return stored ? asStreamContentType(stored, stream) : contentTypeForRecordingFile(filename, stream);
+}
+
+function asStreamContentType(contentType: string, stream?: RecordingStream): string {
+  return stream === 'mic' && contentType.startsWith('video/')
+    ? `audio/${contentType.slice('video/'.length)}`
+    : contentType;
 }
 
 /** True for formats that require the WebM duration metadata repair step. */

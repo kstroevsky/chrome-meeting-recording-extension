@@ -1,7 +1,7 @@
 import { recordingGroupName } from './recordingFilename';
 import type { RecordingStream, StorageMode } from './recording';
 import { isArtifactKind, type RecordingArtifactKind } from './recordingTypes';
-import { contentTypeForRecordingFilename } from './recordingFormats';
+import { contentTypeForRecordingFile, normalizeRecordingFileContentType } from './recordingFormats';
 
 /**
  * Where a logical artifact physically exists. A recording artifact is immutable
@@ -101,13 +101,18 @@ export type RecordingHistoryCursor = { createdAt: number; id: string };
 export type RecordingHistoryPage = {
   entries: RecordingHistoryEntry[];
   nextCursor?: RecordingHistoryCursor;
+  /**
+   * How many recordings the whole library holds — not this page. Only on the
+   * first page, which is the one callers show a count beside.
+   */
+  total?: number;
 };
 
 export type RecordingHistoryMessage =
   | { type: 'LIST_RECORDING_HISTORY'; cursor?: RecordingHistoryCursor }
   | { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string }
   | { type: 'SET_RECORDING_HISTORY_NOTE'; id: string; note: string }
-  | { type: 'REMOVE_RECORDING_HISTORY'; id: string }
+  | { type: 'REMOVE_RECORDING_HISTORY'; id: string; deleteFiles?: boolean }
   | { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
 /**
@@ -216,7 +221,7 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     stream,
     ...(isArtifactKind(candidate.kind) ? { kind: candidate.kind } : {}),
     filename,
-    mimeType: optionalString('mimeType') ?? contentTypeForRecordingFilename(filename),
+    mimeType: normalizeRecordingFileContentType(optionalString('mimeType'), filename, stream),
     ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),
     locations,
     delivery: normalizeArtifactDelivery(candidate.delivery, legacy, requested),
@@ -322,9 +327,10 @@ export function upsertArtifactLocation(locations: ArtifactLocation[], next: Arti
 export function pendingArtifactFields(
   filename: string,
   requested: StorageMode,
+  stream?: RecordingStream,
 ): Pick<RecordingHistoryFile, 'mimeType' | 'locations' | 'delivery'> {
   return {
-    mimeType: contentTypeForRecordingFilename(filename),
+    mimeType: contentTypeForRecordingFile(filename, stream),
     locations: [],
     delivery: { requested, status: 'pending' },
   };
@@ -385,7 +391,9 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
     return typeof message.id === 'string' && message.id.length > 0 && typeof message.note === 'string';
   }
   if (message.type === 'REMOVE_RECORDING_HISTORY') {
-    return typeof message.id === 'string' && message.id.length > 0;
+    // `deleteFiles` deletes files: only an explicit boolean may ask for that.
+    return typeof message.id === 'string' && message.id.length > 0
+      && (message.deleteFiles === undefined || typeof message.deleteFiles === 'boolean');
   }
   return message.type === 'OPEN_RECORDING_HISTORY_FILE'
     && typeof message.recordingId === 'string' && message.recordingId.length > 0

@@ -14,6 +14,20 @@ export function downloadFile(options: chrome.downloads.DownloadOptions): Promise
   });
 }
 
+/**
+ * Deletes a downloaded file from disk. Permanent: Chrome does not move it to
+ * the system trash. Chrome keeps the download in its list, marked as deleted.
+ */
+export function removeDownloadedFile(downloadId: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.downloads.removeFile(downloadId, () => {
+      const error = chrome.runtime.lastError?.message;
+      if (error) return reject(new Error(error));
+      resolve();
+    });
+  });
+}
+
 /** Opens a downloaded file after confirming Chrome still knows it exists. */
 export function openDownloadedFile(downloadId: number): Promise<void> {
   return new Promise((resolve, reject) => {

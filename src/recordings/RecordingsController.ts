@@ -1,6 +1,7 @@
 import { createExternalTab } from '../platform/chrome/tabs';
 import { loadExtensionSettingsFromStorage } from '../shared/settings';
 import { sendToBackground } from '../shared/messages';
+import { openDriveSyncDialog } from './DriveSyncDialog';
 import { PlayerController } from './player/PlayerController';
 import { createPlaybackTrackResolver } from './player/playbackSource';
 import type { PlayerStatus } from './player/PlayerView';
@@ -19,6 +20,8 @@ export class RecordingsController {
   private player: PlayerController | null = null;
   private entries: RecordingHistoryEntry[] = [];
   private nextCursor: RecordingHistoryCursor | undefined;
+  /** The whole library's size; `entries` is only what has been paged in. */
+  private total: number | undefined;
   private loadingMore = false;
   constructor(
     private readonly view: RecordingsView,
@@ -97,28 +100,31 @@ export class RecordingsController {
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
-  async remove(id: string) {
-    if (!confirm('Remove this item from recording history? Its in-extension playback copy is deleted; your downloaded and Google Drive files are not.')) return;
+  /** Called once the page's dialog (and, for files, the native check) said yes. */
+  async remove(id: string, deleteFiles = false) {
     try {
-      const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
+      const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id, ...(deleteFiles ? { deleteFiles } : {}) });
       if (!response.ok) throw new Error(response.error);
-      if (response.removed) this.entries = this.entries.filter((entry) => entry.id !== id);
+      if (response.removed) this.forget(id);
       this.render();
+      this.reportFileErrors(response.fileErrors);
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
-  async removeMany(ids: string[]) {
+  async removeMany(ids: string[], deleteFiles = false) {
     const uniqueIds = [...new Set(ids)].filter((id) => this.entries.some((entry) => entry.id === id));
     if (!uniqueIds.length) return;
-    if (!confirm(`Remove ${uniqueIds.length} item${uniqueIds.length === 1 ? '' : 's'} from recording history? Their in-extension playback copies are deleted; your downloaded and Google Drive files are not.`)) return;
+    const fileErrors: string[] = [];
     try {
       for (const id of uniqueIds) {
-        const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id });
+        const response = await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id, ...(deleteFiles ? { deleteFiles } : {}) });
         if (!response.ok) throw new Error(response.error);
-        if (response.removed) this.entries = this.entries.filter((entry) => entry.id !== id);
+        if (response.removed) this.forget(id);
+        fileErrors.push(...(response.fileErrors ?? []));
       }
       this.render();
-    } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
+      this.reportFileErrors(fileErrors);
+    } catch (error) { this.render(); this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
   async openLocal(recordingId: string, fileId: string) {
@@ -231,6 +237,7 @@ export class RecordingsController {
     if (!response.ok) throw new Error(response.error);
     this.entries = response.entries;
     this.nextCursor = response.nextCursor;
+    this.total = response.total;
     this.view.showError();
     this.render();
     void this.refreshNoteSummaries();
@@ -257,8 +264,37 @@ export class RecordingsController {
     }
   }
 
+  /** "Sync with Drive": the dialog previews and applies; the list is re-read after. */
+  async syncDrive() {
+    const result = await openDriveSyncDialog({
+      plan: async () => {
+        const response = await sendToBackground({ type: 'SYNC_DRIVE_PLAN' });
+        if (!response.ok) throw new Error(response.error);
+        return response.plan;
+      },
+      apply: async (choice) => {
+        const response = await sendToBackground({ type: 'SYNC_DRIVE_APPLY', choice });
+        if (!response.ok) throw new Error(response.error);
+        return response.result;
+      },
+    });
+    if (result) {
+      try { await this.refresh(); } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
+    }
+  }
+
+  /** Removal succeeded; a file that could not be deleted is still said, not hidden. */
+  private reportFileErrors(errors: string[] | undefined) {
+    if (errors?.length) this.view.showError(`Removed, but ${errors.length} file${errors.length === 1 ? '' : 's'} could not be deleted — ${errors.join('; ')}`);
+  }
+
+  private forget(id: string) {
+    this.entries = this.entries.filter((entry) => entry.id !== id);
+    if (this.total != null) this.total = Math.max(0, this.total - 1);
+  }
+
   private render() {
-    this.view.render(this.entries, this.nextCursor != null);
+    this.view.render(this.entries, this.nextCursor != null, this.total);
   }
 
   /**

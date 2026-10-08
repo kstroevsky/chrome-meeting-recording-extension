@@ -309,20 +309,29 @@ export class RecordingFinalizer {
     // Aggregate per-file committed bytes into one overall fraction. A file that
     // falls back locally counts as fully "done" for progress purposes (it is no
     // longer uploading) so the ring still reaches 100% on a partial-fallback run.
+    // Each file's own row shows only what Drive holds, so a fallen-back file
+    // never reads as uploaded there.
     // The report is throttled to whole-percent steps so a many-chunk upload can't
-    // flood the OFFSCREEN_STATE → persist → popup path with redundant updates.
+    // flood the OFFSCREEN_STATE → persist → popup path with redundant updates —
+    // except when a file lands on Drive, which its row says at once: at most one
+    // extra report per file, where a short file next to a long one would
+    // otherwise wait for the long one to move the whole job a percent.
     const progressSink = onUploadProgress;
     const totalBytes = artifacts.reduce((sum, { artifact }) => sum + artifact.file.size, 0);
     const loadedPerFile = new Array<number>(artifacts.length).fill(0);
+    const onDrivePerFile = new Array<number>(artifacts.length).fill(0);
     let lastReportedPercent = -1;
+    let lastReportedLanded = 0;
     const reportProgress = () => {
       if (!progressSink || totalBytes === 0) return;
       const loaded = loadedPerFile.reduce((sum, n) => sum + n, 0);
       const percent = Math.min(100, Math.floor((loaded / totalBytes) * 100));
-      if (percent <= lastReportedPercent) return;
-      lastReportedPercent = percent;
+      const landed = artifacts.filter(({ artifact }, i) => onDrivePerFile[i] >= artifact.file.size).length;
+      if (percent <= lastReportedPercent && landed === lastReportedLanded) return;
+      lastReportedPercent = Math.max(lastReportedPercent, percent);
+      lastReportedLanded = landed;
       const perFile: Record<string, number> = {};
-      artifacts.forEach(({ artifact }, i) => { perFile[artifact.filename] = loadedPerFile[i]; });
+      artifacts.forEach(({ artifact }, i) => { perFile[artifact.filename] = onDrivePerFile[i]; });
       progressSink(loaded / totalBytes, perFile);
     };
 
@@ -337,11 +346,15 @@ export class RecordingFinalizer {
       artifacts,
       Math.min(PERF_FLAGS.parallelUploadConcurrency, 2),
       async ({ artifact, stream, kind }, index) => {
-        const markFileDone = () => { loadedPerFile[index] = artifact.file.size; reportProgress(); };
+        const markFileDone = (onDrive: boolean) => {
+          loadedPerFile[index] = artifact.file.size;
+          if (onDrive) onDrivePerFile[index] = artifact.file.size;
+          reportProgress();
+        };
         const startedAt = nowMs();
         if (sharedSetupError) {
           if (!skipLocalFallback) await this.saveArtifactLocally(artifact, stream, 'fallback', context, kind);
-          markFileDone();
+          markFileDone(false);
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, bytes: artifact.file.size, uploaded: false, error: sharedSetupError } satisfies UploadOutcome;
         }
@@ -351,8 +364,9 @@ export class RecordingFinalizer {
           destinationFolderName: DRIVE_DEFAULT_DESTINATION_NAME,
           recordingFolderName,
           shared: { getUploadToken: sharedGetUploadToken, folderResolver, log: this.deps.log },
-          onProgress: (uploaded) => { loadedPerFile[index] = uploaded; reportProgress(); },
+          onProgress: (uploaded) => { loadedPerFile[index] = uploaded; onDrivePerFile[index] = uploaded; reportProgress(); },
           signal,
+          stream,
         });
 
         // Mark the upload as in-flight so a crash/power-off mid-upload is
@@ -376,7 +390,7 @@ export class RecordingFinalizer {
           const uploadedFile = await driveTarget.upload(artifact.file);
           if (opfsFilename) await this.deps.pendingUploads?.remove(opfsFilename);
           await this.cleanupArtifact(artifact);
-          markFileDone();
+          markFileDone(true);
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: true, durationMs: roundMs(nowMs() - startedAt) });
           return {
             stream,
@@ -398,7 +412,7 @@ export class RecordingFinalizer {
             this.deps.warn('Drive upload failed; falling back to local download', artifact.filename, error);
             await this.saveArtifactLocally(artifact, stream, 'fallback', context, kind);
           }
-          markFileDone();
+          markFileDone(false);
           logPerf(this.deps.log, 'finalizer', 'drive_file_complete', { filename: artifact.filename, stream, uploaded: false, durationMs: roundMs(nowMs() - startedAt) });
           return { stream, filename: artifact.filename, bytes: artifact.file.size, uploaded: false, error } satisfies UploadOutcome;
         }

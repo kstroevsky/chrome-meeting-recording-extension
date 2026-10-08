@@ -1,9 +1,10 @@
 /**
  * @file sharing/ShareUploadStore.ts
  *
- * Durable owner-side bookkeeping for published media uploads. The stored
- * `source` is intentionally private extension state: it may contain OPFS keys
- * or Drive ids and must never be sent to the sharing service.
+ * Durable owner-side bookkeeping for Drive-origin preparation. The store name
+ * is retained for IndexedDB compatibility with the earlier sharing uploader.
+ * `source` is private extension state: it may contain OPFS keys or Drive ids and
+ * must never be sent to the sharing service.
  */
 
 import { createIndexedDbKeyValueArea, type KeyValueArea } from '../offscreen/storage/indexedDbKeyValueArea';
@@ -26,12 +27,18 @@ export type ShareUploadJob = {
   bytes?: number;
   offset: number;
   status: ShareUploadStatus;
-  /** Transient network activity persisted in the same durable job record. */
+  /** Transient Drive-origin preparation activity persisted with the job. */
   activity?: ShareUploadActivity;
-  /** Current request attempt within the uploader's bounded retry loop. */
+  /** Current request attempt within a bounded Drive request/upload retry loop. */
   attempt?: number;
   uploadId?: string;
   chunkSize?: number;
+  /** User-owned Drive file backing the immutable published origin. */
+  driveFileId?: string;
+  revisionId?: string;
+  md5Checksum?: string;
+  permissionId?: string;
+  createdDriveCopy?: boolean;
   error?: string;
   updatedAt: number;
 };
@@ -78,6 +85,11 @@ function isShareUploadJob(value: unknown): value is ShareUploadJob {
     && (typeof job.attempt === 'undefined' || (Number.isInteger(job.attempt) && job.attempt > 0))
     && (typeof job.uploadId === 'undefined' || typeof job.uploadId === 'string')
     && (typeof job.chunkSize === 'undefined' || typeof job.chunkSize === 'number')
+    && (typeof job.driveFileId === 'undefined' || typeof job.driveFileId === 'string')
+    && (typeof job.revisionId === 'undefined' || typeof job.revisionId === 'string')
+    && (typeof job.md5Checksum === 'undefined' || typeof job.md5Checksum === 'string')
+    && (typeof job.permissionId === 'undefined' || typeof job.permissionId === 'string')
+    && (typeof job.createdDriveCopy === 'undefined' || typeof job.createdDriveCopy === 'boolean')
     && (typeof job.error === 'undefined' || typeof job.error === 'string')
     && typeof job.updatedAt === 'number';
 }

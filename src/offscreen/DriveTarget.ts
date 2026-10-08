@@ -25,7 +25,8 @@ import {
 import { uploadChunk } from './drive/DriveChunkUploader';
 import type { DriveUploadFile, UploadChunkResult } from './drive/DriveChunkUploader';
 import { PERF_FLAGS, clamp, logPerf, nowMs, roundMs } from '../shared/perf';
-import { contentTypeForRecordingFilename } from '../shared/recordingFormats';
+import { contentTypeForRecordingFile } from '../shared/recordingFormats';
+import type { RecordingStream } from '../shared/recordingTypes';
 
 export type DriveTargetOptions = DriveFolderHierarchy;
 export type DriveUploadSharedContext = {
@@ -46,6 +47,11 @@ type DriveTargetCtorOptions = DriveFolderHierarchy & {
   onProgress?: (uploadedBytes: number, totalBytes: number) => void;
   /** Cancels session creation, the active chunk request, and retry backoff. */
   signal?: AbortSignal;
+  /**
+   * Names the type when the blob carries none — a file re-read from OPFS for a
+   * retry has an empty type, and the name alone calls a microphone a video.
+   */
+  stream?: RecordingStream;
 };
 
 /**
@@ -65,6 +71,7 @@ export class DriveTarget {
   private readonly signal?: AbortSignal;
   private used = false;
   private parentFolderId: string | null = null;
+  private readonly stream?: RecordingStream;
 
   constructor(
     private readonly filename: string,
@@ -73,6 +80,7 @@ export class DriveTarget {
     options: DriveTargetCtorOptions = {}
   ) {
     const shared = options.shared;
+    this.stream = options.stream;
     this.getUploadToken = shared?.getUploadToken ?? createCachedTokenProvider(getToken);
     this.folderResolver = shared?.folderResolver ?? new DriveFolderResolver(this.getUploadToken);
     this.hierarchy = {
@@ -93,7 +101,7 @@ export class DriveTarget {
     this.throwIfCanceled();
 
     const contentType = (typeof file.type === 'string' ? file.type.split(';', 1)[0] : '')
-      || contentTypeForRecordingFilename(this.filename);
+      || contentTypeForRecordingFile(this.filename, this.stream);
     const uploadStartedAt = nowMs();
     await this.initSession(contentType);
 

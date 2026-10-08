@@ -1,6 +1,6 @@
 import type { PlaybackTrack } from '../../shared/playback';
 import type { DirectoryHandleLike } from '../../offscreen/storage/opfsLayout';
-import { createShareUploadSourceResolver } from '../ShareUploadSourceResolver';
+import { createShareMediaSourceResolver } from '../ShareMediaSourceResolver';
 
 async function blobToText(blob: Blob): Promise<string> {
   const value = blob as Blob & { text?: () => Promise<string>; arrayBuffer?: () => Promise<ArrayBuffer> };
@@ -50,11 +50,11 @@ function rootWithFile(key: string, blob: Blob): DirectoryHandleLike {
   return walk(0);
 }
 
-describe('createShareUploadSourceResolver', () => {
+describe('createShareMediaSourceResolver', () => {
   it('prefers OPFS and exposes random-access Blob slices', async () => {
     const blob = new Blob(['0123456789'], { type: 'video/webm' });
     const fetcher = jest.fn();
-    const resolver = createShareUploadSourceResolver({
+    const resolver = createShareMediaSourceResolver({
       getRoot: async () => rootWithFile('library/r1/tab.webm', blob),
       getDriveToken: async () => 'drive-token',
       fetch: fetcher as typeof fetch,
@@ -78,7 +78,7 @@ describe('createShareUploadSourceResolver', () => {
       return response(206, new Blob(['4567']), { 'content-range': 'bytes 4-7/10' });
     });
     const missingRoot = rootWithFile('somewhere/else.webm', new Blob());
-    const resolver = createShareUploadSourceResolver({
+    const resolver = createShareMediaSourceResolver({
       getRoot: async () => missingRoot,
       getDriveToken: async () => 'drive-token',
       fetch: fetcher as typeof fetch,
@@ -104,7 +104,7 @@ describe('createShareUploadSourceResolver', () => {
       if (auth === 'Bearer stale') return response(401);
       return response(206, new Blob(['x']), { 'content-range': 'bytes 0-0/123' });
     });
-    const resolver = createShareUploadSourceResolver({ getDriveToken, fetch: fetcher as typeof fetch });
+    const resolver = createShareMediaSourceResolver({ getDriveToken, fetch: fetcher as typeof fetch });
 
     const source = await resolver(track([{ kind: 'drive', fileId: 'd1' }]));
 
@@ -114,7 +114,7 @@ describe('createShareUploadSourceResolver', () => {
   });
 
   it('rejects Downloads-only tracks instead of pretending their bytes are reachable', async () => {
-    const resolver = createShareUploadSourceResolver();
+    const resolver = createShareMediaSourceResolver();
     await expect(resolver(track([{ kind: 'download', downloadId: 7, playableInExtension: false }], 10)))
       .rejects.toThrow('downloaded files cannot be read');
   });

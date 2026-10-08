@@ -64,7 +64,9 @@ export function handleSystemIngress(
     fetch(msg.url, {
       method: msg.method,
       headers: msg.headers,
-      body: msg.body,
+      body: msg.bodyBase64 != null
+        ? Uint8Array.from(atob(msg.bodyBase64), (character) => character.charCodeAt(0))
+        : msg.body,
     })
       .then(async (response) => {
         const headers: Record<string, string> = {};

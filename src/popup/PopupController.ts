@@ -16,7 +16,6 @@ import { RecordingNotesView } from './notes/RecordingNotesView';
 import { RecordingNotesDetail } from './notes/RecordingNotesDetail';
 import { RecordingDetailView, type PopupDetailTarget } from './history/RecordingDetailView';
 import { RecordingsListView } from './history/RecordingsListView';
-import { InterruptedView } from './recording/InterruptedView';
 import { PermissionView } from './recording/PermissionView';
 import { RecordingControlsView } from './recording/RecordingControlsView';
 import { PopupStatusView } from './recording/PopupStatusView';
@@ -44,7 +43,7 @@ import {
   buildSavedLocallyMessage,
   POPUP_TOAST_TEXT,
 } from './popupMessages';
-import { setActiveView, type PopupElements } from './popupView';
+import { hideSessionViews, setActiveView, type PopupElements } from './popupView';
 import { createExternalTab, createRuntimeTab } from '../platform/chrome/tabs';
 import { sendToBackground } from '../shared/messages';
 import type {
@@ -103,7 +102,6 @@ export class PopupController {
   private readonly notations: PopupNotations;
   private readonly status: PopupStatusView;
   private readonly controls: RecordingControlsView;
-  private readonly interrupted: InterruptedView;
   private readonly permissionView: PermissionView;
   private readonly detail: RecordingDetailView;
   private readonly recordingsList: RecordingsListView;
@@ -222,11 +220,6 @@ export class PopupController {
       refreshSession: () => this.state.refreshInitialState(),
       activeNotations: () => this.notations.activeNotations,
     }, this.mic, this.camera, this.permissionView, this.confirmDialog);
-    this.interrupted = new InterruptedView(el, {
-      dismiss: () => this.dismissInterruption(),
-      discard: (historyId) => this.discardInterrupted(historyId),
-      loadNotations: (recordingId) => this.notations.list(recordingId),
-    });
     this.recordingsList = new RecordingsListView({
       openRecording: (entry) => this.showRecordingDetail({ kind: 'recording', entry }),
       openUpload: (job) => this.showRecordingDetail({ kind: 'upload', job }),
@@ -252,7 +245,6 @@ export class PopupController {
     setActiveView(this.el, readCachedPhase());
     this.wireRecordingStateListener();
     wireTranscriptDownload(this.el.saveBtn, (message) => this.toast(message));
-    this.interrupted.wire();
     this.commands.wire();
     this.permissionView.wire();
     this.wireMic();
@@ -414,10 +406,7 @@ export class PopupController {
       this.notes.stop();
       this.captionPoller.stop();
       if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
-      if (this.el.viewConfig) this.el.viewConfig.hidden = true;
-      if (this.el.viewPermission) this.el.viewPermission.hidden = true;
-      if (this.el.viewRecording) this.el.viewRecording.hidden = true;
-      if (this.el.viewFinalizing) this.el.viewFinalizing.hidden = true;
+      hideSessionViews(this.el);
       if (this.el.viewUpload) this.el.viewUpload.hidden = false;
       this.status.setHeaderCompact(true);
       this.status.syncHeaderUpload(job);
@@ -425,20 +414,12 @@ export class PopupController {
       return;
     }
 
-    if (this.el.viewUpload) this.el.viewUpload.hidden = true;
     // The menu's "Cancel upload" belongs to the upload screen alone.
     if (this.el.uploadJobCancel) this.el.uploadJobCancel.hidden = true;
-    const view = setActiveView(this.el, phase, session?.interruption != null);
+    // A run that ended on its own (the tab closed, it left the meeting, the
+    // meeting ended) finishes like Stop: nothing to decide, so nothing is asked.
+    const view = setActiveView(this.el, phase);
     this.status.setHeaderCompact(view !== 'config');
-
-    if (view === 'interrupted') {
-      this.status.syncHeaderInterrupted();
-      this.timer.stop();
-      this.notes.stop();
-      this.captionPoller.stop();
-      void this.interrupted.render(session?.interruption);
-      return;
-    }
 
     if (view === 'recording') {
       this.status.syncRecordingBanner(phase, session);
@@ -483,28 +464,6 @@ export class PopupController {
       if (this.el.cameraWarning) this.el.cameraWarning.hidden = false;
       if (this.el.cameraWarningText) this.el.cameraWarningText.textContent = setup.cameraWarningText;
     }
-  }
-
-  private async dismissInterruption(): Promise<void> {
-    try {
-      const response = await sendToBackground({ type: 'DISMISS_INTERRUPTION' });
-      this.state.applySession(response.session);
-    } catch (error) {
-      console.warn('[popup] DISMISS_INTERRUPTION failed', error);
-    }
-  }
-
-  /**
-   * Removes the recording the interruption produced. It was already saved, so
-   * this is an ordinary delete rather than abandoning anything in flight.
-   */
-  private async discardInterrupted(historyId: string): Promise<void> {
-    try {
-      await sendToBackground({ type: 'REMOVE_RECORDING_HISTORY', id: historyId });
-    } catch (error) {
-      console.warn('[popup] REMOVE_RECORDING_HISTORY failed', error);
-    }
-    await this.dismissInterruption();
   }
 
   private toast(msg: string) {
@@ -566,10 +525,9 @@ export class PopupController {
     this.showingRecordings = true;
     if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
     if (this.el.ppHeader) this.el.ppHeader.hidden = true;
-    for (const id of ['view-config', 'view-permission', 'view-recording', 'view-finalizing', 'view-upload', 'view-recordings']) {
-      const view = document.getElementById(id);
-      if (view) view.hidden = true;
-    }
+    hideSessionViews(this.el);
+    const recordings = document.getElementById('view-recordings');
+    if (recordings) recordings.hidden = true;
     if (!this.detail.show(target)) this.showingRecordings = false;
   }
 
@@ -593,10 +551,7 @@ export class PopupController {
     if (detail) detail.hidden = true;
     if (this.el.ppHeader) this.el.ppHeader.hidden = false;
     if (this.el.sessionTabs) this.el.sessionTabs.hidden = true;
-    for (const id of ['view-config', 'view-permission', 'view-recording', 'view-finalizing', 'view-upload']) {
-      const view = document.getElementById(id);
-      if (view) view.hidden = true;
-    }
+    hideSessionViews(this.el);
     this.status.setHeaderCompact(false);
     const title = this.el.ppHeader?.querySelector<HTMLElement>('.brand-name');
     if (title) title.textContent = 'Recordings';

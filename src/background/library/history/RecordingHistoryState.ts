@@ -29,7 +29,7 @@ export function createPendingHistoryEntry(
 ): RecordingHistoryEntry {
   const nextFiles = files.map((file) => ({
     ...file,
-    ...pendingArtifactFields(file.filename, storageMode),
+    ...pendingArtifactFields(file.filename, storageMode, file.stream),
     destination: storageMode,
     status: 'pending' as const,
   }));
@@ -51,7 +51,7 @@ export function createHistoryEntryFromUploadJob(job: UploadJob): RecordingHistor
     ...(isArtifactKind(file.kind) ? { kind: file.kind } : {}),
     filename: file.filename,
     ...(file.startOffsetMs != null ? { captureStartOffsetMs: file.startOffsetMs } : {}),
-    ...pendingArtifactFields(file.filename, 'drive'),
+    ...pendingArtifactFields(file.filename, 'drive', file.stream),
     ...(file.status === 'uploaded' && file.driveFileId
       ? {
           locations: [{

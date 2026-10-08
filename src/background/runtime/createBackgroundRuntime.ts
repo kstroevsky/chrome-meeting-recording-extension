@@ -153,7 +153,7 @@ export function createBackgroundRuntime() {
     transcriptCapture,
     playback: library.playback,
     playbackLeases,
-    driveArtifacts: driveLibrary.artifacts,
+    driveLibrary,
     fileToDestination: (recordingId, presetId) =>
       driveLibrary.fileRecordingToDestination(recordingId, presetId),
     renameDriveRootFolder: (from, to) => driveLibrary.renameRootFolder(from, to),
@@ -215,6 +215,7 @@ export function createBackgroundRuntime() {
     logger,
     session,
     controller,
+    driveLibrary,
     messageListener,
     bootstrap,
     waitUntilReady: () => readiness.wait(),

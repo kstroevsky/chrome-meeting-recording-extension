@@ -251,10 +251,10 @@ export type RecordingSessionSnapshot = {
    */
   epoch?: number;
   /**
-   * Why the last run ended, when it was not the user's doing. Phase-independent
-   * — it outlives the run so the popup can report the interruption after the
-   * capture has already been saved (ADR-0005, design n4). Cleared on the next
-   * `start()` and when the user dismisses the notice.
+   * Why the last run ended, when it ended on its own (the tab closed, it left
+   * the meeting, the meeting ended). Phase-independent — it outlives the run.
+   * Cleared on the next `start()`. The popup no longer reports it: such a run
+   * finishes like Stop, with nothing to decide.
    */
   interruption?: RecordingInterruption;
   uploadSummary?: UploadSummary;
@@ -341,7 +341,7 @@ export type RecordingStatusView = {
   cameraMuted?: boolean;
   /** Live whole-recording pause state; see {@link RecordingSessionSnapshot.paused}. */
   paused?: boolean;
-  /** Set when the last run ended without the user asking (design n4). */
+  /** Set when the last run ended on its own; see {@link RecordingSessionSnapshot.interruption}. */
   interruption?: RecordingInterruption;
   /** Pause-aware recording timer state; see {@link RecordingSessionSnapshot.recordedMs}. */
   recordedMs?: number;

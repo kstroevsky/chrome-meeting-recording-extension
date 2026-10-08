@@ -231,21 +231,3 @@
 .upload-notes--saved .upload-notes-state { color: var(--ready); }
 .upload-notes:not(.upload-notes--saved) .upload-notes-state svg { opacity: .35; }
 
-/* An interrupted run, reported after the fact (n4). The capture is already
-   saved, so this is a notice, not a prompt. */
-.interrupted-head { display: flex; align-items: center; gap: 11px; margin: 0 0 14px; }
-.interrupted-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; background: var(--accent-soft); color: var(--danger-ink); }
-.interrupted-icon svg { width: 18px; height: 18px; }
-.interrupted-title { margin: 0; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
-.interrupted-sub { margin: 2px 0 0; color: var(--ink-3); font: 10.5px 'IBM Plex Mono', monospace; }
-.interrupted-ribbon { margin-bottom: 14px; }
-.interrupted-actions { display: flex; flex-direction: column; gap: 8px; margin: 16px -18px -18px; padding: 14px 18px; border-top: 1px solid var(--divider); background: var(--raised); }
-.interrupted-actions .btn-ink { height: 48px; font-size: 14px; }
-.interrupted-actions .btn-secondary { height: 44px; font-size: 13px; }
-/* A report, not a scroller: the sealed row's band has to bleed past the list,
-   so the list neither clips nor draws its own closing line — the last row does. */
-#interrupted-notes .detail-notes-list { overflow: visible; max-height: none; margin-bottom: 16px; border-bottom: 0; }
-#interrupted-notes .detail-notes-row:last-child { border-bottom: 1px solid var(--divider); }
-/* The sealed note bleeds edge to edge in the notes band, its end in the stopped red. */
-#interrupted-notes .detail-notes-row.sealed { gap: 10px; margin: 0 -18px; padding: 0 18px; background: var(--note-band); }
-#interrupted-notes .detail-notes-row.sealed .detail-notes-length { color: var(--rec-label); font-size: 9.5px; letter-spacing: .06em; }

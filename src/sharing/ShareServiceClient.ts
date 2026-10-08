@@ -2,26 +2,31 @@
  * @file sharing/ShareServiceClient.ts
  *
  * HTTP boundary between the extension and the sharing service. The extension
- * owns the public ids and sends only the sanitized published manifest; media
- * bytes travel through resumable upload sessions keyed by opaque upload ids.
+ * owns the public ids and sends only the sanitized published manifest plus a
+ * private Drive revision descriptor for each track. Media bytes never upload
+ * to the sharing service during publication.
  *
  * The paths in this file are the service contract for the backend implementation:
  *
  *   PUT    /api/shares/:shareId
- *   POST   /api/shares/:shareId/recordings/:recordingId/tracks/:trackId/uploads
- *   PUT    /api/share-uploads/:uploadId/chunks/:offset
- *   POST   /api/share-uploads/:uploadId/complete
+ *   GET    /api/sharing-reader
+ *   PUT    /api/shares/:shareId/recordings/:recordingId/tracks/:trackId/origin
  *   POST   /api/shares/:shareId/finalize
  *   POST   /api/shares/:shareId/revoke
  *   DELETE /api/shares/:shareId
- *
- * A chunk's offset is part of its URL and Content-Range, so replaying a request
- * after a lost response is naturally idempotent for the backend.
+ *   POST   /api/origin-cleanup/claim-pending
+* A chunk's offset is part of its URL and Content-Range, so replaying a request
  */
 
 import type { PublishedPlaybackManifest } from '../shared/sharing';
+import type {
+  DriveOriginApi,
+  DriveOriginCleanupClaim,
+  DriveOriginCleanupDescriptor,
+  RegisterDriveOriginInput,
+} from './DriveOriginPreparer';
 import type { SharePublicationApi } from './SharePublicationCoordinator';
-import type { ShareUploadSession, ShareUploadTransport } from './ShareUploadManager';
+import type { ShareOriginCleanupApi } from './ShareOriginCleanupQueue';
 
 export type RemoteShareStatus = 'draft' | 'uploading' | 'active' | 'revoked';
 
@@ -65,7 +70,7 @@ export class ShareServiceRequestError extends Error {
   }
 }
 
-export class ShareServiceClient implements SharePublicationApi, ShareUploadTransport, ShareRegistryApi {
+export class ShareServiceClient implements SharePublicationApi, DriveOriginApi, ShareRegistryApi, ShareOriginCleanupApi {
   private readonly origin: string;
   private readonly fetcher: typeof fetch;
 
@@ -82,58 +87,47 @@ export class ShareServiceClient implements SharePublicationApi, ShareUploadTrans
     });
   }
 
-  async beginTrackUpload(input: {
-    shareId: string;
-    recordingId: string;
-    trackId: string;
-    mimeType: string;
-    bytes: number;
-  }, signal?: AbortSignal): Promise<ShareUploadSession> {
-    const body = await this.requestJson(
-      `/api/shares/${segment(input.shareId)}/recordings/${segment(input.recordingId)}/tracks/${segment(input.trackId)}/uploads`,
+  async getDriveReaderIdentity(): Promise<{ email: string }> {
+    const body = await this.requestJson('/api/sharing-reader', {
+      method: 'GET',
+      statuses: [200],
+    });
+    const email = stringField(body, 'email');
+    if (!email) throw new Error('Sharing service returned no Drive reader identity');
+    return { email };
+  }
+
+  async registerDriveOrigin(input: RegisterDriveOriginInput): Promise<void> {
+    await this.request(
+      `/api/shares/${segment(input.shareId)}/recordings/${segment(input.recordingId)}/tracks/${segment(input.trackId)}/origin`,
       {
-        method: 'POST',
-        json: { mimeType: input.mimeType, bytes: input.bytes },
-        statuses: [200, 201],
-        signal,
+        method: 'PUT',
+        json: {
+          fileId: input.fileId,
+          revisionId: input.revisionId,
+          bytes: input.bytes,
+          mimeType: input.mimeType,
+          ...(input.md5Checksum ? { md5Checksum: input.md5Checksum } : {}),
+          ...(input.permissionId ? { permissionId: input.permissionId } : {}),
+        },
+        statuses: [200, 201, 204],
       },
     );
-    return parseUploadSession(body, input.bytes);
   }
 
-  async uploadTrackChunk(input: {
-    uploadId: string;
-    offset: number;
-    totalBytes: number;
-    chunk: Blob;
-  }, signal?: AbortSignal): Promise<void> {
-    const endExclusive = input.offset + input.chunk.size;
-    if (!Number.isInteger(input.offset) || input.offset < 0 || endExclusive > input.totalBytes) {
-      throw new Error('Invalid share upload chunk range');
+  async getShareDriveOrigins(shareId: string): Promise<DriveOriginCleanupDescriptor[]> {
+    const response = await this.request(`/api/shares/${segment(shareId)}/origins`, {
+      method: 'GET',
+      statuses: [200, 404],
+    });
+    if (response.status === 404) return [];
+    const body = await response.json().catch(() => {
+      throw new Error('Sharing service returned invalid Drive cleanup metadata');
+    });
+    if (!isRecord(body) || !Array.isArray(body.origins)) {
+      throw new Error('Sharing service returned invalid Drive cleanup metadata');
     }
-    const contentRange = `bytes ${input.offset}-${Math.max(input.offset, endExclusive - 1)}/${input.totalBytes}`;
-    await this.request(`/api/share-uploads/${segment(input.uploadId)}/chunks/${input.offset}`, {
-      method: 'PUT',
-      body: input.chunk,
-      headers: {
-        'content-type': input.chunk.type || 'application/octet-stream',
-        'content-range': contentRange,
-      },
-      statuses: [200, 201, 204],
-      signal,
-    });
-  }
-
-  async completeTrackUpload(input: {
-    uploadId: string;
-    totalBytes: number;
-  }, signal?: AbortSignal): Promise<void> {
-    await this.request(`/api/share-uploads/${segment(input.uploadId)}/complete`, {
-      method: 'POST',
-      json: { totalBytes: input.totalBytes },
-      statuses: [200, 204],
-      signal,
-    });
+    return body.origins.map(parseDriveCleanupDescriptor);
   }
 
   async finalizeShare(shareId: string): Promise<{ shareUrl: string }> {
@@ -169,6 +163,43 @@ export class ShareServiceClient implements SharePublicationApi, ShareUploadTrans
       }
     }
     throw lastError;
+  }
+
+  async claimDriveOriginCleanup(
+    shareId: string,
+    action: 'revoke' | 'delete',
+  ): Promise<{ claims: DriveOriginCleanupClaim[]; pending: boolean }> {
+    const body = await this.requestJson(
+      `/api/shares/${segment(shareId)}/origin-cleanup/claim`,
+      {
+        method: 'POST',
+        json: { action },
+        statuses: [200],
+      },
+    );
+    return parseDriveCleanupClaims(body);
+  }
+
+  async claimPendingDriveOriginCleanup(): Promise<{ claims: DriveOriginCleanupClaim[]; pending: boolean }> {
+    const body = await this.requestJson('/api/origin-cleanup/claim-pending', {
+      method: 'POST',
+      statuses: [200],
+    });
+    return parseDriveCleanupClaims(body);
+  }
+
+  async completeDriveOriginCleanup(claim: DriveOriginCleanupClaim): Promise<void> {
+    await this.request(
+      `/api/origin-cleanup/${segment(claim.candidateId)}/complete`,
+      {
+        method: 'POST',
+        json: {
+          leaseId: claim.leaseId,
+          leaseToken: claim.leaseToken,
+        },
+        statuses: [204],
+      },
+    );
   }
 
   async listShares(): Promise<RemoteShareSummary[]> {
@@ -267,28 +298,56 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function parseUploadSession(value: unknown, totalBytes: number): ShareUploadSession {
-  const uploadId = stringField(value, 'uploadId');
-  if (!uploadId) throw new Error('Sharing service returned no upload id');
-  const chunkSize = numberField(value, 'chunkSize');
-  const offset = numberField(value, 'offset');
-  if (chunkSize != null && (!Number.isInteger(chunkSize) || chunkSize <= 0)) {
-    throw new Error('Sharing service returned an invalid chunk size');
-  }
-  if (offset != null && (!Number.isInteger(offset) || offset < 0 || offset > totalBytes)) {
-    throw new Error('Sharing service returned an invalid upload offset');
-  }
-  return {
-    uploadId,
-    ...(chunkSize != null ? { chunkSize } : {}),
-    ...(offset != null ? { offset } : {}),
-  };
-}
-
 function stringField(value: unknown, field: string): string | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const candidate = (value as Record<string, unknown>)[field];
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
+}
+
+function parseDriveCleanupDescriptor(value: unknown): DriveOriginCleanupDescriptor {
+  if (!isRecord(value)) throw new Error('Sharing service returned invalid Drive cleanup metadata');
+  const fileId = stringField(value, 'fileId');
+  const revisionId = stringField(value, 'revisionId');
+  const permissionId = optionalStringField(value, 'permissionId');
+  if (!fileId || !revisionId) throw new Error('Sharing service returned invalid Drive cleanup metadata');
+  return { fileId, revisionId, ...(permissionId ? { permissionId } : {}) };
+}
+
+function parseDriveCleanupClaims(value: unknown): {
+  claims: DriveOriginCleanupClaim[];
+  pending: boolean;
+} {
+  if (!isRecord(value) || !Array.isArray(value.claims) || typeof value.pending !== 'boolean') {
+    throw new Error('Sharing service returned invalid Drive cleanup claims');
+  }
+  return {
+    claims: value.claims.map(parseDriveCleanupClaim),
+    pending: value.pending,
+  };
+}
+
+function parseDriveCleanupClaim(value: unknown): DriveOriginCleanupClaim {
+  if (!isRecord(value)) throw new Error('Sharing service returned invalid Drive cleanup claim');
+  const candidateId = stringField(value, 'candidateId');
+  const leaseId = stringField(value, 'leaseId');
+  const leaseToken = stringField(value, 'leaseToken');
+  const kind = value.kind;
+  const fileId = stringField(value, 'fileId');
+  const revisionId = stringField(value, 'revisionId');
+  const permissionId = optionalStringField(value, 'permissionId');
+  if (!candidateId || !leaseId || !leaseToken || (kind !== 'permission' && kind !== 'revision')
+    || !fileId || (kind === 'revision' && !revisionId)) {
+    throw new Error('Sharing service returned invalid Drive cleanup claim');
+  }
+  return {
+    candidateId,
+    leaseId,
+    leaseToken,
+    kind,
+    fileId,
+    revisionId: revisionId ?? '',
+    ...(permissionId ? { permissionId } : {}),
+  };
 }
 
 function numberField(value: unknown, field: string): number | undefined {

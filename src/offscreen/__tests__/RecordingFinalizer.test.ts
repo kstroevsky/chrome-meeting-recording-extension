@@ -442,6 +442,64 @@ describe('RecordingFinalizer', () => {
     expect(fractions[fractions.length - 1]).toBe(1);
   });
 
+  it('reports a file the moment Drive has all of it, even when the overall percent does not move', async () => {
+    resetPerfFlags();
+    PERF_FLAGS.parallelUploadConcurrency = 1;
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    jest.spyOn(DriveTarget.prototype, 'upload').mockImplementation(async function (this: any, file: Blob) {
+      this.onProgress?.(file.size, file.size);
+      return undefined;
+    });
+    const sized = (filename: string, bytes: number) => ({
+      ...makeArtifact(filename),
+      file: new File([new Uint8Array(bytes)], filename, { type: 'video/webm' }),
+    });
+    const onUploadProgress = jest.fn();
+
+    // 4,014 bytes: the tab lands at 25%, and the microphone's 4 bytes only take
+    // the job to 25.3% — the same whole percent.
+    await finalizer.finalize({
+      storageMode: 'drive',
+      onUploadProgress,
+      artifacts: [
+        { stream: 'tab', artifact: sized('tab.webm', 1_010) },
+        { stream: 'mic', artifact: sized('mic.webm', 4) },
+        { stream: 'self-video', artifact: sized('camera.webm', 3_000) },
+      ],
+    });
+
+    const perFile = onUploadProgress.mock.calls.map((c) => c[1] as Record<string, number>);
+    const micLanded = perFile.find((files) => files['mic.webm'] === 4);
+    expect(micLanded).toEqual({ 'tab.webm': 1_010, 'mic.webm': 4, 'camera.webm': 0 });
+  });
+
+  it('never reports a file that fell back locally as all on Drive', async () => {
+    resetPerfFlags();
+    PERF_FLAGS.parallelUploadConcurrency = 1;
+    jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+    jest.spyOn(DriveTarget.prototype, 'upload').mockImplementation(function (this: any, file: Blob) {
+      if (this.filename !== 'tab.webm') return Promise.resolve(undefined);
+      this.onProgress?.(file.size / 2, file.size);
+      return Promise.reject(new DOMException('network timeout', 'AbortError'));
+    });
+    const onUploadProgress = jest.fn();
+
+    await finalizer.finalize({
+      storageMode: 'drive',
+      onUploadProgress,
+      artifacts: [
+        { stream: 'tab', artifact: makeArtifact('tab.webm') },
+        { stream: 'mic', artifact: makeArtifact('mic.webm') },
+      ],
+    });
+
+    // The job still reaches 100%: the fallen-back file is no longer uploading.
+    expect(onUploadProgress.mock.calls[onUploadProgress.mock.calls.length - 1][0]).toBe(1);
+    // But its row keeps what Drive actually holds — half of it.
+    const tabBytes = onUploadProgress.mock.calls.map((c) => (c[1] as Record<string, number>)['tab.webm']);
+    expect(Math.max(...tabBytes)).toBe(2);
+  });
+
   it('downloads locally on a normal upload failure (the failsafe)', async () => {
     jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
     jest.spyOn(DriveTarget.prototype, 'upload').mockRejectedValue(new DOMException('network timeout', 'AbortError'));

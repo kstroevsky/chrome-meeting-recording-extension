@@ -1,4 +1,5 @@
 import { deletePublishedShare } from '../shares/deleteShare';
+import { pruneDriveFileOwners } from '../shares/driveCleanup';
 import type { ShareRow } from '../shares/ShareRepository';
 
 const MAX_CLEANUP_BATCH = 100;
@@ -36,6 +37,8 @@ export async function cleanupExpiredShares(env: Env, now = Date.now()): Promise<
       failed += 1;
     }
   }
+
+  await pruneDriveFileOwners(env, revokedBefore);
 
   // Rate-limit rows have no product value after their window has long expired.
   await env.SHARING_DB.prepare(
