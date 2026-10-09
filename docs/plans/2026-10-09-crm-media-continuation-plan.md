@@ -4,6 +4,44 @@ Revision 2: findings rechecked with the current classes and an in-process HTTP
 probe; CORS assumptions corrected; dependencies, recovery states and release
 boundaries made explicit. Revision 1 is preserved in commit `d0b2144`.
 
+## Implementation status addendum — 2026-10-09
+
+The detailed findings below are preserved as the audit that drove the work, but
+their pre-implementation statements are no longer the current status. This
+addendum supersedes those statements where they conflict with the implemented
+state. The original architecture plan has also been reconciled in
+`CheekyCheeseIT_CRM/docs/architecture/2026-10-07-meeting-recorder-integration-plan.md`
+under _Phase 2 implementation reconciliation — 2026-10-09_ (D132–D143).
+
+Rechecked implemented heads:
+
+- Extension `6f2ba4f`: Start-time media authorization including exact upload
+  origins, durable IndexedDB/offscreen queue, immutable logical transfer
+  ownership, recovery/retry scheduling, ready-result acknowledgement, progress,
+  external playback and recovery controls.
+- CRM `56820170`: deployment-wired Phase-2 schema, CRM-user playback independent
+  of connection disable, aggregate connection throttling, completion/missing-
+  session recovery, provisioning and ranged playback, and conservative media
+  reconciliation/orphan reporting.
+
+The most important post-audit corrections are now implemented: legacy intents
+without explicit media authorization fail closed; current receiver/upload origins
+must exactly match the Start-time authorization; `MEDIA_UPLOAD_COMPLETING` is the
+only `409` treated as transient completion work; completed-result replay no longer
+depends on source bytes; completing uploads count toward the connection cap; and
+stale provider attempts converge with DB state before cleanup.
+
+Current verification is green at the unit/integration/local-PostgreSQL layers.
+JM1 is now proven with the real Chrome → CRM → private R2 path: the extension
+uploaded a retained OPFS recording through CRM-issued multipart URLs, CRM
+completed and HEAD-verified the object, and Chromium performed ranged playback
+of the resulting artifact. The proving run used a 77,215-byte playable artifact
+and deliberately retained its local OPFS source. The remaining R0 work is the
+large-transfer/restart/expiry matrix (JM2–JM5), playback-expiry/deep-seek cases
+(JM6–JM7), and the remaining isolation/auth/lifecycle rows in the verification
+table below. Explicit local-source release remains R1 and must not be enabled
+from capability/HEAD success alone.
+
 ## Scope and verdict
 
 This is a continuation of PLAN C, M1–M6, in the CRM's

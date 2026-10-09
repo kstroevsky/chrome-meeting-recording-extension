@@ -160,7 +160,7 @@ export class IntegrationCoordinator {
     if (!secret || secret.kind !== 'media-auth') throw new Error('Media credential is missing');
     return new ExternalMediaClient(
       destination.media.capability, destination.endpoint,
-      async () => secret.value, fetch, hasUploadHostPermission,
+      async () => secret.value, undefined, hasUploadHostPermission,
     );
   }
 
@@ -180,7 +180,7 @@ export class IntegrationCoordinator {
     if (!secret || secret.kind !== 'media-auth') throw new Error('Media credential is missing');
     return new ExternalMediaClient(
       destination.media.capability, destination.endpoint,
-      async () => secret.value, fetch, hasUploadHostPermission,
+      async () => secret.value, undefined, hasUploadHostPermission,
     );
   }
 

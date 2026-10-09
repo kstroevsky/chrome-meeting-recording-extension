@@ -28,6 +28,7 @@ export type UploadStatus = { state: 'ready'; artifactId: string } |
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const ID = /^(?:media|upload)_[0-9a-f-]{36}$/i;
+const browserFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
 export class MediaHttpError extends Error {
   constructor(readonly status: number, readonly code?: string) {
@@ -110,7 +111,7 @@ export class ExternalMediaClient {
     readonly capability: MediaCapability,
     webhookEndpoint: string,
     private readonly getBearer: () => Promise<string>,
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly fetcher: typeof fetch = browserFetch,
     private readonly hasUploadHostPermission: (origin: string) => Promise<boolean> = async () => false,
   ) {
     this.base = checkCapability(capability, webhookEndpoint);

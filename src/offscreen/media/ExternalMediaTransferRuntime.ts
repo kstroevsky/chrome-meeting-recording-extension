@@ -184,7 +184,7 @@ export class ExternalMediaTransferRuntime {
       this.deps.onState(await this.deps.store.get(running.destinationId, running.request.clientTransferId) ?? running);
 
       const client = this.deps.createClient?.(grant) ?? new ExternalMediaClient(
-        grant.capability, grant.endpoint, async () => grant.bearer, fetch,
+        grant.capability, grant.endpoint, async () => grant.bearer, undefined,
         async (origin) => grant.capability.upload.origins.includes(origin),
       );
       const runner = new ExternalMediaTransferRunner(client, this.deps.store);

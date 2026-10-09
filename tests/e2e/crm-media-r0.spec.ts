@@ -270,12 +270,20 @@ async function preparePilotExtension(
   manifest.host_permissions = Array.from(
     new Set([
       ...(manifest.host_permissions ?? []),
-      `${crmOrigin}/*`,
-      `${r2Origin}/*`,
+      chromeHostPermission(crmOrigin),
+      chromeHostPermission(r2Origin),
     ]),
   );
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return destination;
+}
+
+function chromeHostPermission(origin: string): string {
+  const url = new URL(origin);
+  // Chrome match patterns do not include ports. Match the same normalized
+  // permission shape used by the production webhook endpoint code so the
+  // local HTTPS proxy on :3443 is covered by https://127.0.0.1/*.
+  return `${url.protocol}//${url.hostname}/*`;
 }
 
 async function crmLogin(

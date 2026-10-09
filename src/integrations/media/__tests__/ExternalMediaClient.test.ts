@@ -2,6 +2,7 @@ import { ExternalMediaClient, MediaHttpError } from '../ExternalMediaClient';
 import type { MediaCapability } from '../MediaCapability';
 
 const uploadId = `upload_${'b'.repeat(8)}-${'b'.repeat(4)}-4bbb-8bbb-${'b'.repeat(12)}`;
+const artifactId = `media_${'a'.repeat(8)}-${'a'.repeat(4)}-4aaa-8aaa-${'a'.repeat(12)}`;
 const capability: MediaCapability = {
   version: 1,
   apiBase: 'https://crm.example.test/api/media',
@@ -44,6 +45,32 @@ function harness(fetcher: jest.Mock, allowed = jest.fn(async () => true)) {
 
 describe('ExternalMediaClient signed storage upload', () => {
   const blob = new Blob(['video'], { type: 'video/webm' });
+
+  it('calls the default browser fetch with the Window receiver', async () => {
+    const originalFetch = globalThis.fetch;
+    const receiverCheckedFetch = jest.fn(function (this: typeof globalThis) {
+      if (this !== globalThis) throw new TypeError('Illegal invocation');
+      return Promise.resolve(response({
+        state: 'uploading', artifactId, uploadId, partSize: 5 * 1024 * 1024,
+        maxConcurrency: 1, strategy: 'multipart-put-v1',
+      }));
+    }) as unknown as typeof fetch;
+    globalThis.fetch = receiverCheckedFetch;
+    try {
+      const client = new ExternalMediaClient(
+        capability,
+        'https://crm.example.test/hooks/recordings',
+        async () => 'sensitive-token',
+      );
+      await expect(client.create({
+        clientTransferId: 'transfer-1', recordingId: 'recording-1',
+        artifact: { role: 'tab-recording', filename: 'recording.webm', mimeType: 'video/webm', bytes: 5 },
+      })).resolves.toMatchObject({ state: 'uploading', artifactId, uploadId });
+      expect(receiverCheckedFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 
   it('renews an opaque network/CORS failure with a new signing request and checks each origin', async () => {
     const fetcher = jest.fn()
