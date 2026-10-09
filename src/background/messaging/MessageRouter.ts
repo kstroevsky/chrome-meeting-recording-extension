@@ -100,6 +100,7 @@ export const POPUP_ROUTE_OWNERS = {
   REMOVE_RECORDING_DESTINATION: 'integrations',
   GET_RECORDING_ROUTES: 'integrations',
   CONFIRM_RECORDING_ROUTES: 'integrations',
+  CHANGE_RECORDING_ROUTE: 'integrations',
   RETRY_RECORDING_ROUTING: 'integrations',
   LIST_HELD_RECORDING_ROUTES: 'integrations',
 } satisfies Record<PopupToBg['type'], PopupRouteOwner>;

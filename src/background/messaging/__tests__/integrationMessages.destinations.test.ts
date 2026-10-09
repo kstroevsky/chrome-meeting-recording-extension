@@ -3,13 +3,16 @@ import { handleIntegrationMessage } from '../integrationMessages';
 
 const ROUTES = [{ destinationId: 'destination_crm', mode: 'auto' as const }];
 const VIEW = [{ destinationId: 'destination_crm', destinationName: 'CRM', state: 'held' as const }];
+const CANDIDATES = [{ destinationId: 'destination_journal', destinationName: 'Journal' }];
 
 function deps(historyId?: string) {
   const integrations = {
     confirmRecordingRoutes: jest.fn(async () => {}),
+    changeRecordingRoute: jest.fn(async (): Promise<'changed' | 'stale' | 'unavailable'> => 'changed'),
     beginRecordingRouting: jest.fn(async () => ({ scheduled: ['destination_crm'], unavailable: [] })),
     retryRecordingRouting: jest.fn(async () => ({ scheduled: ['destination_crm'], unavailable: [] })),
     recordingRoutes: jest.fn(async () => VIEW),
+    recordingRouteCandidates: jest.fn(async () => CANDIDATES),
     setDestinationEnabled: jest.fn(async (_id: string, enabled: boolean) => ({ id: 'destination_crm', enabled })),
     disconnectImpact: jest.fn(async () => ({ affectedRecordings: 63 })),
   };
@@ -49,7 +52,10 @@ describe('destination and routing messages', () => {
     const respond = jest.fn();
     await handleIntegrationMessage({ type: 'GET_RECORDING_ROUTES' }, respond, ctx.all);
     expect(ctx.integrations.recordingRoutes).toHaveBeenCalledWith('history-live', ROUTES);
-    expect(respond).toHaveBeenCalledWith({ ok: true, recordingId: 'history-live', routes: VIEW });
+    expect(ctx.integrations.recordingRouteCandidates).toHaveBeenCalledWith('history-live', ROUTES);
+    expect(respond).toHaveBeenCalledWith({
+      ok: true, recordingId: 'history-live', routes: VIEW, candidates: CANDIDATES,
+    });
   });
 
   it('answers no routes when nothing is recording and no recording is named', async () => {
@@ -58,17 +64,51 @@ describe('destination and routing messages', () => {
     expect(respond).toHaveBeenCalledWith({ ok: true, routes: [] });
   });
 
-  it('confirms with the removed destinations, and retries with the profile\'s routes', async () => {
+  it('confirms only explicit route decisions, and retries with the profile\'s routes', async () => {
     const ctx = deps();
+    const decisions = [{ destinationId: 'destination_crm', action: 'skip' as const }];
     await handleIntegrationMessage(
-      { type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1', removedDestinationIds: ['destination_crm'] },
+      { type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1', decisions },
       jest.fn(),
       ctx.all,
     );
-    expect(ctx.integrations.confirmRecordingRoutes).toHaveBeenCalledWith('r1', ['destination_crm']);
+    expect(ctx.integrations.confirmRecordingRoutes).toHaveBeenCalledWith('r1', decisions);
     expect(ctx.externalMedia.reconcileRecording).toHaveBeenCalledWith('r1');
     await handleIntegrationMessage({ type: 'RETRY_RECORDING_ROUTING', recordingId: 'r1' }, jest.fn(), ctx.all);
     expect(ctx.integrations.retryRecordingRouting).toHaveBeenCalledWith('r1', ROUTES);
+  });
+
+  it('changes a route only through the explicit end-dialog command', async () => {
+    const ctx = deps();
+    const respond = jest.fn();
+    await handleIntegrationMessage({
+      type: 'CHANGE_RECORDING_ROUTE',
+      recordingId: 'r1',
+      fromDestinationId: 'destination_crm',
+      toDestinationId: 'destination_journal',
+    }, respond, ctx.all);
+
+    expect(ctx.integrations.changeRecordingRoute).toHaveBeenCalledWith(
+      'r1', 'destination_crm', 'destination_journal',
+    );
+    expect(respond).toHaveBeenCalledWith({
+      ok: true, recordingId: 'r1', routes: VIEW, candidates: CANDIDATES,
+    });
+  });
+
+  it('reports a stale route change without releasing or reconciling anything', async () => {
+    const ctx = deps();
+    ctx.integrations.changeRecordingRoute.mockResolvedValueOnce('stale');
+    const respond = jest.fn();
+    await handleIntegrationMessage({
+      type: 'CHANGE_RECORDING_ROUTE', recordingId: 'r1',
+      fromDestinationId: 'destination_crm', toDestinationId: 'destination_journal',
+    }, respond, ctx.all);
+
+    expect(respond).toHaveBeenCalledWith({
+      ok: false, error: 'This recording routing decision is stale; refresh and try again',
+    });
+    expect(ctx.externalMedia.reconcileRecording).not.toHaveBeenCalled();
   });
 
   it('disables automation and cancels media work without disconnecting the integration', async () => {
@@ -233,8 +273,29 @@ describe('destination and routing messages', () => {
     expect(isPopupToBgMessage({ type: 'REMOVE_RECORDING_DESTINATION', profileId: ' ' })).toBe(false);
     expect(isPopupToBgMessage({ type: 'GET_RECORDING_ROUTES' })).toBe(true);
     expect(isPopupToBgMessage({ type: 'GET_RECORDING_ROUTES', recordingId: '' })).toBe(false);
-    expect(isPopupToBgMessage({ type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1', removedDestinationIds: [] })).toBe(true);
-    expect(isPopupToBgMessage({ type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1', removedDestinationIds: [1] })).toBe(false);
+    expect(isPopupToBgMessage({
+      type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1',
+      decisions: [{ destinationId: 'd', action: 'release' }],
+    })).toBe(true);
+    expect(isPopupToBgMessage({
+      type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1',
+      decisions: [{ destinationId: 'd', action: 'send' }],
+    })).toBe(false);
+    expect(isPopupToBgMessage({
+      type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1',
+      decisions: [
+        { destinationId: 'd', action: 'release' },
+        { destinationId: 'd', action: 'skip' },
+      ],
+    })).toBe(false);
     expect(isPopupToBgMessage({ type: 'CONFIRM_RECORDING_ROUTES', recordingId: 'r1' })).toBe(false);
+    expect(isPopupToBgMessage({
+      type: 'CHANGE_RECORDING_ROUTE', recordingId: 'r1',
+      fromDestinationId: 'd', toDestinationId: 'journal',
+    })).toBe(true);
+    expect(isPopupToBgMessage({
+      type: 'CHANGE_RECORDING_ROUTE', recordingId: 'r1',
+      fromDestinationId: 'd', toDestinationId: 'd',
+    })).toBe(false);
   });
 });

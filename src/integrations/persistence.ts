@@ -50,6 +50,8 @@ export type RecordingIntegrationIntentDestination = {
     uploadOrigins: string[];
   };
   approvedPolicyHash?: string;
+  /** Present only when this receiver was explicitly authorized after capture. */
+  selectionSource?: 'end-dialog';
   /**
    * Holds an entry written when the recording started until the user confirms
    * the save at the end. A held entry is inactive: nothing is planned for it,
@@ -310,6 +312,7 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
   if (!destinationId || !allowedPolicy || connectionVersion == null) return undefined;
   if ((value.mode !== 'auto' && value.mode !== 'review') || !isIntentState(value.state)) return undefined;
   if (value.releaseAfter != null && value.releaseAfter !== 'save-confirmed') return undefined;
+  if (value.selectionSource != null && value.selectionSource !== 'end-dialog') return undefined;
   return {
     destinationId,
     mode: value.mode,
@@ -318,6 +321,7 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
     connectionVersion,
     ...(mediaAuthorization ? { mediaAuthorization } : {}),
     ...(approvedPolicyHash ? { approvedPolicyHash } : {}),
+    ...(value.selectionSource === 'end-dialog' ? { selectionSource: 'end-dialog' as const } : {}),
     ...(value.releaseAfter === 'save-confirmed' ? { releaseAfter: 'save-confirmed' as const } : {}),
   };
 }

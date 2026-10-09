@@ -141,7 +141,7 @@ export class CompletedNamingPrompt {
       if (outcome !== 'saved') await this.actions.deliverLocal(next.id, null);
       // Only once the files are written: data is not released for a recording
       // whose files were not saved.
-      if (routes.options) await this.confirmRoutes(next.id, outcome, routes.removed());
+      if (routes.options) await this.confirmRoutes(next.id, outcome, routes.decisions());
     } catch (error) {
       this.actions.notify(error instanceof Error ? error.message : 'Could not save this recording');
     } finally {
@@ -175,6 +175,7 @@ export class CompletedNamingPrompt {
 
     this.pending = next.recordingId;
     let removed: string[] = [];
+    let routeItems = next.routes;
     try {
       const outcome = await this.dialog.ask({
         title: 'Confirm where this recording goes',
@@ -184,15 +185,15 @@ export class CompletedNamingPrompt {
         cancelLabel: 'Keep this name',
         duplicateOf: (name) => (name === next.name ? null : suffixedRecordingName(name, this.actions.recordingNames())),
         routes: {
-          items: next.routes,
+          items: routeItems,
           onChange: (ids) => { removed = ids; },
-          onRetry: () => routing.retry(next.recordingId),
+          onRetry: async () => (routeItems = await routing.retry(next.recordingId)),
         },
         onSave: async (name) => {
           if (name !== next.name) await this.actions.rename(next.recordingId, name);
         },
       });
-      await this.confirmRoutes(next.recordingId, outcome, removed);
+      await this.confirmRoutes(next.recordingId, outcome, routeDecisions(routeItems, removed));
     } catch (error) {
       this.actions.notify(error instanceof Error ? error.message : 'Could not confirm where this recording goes');
     } finally {
@@ -207,26 +208,33 @@ export class CompletedNamingPrompt {
    * A failed read shows no rows: the routes stay held, and the recording is
    * asked about again afterwards rather than blocking its name or its files.
    */
-  private async routesFor(recordingId: string): Promise<{ options?: RecordingNameDialogRoutes; removed: () => string[] }> {
+  private async routesFor(recordingId: string): Promise<{
+    options?: RecordingNameDialogRoutes;
+    decisions: () => import('../../integrations/RecordingRoutingService').RecordingRouteDecision[];
+  }> {
     const routing = this.actions.routing;
     let removed: string[] = [];
-    const items = routing ? await routing.routes(recordingId).catch(() => []) : [];
-    if (!routing || !items.length) return { removed: () => [] };
+    let items = routing ? await routing.routes(recordingId).catch(() => []) : [];
+    if (!routing || !items.length) return { decisions: () => [] };
     return {
       options: {
         items,
         onChange: (ids) => { removed = ids; },
-        onRetry: () => routing.retry(recordingId),
+        onRetry: async () => (items = await routing.retry(recordingId)),
       },
-      removed: () => removed,
+      decisions: () => routeDecisions(items, removed),
     };
   }
 
   /** Either button is an answer about the data; Escape is not. */
-  private async confirmRoutes(recordingId: string, outcome: RecordingNameDialogOutcome, removed: string[]): Promise<void> {
+  private async confirmRoutes(
+    recordingId: string,
+    outcome: RecordingNameDialogOutcome,
+    decisions: import('../../integrations/RecordingRoutingService').RecordingRouteDecision[],
+  ): Promise<void> {
     const routing = this.actions.routing;
     if (!routing || outcome === 'dismissed') return;
-    await routing.confirm(recordingId, removed);
+    await routing.confirm(recordingId, decisions);
   }
 
   private driveOptions(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
@@ -266,7 +274,7 @@ export class CompletedNamingPrompt {
         if (response.ok === false) throw new Error(response.error || 'Could not skip recording naming');
         if (response.session) this.actions.applySession(response.session);
       }
-      if (routes.options) await this.confirmRoutes(job.historyId, outcome, routes.removed());
+      if (routes.options) await this.confirmRoutes(job.historyId, outcome, routes.decisions());
     } catch (error) {
       this.actions.notify(error instanceof Error ? error.message : 'Could not update recording name');
     } finally {
@@ -275,6 +283,17 @@ export class CompletedNamingPrompt {
       this.queue(latestPhase, latestSession);
     }
   }
+}
+
+/** A stale dialog can decide only the held rows it actually rendered. */
+function routeDecisions(
+  items: readonly import('../RecordingNameDialog').RecordingNameDialogRoute[],
+  removedDestinationIds: readonly string[],
+): import('../../integrations/RecordingRoutingService').RecordingRouteDecision[] {
+  const removed = new Set(removedDestinationIds);
+  return items.flatMap((route) => route.state === 'held'
+    ? [{ destinationId: route.destinationId, action: removed.has(route.destinationId) ? 'skip' as const : 'release' as const }]
+    : []);
 }
 
 /** A title for the gallery: the Drive prompt with its real copy, and no writes. */

@@ -234,6 +234,10 @@ async function heldRecordings(page: Page): Promise<any[]> {
 }
 
 async function confirm(page: Page, recordingId: string, removedDestinationIds: string[]): Promise<void> {
-  const response = await sendRuntimeMessage<any>(page, { type: 'CONFIRM_RECORDING_ROUTES', recordingId, removedDestinationIds });
+  const removed = new Set(removedDestinationIds);
+  const decisions = (await routes(page, recordingId)).flatMap((route) => route.state === 'held'
+    ? [{ destinationId: route.destinationId, action: removed.has(route.destinationId) ? 'skip' : 'release' }]
+    : []);
+  const response = await sendRuntimeMessage<any>(page, { type: 'CONFIRM_RECORDING_ROUTES', recordingId, decisions });
   if (!response?.ok) throw new Error(`CONFIRM_RECORDING_ROUTES failed: ${response?.error}`);
 }

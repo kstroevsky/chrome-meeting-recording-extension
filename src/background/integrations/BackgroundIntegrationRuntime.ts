@@ -192,9 +192,19 @@ export class BackgroundIntegrationRuntime {
     return this.recordingRouting.authorizedMediaRoutes(recordingId);
   }
 
-  /** The end dialog's answer: release the held routes, except the removed ones. */
-  confirmRecordingRoutes(recordingId: string, removedDestinationIds: readonly string[]) {
-    return this.recordingRouting.confirm(recordingId, removedDestinationIds);
+  /** Applies only the held routes the answering dialog actually observed. */
+  confirmRecordingRoutes(
+    recordingId: string,
+    decisions: readonly import('../../integrations/RecordingRoutingService').RecordingRouteDecision[],
+  ) {
+    return this.recordingRouting.confirm(recordingId, decisions);
+  }
+
+  /** Explicit end-dialog receiver replacement; the replacement remains held. */
+  async changeRecordingRoute(recordingId: string, fromDestinationId: string | undefined, toDestinationId: string) {
+    const context = await this.readers.getContext(recordingId);
+    if (!context?.endedAt) return 'stale' as const;
+    return this.recordingRouting.change(recordingId, fromDestinationId, toDestinationId);
   }
 
   /** A discarded run or a removed recording: nothing about it leaves the browser any more. */
@@ -208,6 +218,24 @@ export class BackgroundIntegrationRuntime {
 
   recordingRoutes(recordingId: string, expected: readonly RecordingDestinationRoute[] = []) {
     return this.recordingRouting.routes(recordingId, expected);
+  }
+
+  async recordingRouteCandidates(
+    recordingId: string,
+    expected: readonly RecordingDestinationRoute[] = [],
+  ): Promise<import('../../integrations/RecordingRoutingService').RecordingRouteCandidate[]> {
+    const [destinations, routes] = await Promise.all([
+      this.listDestinations(),
+      this.recordingRoutes(recordingId, expected),
+    ]);
+    const existing = new Set(routes.map((route) => route.destinationId));
+    return destinations.flatMap((destination) => destination.enabled && !existing.has(destination.id)
+      ? [{
+          destinationId: destination.id,
+          destinationName: destination.name,
+          ...(destination.media ? { includesMedia: true as const } : {}),
+        }]
+      : []);
   }
 
   consider(recordingId: string): Promise<void> {

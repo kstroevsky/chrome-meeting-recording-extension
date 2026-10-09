@@ -225,16 +225,7 @@ export class IntegrationUnitOfWork {
               if (current?.enabled) {
                 // Recheck the receiver inside the same transaction as the Start intent.
                 // A concurrent media enable or receiver edit must never widen consent.
-                const consent = entry.mediaAuthorization;
-                const mediaUnchanged = consent && current.media &&
-                  consent.producerId === current.producerId &&
-                  consent.endpoint === current.endpoint &&
-                  consent.apiBase === current.media.capability.apiBase &&
-                  consent.uploadOrigins.length === current.media.capability.upload.origins.length &&
-                  consent.uploadOrigins.every((origin, index) =>
-                    origin === current.media!.capability.upload.origins[index]) &&
-                  entry.connectionVersion === current.connectionVersion;
-                live.push(mediaUnchanged ? entry : { ...entry, mediaAuthorization: undefined });
+                live.push(revalidateMediaAuthorization(entry, current));
               }
               remaining -= 1;
               if (!remaining) finish();
@@ -248,12 +239,14 @@ export class IntegrationUnitOfWork {
   }
 
   /**
-   * The end dialog's answer: every held route is released, and the removed ones
-   * are skipped for this recording. One transaction, so a destination deleted
-   * meanwhile is not written back. Resolves to whether anything was held.
+   * Applies only the held routes the answering dialog actually observed. A route
+   * added by a newer dialog stays held when an older dialog answers later.
    */
-  async confirmRecordingRouting(recordingId: string, removedDestinationIds: readonly string[]): Promise<boolean> {
-    const removed = new Set(removedDestinationIds);
+  async confirmRecordingRouting(
+    recordingId: string,
+    decisions: readonly { destinationId: string; action: 'release' | 'skip' }[],
+  ): Promise<boolean> {
+    const decisionsById = new Map(decisions.map((decision) => [decision.destinationId, decision.action]));
     let changed = false;
     const database = await openIntegrationDatabase(this.factory);
     await runTransaction(
@@ -264,21 +257,84 @@ export class IntegrationUnitOfWork {
         const request = store.get(recordingId);
         request.onsuccess = () => {
           const intent = normalizeRecordingIntegrationIntent(request.result);
-          if (!intent?.destinations.some((entry) => entry.releaseAfter)) return;
-          changed = true;
-          store.put({
-            recordingId,
-            destinations: intent.destinations.map((entry) => {
-              if (!entry.releaseAfter) return entry;
-              const { releaseAfter: _released, ...rest } = entry;
-              return removed.has(entry.destinationId) ? { ...rest, state: 'skipped' as const } : rest;
-            }),
+          if (!intent) return;
+          const destinations = intent.destinations.map((entry) => {
+            const action = entry.releaseAfter ? decisionsById.get(entry.destinationId) : undefined;
+            if (!action) return entry;
+            changed = true;
+            const { releaseAfter: _released, ...rest } = entry;
+            return action === 'skip' ? { ...rest, state: 'skipped' as const } : rest;
           });
+          if (changed) store.put({ recordingId, destinations });
         };
       },
       'Could not confirm recording routing',
     );
     return changed;
+  }
+
+  /**
+   * An explicit end-dialog receiver change. The old route is skipped and the
+   * new one is created held, with its stream identity, in one transaction. A
+   * stale dialog cannot replace an already-decided route.
+   */
+  async changeRecordingRouting(
+    recordingId: string,
+    fromDestinationId: string | undefined,
+    entry: RecordingIntegrationIntentDestination,
+    stream: IntegrationStream,
+  ): Promise<'changed' | 'stale' | 'unavailable'> {
+    const normalizedIntent = normalizeRecordingIntegrationIntent({ recordingId, destinations: [entry] });
+    const normalizedStream = normalizeIntegrationStream(stream);
+    const normalizedEntry = normalizedIntent?.destinations[0];
+    if (!normalizedEntry || !normalizedStream || normalizedEntry.destinationId !== normalizedStream.destinationId) {
+      throw new Error('Invalid recording route change transaction');
+    }
+
+    let result: 'changed' | 'stale' | 'unavailable' = 'stale';
+    const database = await openIntegrationDatabase(this.factory);
+    await runTransaction(
+      database,
+      [INTEGRATION_DESTINATIONS_STORE, INTEGRATION_ROUTING_INTENTS_STORE, INTEGRATION_STREAMS_STORE],
+      (transaction) => {
+        const destinationStore = transaction.objectStore(INTEGRATION_DESTINATIONS_STORE);
+        const intentStore = transaction.objectStore(INTEGRATION_ROUTING_INTENTS_STORE);
+        const streamStore = transaction.objectStore(INTEGRATION_STREAMS_STORE);
+        const existingIntent = intentStore.get(recordingId);
+        existingIntent.onsuccess = () => {
+          const kept = normalizeRecordingIntegrationIntent(existingIntent.result)?.destinations ?? [];
+          if (kept.some((candidate) => candidate.destinationId === normalizedEntry.destinationId)) return;
+          if (fromDestinationId) {
+            const source = kept.find((candidate) => candidate.destinationId === fromDestinationId);
+            if (source?.state !== 'selected' || source.releaseAfter !== 'save-confirmed') return;
+          }
+
+          const destinationRequest = destinationStore.get(normalizedEntry.destinationId);
+          destinationRequest.onsuccess = () => {
+            const current = normalizeIntegrationDestination(destinationRequest.result);
+            if (!current?.enabled) {
+              result = 'unavailable';
+              return;
+            }
+            const liveEntry = revalidateMediaAuthorization(normalizedEntry, current);
+            const destinations = kept.map((candidate) => {
+              if (!fromDestinationId || candidate.destinationId !== fromDestinationId) return candidate;
+              const { releaseAfter: _held, ...rest } = candidate;
+              return { ...rest, state: 'skipped' as const };
+            });
+            intentStore.put({ recordingId, destinations: [...destinations, liveEntry] });
+
+            const existingStream = streamStore.get([normalizedStream.destinationId, recordingId]);
+            existingStream.onsuccess = () => {
+              if (existingStream.result === undefined) streamStore.put(normalizedStream);
+            };
+            result = 'changed';
+          };
+        };
+      },
+      'Could not change recording routing',
+    );
+    return result;
   }
 
   /**
@@ -336,6 +392,22 @@ export class IntegrationUnitOfWork {
       'Could not delete integration destination',
     );
   }
+}
+
+/** A consent snapshot can survive the transaction only while its receiver is unchanged. */
+function revalidateMediaAuthorization(
+  entry: RecordingIntegrationIntentDestination,
+  current: IntegrationDestination,
+): RecordingIntegrationIntentDestination {
+  const consent = entry.mediaAuthorization;
+  const mediaUnchanged = consent && current.media &&
+    consent.producerId === current.producerId &&
+    consent.endpoint === current.endpoint &&
+    consent.apiBase === current.media.capability.apiBase &&
+    consent.uploadOrigins.length === current.media.capability.upload.origins.length &&
+    consent.uploadOrigins.every((origin, index) => origin === current.media!.capability.upload.origins[index]) &&
+    entry.connectionVersion === current.connectionVersion;
+  return mediaUnchanged ? entry : { ...entry, mediaAuthorization: undefined };
 }
 
 function supersedeOlderStreamDeliveries(

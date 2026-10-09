@@ -301,11 +301,18 @@ export type PopupSaveRecordingDestination = {
 export type PopupRemoveRecordingDestination = { type: 'REMOVE_RECORDING_DESTINATION'; profileId: string };
 /** Routes of one recording; without `recordingId`, of the run in progress. */
 export type PopupGetRecordingRoutes = { type: 'GET_RECORDING_ROUTES'; recordingId?: string };
-/** The end dialog's answer: every held route is released except the removed ones. */
+/** The end dialog's answer for exactly the held routes that dialog observed. */
 export type PopupConfirmRecordingRoutes = {
   type: 'CONFIRM_RECORDING_ROUTES';
   recordingId: string;
-  removedDestinationIds: string[];
+  decisions: import('../integrations/RecordingRoutingService').RecordingRouteDecision[];
+};
+/** Explicitly replaces/adds a receiver from the end dialog; the new route remains held. */
+export type PopupChangeRecordingRoute = {
+  type: 'CHANGE_RECORDING_ROUTE';
+  recordingId: string;
+  fromDestinationId?: string;
+  toDestinationId: string;
 };
 /**
  * Finished recordings whose routes still wait for a confirmation, because the
@@ -386,6 +393,7 @@ export type PopupToBg =
   | PopupRemoveRecordingDestination
   | PopupGetRecordingRoutes
   | PopupConfirmRecordingRoutes
+  | PopupChangeRecordingRoute
   | PopupRetryRecordingRouting
   | PopupListHeldRecordingRoutes;
 
@@ -518,8 +526,13 @@ export type PopupToBgResponse<T extends PopupToBg> =
           routes: import('../integrations/RecordingRoutingService').RecordingRouteView[];
         }>;
       } | { ok: false; error: string } :
-  T extends PopupGetRecordingRoutes | PopupConfirmRecordingRoutes | PopupRetryRecordingRouting
-    ? { ok: true; recordingId?: string; routes: import('../integrations/RecordingRoutingService').RecordingRouteView[] }
+  T extends PopupGetRecordingRoutes | PopupConfirmRecordingRoutes | PopupChangeRecordingRoute | PopupRetryRecordingRouting
+    ? {
+        ok: true;
+        recordingId?: string;
+        routes: import('../integrations/RecordingRoutingService').RecordingRouteView[];
+        candidates?: import('../integrations/RecordingRoutingService').RecordingRouteCandidate[];
+      }
       | { ok: false; error: string } :
   never;
 
@@ -880,12 +893,27 @@ function isIntegrationPopupMessage(value: unknown): boolean {
       return value.recordingId === undefined || nonEmptyText(value.recordingId);
     case 'CONFIRM_RECORDING_ROUTES':
       return nonEmptyText(value.recordingId)
-        && Array.isArray(value.removedDestinationIds)
-        && value.removedDestinationIds.length <= 20
-        && value.removedDestinationIds.every(nonEmptyText);
+        && isRecordingRouteDecisions(value.decisions);
+    case 'CHANGE_RECORDING_ROUTE':
+      return nonEmptyText(value.recordingId)
+        && nonEmptyText(value.toDestinationId)
+        && (value.fromDestinationId === undefined || nonEmptyText(value.fromDestinationId))
+        && value.fromDestinationId !== value.toDestinationId;
     default:
       return false;
   }
+}
+
+function isRecordingRouteDecisions(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > 20) return false;
+  const seen = new Set<string>();
+  for (const decision of value) {
+    if (!isRecord(decision) || Array.isArray(decision) || !nonEmptyText(decision.destinationId)) return false;
+    if (decision.action !== 'release' && decision.action !== 'skip') return false;
+    if (seen.has(decision.destinationId)) return false;
+    seen.add(decision.destinationId);
+  }
+  return true;
 }
 
 function isSaveRecordingDestinationInput(value: unknown): boolean {

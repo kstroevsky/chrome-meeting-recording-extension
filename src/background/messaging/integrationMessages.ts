@@ -111,6 +111,7 @@ export async function handleIntegrationMessage(
       return true;
     case 'GET_RECORDING_ROUTES':
     case 'CONFIRM_RECORDING_ROUTES':
+    case 'CHANGE_RECORDING_ROUTE':
     case 'RETRY_RECORDING_ROUTING': {
       const recordingId = msg.recordingId ?? deps.session.getSnapshot().historyId;
       if (!recordingId) {
@@ -119,13 +120,32 @@ export async function handleIntegrationMessage(
       }
       const expected = await deps.destinations?.routesForRecording(recordingId) ?? [];
       if (msg.type === 'CONFIRM_RECORDING_ROUTES') {
-        await integrations.confirmRecordingRoutes(recordingId, msg.removedDestinationIds);
+        await integrations.confirmRecordingRoutes(recordingId, msg.decisions);
         await deps.externalMedia?.reconcileRecording(recordingId)
           .catch((error) => deps.L.warn('External media reconciliation deferred:', error));
+      } else if (msg.type === 'CHANGE_RECORDING_ROUTE') {
+        const result = await integrations.changeRecordingRoute(
+          recordingId,
+          msg.fromDestinationId,
+          msg.toDestinationId,
+        );
+        if (result !== 'changed') {
+          sendResponse({
+            ok: false,
+            error: result === 'unavailable'
+              ? 'That integration is no longer available'
+              : 'This recording routing decision is stale; refresh and try again',
+          });
+          return true;
+        }
       } else if (msg.type === 'RETRY_RECORDING_ROUTING' && expected.length) {
         await integrations.retryRecordingRouting(recordingId, expected);
       }
-      sendResponse({ ok: true, recordingId, routes: await integrations.recordingRoutes(recordingId, expected) });
+      const [routes, candidates] = await Promise.all([
+        integrations.recordingRoutes(recordingId, expected),
+        integrations.recordingRouteCandidates(recordingId, expected),
+      ]);
+      sendResponse({ ok: true, recordingId, routes, candidates });
       return true;
     }
     default:

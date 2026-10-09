@@ -79,7 +79,9 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
 
       expect(asks[0]!.routes?.items).toEqual([CRM]);
       expect(order).toEqual(['deliver', 'confirm']);
-      expect(route.confirm).toHaveBeenCalledWith('rec-1', ['destination_crm']);
+      expect(route.confirm).toHaveBeenCalledWith('rec-1', [
+        { destinationId: 'destination_crm', action: 'skip' },
+      ]);
     });
 
     it('confirms on the quiet button too: it only skips renaming', async () => {
@@ -87,7 +89,9 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
       const { dialog } = answeringDialog([{ outcome: 'canceled' }]);
       new CompletedNamingPrompt(dialog, actions({ pendingLocal: jest.fn(() => pending), routing: route })).queue('idle', localOnly());
       await flush();
-      expect(route.confirm).toHaveBeenCalledWith('rec-1', []);
+      expect(route.confirm).toHaveBeenCalledWith('rec-1', [
+        { destinationId: 'destination_crm', action: 'release' },
+      ]);
     });
 
     it('writes the file but decides nothing about the data on Escape', async () => {
@@ -146,7 +150,9 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
     new CompletedNamingPrompt(dialog, actions({ routing: route })).queue('idle', { uploadJobs: [job] } as RecordingStatusView);
     await flush();
     expect(mockSend).toHaveBeenCalledWith({ type: 'SKIP_RECORDING_NAMING', jobId: 'job-1' });
-    expect(route.confirm).toHaveBeenCalledWith('rec-2', []);
+    expect(route.confirm).toHaveBeenCalledWith('rec-2', [
+      { destinationId: 'destination_crm', action: 'release' },
+    ]);
   });
 
   describe('a recording saved without a prompt', () => {
@@ -161,7 +167,9 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
 
       expect(asks[0]).toEqual(expect.objectContaining({ title: 'Confirm where this recording goes', initialValue: 'Acme interview' }));
       expect(asks[0]!.destinations).toBeUndefined();
-      expect(route.confirm).toHaveBeenCalledWith('rec-3', []);
+      expect(route.confirm).toHaveBeenCalledWith('rec-3', [
+        { destinationId: 'destination_crm', action: 'release' },
+      ]);
       expect(act.rename).not.toHaveBeenCalled();
     });
 
@@ -172,7 +180,9 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
       new CompletedNamingPrompt(dialog, act).queue('idle', localOnly());
       await flush();
       expect(act.rename).toHaveBeenCalledWith('rec-3', 'Acme — round 2');
-      expect(route.confirm).toHaveBeenCalledWith('rec-3', []);
+      expect(route.confirm).toHaveBeenCalledWith('rec-3', [
+        { destinationId: 'destination_crm', action: 'release' },
+      ]);
     });
 
     it('is not asked again in the same popup once dismissed, and is not confirmed', async () => {

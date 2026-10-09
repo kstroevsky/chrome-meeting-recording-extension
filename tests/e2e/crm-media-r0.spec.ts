@@ -165,11 +165,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
           includesMedia: true,
         }),
       ]);
-      const confirmed = await sendRuntimeMessage<any>(harness.controlPage, {
-        type: "CONFIRM_RECORDING_ROUTES",
-        recordingId,
-        removedDestinationIds: [],
-      });
+      const confirmed = await confirmHeldRoutes(harness.controlPage, recordingId);
       expect(confirmed.ok).toBe(true);
 
       const transfers = await waitForTransfersAcknowledged(
@@ -371,11 +367,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
           includesMedia: true,
         }),
       ]);
-      const confirmed = await sendRuntimeMessage<any>(harness.controlPage, {
-        type: "CONFIRM_RECORDING_ROUTES",
-        recordingId,
-        removedDestinationIds: [],
-      });
+      const confirmed = await confirmHeldRoutes(harness.controlPage, recordingId);
       expect(confirmed.ok).toBe(true);
 
       const transfers = await waitForTransfersAcknowledged(
@@ -534,11 +526,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         ),
       ).toBe(RESTART_FIXTURE_BYTES);
 
-      const confirmed = await sendRuntimeMessage<any>(harness.controlPage, {
-        type: "CONFIRM_RECORDING_ROUTES",
-        recordingId,
-        removedDestinationIds: [],
-      });
+      const confirmed = await confirmHeldRoutes(harness.controlPage, recordingId);
       expect(confirmed.ok).toBe(true);
 
       let beforeRestart: any;
@@ -711,11 +699,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         ),
       ).toBe(URL_EXPIRY_FIXTURE_BYTES);
       expect(
-        await sendRuntimeMessage<any>(harness.controlPage, {
-          type: "CONFIRM_RECORDING_ROUTES",
-          recordingId,
-          removedDestinationIds: [],
-        }),
+        await confirmHeldRoutes(harness.controlPage, recordingId),
       ).toEqual(expect.objectContaining({ ok: true }));
 
       const transfers = await waitForTransfersAcknowledged(
@@ -836,11 +820,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         ),
       ).toBe(ATTEMPT_EXPIRY_FIXTURE_BYTES);
       expect(
-        await sendRuntimeMessage<any>(harness.controlPage, {
-          type: "CONFIRM_RECORDING_ROUTES",
-          recordingId,
-          removedDestinationIds: [],
-        }),
+        await confirmHeldRoutes(harness.controlPage, recordingId),
       ).toEqual(expect.objectContaining({ ok: true }));
 
       let firstAttempt: any;
@@ -990,11 +970,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       const recorded = await historyEntry(harness.controlPage, recordingId);
       expect(recorded.files.filter((file) => !file.kind)).toHaveLength(3);
       expect(
-        await sendRuntimeMessage<any>(harness.controlPage, {
-          type: "CONFIRM_RECORDING_ROUTES",
-          recordingId,
-          removedDestinationIds: [],
-        }),
+        await confirmHeldRoutes(harness.controlPage, recordingId),
       ).toEqual(expect.objectContaining({ ok: true }));
       const transfers = await waitForTransfersAcknowledged(
         harness.controlPage,
@@ -1189,11 +1165,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         configured.created.profile.id,
       );
       expect(
-        await sendRuntimeMessage<any>(harness.controlPage, {
-          type: "CONFIRM_RECORDING_ROUTES",
-          recordingId,
-          removedDestinationIds: [],
-        }),
+        await confirmHeldRoutes(harness.controlPage, recordingId),
       ).toEqual(expect.objectContaining({ ok: true }));
       await waitForTransfersAcknowledged(
         harness.controlPage,
@@ -1414,11 +1386,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         configured.created.profile.id,
       );
       expect(
-        await sendRuntimeMessage<any>(harness.controlPage, {
-          type: "CONFIRM_RECORDING_ROUTES",
-          recordingId,
-          removedDestinationIds: [],
-        }),
+        await confirmHeldRoutes(harness.controlPage, recordingId),
       ).toEqual(expect.objectContaining({ ok: true }));
       await waitForTransfersAcknowledged(
         harness.controlPage,
@@ -1722,11 +1690,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         configured.created.profile.id,
       );
       expect(
-        await sendRuntimeMessage<any>(harness.controlPage, {
-          type: "CONFIRM_RECORDING_ROUTES",
-          recordingId,
-          removedDestinationIds: [],
-        }),
+        await confirmHeldRoutes(harness.controlPage, recordingId),
       ).toEqual(expect.objectContaining({ ok: true }));
       await waitForTransfersAcknowledged(
         harness.controlPage,
@@ -2508,6 +2472,19 @@ async function recordingRoutes(
   if (!response?.ok)
     throw new Error(`GET_RECORDING_ROUTES failed: ${response?.error}`);
   return response.routes;
+}
+
+async function confirmHeldRoutes(page: Page, recordingId: string): Promise<any> {
+  const decisions = (await recordingRoutes(page, recordingId)).flatMap((route) =>
+    route.state === "held"
+      ? [{ destinationId: route.destinationId, action: "release" as const }]
+      : [],
+  );
+  return sendRuntimeMessage<any>(page, {
+    type: "CONFIRM_RECORDING_ROUTES",
+    recordingId,
+    decisions,
+  });
 }
 
 async function waitForTransfersAcknowledged(

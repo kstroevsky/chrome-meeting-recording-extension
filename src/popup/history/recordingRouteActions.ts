@@ -8,7 +8,7 @@
 
 import { sendToBackground } from '../../shared/messages';
 import type { RecordingNameDialogRoute } from '../RecordingNameDialog';
-import type { RecordingRouteView } from '../../integrations/RecordingRoutingService';
+import type { RecordingRouteDecision, RecordingRouteView } from '../../integrations/RecordingRoutingService';
 
 export type HeldRecording = { recordingId: string; name: string; routes: RecordingNameDialogRoute[] };
 
@@ -16,8 +16,8 @@ export type RecordingRouteActions = {
   /** The routes still to decide about: held ones and ones that could not be scheduled. */
   routes(recordingId: string): Promise<RecordingNameDialogRoute[]>;
   retry(recordingId: string): Promise<RecordingNameDialogRoute[]>;
-  /** The answer: every held route is released except the removed ones. */
-  confirm(recordingId: string, removedDestinationIds: string[]): Promise<void>;
+  /** Applies only decisions for held routes this dialog actually observed. */
+  confirm(recordingId: string, decisions: RecordingRouteDecision[]): Promise<void>;
   /** Finished recordings whose routes were never confirmed, because no dialog asked. */
   held(): Promise<HeldRecording[]>;
 };
@@ -42,8 +42,8 @@ export function backgroundRecordingRouteActions(): RecordingRouteActions {
       if (response.ok === false) throw new Error(response.error || 'Could not schedule the automation');
       return undecidedRoutes(response.routes);
     },
-    async confirm(recordingId, removedDestinationIds) {
-      const response = await sendToBackground({ type: 'CONFIRM_RECORDING_ROUTES', recordingId, removedDestinationIds });
+    async confirm(recordingId, decisions) {
+      const response = await sendToBackground({ type: 'CONFIRM_RECORDING_ROUTES', recordingId, decisions });
       if (response.ok === false) throw new Error(response.error || 'Could not confirm where this recording goes');
     },
     async held() {

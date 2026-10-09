@@ -27,6 +27,8 @@ const MEDIA_AUTHORIZATION = {
   apiBase: 'https://crm.example.test/api/media',
   uploadOrigins: ['https://objects.example.test'],
 };
+const RELEASE_CRM = [{ destinationId: 'destination_crm', action: 'release' as const }];
+const SKIP_CRM = [{ destinationId: 'destination_crm', action: 'skip' as const }];
 
 function destination(overrides: Partial<IntegrationDestination> = {}): IntegrationDestination {
   return {
@@ -136,7 +138,7 @@ describe('RecordingRoutingService', () => {
       destinationName: 'CheekyCheeseIT CRM', state: 'held', includesMedia: true }]);
     expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
 
-    await ctx.service.confirm('recording_1', []);
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
     const [authorized] = await ctx.service.authorizedMediaRoutes('recording_1');
     expect(authorized).toEqual({ destinationId: 'destination_crm',
       externalRecordingId: (await ctx.streams.get('destination_crm', 'recording_1'))?.externalRecordingId,
@@ -162,7 +164,7 @@ describe('RecordingRoutingService', () => {
     await ctx.destinations.put(destination());
     await ctx.service.begin('recording_1', ROUTE);
     await ctx.destinations.put(destination({ media: MEDIA }));
-    await ctx.service.confirm('recording_1', []);
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
     expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
     await ctx.service.begin('recording_1', ROUTE); // Start may be replayed; older intent wins.
     expect((await ctx.routing.get('recording_1'))?.destinations[0]?.mediaAuthorization).toBeUndefined();
@@ -173,7 +175,7 @@ describe('RecordingRoutingService', () => {
     const ctx = harness();
     await ctx.destinations.put(destination({ media: MEDIA }));
     await ctx.service.begin('recording_1', ROUTE, false);
-    await ctx.service.confirm('recording_1', []);
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
     expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
   });
 
@@ -181,11 +183,11 @@ describe('RecordingRoutingService', () => {
     const ctx = harness();
     await ctx.destinations.put(destination({ media: MEDIA }));
     await ctx.service.begin('recording_skipped', ROUTE);
-    await ctx.service.confirm('recording_skipped', ['destination_crm']);
+    await ctx.service.confirm('recording_skipped', SKIP_CRM);
     expect(await ctx.service.authorizedMediaRoutes('recording_skipped')).toEqual([]);
 
     await ctx.service.begin('recording_1', ROUTE);
-    await ctx.service.confirm('recording_1', []);
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
     await ctx.destinations.put(destination({ media: {
       ...MEDIA, capability: { ...MEDIA.capability, apiBase: 'https://crm.example.test/other' },
     } }));
@@ -269,7 +271,10 @@ describe('RecordingRoutingService', () => {
     await ctx.destinations.put(destination({ id: 'destination_journal', producerId: 'producer_journal', name: 'Journal' }));
     await ctx.service.begin('recording_1', [...ROUTE, { destinationId: 'destination_journal', mode: 'auto' }]);
 
-    await ctx.service.confirm('recording_1', ['destination_journal']);
+    await ctx.service.confirm('recording_1', [
+      { destinationId: 'destination_crm', action: 'release' },
+      { destinationId: 'destination_journal', action: 'skip' },
+    ]);
 
     const intent = await ctx.routing.get('recording_1');
     expect(intent?.destinations).toEqual([
@@ -281,16 +286,110 @@ describe('RecordingRoutingService', () => {
     expect(ctx.consider).toHaveBeenCalledWith('recording_1');
   });
 
+  it('leaves routes a stale dialog never observed held', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination());
+    await ctx.destinations.put(destination({
+      id: 'destination_journal', producerId: 'producer_journal', name: 'Journal',
+      endpoint: 'https://journal.example.test/events', signingSecretId: 'secret_journal',
+    }));
+    await ctx.service.begin('recording_1', ROUTE);
+
+    await expect(ctx.service.change('recording_1', 'destination_crm', 'destination_journal')).resolves.toBe('changed');
+    ctx.consider.mockClear();
+
+    // This decision came from the dialog that still showed CRM. It must not
+    // release Journal, which a newer explicit change added afterwards.
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
+    await expect(ctx.service.routes('recording_1')).resolves.toEqual([
+      { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM', state: 'skipped' },
+      { destinationId: 'destination_journal', destinationName: 'Journal', state: 'held' },
+    ]);
+    expect(ctx.consider).not.toHaveBeenCalled();
+  });
+
+  it('atomically replaces a held receiver and captures fresh media consent for the explicit choice', async () => {
+    const ctx = harness();
+    const journalMedia = {
+      secretId: 'media_journal',
+      capability: {
+        version: 1 as const,
+        apiBase: 'https://journal.example.test/api/media',
+        upload: { strategy: 'multipart-put-v1' as const, origins: ['https://journal-objects.example.test'] },
+        playback: { strategy: 'refreshable-url-v1' as const },
+      },
+    };
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    await ctx.destinations.put(destination({
+      id: 'destination_journal', producerId: 'producer_journal', name: 'Journal',
+      endpoint: 'https://journal.example.test/events', signingSecretId: 'secret_journal',
+      connectionVersion: 7, media: journalMedia,
+    }));
+    await ctx.service.begin('recording_1', ROUTE);
+
+    await expect(ctx.service.change('recording_1', 'destination_crm', 'destination_journal')).resolves.toBe('changed');
+    const intent = await ctx.routing.get('recording_1');
+    expect(intent?.destinations).toEqual([
+      expect.objectContaining({ destinationId: 'destination_crm', state: 'skipped' }),
+      expect.objectContaining({
+        destinationId: 'destination_journal', state: 'selected', connectionVersion: 7,
+        selectionSource: 'end-dialog',
+        releaseAfter: 'save-confirmed',
+        mediaAuthorization: {
+          producerId: 'producer_journal',
+          endpoint: 'https://journal.example.test/events',
+          apiBase: 'https://journal.example.test/api/media',
+          uploadOrigins: ['https://journal-objects.example.test'],
+        },
+      }),
+    ]);
+    expect(intent?.destinations[0]).not.toHaveProperty('releaseAfter');
+    await expect(ctx.streams.get('destination_journal', 'recording_1')).resolves.toEqual(expect.objectContaining({
+      destinationId: 'destination_journal',
+      externalRecordingId: expect.stringMatching(/^recording_/),
+      readyCreated: false,
+      everAttempted: false,
+    }));
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+
+    await ctx.service.confirm('recording_1', [{ destinationId: 'destination_journal', action: 'release' }]);
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([
+      expect.objectContaining({ destinationId: 'destination_journal', connectionVersion: 7 }),
+    ]);
+  });
+
+  it('rejects a stale or unavailable receiver change without disturbing the held source', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination());
+    await ctx.destinations.put(destination({
+      id: 'destination_off', producerId: 'producer_off', name: 'Off', enabled: false,
+      signingSecretId: 'secret_off',
+    }));
+    await ctx.service.begin('recording_1', ROUTE);
+
+    await expect(ctx.service.change('recording_1', 'destination_crm', 'destination_off')).resolves.toBe('unavailable');
+    await expect(ctx.service.routes('recording_1')).resolves.toEqual([
+      { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM', state: 'held' },
+    ]);
+
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
+    await ctx.destinations.put(destination({
+      id: 'destination_journal', producerId: 'producer_journal', name: 'Journal', signingSecretId: 'secret_journal',
+    }));
+    await expect(ctx.service.change('recording_1', 'destination_crm', 'destination_journal')).resolves.toBe('stale');
+    await expect(ctx.streams.get('destination_journal', 'recording_1')).resolves.toBeUndefined();
+  });
+
   it('confirming twice is harmless, and confirming without an intent does nothing', async () => {
     const ctx = harness();
     await ctx.destinations.put(destination());
     await ctx.service.begin('recording_1', ROUTE);
-    await ctx.service.confirm('recording_1', []);
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
     const once = await ctx.routing.get('recording_1');
-    await ctx.service.confirm('recording_1', []);
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
     await expect(ctx.routing.get('recording_1')).resolves.toEqual(once);
 
-    await expect(ctx.service.confirm('recording_none', [])).resolves.toBeUndefined();
+    await expect(ctx.service.confirm('recording_none', RELEASE_CRM)).resolves.toBeUndefined();
   });
 
   it('lists recordings whose routes still wait for a confirmation', async () => {
@@ -298,7 +397,7 @@ describe('RecordingRoutingService', () => {
     await ctx.destinations.put(destination());
     await ctx.service.begin('recording_1', ROUTE);
     await ctx.service.begin('recording_2', ROUTE);
-    await ctx.service.confirm('recording_2', []);
+    await ctx.service.confirm('recording_2', RELEASE_CRM);
     await expect(ctx.service.held()).resolves.toEqual(['recording_1']);
   });
 
@@ -315,7 +414,7 @@ describe('RecordingRoutingService', () => {
       { destinationId: 'destination_missing', destinationName: null, state: 'not-scheduled' },
     ]);
 
-    await ctx.service.confirm('recording_1', ['destination_crm']);
+    await ctx.service.confirm('recording_1', SKIP_CRM);
     await expect(ctx.service.routes('recording_1')).resolves.toEqual([
       { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM', state: 'skipped' },
     ]);
@@ -344,7 +443,10 @@ describe('RecordingRoutingService', () => {
     await ctx.service.begin('recording_1', [...ROUTE, { destinationId: 'destination_journal', mode: 'auto' }]);
     await ctx.unitOfWork.deleteDestination(crm, 50);
 
-    await ctx.service.confirm('recording_1', []);
+    await ctx.service.confirm('recording_1', [
+      { destinationId: 'destination_crm', action: 'release' },
+      { destinationId: 'destination_journal', action: 'release' },
+    ]);
     const intent = await ctx.routing.get('recording_1');
     expect(intent?.destinations.map((entry) => entry.destinationId)).toEqual(['destination_journal']);
     expect(ctx.consider).toHaveBeenCalledWith('recording_1');

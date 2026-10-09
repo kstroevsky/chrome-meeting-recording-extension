@@ -27,6 +27,19 @@ export type RecordingRouteView = {
   includesMedia?: true;
 };
 
+export type RecordingRouteDecision = {
+  destinationId: string;
+  action: 'release' | 'skip';
+};
+
+export type RecordingRouteCandidate = {
+  destinationId: string;
+  destinationName: string;
+  includesMedia?: true;
+};
+
+export type RecordingRouteChangeResult = 'changed' | 'stale' | 'unavailable';
+
 /** Candidate for upload; the caller must also prove the OPFS artifact is sealed and owned. */
 export type AuthorizedMediaRoute = {
   destinationId: string;
@@ -58,7 +71,13 @@ type Deps = {
       entries: RecordingIntegrationIntentDestination[],
       streams: IntegrationStream[],
     ): Promise<string[]>;
-    confirmRecordingRouting(recordingId: string, removedDestinationIds: readonly string[]): Promise<boolean>;
+    confirmRecordingRouting(recordingId: string, decisions: readonly RecordingRouteDecision[]): Promise<boolean>;
+    changeRecordingRouting(
+      recordingId: string,
+      fromDestinationId: string | undefined,
+      entry: RecordingIntegrationIntentDestination,
+      stream: IntegrationStream,
+    ): Promise<RecordingRouteChangeResult>;
     forgetRecordingRouting(recordingId: string, updatedAt: number): Promise<void>;
   };
   /** Hands a recording to the planner after its routing changed. */
@@ -93,34 +112,12 @@ export class RecordingRoutingService {
         unavailable.push(route.destinationId);
         continue;
       }
-      entries.push({
-        destinationId: destination.id,
-        mode: 'auto',
-        state: 'selected',
-        allowedPolicy: { ...destination.dataPolicy },
-        connectionVersion: destination.connectionVersion,
-        ...(allowMediaAuthorization && destination.media ? {
-          mediaAuthorization: {
-            producerId: destination.producerId,
-            endpoint: destination.endpoint,
-            apiBase: destination.media.capability.apiBase,
-            uploadOrigins: [...destination.media.capability.upload.origins],
-          },
-        } : {}),
-        releaseAfter: 'save-confirmed',
-      });
+      entries.push(this.heldEntry(destination, allowMediaAuthorization));
     }
     if (!entries.length) return { scheduled: [], unavailable };
 
     // Every candidate gets a fresh identity; the transaction keeps an existing one.
-    const streams: IntegrationStream[] = entries.map((entry) => ({
-      destinationId: entry.destinationId,
-      recordingId,
-      externalRecordingId: createIntegrationId('recording'),
-      nextRevision: 1,
-      readyCreated: false,
-      everAttempted: false,
-    }));
+    const streams = entries.map((entry) => this.newStream(recordingId, entry.destinationId));
     const scheduled = await this.deps.unitOfWork.beginRecordingRouting(recordingId, entries, streams);
     return { scheduled, unavailable };
   }
@@ -151,10 +148,29 @@ export class RecordingRoutingService {
     return authorized;
   }
 
-  async confirm(recordingId: string, removedDestinationIds: readonly string[]): Promise<void> {
-    if (await this.deps.unitOfWork.confirmRecordingRouting(recordingId, removedDestinationIds)) {
+  async confirm(recordingId: string, decisions: readonly RecordingRouteDecision[]): Promise<void> {
+    if (await this.deps.unitOfWork.confirmRecordingRouting(recordingId, decisions)) {
       await this.deps.consider(recordingId);
     }
+  }
+
+  /**
+   * Creates authorization only from an explicit end-dialog action. The new
+   * receiver stays held until a later confirm decision releases it.
+   */
+  async change(
+    recordingId: string,
+    fromDestinationId: string | undefined,
+    toDestinationId: string,
+  ): Promise<RecordingRouteChangeResult> {
+    const destination = await this.deps.destinations.get(toDestinationId);
+    if (!destination?.enabled) return 'unavailable';
+    return this.deps.unitOfWork.changeRecordingRouting(
+      recordingId,
+      fromDestinationId,
+      this.heldEntry(destination, true, 'end-dialog'),
+      this.newStream(recordingId, destination.id),
+    );
   }
 
   /** Recordings with a route still waiting for its confirmation. */
@@ -195,5 +211,40 @@ export class RecordingRoutingService {
 
   private async nameOf(destinationId: string): Promise<string | null> {
     return (await this.deps.destinations.get(destinationId))?.name ?? null;
+  }
+
+  private heldEntry(
+    destination: IntegrationDestination,
+    allowMediaAuthorization: boolean,
+    selectionSource?: 'end-dialog',
+  ): RecordingIntegrationIntentDestination {
+    return {
+      destinationId: destination.id,
+      mode: 'auto',
+      state: 'selected',
+      allowedPolicy: { ...destination.dataPolicy },
+      connectionVersion: destination.connectionVersion,
+      ...(selectionSource ? { selectionSource } : {}),
+      ...(allowMediaAuthorization && destination.media ? {
+        mediaAuthorization: {
+          producerId: destination.producerId,
+          endpoint: destination.endpoint,
+          apiBase: destination.media.capability.apiBase,
+          uploadOrigins: [...destination.media.capability.upload.origins],
+        },
+      } : {}),
+      releaseAfter: 'save-confirmed',
+    };
+  }
+
+  private newStream(recordingId: string, destinationId: string): IntegrationStream {
+    return {
+      destinationId,
+      recordingId,
+      externalRecordingId: createIntegrationId('recording'),
+      nextRevision: 1,
+      readyCreated: false,
+      everAttempted: false,
+    };
   }
 }
