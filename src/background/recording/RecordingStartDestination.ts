@@ -1,7 +1,7 @@
 import {
   storageModeOfProfile,
   type RecordingDestinationMediaTarget,
-  type RecordingDestinationRoute,
+  type RecordingRoutingRoute,
 } from '../../shared/recordingDestinations';
 import type { RecordingRunConfig } from '../../shared/recording';
 import type { RecordingDestinationPort, RecordingRoutingPort } from './recordingRoutingPorts';
@@ -13,9 +13,9 @@ type Deps = {
 };
 
 export type StartDestinationResolution = {
-  mediaTarget?: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
-  expectedRoutes: RecordingDestinationRoute[];
-  scheduledRoutes: RecordingDestinationRoute[];
+  mediaTarget?: RecordingDestinationMediaTarget;
+  expectedRoutes: RecordingRoutingRoute[];
+  scheduledRoutes: RecordingRoutingRoute[];
 };
 
 /**
@@ -35,12 +35,16 @@ export async function applyStartDestination(
     const profile = resolved.requested ?? resolved.profile;
     runConfig.storageMode = storageModeOfProfile(profile);
     runConfig.destinationProfileId = profile.id;
-    const expectedRoutes = profile.dataRoutes.map((route) => ({ ...route }));
-    const mediaTarget = profile.mediaTarget.kind === 'external'
-      ? undefined
-      : { ...profile.mediaTarget };
+    const expectedRoutes: RecordingRoutingRoute[] = profile.dataRoutes.map((route) => ({ ...route }));
+    if (profile.mediaTarget.kind === 'external') {
+      const destinationId = profile.mediaTarget.destinationId;
+      if (!expectedRoutes.some((route) => route.destinationId === destinationId)) {
+        expectedRoutes.push({ destinationId, mode: 'auto', mediaOnly: true });
+      }
+    }
+    const mediaTarget: RecordingDestinationMediaTarget = { ...profile.mediaTarget };
     return {
-      ...(mediaTarget ? { mediaTarget } : {}),
+      mediaTarget,
       expectedRoutes,
       scheduledRoutes: resolved.available ? expectedRoutes.map((route) => ({ ...route })) : [],
     };
@@ -57,7 +61,7 @@ export async function applyStartDestination(
  */
 export async function beginStartRouting(
   recordingId: string,
-  routes: readonly RecordingDestinationRoute[],
+  routes: readonly RecordingRoutingRoute[],
   deps: Deps,
 ): Promise<void> {
   if (!routes.length) return;

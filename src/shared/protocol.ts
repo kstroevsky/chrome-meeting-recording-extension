@@ -924,8 +924,13 @@ function isSaveRecordingDestinationInput(value: unknown): boolean {
   if (value.mediaTarget !== undefined || value.dataRoutes !== undefined) {
     if (value.destinationId !== undefined || value.localFolderPresetId !== undefined) return false;
     if (!isRecord(value.mediaTarget) || Array.isArray(value.mediaTarget)) return false;
-    if (value.mediaTarget.kind !== 'local' && value.mediaTarget.kind !== 'drive') return false;
-    if (!optionalText(value.mediaTarget.folderPresetId) || !Array.isArray(value.dataRoutes)) return false;
+    if (value.mediaTarget.kind === 'external') {
+      if (!nonEmptyText(value.mediaTarget.destinationId) || value.mediaTarget.folderPresetId !== undefined) return false;
+    } else {
+      if (value.mediaTarget.kind !== 'local' && value.mediaTarget.kind !== 'drive') return false;
+      if (!optionalText(value.mediaTarget.folderPresetId) || value.mediaTarget.destinationId !== undefined) return false;
+    }
+    if (!Array.isArray(value.dataRoutes)) return false;
     return value.dataRoutes.every((route) => isRecord(route)
       && !Array.isArray(route)
       && nonEmptyText(route.destinationId)

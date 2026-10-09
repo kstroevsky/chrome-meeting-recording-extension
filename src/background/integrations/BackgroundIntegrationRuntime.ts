@@ -18,7 +18,7 @@ import { KeyedCoalescer } from '../../integrations/KeyedCoalescer';
 import { IntegrationUnitOfWork } from '../../integrations/IntegrationUnitOfWork';
 import { IntegrationScheduler } from '../../integrations/IntegrationScheduler';
 import { RecordingRoutingService } from '../../integrations/RecordingRoutingService';
-import type { RecordingDestinationRoute } from '../../shared/recordingDestinations';
+import type { RecordingRoutingRoute } from '../../shared/recordingDestinations';
 import type { CreateIntegrationDestinationInput } from '../../integrations/management';
 import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../../integrations/contracts';
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
@@ -178,12 +178,12 @@ export class BackgroundIntegrationRuntime {
   }
 
   /** Holds the routes of a "Save to" destination for a recording that is starting. */
-  beginRecordingRouting(recordingId: string, routes: readonly RecordingDestinationRoute[]) {
+  beginRecordingRouting(recordingId: string, routes: readonly RecordingRoutingRoute[]) {
     return this.recordingRouting.begin(recordingId, routes);
   }
 
   /** Recovered Start failures may retry data routing, but cannot retroactively consent to media. */
-  retryRecordingRouting(recordingId: string, routes: readonly RecordingDestinationRoute[]) {
+  retryRecordingRouting(recordingId: string, routes: readonly RecordingRoutingRoute[]) {
     return this.recordingRouting.begin(recordingId, routes, false);
   }
 
@@ -216,13 +216,13 @@ export class BackgroundIntegrationRuntime {
     return this.recordingRouting.held();
   }
 
-  recordingRoutes(recordingId: string, expected: readonly RecordingDestinationRoute[] = []) {
+  recordingRoutes(recordingId: string, expected: readonly RecordingRoutingRoute[] = []) {
     return this.recordingRouting.routes(recordingId, expected);
   }
 
   async recordingRouteCandidates(
     recordingId: string,
-    expected: readonly RecordingDestinationRoute[] = [],
+    expected: readonly RecordingRoutingRoute[] = [],
   ): Promise<import('../../integrations/RecordingRoutingService').RecordingRouteCandidate[]> {
     const [destinations, routes] = await Promise.all([
       this.listDestinations(),

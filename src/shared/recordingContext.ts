@@ -1,7 +1,7 @@
 import {
-  normalizeAutomaticRecordingDestinationRoutes,
+  normalizeRecordingRoutingRoutes,
   type RecordingDestinationMediaTarget,
-  type RecordingDestinationRoute,
+  type RecordingRoutingRoute,
 } from './recordingDestinations';
 
 export type RecordingSourceContext = {
@@ -22,9 +22,9 @@ export type RecordingContext = {
    */
   destinationProfileId?: string;
   /** Immutable media choice resolved from the profile when Start was accepted. */
-  destinationMediaTarget?: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
-  /** Immutable expected data routes. Empty is meaningful and must survive normalization. */
-  destinationRoutes?: RecordingDestinationRoute[];
+  destinationMediaTarget?: RecordingDestinationMediaTarget;
+  /** Immutable expected routes, including a synthesized media-only external owner. */
+  destinationRoutes?: RecordingRoutingRoute[];
 };
 
 const MAX_PROVIDER_LENGTH = 128;
@@ -44,7 +44,7 @@ export function normalizeRecordingContext(value: unknown): RecordingContext | un
   const destinationMediaTarget = normalizeDestinationMediaTarget(candidate.destinationMediaTarget);
   const destinationRoutes = candidate.destinationRoutes === undefined
     ? undefined
-    : normalizeAutomaticRecordingDestinationRoutes(candidate.destinationRoutes);
+    : normalizeRecordingRoutingRoutes(candidate.destinationRoutes);
   return {
     recordingId,
     startedAt,
@@ -61,6 +61,10 @@ function normalizeDestinationMediaTarget(
 ): RecordingContext['destinationMediaTarget'] | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const candidate = value as Record<string, unknown>;
+  if (candidate.kind === 'external') {
+    const destinationId = normalizeString(candidate.destinationId, 128);
+    return destinationId ? { kind: 'external', destinationId } : undefined;
+  }
   if (candidate.kind !== 'local' && candidate.kind !== 'drive') return undefined;
   const folderPresetId = candidate.folderPresetId === undefined
     ? undefined

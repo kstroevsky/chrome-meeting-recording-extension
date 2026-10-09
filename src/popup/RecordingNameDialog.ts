@@ -29,6 +29,8 @@ export type RecordingNameDialogRoute = {
   /** Held routes can be removed; ones that could not be scheduled can be retried. */
   state: 'held' | 'not-scheduled';
   includesMedia?: true;
+  /** Primary media ownership without snapshot/data delivery. */
+  mediaOnly?: true;
 };
 
 export type RecordingNameDialogRouteCandidate = {
@@ -426,7 +428,9 @@ export class RecordingNameDialog {
       }
       const removed = this.removedRoutes.has(route.destinationId);
       row.classList.toggle('recording-name-route--removed', removed);
-      const payload = route.includesMedia ? 'recording video/audio and data' : 'recording data';
+      const payload = route.mediaOnly
+        ? 'recording video/audio'
+        : route.includesMedia ? 'recording video/audio and data' : 'recording data';
       text.textContent = removed
         ? `Won't send ${payload} to ${name ?? 'this integration'}`
         : `Will send ${payload} to ${name ?? 'this integration'}`;
@@ -510,7 +514,12 @@ export class RecordingNameDialog {
     picker.className = 'recording-name-route-picker';
     picker.setAttribute('role', 'group');
     picker.setAttribute('aria-label', fromDestinationId ? 'Choose replacement service' : 'Choose service');
+    const source = fromDestinationId
+      ? this.routeItems.find((route) => route.destinationId === fromDestinationId)
+      : undefined;
+    const mediaOnly = source?.mediaOnly === true;
     for (const candidate of this.routeCandidates) {
+      if (mediaOnly && !candidate.includesMedia) continue;
       const button = this.doc.createElement('button');
       button.type = 'button';
       button.className = 'recording-name-route-candidate';
@@ -519,11 +528,13 @@ export class RecordingNameDialog {
       name.textContent = candidate.destinationName;
       const disclosure = this.doc.createElement('span');
       disclosure.className = 'recording-name-route-candidate__payload';
-      disclosure.textContent = candidate.includesMedia ? 'VIDEO/AUDIO + DATA' : 'DATA ONLY';
+      disclosure.textContent = mediaOnly
+        ? 'VIDEO/AUDIO ONLY'
+        : candidate.includesMedia ? 'VIDEO/AUDIO + DATA' : 'DATA ONLY';
       button.append(name, disclosure);
       button.setAttribute(
         'aria-label',
-        `${candidate.destinationName}: ${candidate.includesMedia ? 'video, audio and data' : 'data only'}`,
+        `${candidate.destinationName}: ${mediaOnly ? 'video and audio only' : candidate.includesMedia ? 'video, audio and data' : 'data only'}`,
       );
       button.disabled = this.busy || this.retrying || this.routeChanging;
       button.addEventListener('click', () => void this.replaceRoute(fromDestinationId ?? undefined, candidate.destinationId));

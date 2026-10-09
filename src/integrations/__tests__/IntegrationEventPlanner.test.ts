@@ -146,6 +146,26 @@ function harness(policy: IntegrationDataPolicy, start = 1_000) {
 }
 
 describe('IntegrationEventPlanner', () => {
+  it('never exports event data for a media-only primary receiver intent', async () => {
+    const ctx = harness(BASE_POLICY);
+    await ctx.seed();
+    await ctx.routing.put({
+      recordingId: 'recording_1',
+      destinations: [{
+        destinationId: 'destination_1',
+        mode: 'auto',
+        state: 'selected',
+        allowedPolicy: BASE_POLICY,
+        connectionVersion: 1,
+        mediaOnly: true,
+      }],
+    });
+
+    await expect(ctx.planner.consider('destination_1', 'recording_1')).resolves.toEqual({ kind: 'noop' });
+    expect(ctx.snapshots.build).not.toHaveBeenCalled();
+    await expect(ctx.deliveries.listStream('destination_1', 'recording_1')).resolves.toEqual([]);
+  });
+
   it('waits for pending requested data and emits ready when it settles', async () => {
     const ctx = harness({ ...BASE_POLICY, analysis: true });
     ctx.source.analysis = 'analyzing';

@@ -12,7 +12,23 @@ const crmProfile = {
   id: 'profile-crm', name: 'CheekyCheeseIT', kind: 'custom', storageMode: 'local',
   filesLabel: 'Local downloads', dataRoutes: [{ destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM' }], available: true,
 };
-const integration = (id: string, name: string) => ({ id, name, enabled: true, endpoint: 'https://crm.example.test/hook' });
+const integration = (id: string, name: string, media = false) => ({
+  id,
+  name,
+  enabled: true,
+  endpoint: 'https://crm.example.test/hook',
+  ...(media ? {
+    media: {
+      secretId: `media-${id}`,
+      capability: {
+        version: 1,
+        apiBase: 'https://crm.example.test/api/media',
+        upload: { strategy: 'multipart-put-v1', origins: ['https://objects.example.test'] },
+        playback: { strategy: 'refreshable-url-v1' },
+      },
+    },
+  } : {}),
+});
 
 function mount(state: { destinations: object[]; integrations: object[] }) {
   document.body.innerHTML = `
@@ -137,6 +153,32 @@ describe('DestinationSettingsController', () => {
     expect(send).toHaveBeenCalledWith({
       type: 'SAVE_RECORDING_DESTINATION',
       input: { mediaTarget: { kind: 'drive', folderPresetId: 'drive-folder-1' }, dataRoutes: [] },
+    });
+  });
+
+  it('offers media-capable integrations as primary media without selecting them for data', async () => {
+    await mount({
+      destinations: [builtin('builtin:local', 'Local downloads')],
+      integrations: [integration('destination_crm', 'CheekyCheeseIT CRM', true)],
+    }).init();
+    const media = document.getElementById('save-to-media') as HTMLSelectElement;
+    const folder = document.getElementById('save-to-folder') as HTMLSelectElement;
+    expect(Array.from(media.options).map((option) => option.textContent)).toContain('Files: CheekyCheeseIT CRM');
+
+    media.value = 'external:destination_crm';
+    media.dispatchEvent(new Event('change'));
+    await flush();
+    expect(folder.disabled).toBe(true);
+    expect(Array.from(folder.options).map((option) => option.textContent)).toEqual(['Files: CheekyCheeseIT CRM']);
+
+    document.getElementById('save-to-add')!.click();
+    await flush();
+    expect(send).toHaveBeenCalledWith({
+      type: 'SAVE_RECORDING_DESTINATION',
+      input: {
+        mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+        dataRoutes: [],
+      },
     });
   });
 

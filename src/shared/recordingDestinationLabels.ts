@@ -10,6 +10,7 @@ import type { RecordingDestinationOption } from '../background/destinations/Reco
 const UNAVAILABLE_TEXT: Record<NonNullable<RecordingDestinationOption['unavailableReason']>, string> = {
   'destination-missing': 'Integration deleted · fix in Settings',
   'destination-disabled': 'Integration disabled · fix in Settings',
+  'media-unavailable': 'Media upload unavailable · fix in Settings',
   'permission-missing': 'Needs site access · fix in Settings',
 };
 

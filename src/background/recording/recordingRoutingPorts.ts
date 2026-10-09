@@ -1,4 +1,4 @@
-import type { RecordingDestinationProfile, RecordingDestinationRoute } from '../../shared/recordingDestinations';
+import type { RecordingDestinationProfile, RecordingRoutingRoute } from '../../shared/recordingDestinations';
 import type { StorageMode } from '../../shared/recordingTypes';
 
 /** What the start command needs from the "Save to" destinations owner. */
@@ -14,6 +14,6 @@ export type RecordingDestinationPort = {
 
 /** What recording lifecycle code needs from the integration routing owner. */
 export type RecordingRoutingPort = {
-  begin(recordingId: string, routes: readonly RecordingDestinationRoute[]): Promise<unknown>;
+  begin(recordingId: string, routes: readonly RecordingRoutingRoute[]): Promise<unknown>;
   forget(recordingId: string): Promise<void>;
 };

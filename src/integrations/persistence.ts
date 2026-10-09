@@ -41,6 +41,12 @@ export type RecordingIntegrationIntentDestination = {
   state: 'selected' | 'skipped' | 'needs-review' | 'approved';
   allowedPolicy: IntegrationDataPolicy;
   connectionVersion: number;
+  /**
+   * This intent grants media ownership only. It must never be consumed by the
+   * event planner. Absent on legacy/data routes so older rows keep their exact
+   * behavior.
+   */
+  mediaOnly?: true;
   /** Explicit permission captured at recording Start. Absent on older intents: no video export. */
   mediaAuthorization?: {
     producerId: string;
@@ -313,12 +319,14 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
   if ((value.mode !== 'auto' && value.mode !== 'review') || !isIntentState(value.state)) return undefined;
   if (value.releaseAfter != null && value.releaseAfter !== 'save-confirmed') return undefined;
   if (value.selectionSource != null && value.selectionSource !== 'end-dialog') return undefined;
+  if (value.mediaOnly != null && value.mediaOnly !== true) return undefined;
   return {
     destinationId,
     mode: value.mode,
     state: value.state,
     allowedPolicy,
     connectionVersion,
+    ...(value.mediaOnly === true ? { mediaOnly: true as const } : {}),
     ...(mediaAuthorization ? { mediaAuthorization } : {}),
     ...(approvedPolicyHash ? { approvedPolicyHash } : {}),
     ...(value.selectionSource === 'end-dialog' ? { selectionSource: 'end-dialog' as const } : {}),

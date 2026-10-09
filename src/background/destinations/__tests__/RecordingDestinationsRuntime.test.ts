@@ -24,6 +24,16 @@ function integration(overrides: Partial<IntegrationDestination> = {}): Integrati
   };
 }
 
+const MEDIA: NonNullable<IntegrationDestination['media']> = {
+  secretId: 'secret_media',
+  capability: {
+    version: 1,
+    apiBase: 'https://crm.example.test/api/integrations/meeting-recorder/media',
+    upload: { strategy: 'multipart-put-v1', origins: ['https://objects.example.test'] },
+    playback: { strategy: 'refreshable-url-v1' },
+  },
+};
+
 function harness(options: {
   integrations?: IntegrationDestination[];
   permitted?: boolean;
@@ -122,6 +132,33 @@ describe('RecordingDestinationsRuntime', () => {
       mediaTarget: { kind: 'drive', folderPresetId: 'missing' },
       dataRoutes: [],
     })).rejects.toThrow('Folder preset does not exist');
+  });
+
+  it('saves an external primary-media profile without turning the receiver into a data route', async () => {
+    const ctx = harness({ integrations: [integration({ media: MEDIA })] });
+    await expect(ctx.runtime.save({
+      mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      dataRoutes: [],
+    })).resolves.toEqual(expect.objectContaining({
+      name: 'CheekyCheeseIT CRM',
+      mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      dataRoutes: [],
+    }));
+
+    expect((await ctx.runtime.list()).destinations[2]).toEqual(expect.objectContaining({
+      storageMode: 'local',
+      filesLabel: 'CheekyCheeseIT CRM',
+      dataRoutes: [],
+      available: true,
+    }));
+  });
+
+  it('requires an external primary receiver to advertise media capability', async () => {
+    const ctx = harness();
+    await expect(ctx.runtime.save({
+      mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      dataRoutes: [],
+    })).rejects.toThrow('does not support media');
   });
 
   it('marks a profile unavailable when its destination is gone, disabled, or lacks host permission', async () => {

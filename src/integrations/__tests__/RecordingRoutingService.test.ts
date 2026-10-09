@@ -159,6 +159,42 @@ describe('RecordingRoutingService', () => {
     expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
   });
 
+  it('holds external primary media without granting data export', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    await ctx.service.begin('recording_1', [{ destinationId: 'destination_crm', mode: 'auto', mediaOnly: true }]);
+
+    expect((await ctx.routing.get('recording_1'))?.destinations).toEqual([
+      expect.objectContaining({
+        destinationId: 'destination_crm',
+        mediaOnly: true,
+        releaseAfter: 'save-confirmed',
+        mediaAuthorization: MEDIA_AUTHORIZATION,
+      }),
+    ]);
+    expect(await ctx.service.routes('recording_1')).toEqual([{
+      destinationId: 'destination_crm',
+      destinationName: 'CheekyCheeseIT CRM',
+      state: 'held',
+      includesMedia: true,
+      mediaOnly: true,
+    }]);
+
+    await ctx.service.confirm('recording_1', RELEASE_CRM);
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toHaveLength(1);
+  });
+
+  it('does not manufacture media consent when a media-only Start route is retried later', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    await expect(ctx.service.begin(
+      'recording_1',
+      [{ destinationId: 'destination_crm', mode: 'auto', mediaOnly: true }],
+      false,
+    )).resolves.toEqual({ scheduled: [], unavailable: ['destination_crm'] });
+    expect(await ctx.routing.get('recording_1')).toBeUndefined();
+  });
+
   it('does not authorize older recordings when media is enabled after Start', async () => {
     const ctx = harness();
     await ctx.destinations.put(destination());

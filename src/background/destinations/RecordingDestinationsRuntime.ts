@@ -11,6 +11,7 @@ import {
   type RecordingDestinationMediaTarget,
   type RecordingDestinationProfile,
   type RecordingDestinationRoute,
+  type RecordingRoutingRoute,
 } from '../../shared/recordingDestinations';
 import type { StorageMode } from '../../shared/recordingTypes';
 import type { ExtensionSettings } from '../../shared/settings';
@@ -19,6 +20,7 @@ import type { RecordingContext } from '../../shared/recordingContext';
 export type RecordingDestinationUnavailableReason =
   | 'destination-missing'
   | 'destination-disabled'
+  | 'media-unavailable'
   | 'permission-missing';
 
 /** One "Save to" entry as the popup and settings page show it. */
@@ -45,9 +47,9 @@ export type LegacySaveRecordingDestinationInput = SaveRecordingDestinationBaseIn
   localFolderPresetId?: string;
 };
 
-/** M3 profile editor payload. External primary media is introduced in M5. */
+/** M3/M5 profile editor payload. */
 export type GeneralSaveRecordingDestinationInput = SaveRecordingDestinationBaseInput & {
-  mediaTarget: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
+  mediaTarget: RecordingDestinationMediaTarget;
   dataRoutes: RecordingDestinationRoute[];
 };
 
@@ -112,7 +114,6 @@ export class RecordingDestinationsRuntime {
     const settings = await this.deps.loadSettings();
     const requested = resolveRecordingDestination(profileId, settings.storage.recordingDestinations);
     if (!requested) return { profile: fallback, available: false };
-    if (!requested.dataRoutes.length) return { profile: requested, requested, available: true };
     const option = await this.describe(requested, settings, await this.deps.listIntegrationDestinations());
     return { profile: requested, requested, available: option.available };
   }
@@ -129,7 +130,7 @@ export class RecordingDestinationsRuntime {
    * live profile: doing so would let a later profile edit authorize a new
    * receiver for historical data.
    */
-  async routesForRecording(recordingId: string): Promise<RecordingDestinationRoute[]> {
+  async routesForRecording(recordingId: string): Promise<RecordingRoutingRoute[]> {
     const context = await this.deps.getRecordingContext?.(recordingId).catch(() => undefined);
     return context?.destinationRoutes?.map((route) => ({ ...route })) ?? [];
   }
@@ -174,11 +175,17 @@ export class RecordingDestinationsRuntime {
     if (routedDestinations.some((destination) => !destination)) {
       throw new Error('Integration destination does not exist');
     }
-    if (normalizedInput.mediaTarget.folderPresetId) {
+    if (normalizedInput.mediaTarget.kind === 'external') {
+      const destinationId = normalizedInput.mediaTarget.destinationId;
+      const destination = integrations.find((candidate) => candidate.id === destinationId);
+      if (!destination) throw new Error('Primary media integration does not exist');
+      if (!destination.media) throw new Error('Primary media integration does not support media');
+    } else if (normalizedInput.mediaTarget.folderPresetId) {
+      const folderPresetId = normalizedInput.mediaTarget.folderPresetId;
       const presets = normalizedInput.mediaTarget.kind === 'drive'
         ? settings.storage.driveFolderPresets
         : settings.storage.localFolderPresets;
-      if (!presets.some((preset) => preset.id === normalizedInput.mediaTarget.folderPresetId)) {
+      if (!presets.some((preset) => preset.id === folderPresetId)) {
         throw new Error('Folder preset does not exist');
       }
     }
@@ -191,7 +198,7 @@ export class RecordingDestinationsRuntime {
         name: '',
         mediaTarget: normalizedInput.mediaTarget,
         dataRoutes: [],
-      }, settings);
+      }, settings, integrations);
     const profile: RecordingDestinationProfile = {
       id,
       name: (input.name ?? '').trim() || defaultName,
@@ -236,13 +243,25 @@ export class RecordingDestinationsRuntime {
       name: profile.name,
       kind: isBuiltinRecordingDestinationId(profile.id) ? 'builtin' : 'custom',
       storageMode,
-      filesLabel: filesLabelOf(profile, settings),
+      filesLabel: filesLabelOf(profile, settings, integrations),
       dataRoutes: profile.dataRoutes.map((route) => ({
         destinationId: route.destinationId,
         destinationName: integrations.find((destination) => destination.id === route.destinationId)?.name ?? null,
       })),
       available: true,
     };
+    if (profile.mediaTarget.kind === 'external') {
+      const destinationId = profile.mediaTarget.destinationId;
+      const destination = integrations.find((candidate) => candidate.id === destinationId);
+      const reason: RecordingDestinationUnavailableReason | undefined = !destination
+        ? 'destination-missing'
+        : !destination.enabled
+          ? 'destination-disabled'
+          : !destination.media
+            ? 'media-unavailable'
+            : await this.hasMediaPermission(destination) ? undefined : 'permission-missing';
+      if (reason) return { ...option, available: false, unavailableReason: reason };
+    }
     for (const route of profile.dataRoutes) {
       const destination = integrations.find((candidate) => candidate.id === route.destinationId);
       const reason: RecordingDestinationUnavailableReason | undefined = !destination
@@ -262,16 +281,28 @@ export class RecordingDestinationsRuntime {
       return false;
     }
   }
+
+  private async hasMediaPermission(destination: IntegrationDestination): Promise<boolean> {
+    try {
+      if (!destination.media || !await this.hasPermission(destination)) return false;
+      for (const origin of destination.media.capability.upload.origins) {
+        if (!await this.deps.containsHostPermission(`${origin}/*`)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function normalizeSaveInput(input: SaveRecordingDestinationInput): {
-  mediaTarget: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
+  mediaTarget: RecordingDestinationMediaTarget;
   dataRoutes: RecordingDestinationRoute[];
 } {
   if ('mediaTarget' in input) {
     return {
       mediaTarget: { ...input.mediaTarget },
-      dataRoutes: input.dataRoutes.map((route) => ({ ...route })),
+      dataRoutes: input.dataRoutes.map((route) => ({ destinationId: route.destinationId, mode: route.mode })),
     };
   }
   return {
@@ -283,9 +314,15 @@ function normalizeSaveInput(input: SaveRecordingDestinationInput): {
   };
 }
 
-function filesLabelOf(profile: RecordingDestinationProfile, settings: ExtensionSettings): string {
+function filesLabelOf(
+  profile: RecordingDestinationProfile,
+  settings: ExtensionSettings,
+  integrations: readonly IntegrationDestination[] = [],
+): string {
   const target = profile.mediaTarget;
-  if (target.kind === 'external') return 'External service';
+  if (target.kind === 'external') {
+    return integrations.find((destination) => destination.id === target.destinationId)?.name ?? 'External service';
+  }
   const base = target.kind === 'drive' ? 'Google Drive' : 'Local downloads';
   const presets = target.kind === 'drive' ? settings.storage.driveFolderPresets : settings.storage.localFolderPresets;
   const folder = target.folderPresetId

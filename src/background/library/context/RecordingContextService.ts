@@ -4,7 +4,7 @@ import type {
 } from '../../../shared/recordingContext';
 import type {
   RecordingDestinationMediaTarget,
-  RecordingDestinationRoute,
+  RecordingRoutingRoute,
 } from '../../../shared/recordingDestinations';
 import type { RecordingContextRepositoryPort } from './RecordingContextRepository';
 
@@ -23,8 +23,8 @@ export class RecordingContextService {
     startedAt: number,
     source: RecordingSourceContext,
     destinationProfileId?: string,
-    destinationMediaTarget?: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>,
-    destinationRoutes?: readonly RecordingDestinationRoute[],
+    destinationMediaTarget?: RecordingDestinationMediaTarget,
+    destinationRoutes?: readonly RecordingRoutingRoute[],
   ): Promise<void> {
     await this.repository.put({
       recordingId,

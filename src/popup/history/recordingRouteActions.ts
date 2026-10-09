@@ -39,7 +39,8 @@ export type RecordingRouteActions = {
 export function undecidedRoutes(routes: readonly RecordingRouteView[]): RecordingNameDialogRoute[] {
   return routes.flatMap((route) => route.state === 'held' || route.state === 'not-scheduled'
     ? [{ destinationId: route.destinationId, destinationName: route.destinationName, state: route.state,
-      ...(route.includesMedia ? { includesMedia: true as const } : {}) }]
+      ...(route.includesMedia ? { includesMedia: true as const } : {}),
+      ...(route.mediaOnly ? { mediaOnly: true as const } : {}) }]
     : []);
 }
 

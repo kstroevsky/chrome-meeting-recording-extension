@@ -6,8 +6,9 @@
  * A destination profile says where a recording's media goes (`mediaTarget`)
  * and which external services receive its data (`dataRoutes`). The type is the
  * final one, so later phases add capabilities without migrating stored data.
- * M3 accepts local or Drive media plus several automatic data routes; external
- * primary media and review routing remain reserved for their later milestones.
+ * M3 accepts local or Drive media plus several automatic data routes. M5 adds
+ * an external primary-media target while keeping media ownership independent
+ * from the profile's data routes. Review routing remains reserved for later.
  *
  * Folder presets stay storage-level concepts: a profile references them by
  * their stable ID. Integration destinations live in the integration database
@@ -25,6 +26,16 @@ export type RecordingDestinationMediaTarget =
 export type RecordingDestinationRoute = {
   destinationId: string;
   mode: 'auto' | 'review';
+};
+
+/**
+ * Immutable per-recording routing snapshot. `mediaOnly` is never stored in a
+ * destination profile: it is synthesized when an external primary-media target
+ * is distinct from every data route, so granting media ownership cannot also
+ * grant data export.
+ */
+export type RecordingRoutingRoute = RecordingDestinationRoute & {
+  mediaOnly?: true;
 };
 
 export type RecordingDestinationProfile = {
@@ -58,8 +69,9 @@ export function isBuiltinRecordingDestinationId(id: string): boolean {
 /**
  * User profiles as stored in settings. Existing V1 profiles remain valid, and
  * M3 additionally permits Drive media, folder-only profiles and several AUTO
- * data routes. Anything else is dropped rather than repaired, so malformed or
- * duplicate routing never broadens what a profile author explicitly selected.
+ * data routes; M5 permits an external primary-media receiver. Anything else is
+ * dropped rather than repaired, so malformed or duplicate routing never
+ * broadens what a profile author explicitly selected.
  */
 export function normalizeRecordingDestinationProfiles(value: unknown): RecordingDestinationProfile[] {
   if (!Array.isArray(value)) return [];
@@ -81,15 +93,23 @@ function normalizeProfile(value: unknown): RecordingDestinationProfile | undefin
   const name = boundedText(value.name, MAX_RECORDING_DESTINATION_NAME_LENGTH);
   if (!id || !name || isBuiltinRecordingDestinationId(id)) return undefined;
   const media = isRecord(value.mediaTarget) ? value.mediaTarget : undefined;
-  if (!media || (media.kind !== 'local' && media.kind !== 'drive')) return undefined;
-  const folderPresetId = media.folderPresetId == null ? undefined : boundedText(media.folderPresetId, MAX_ID_LENGTH);
-  if (media.folderPresetId != null && !folderPresetId) return undefined;
+  if (!media || (media.kind !== 'local' && media.kind !== 'drive' && media.kind !== 'external')) return undefined;
+  let mediaTarget: RecordingDestinationMediaTarget;
+  if (media.kind === 'external') {
+    const destinationId = boundedText(media.destinationId, MAX_ID_LENGTH);
+    if (!destinationId || media.folderPresetId != null) return undefined;
+    mediaTarget = { kind: 'external', destinationId };
+  } else {
+    const folderPresetId = media.folderPresetId == null ? undefined : boundedText(media.folderPresetId, MAX_ID_LENGTH);
+    if (media.folderPresetId != null && !folderPresetId) return undefined;
+    mediaTarget = { kind: media.kind, ...(folderPresetId ? { folderPresetId } : {}) };
+  }
   const dataRoutes = normalizeAutomaticRoutes(value.dataRoutes);
   if (!dataRoutes) return undefined;
   return {
     id,
     name,
-    mediaTarget: { kind: media.kind, ...(folderPresetId ? { folderPresetId } : {}) },
+    mediaTarget,
     dataRoutes,
   };
 }
@@ -97,6 +117,22 @@ function normalizeProfile(value: unknown): RecordingDestinationProfile | undefin
 /** Strict route snapshot normalizer shared by settings and recording context. */
 export function normalizeAutomaticRecordingDestinationRoutes(value: unknown): RecordingDestinationRoute[] | undefined {
   return normalizeAutomaticRoutes(value);
+}
+
+/** Strict normalizer for the immutable Start routing snapshot. */
+export function normalizeRecordingRoutingRoutes(value: unknown): RecordingRoutingRoute[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_RECORDING_DESTINATION_ROUTES) return undefined;
+  const seen = new Set<string>();
+  const routes: RecordingRoutingRoute[] = [];
+  for (const route of value) {
+    if (!isRecord(route) || route.mode !== 'auto') return undefined;
+    const destinationId = boundedText(route.destinationId, MAX_ID_LENGTH);
+    if (!destinationId || seen.has(destinationId)) return undefined;
+    if (route.mediaOnly != null && route.mediaOnly !== true) return undefined;
+    seen.add(destinationId);
+    routes.push({ destinationId, mode: 'auto', ...(route.mediaOnly === true ? { mediaOnly: true } : {}) });
+  }
+  return routes;
 }
 
 function normalizeAutomaticRoutes(value: unknown): RecordingDestinationRoute[] | undefined {

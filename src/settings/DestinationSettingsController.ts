@@ -36,6 +36,8 @@ type Deps = {
 };
 
 export class DestinationSettingsController {
+  private integrations: IntegrationDestination[] = [];
+
   constructor(
     private readonly el: Elements,
     private readonly deps: Deps = {
@@ -80,6 +82,7 @@ export class DestinationSettingsController {
       ]);
       if (!destinationsResponse.ok) throw new Error(destinationsResponse.error);
       const integrations = integrationsResponse.ok ? integrationsResponse.destinations : [];
+      this.integrations = integrations;
       this.renderList(destinationsResponse.destinations);
       this.renderAddRow(integrations, folders);
     } catch (error) {
@@ -123,6 +126,24 @@ export class DestinationSettingsController {
   ): void {
     const doc = this.el.document;
     if (this.el.addRow) this.el.addRow.hidden = false;
+    if (this.el.media) {
+      const selected = this.el.media.value;
+      this.el.media.replaceChildren(
+        ...[
+          { value: 'local', label: 'Files: Local downloads' },
+          { value: 'drive', label: 'Files: Google Drive' },
+          ...integrations
+            .filter((integration) => integration.enabled && integration.media)
+            .map((integration) => ({ value: `external:${integration.id}`, label: `Files: ${integration.name}` })),
+        ].map(({ value, label }) => {
+          const option = doc.createElement('option');
+          option.value = value;
+          option.textContent = label;
+          return option;
+        }),
+      );
+      if (Array.from(this.el.media.options).some((option) => option.value === selected)) this.el.media.value = selected;
+    }
     this.el.integration?.replaceChildren(...integrations.map((integration) => {
       const option = doc.createElement('option');
       option.value = integration.id;
@@ -133,17 +154,21 @@ export class DestinationSettingsController {
   }
 
   private async addDestination(): Promise<void> {
-    const mediaKind = this.el.media?.value === 'drive' ? 'drive' : 'local';
+    const mediaValue = this.el.media?.value ?? 'local';
     const folderId = this.el.folder?.value || undefined;
     const destinationIds = Array.from(this.el.integration?.selectedOptions ?? []).map((option) => option.value);
     const name = this.el.name?.value.trim() || undefined;
+    const externalDestinationId = mediaValue.startsWith('external:') ? mediaValue.slice('external:'.length) : undefined;
+    const mediaTarget = externalDestinationId
+      ? { kind: 'external' as const, destinationId: externalDestinationId }
+      : { kind: mediaValue === 'drive' ? 'drive' as const : 'local' as const, ...(folderId ? { folderPresetId: folderId } : {}) };
     this.setBusy(true);
     try {
       const response = await sendToBackground({
         type: 'SAVE_RECORDING_DESTINATION',
         input: {
           ...(name ? { name } : {}),
-          mediaTarget: { kind: mediaKind, ...(folderId ? { folderPresetId: folderId } : {}) },
+          mediaTarget,
           dataRoutes: destinationIds.map((destinationId) => ({ destinationId, mode: 'auto' as const })),
         },
       });
@@ -188,7 +213,19 @@ export class DestinationSettingsController {
   private renderFolderOptions(folders: { local: FolderPreset[]; drive: FolderPreset[] }): void {
     if (!this.el.folder) return;
     const doc = this.el.document;
-    const mediaKind = this.el.media?.value === 'drive' ? 'drive' : 'local';
+    const mediaValue = this.el.media?.value ?? 'local';
+    if (mediaValue.startsWith('external:')) {
+      const destinationId = mediaValue.slice('external:'.length);
+      const name = this.integrations.find((integration) => integration.id === destinationId)?.name ?? 'External service';
+      const option = doc.createElement('option');
+      option.value = '';
+      option.textContent = `Files: ${name}`;
+      this.el.folder.replaceChildren(option);
+      this.el.folder.disabled = true;
+      return;
+    }
+    this.el.folder.disabled = false;
+    const mediaKind = mediaValue === 'drive' ? 'drive' : 'local';
     const base = mediaKind === 'drive' ? 'Google Drive' : 'Local downloads';
     const presets = mediaKind === 'drive' ? folders.drive : folders.local;
     this.el.folder.replaceChildren(

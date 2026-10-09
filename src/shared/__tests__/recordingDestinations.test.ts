@@ -53,9 +53,22 @@ describe('recording destination profiles', () => {
     expect(normalizeRecordingDestinationProfiles([drive, several])).toEqual([drive, several]);
   });
 
-  it('rejects external media, review routes, duplicate routes and overlong route lists', () => {
+  it('accepts M5 external primary media independently from data routes', () => {
+    const mediaOnly = crm({
+      id: 'external-media-only',
+      mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      dataRoutes: [],
+    });
+    const mediaAndData = crm({
+      id: 'external-combined',
+      mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+    });
+    expect(normalizeRecordingDestinationProfiles([mediaOnly, mediaAndData])).toEqual([mediaOnly, mediaAndData]);
+  });
+
+  it('rejects malformed external media, review routes, duplicate routes and overlong route lists', () => {
     expect(normalizeRecordingDestinationProfiles([
-      crm({ id: 'external', mediaTarget: { kind: 'external', destinationId: 'destination_crm' } }),
+      { ...crm({ id: 'external' }), mediaTarget: { kind: 'external' } },
       crm({ id: 'review', dataRoutes: [{ destinationId: 'destination_crm', mode: 'review' }] }),
       crm({ id: 'duplicate', dataRoutes: [
         { destinationId: 'destination_crm', mode: 'auto' },
@@ -97,6 +110,7 @@ describe('recording destination profiles', () => {
     expect(storageModeOfProfile(builtinRecordingDestinations()[1])).toBe('local');
     expect(storageModeOfProfile(crm())).toBe('local');
     expect(storageModeOfProfile(crm({ mediaTarget: { kind: 'drive' } }))).toBe('drive');
+    expect(storageModeOfProfile(crm({ mediaTarget: { kind: 'external', destinationId: 'destination_crm' } }))).toBe('local');
   });
 
   it('resolves built-in and user profiles by ID, and nothing else', () => {

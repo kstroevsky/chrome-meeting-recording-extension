@@ -105,6 +105,48 @@ describe('RecordingController — Save to destination at Start', () => {
     expect(routing.begin).not.toHaveBeenCalled();
   });
 
+  it('freezes an external primary target and schedules media-only consent when it has no data route', async () => {
+    const external: RecordingDestinationProfile = {
+      id: 'profile-external',
+      name: 'CRM media',
+      mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      dataRoutes: [],
+    };
+    destinations.resolveForStart.mockResolvedValueOnce({ profile: external, requested: external, available: true });
+
+    await expect(start({ storageMode: 'drive', destinationProfileId: 'profile-external' })).resolves.toEqual(
+      expect.objectContaining({ ok: true }),
+    );
+    const historyId = session.getSnapshot().historyId;
+    const expectedRoutes = [{ destinationId: 'destination_crm', mode: 'auto', mediaOnly: true }];
+    expect(session.getSnapshot().runConfig).toEqual(expect.objectContaining({
+      storageMode: 'local',
+      destinationProfileId: 'profile-external',
+    }));
+    expect(contexts.begin).toHaveBeenCalledWith(
+      historyId,
+      expect.any(Number),
+      expect.anything(),
+      'profile-external',
+      external.mediaTarget,
+      expectedRoutes,
+    );
+    expect(routing.begin).toHaveBeenCalledWith(historyId, expectedRoutes);
+  });
+
+  it('uses one combined route when the external primary receiver also receives data', async () => {
+    const combined: RecordingDestinationProfile = {
+      id: 'profile-external',
+      name: 'CRM media + data',
+      mediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      dataRoutes: [{ destinationId: 'destination_crm', mode: 'auto' }],
+    };
+    destinations.resolveForStart.mockResolvedValueOnce({ profile: combined, requested: combined, available: true });
+
+    await start({ storageMode: 'local', destinationProfileId: 'profile-external' });
+    expect(routing.begin).toHaveBeenCalledWith(session.getSnapshot().historyId, combined.dataRoutes);
+  });
+
   it('never fails Start because routing could not be written', async () => {
     routing.begin.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
     await expect(start({ storageMode: 'local', destinationProfileId: 'profile-crm' })).resolves.toEqual(

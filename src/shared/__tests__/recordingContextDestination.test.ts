@@ -45,12 +45,25 @@ describe('recording context destination profile', () => {
     });
   });
 
+  it('keeps the external primary receiver and its media-only routing snapshot', () => {
+    expect(normalizeRecordingContext({
+      ...base,
+      destinationMediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      destinationRoutes: [{ destinationId: 'destination_crm', mode: 'auto', mediaOnly: true }],
+    })).toEqual({
+      ...base,
+      destinationMediaTarget: { kind: 'external', destinationId: 'destination_crm' },
+      destinationRoutes: [{ destinationId: 'destination_crm', mode: 'auto', mediaOnly: true }],
+    });
+  });
+
   it.each([
     [[{ destinationId: 'destination_crm', mode: 'review' }]],
     [[
       { destinationId: 'destination_crm', mode: 'auto' },
       { destinationId: 'destination_crm', mode: 'auto' },
     ]],
+    [[{ destinationId: 'destination_crm', mode: 'auto', mediaOnly: false }]],
   ])('drops an invalid route snapshot rather than broadening it (%p)', (destinationRoutes) => {
     expect(normalizeRecordingContext({ ...base, destinationRoutes })).toEqual(base);
   });

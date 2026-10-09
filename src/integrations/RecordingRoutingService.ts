@@ -1,4 +1,4 @@
-import type { RecordingDestinationRoute } from '../shared/recordingDestinations';
+import type { RecordingRoutingRoute } from '../shared/recordingDestinations';
 import { createIntegrationId } from './ids';
 import type {
   IntegrationDestination,
@@ -25,6 +25,8 @@ export type RecordingRouteView = {
   state: RecordingRouteState;
   /** True only when video/audio was explicitly authorized at Start or by an end-dialog receiver change. */
   includesMedia?: true;
+  /** Media ownership without event/data export. */
+  mediaOnly?: true;
 };
 
 export type RecordingRouteDecision = {
@@ -100,7 +102,7 @@ export class RecordingRoutingService {
 
   async begin(
     recordingId: string,
-    routes: readonly RecordingDestinationRoute[],
+    routes: readonly RecordingRoutingRoute[],
     /** Retries at the end of capture must never acquire media permission retroactively. */
     allowMediaAuthorization = true,
   ): Promise<RecordingRoutingBeginResult> {
@@ -108,11 +110,12 @@ export class RecordingRoutingService {
     const entries: RecordingIntegrationIntentDestination[] = [];
     for (const route of routes) {
       const destination = await this.deps.destinations.get(route.destinationId);
-      if (!destination?.enabled || route.mode !== 'auto') {
+      if (!destination?.enabled || route.mode !== 'auto'
+          || (route.mediaOnly && (!destination.media || !allowMediaAuthorization))) {
         unavailable.push(route.destinationId);
         continue;
       }
-      entries.push(this.heldEntry(destination, allowMediaAuthorization));
+      entries.push(this.heldEntry(destination, allowMediaAuthorization, undefined, route.mediaOnly === true));
     }
     if (!entries.length) return { scheduled: [], unavailable };
 
@@ -165,10 +168,15 @@ export class RecordingRoutingService {
   ): Promise<RecordingRouteChangeResult> {
     const destination = await this.deps.destinations.get(toDestinationId);
     if (!destination?.enabled) return 'unavailable';
+    const existing = fromDestinationId
+      ? (await this.deps.routing.get(recordingId))?.destinations.find((entry) => entry.destinationId === fromDestinationId)
+      : undefined;
+    const mediaOnly = existing?.mediaOnly === true;
+    if (mediaOnly && !destination.media) return 'unavailable';
     return this.deps.unitOfWork.changeRecordingRouting(
       recordingId,
       fromDestinationId,
-      this.heldEntry(destination, true, 'end-dialog'),
+      this.heldEntry(destination, true, 'end-dialog', mediaOnly),
       this.newStream(recordingId, destination.id),
     );
   }
@@ -186,7 +194,7 @@ export class RecordingRoutingService {
 
   async routes(
     recordingId: string,
-    expected: readonly RecordingDestinationRoute[] = [],
+    expected: readonly RecordingRoutingRoute[] = [],
   ): Promise<RecordingRouteView[]> {
     const intent = await this.deps.routing.get(recordingId);
     const views: RecordingRouteView[] = [];
@@ -196,6 +204,7 @@ export class RecordingRoutingService {
         destinationName: await this.nameOf(entry.destinationId),
         state: entry.releaseAfter ? 'held' : entry.state === 'skipped' ? 'skipped' : 'released',
         ...(entry.mediaAuthorization ? { includesMedia: true as const } : {}),
+        ...(entry.mediaOnly ? { mediaOnly: true as const } : {}),
       });
     }
     for (const route of expected) {
@@ -204,6 +213,7 @@ export class RecordingRoutingService {
         destinationId: route.destinationId,
         destinationName: await this.nameOf(route.destinationId),
         state: 'not-scheduled',
+        ...(route.mediaOnly ? { includesMedia: true as const, mediaOnly: true as const } : {}),
       });
     }
     return views;
@@ -217,6 +227,7 @@ export class RecordingRoutingService {
     destination: IntegrationDestination,
     allowMediaAuthorization: boolean,
     selectionSource?: 'end-dialog',
+    mediaOnly = false,
   ): RecordingIntegrationIntentDestination {
     return {
       destinationId: destination.id,
@@ -224,6 +235,7 @@ export class RecordingRoutingService {
       state: 'selected',
       allowedPolicy: { ...destination.dataPolicy },
       connectionVersion: destination.connectionVersion,
+      ...(mediaOnly ? { mediaOnly: true as const } : {}),
       ...(selectionSource ? { selectionSource } : {}),
       ...(allowMediaAuthorization && destination.media ? {
         mediaAuthorization: {

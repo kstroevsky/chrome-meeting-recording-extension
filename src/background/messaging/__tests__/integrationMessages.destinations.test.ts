@@ -263,6 +263,10 @@ describe('destination and routing messages', () => {
     expect(isPopupToBgMessage({
       type: 'SAVE_RECORDING_DESTINATION',
       input: { mediaTarget: { kind: 'external', destinationId: 'd' }, dataRoutes: [] },
+    })).toBe(true);
+    expect(isPopupToBgMessage({
+      type: 'SAVE_RECORDING_DESTINATION',
+      input: { mediaTarget: { kind: 'external' }, dataRoutes: [] },
     })).toBe(false);
     expect(isPopupToBgMessage({
       type: 'SAVE_RECORDING_DESTINATION',
