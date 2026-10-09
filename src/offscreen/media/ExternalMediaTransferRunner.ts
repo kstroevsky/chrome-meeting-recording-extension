@@ -71,6 +71,9 @@ export class ExternalMediaTransferRunner {
       if (!state.artifactId) throw new Error('Missing confirmed artifact');
       return { state: 'ready', artifactId: state.artifactId };
     }
+    if (state?.state === 'canceled' || state?.state === 'acknowledged') {
+      throw new Error('External media transfer is already terminal');
+    }
     if (!bytes || !Number.isSafeInteger(bytes.size) || bytes.size <= 0 ||
         bytes.size !== input.request.artifact.bytes) {
       throw new Error('Media source does not match declared upload size');

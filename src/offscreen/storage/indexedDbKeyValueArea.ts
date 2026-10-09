@@ -24,8 +24,13 @@ import { hasStores, openAdditiveDatabase } from '../../shared/storage/openAdditi
 
 export interface KeyValueArea {
   getAll(): Promise<Record<string, unknown>>;
+  get?(key: string): Promise<unknown>;
   set(items: Record<string, unknown>): Promise<void>;
   remove(key: string): Promise<void>;
+  /** One readwrite transaction across readers/contexts. Never overwrite the first writer. */
+  setIfAbsent?(key: string, value: unknown): Promise<unknown>;
+  /** Synchronous mutation inside one readwrite transaction; callback must not await. */
+  update?(key: string, transform: (current: unknown) => unknown): Promise<unknown>;
 }
 
 export type IndexedDbAreaOptions = {
@@ -87,6 +92,18 @@ export function createIndexedDbKeyValueArea(options: IndexedDbAreaOptions): KeyV
   };
 
   return {
+    async get(key) {
+      const database = await open();
+      return new Promise<unknown>((resolve, reject) => {
+        const transaction = database.transaction(storeName, 'readonly');
+        let value: unknown;
+        const read = transaction.objectStore(storeName).get(key);
+        read.onsuccess = () => { value = read.result; };
+        transaction.oncomplete = () => resolve(value);
+        transaction.onabort = () => reject(transaction.error ?? new Error(`${databaseName} read aborted`));
+        transaction.onerror = () => reject(transaction.error ?? new Error(`${databaseName} read failed`));
+      });
+    },
     async getAll() {
       const entries: Record<string, unknown> = {};
       await run('readonly', (store) => {
@@ -108,6 +125,49 @@ export function createIndexedDbKeyValueArea(options: IndexedDbAreaOptions): KeyV
     async remove(key) {
       // Deleting an absent key succeeds, so a replayed removal is harmless.
       await run('readwrite', (store) => { store.delete(key); });
+    },
+    async setIfAbsent(key, value) {
+      const database = await open();
+      return new Promise<unknown>((resolve, reject) => {
+        const transaction = database.transaction(storeName, 'readwrite');
+        const store = transaction.objectStore(storeName);
+        let result: unknown;
+        const read = store.get(key);
+        read.onsuccess = () => {
+          if (read.result !== undefined) {
+            result = read.result;
+          } else {
+            result = value;
+            store.add(value, key);
+          }
+        };
+        transaction.oncomplete = () => resolve(result);
+        transaction.onabort = () => reject(transaction.error ?? new Error(`${databaseName} insert aborted`));
+        transaction.onerror = () => reject(transaction.error ?? new Error(`${databaseName} insert failed`));
+      });
+    },
+    async update(key, transform) {
+      const database = await open();
+      return new Promise<unknown>((resolve, reject) => {
+        const transaction = database.transaction(storeName, 'readwrite');
+        const store = transaction.objectStore(storeName);
+        let result: unknown;
+        let transformError: unknown;
+        const read = store.get(key);
+        read.onsuccess = () => {
+          try {
+            result = transform(read.result);
+            if (result === undefined) store.delete(key);
+            else store.put(result, key);
+          } catch (error) {
+            transformError = error;
+            transaction.abort();
+          }
+        };
+        transaction.oncomplete = () => resolve(result);
+        transaction.onabort = () => reject(transformError ?? transaction.error ?? new Error(`${databaseName} update aborted`));
+        transaction.onerror = () => reject(transformError ?? transaction.error ?? new Error(`${databaseName} update failed`));
+      });
     },
   };
 }
