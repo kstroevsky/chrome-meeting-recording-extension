@@ -122,7 +122,16 @@ describe('ExternalMediaClient signed storage upload', () => {
   it('rejects error responses on the control plane without exposing the signed URL', async () => {
     const fetcher = jest.fn().mockResolvedValue(response({ code: 'NOT_FOUND' }, 404));
     await expect(harness(fetcher).client.uploadPart(uploadId, 1, blob))
-      .rejects.toEqual(new MediaHttpError(404));
+      .rejects.toEqual(new MediaHttpError(404, 'NOT_FOUND'));
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves only a bounded structured receiver error code for retry classification', async () => {
+    const fetcher = jest.fn().mockResolvedValue(response({
+      code: 'MEDIA_UPLOAD_COMPLETING',
+      details: 'must not be copied into the client error',
+    }, 409));
+    await expect(harness(fetcher).client.status(uploadId))
+      .rejects.toEqual(new MediaHttpError(409, 'MEDIA_UPLOAD_COMPLETING'));
   });
 });

@@ -1,5 +1,18 @@
 import type { MediaCapability } from './MediaCapability';
 
+/**
+ * Memory-only authorization handed from the background control plane to the
+ * trusted offscreen data plane. It must never be persisted with a transfer.
+ */
+export type ExternalMediaGrant = {
+  destinationId: string;
+  connectionVersion: number;
+  producerId: string;
+  endpoint: string;
+  capability: MediaCapability;
+  bearer: string;
+};
+
 export type MediaArtifactRole = 'tab-recording' | 'microphone-recording' | 'self-video';
 export type UploadCreate = {
   clientTransferId: string;
@@ -17,8 +30,9 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 const ID = /^(?:media|upload)_[0-9a-f-]{36}$/i;
 
 export class MediaHttpError extends Error {
-  constructor(readonly status: number) {
+  constructor(readonly status: number, readonly code?: string) {
     super(`Media service returned HTTP ${status}`);
+    this.name = 'MediaHttpError';
   }
 }
 
@@ -110,7 +124,16 @@ export class ExternalMediaClient {
       headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal,
     });
-    if (!response.ok) throw new MediaHttpError(response.status);
+    if (!response.ok) {
+      let code: string | undefined;
+      try {
+        const error = await jsonBounded(response);
+        if (typeof error.code === 'string' && /^[A-Z0-9_]{1,128}$/.test(error.code)) code = error.code;
+      } catch {
+        // Status remains authoritative when an independent receiver has no structured error body.
+      }
+      throw new MediaHttpError(response.status, code);
+    }
     return jsonBounded(response);
   }
 

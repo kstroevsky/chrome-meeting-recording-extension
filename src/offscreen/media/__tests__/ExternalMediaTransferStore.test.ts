@@ -10,7 +10,7 @@ const sourceKey = libraryKey(recordingId, fileId, 'clip.webm');
 const route: AuthorizedMediaRoute = {
   destinationId: 'crm', externalRecordingId: 'recording_external', connectionVersion: 1,
   receiver: { producerId: 'receiver', endpoint: 'https://receiver.example.test',
-    apiBase: 'https://receiver.example.test/media' },
+    apiBase: 'https://receiver.example.test/media', uploadOrigins: ['https://upload.example.test'] },
 };
 
 const media = (): RecordingHistoryFile => ({

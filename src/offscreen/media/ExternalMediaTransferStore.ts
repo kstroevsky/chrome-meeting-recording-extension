@@ -11,13 +11,15 @@ export type ExternalMediaTransfer = {
   request: UploadCreate;
   /** Identity and owner of a newly consented, finalized recording; absent on legacy test journals. */
   owner?: { recordingId: string; fileId: string; connectionVersion: number;
-    producerId: string; endpoint: string; apiBase: string };
+    producerId: string; endpoint: string; apiBase: string; uploadOrigins: string[] };
   logicalKey?: string;
   createdAt?: number;
   updatedAt?: number;
   nextAttemptAt?: number;
   attempts?: number;
   errorCategory?: 'network' | 'provider' | 'permission' | 'source' | 'conflict';
+  /** Preserve a source-free recovery phase while the visible state is retry/action-required. */
+  resumeFrom?: 'verifying-capability';
   uploadId?: string;
   artifactId?: string;
   partSize?: number;
@@ -76,9 +78,10 @@ function inspect(input: EnqueueExternalMediaInput) {
     recordingId: recording.id, fileId, connectionVersion: route.connectionVersion,
     producerId: route.receiver.producerId,
     endpoint: route.receiver.endpoint, apiBase: route.receiver.apiBase,
+    uploadOrigins: [...route.receiver.uploadOrigins],
   };
   const logicalKey = JSON.stringify([owner.recordingId, owner.fileId, route.destinationId,
-    owner.producerId, owner.endpoint, owner.apiBase, owner.connectionVersion]);
+    owner.producerId, owner.endpoint, owner.apiBase, owner.uploadOrigins, owner.connectionVersion]);
   return { owner, logicalKey, sourceKey: source?.kind === 'opfs' ? source.key : undefined,
     role: MEDIA_ROLES[file.stream], filename: file.filename, mimeType: expectedMime };
 }

@@ -60,6 +60,21 @@ export type RpcHandlerDeps = {
   cancelAnalysis?: (jobId: string) => boolean;
   /** Releases a completed analysis the background has now persisted (HOST-03). */
   acknowledgeAnalysisState?: (jobId: string) => Promise<void>;
+  enqueueExternalMedia?: (
+    input: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_ENQUEUE' }>,
+  ) => Promise<import('./media/ExternalMediaTransferStore').ExternalMediaTransfer>;
+  listExternalMedia?: () => Promise<import('./media/ExternalMediaTransferStore').ExternalMediaTransfer[]>;
+  acknowledgeExternalMedia?: (destinationId: string, clientTransferId: string) => Promise<void>;
+  cancelExternalMedia?: (filter: {
+    recordingId?: string;
+    destinationId?: string;
+    clientTransferId?: string;
+  }) => Promise<number>;
+  retryExternalMedia?: (
+    destinationId: string,
+    clientTransferId: string,
+    grant: import('../integrations/media/ExternalMediaClient').ExternalMediaGrant,
+  ) => Promise<import('./media/ExternalMediaTransferStore').ExternalMediaTransfer>;
   renameDriveResources?: (resources: DriveRenameResource[]) => Promise<DriveRenameResource[]>;
   publishShare?: (
     recordings: import('../sharing/PublishedManifestBuilder').PublishedRecordingInput[],
@@ -360,6 +375,73 @@ async function handleAcknowledgeAnalysisState(
   if (typeof msg.jobId === 'string' && msg.jobId) await deps.acknowledgeAnalysisState?.(msg.jobId);
 }
 
+async function handleExternalMediaEnqueue(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_ENQUEUE' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; transfer: import('./media/ExternalMediaTransferStore').ExternalMediaTransfer } | { ok: false; error: string }> {
+  if (!deps.enqueueExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    return { ok: true, transfer: await deps.enqueueExternalMedia(msg) };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaSnapshot(
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; transfers: import('./media/ExternalMediaTransferStore').ExternalMediaTransfer[] } | { ok: false; error: string }> {
+  if (!deps.listExternalMedia) return { ok: true, transfers: [] };
+  try {
+    return { ok: true, transfers: await deps.listExternalMedia() };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaAck(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_ACK' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!deps.acknowledgeExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    await deps.acknowledgeExternalMedia(msg.destinationId, msg.clientTransferId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaCancel(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_CANCEL' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; canceled: number } | { ok: false; error: string }> {
+  if (!deps.cancelExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    return { ok: true, canceled: await deps.cancelExternalMedia({
+      ...(msg.recordingId ? { recordingId: msg.recordingId } : {}),
+      ...(msg.destinationId ? { destinationId: msg.destinationId } : {}),
+      ...(msg.clientTransferId ? { clientTransferId: msg.clientTransferId } : {}),
+    }) };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaRetry(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_RETRY' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; transfer: import('./media/ExternalMediaTransferStore').ExternalMediaTransfer } | { ok: false; error: string }> {
+  if (!deps.retryExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    return {
+      ok: true,
+      transfer: await deps.retryExternalMedia(msg.destinationId, msg.clientTransferId, msg.grant),
+    };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
 async function handleSharePublish(
   msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_SHARE_PUBLISH' }>,
   deps: RpcHandlerDeps,
@@ -437,6 +519,11 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_SHARE_DELETE: (msg) => handleShareDelete(msg, deps),
       OFFSCREEN_LIST_ANALYSIS_WORK: () => handleOffscreenListAnalysisWork(deps),
       OFFSCREEN_ACK_ANALYSIS_STATE: (msg) => handleAcknowledgeAnalysisState(msg, deps),
+      OFFSCREEN_MEDIA_ENQUEUE: (msg) => handleExternalMediaEnqueue(msg, deps),
+      OFFSCREEN_MEDIA_SNAPSHOT: () => handleExternalMediaSnapshot(deps),
+      OFFSCREEN_MEDIA_ACK: (msg) => handleExternalMediaAck(msg, deps),
+      OFFSCREEN_MEDIA_CANCEL: (msg) => handleExternalMediaCancel(msg, deps),
+      OFFSCREEN_MEDIA_RETRY: (msg) => handleExternalMediaRetry(msg, deps),
     },
     (reqId, payload) => respond(deps.getPort, reqId, payload),
     deps.error

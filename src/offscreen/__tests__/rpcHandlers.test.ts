@@ -39,6 +39,11 @@ function wire(overrides: Partial<Record<string, any>> = {}) {
     listAnalysisWork: overrides.listAnalysisWork,
     cancelAnalysis: overrides.cancelAnalysis,
     acknowledgeAnalysisState: overrides.acknowledgeAnalysisState,
+    enqueueExternalMedia: overrides.enqueueExternalMedia,
+    listExternalMedia: overrides.listExternalMedia,
+    acknowledgeExternalMedia: overrides.acknowledgeExternalMedia,
+    cancelExternalMedia: overrides.cancelExternalMedia,
+    retryExternalMedia: overrides.retryExternalMedia,
     pushState: jest.fn((next: RecordingPhase) => { phase = next; }),
     clearWarnings: jest.fn(),
     log: jest.fn(),
@@ -343,6 +348,61 @@ describe('offscreen rpc handlers', () => {
       await listener({ type: 'REVOKE_BLOB_URL', blobUrl: 'blob:abc', opfsFilename: 'tab.webm' });
 
       expect(deps.error).toHaveBeenCalledWith('Failed to cleanup OPFS file', expect.stringContaining('no opfs'));
+    });
+  });
+
+  describe('external media RPCs', () => {
+    const transfer = {
+      destinationId: 'crm',
+      request: { clientTransferId: 'transfer-1' },
+      state: 'queued',
+    };
+
+    it('persists enqueue before responding and exposes a journal snapshot', async () => {
+      const enqueueExternalMedia = jest.fn().mockResolvedValue(transfer);
+      const listExternalMedia = jest.fn().mockResolvedValue([transfer]);
+      const { port, listener } = wire({ enqueueExternalMedia, listExternalMedia });
+      const enqueue = {
+        __id: 'media-enqueue',
+        type: 'OFFSCREEN_MEDIA_ENQUEUE',
+        recording: { id: 'rec-1', status: 'complete', files: [] },
+        route: { destinationId: 'crm' },
+        fileId: 'rec-1:tab',
+        sealed: true,
+        grant: { destinationId: 'crm' },
+      } as any;
+
+      await listener(enqueue);
+      await listener({ __id: 'media-snapshot', type: 'OFFSCREEN_MEDIA_SNAPSHOT' });
+
+      expect(enqueueExternalMedia).toHaveBeenCalledWith(enqueue);
+      expect(responseFor(port, 'media-enqueue')).toEqual({ ok: true, transfer });
+      expect(responseFor(port, 'media-snapshot')).toEqual({ ok: true, transfers: [transfer] });
+    });
+
+    it('routes acknowledgement, precise cancellation and explicit retry', async () => {
+      const acknowledgeExternalMedia = jest.fn().mockResolvedValue(undefined);
+      const cancelExternalMedia = jest.fn().mockResolvedValue(1);
+      const retryExternalMedia = jest.fn().mockResolvedValue({ ...transfer, state: 'queued' });
+      const { port, listener } = wire({
+        acknowledgeExternalMedia,
+        cancelExternalMedia,
+        retryExternalMedia,
+      });
+
+      await listener({ __id: 'media-ack', type: 'OFFSCREEN_MEDIA_ACK',
+        destinationId: 'crm', clientTransferId: 'transfer-1' });
+      await listener({ __id: 'media-cancel', type: 'OFFSCREEN_MEDIA_CANCEL',
+        destinationId: 'crm', clientTransferId: 'transfer-1' });
+      await listener({ __id: 'media-retry', type: 'OFFSCREEN_MEDIA_RETRY',
+        destinationId: 'crm', clientTransferId: 'transfer-1', grant: { destinationId: 'crm' } });
+
+      expect(acknowledgeExternalMedia).toHaveBeenCalledWith('crm', 'transfer-1');
+      expect(cancelExternalMedia).toHaveBeenCalledWith({ destinationId: 'crm', clientTransferId: 'transfer-1' });
+      expect(retryExternalMedia).toHaveBeenCalledWith('crm', 'transfer-1', { destinationId: 'crm' });
+      expect(responseFor(port, 'media-ack')).toEqual({ ok: true });
+      expect(responseFor(port, 'media-cancel')).toEqual({ ok: true, canceled: 1 });
+      expect(responseFor(port, 'media-retry')).toEqual({ ok: true, transfer: { ...transfer, state: 'queued' } });
     });
   });
 

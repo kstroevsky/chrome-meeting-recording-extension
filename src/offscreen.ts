@@ -52,6 +52,8 @@ import { loadExtensionSettingsFromStorage, normalizeExtensionSettings } from './
 import { TelemetryAccumulator, type TelemetrySink } from './shared/telemetry';
 import { sharingServiceOrigin } from './sharing/config';
 import { createShareRuntime } from './sharing/ShareRuntime';
+import { createExternalMediaTransferStore } from './offscreen/media/ExternalMediaTransferStore';
+import { ExternalMediaTransferRuntime } from './offscreen/media/ExternalMediaTransferRuntime';
 
 // The recording runtime only ever runs as the offscreen document or the top
 // frame of the recorder tab. Framed inside anything else it would take over the
@@ -217,6 +219,17 @@ const retainedMediaStore = new RetainedMediaStore({
   getRoot: () => navigator.storage.getDirectory(),
   warn: L.warn,
 });
+const externalMediaTransferRuntime = new ExternalMediaTransferRuntime({
+  store: createExternalMediaTransferStore(),
+  getRoot: () => navigator.storage.getDirectory(),
+  onState: (transfer) => {
+    try {
+      getPort().postMessage({ type: 'OFFSCREEN_MEDIA_STATE', transfer });
+    } catch (error) {
+      L.warn('Could not send external media state to background', describeRuntimeError(error));
+    }
+  },
+});
 
 // ─── Port lifecycle ──────────────────────────────────────────────────────────
 
@@ -258,6 +271,19 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     // deliberately never sealed, in which case there is no row to remove and
     // holding the result would defeat the degraded path's whole purpose.
     acknowledgeAnalysisState: (jobId) => analysisSeals.acknowledge(jobId).then(() => {}),
+    enqueueExternalMedia: (msg) => externalMediaTransferRuntime.enqueue({
+      recording: msg.recording,
+      route: msg.route,
+      fileId: msg.fileId,
+      sealed: msg.sealed,
+      grant: msg.grant,
+    }),
+    listExternalMedia: () => externalMediaTransferRuntime.snapshot(),
+    acknowledgeExternalMedia: (destinationId, clientTransferId) =>
+      externalMediaTransferRuntime.acknowledge(destinationId, clientTransferId),
+    cancelExternalMedia: (filter) => externalMediaTransferRuntime.cancel(filter),
+    retryExternalMedia: (destinationId, clientTransferId, grant) =>
+      externalMediaTransferRuntime.retry(destinationId, clientTransferId, grant),
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
     publishShare: sharingRuntime ? async (recordings, options) => {
       const queued = await sharingRuntime.publisher.queue(recordings, options);
@@ -296,6 +322,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   L.log('READY signaled via Port');
   void replayUploadStates(port);
   void replayAnalysisStates(port);
+  void externalMediaTransferRuntime.replay();
   return port;
 }
 

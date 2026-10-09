@@ -85,6 +85,18 @@ describe('durable external media transfer runner', () => {
     expect(api.playback).not.toHaveBeenCalled();
   });
 
+  it('finishes persisted capability verification without retained source bytes', async () => {
+    const store = memoryStore();
+    await store.put({ ...input, state: 'verifying-capability', artifactId, uploadedParts: [] });
+    const api = client();
+    await expect(new ExternalMediaTransferRunner(api, store).transfer(input))
+      .resolves.toEqual({ state: 'ready', artifactId });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.status).not.toHaveBeenCalled();
+    expect(api.playback).toHaveBeenCalledWith(artifactId);
+    expect((await store.list())[0]).toMatchObject({ state: 'ready-unacknowledged', artifactId });
+  });
+
   it('retries a temporary network failure while retaining the original transfer identity', async () => {
     const api = client();
     api.create.mockRejectedValueOnce(new TypeError('Failed to fetch'));
@@ -102,13 +114,24 @@ describe('durable external media transfer runner', () => {
     await store.put({ ...input, uploadId, artifactId, partSize: 5 * MiB,
       maxConcurrency: 2, state: 'uploading', uploadedParts: [] });
     const api = client();
-    api.status.mockRejectedValueOnce(new MediaHttpError(409));
-    api.complete.mockRejectedValueOnce(new MediaHttpError(409));
+    api.status.mockRejectedValueOnce(new MediaHttpError(409, 'MEDIA_UPLOAD_COMPLETING'));
+    api.complete.mockRejectedValueOnce(new MediaHttpError(409, 'MEDIA_UPLOAD_COMPLETING'));
     await expect(new ExternalMediaTransferRunner(api, store).transfer(
       input, mockSource(request.artifact.bytes, []))).resolves.toEqual({ state: 'ready', artifactId });
     expect(api.status).toHaveBeenCalledTimes(2);
     expect(api.complete).toHaveBeenCalledTimes(2);
     expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it('does not retry permanent 409 conflicts as completion leases', async () => {
+    const store = memoryStore();
+    await store.put({ ...input, uploadId, artifactId, partSize: 5 * MiB,
+      maxConcurrency: 2, state: 'uploading', uploadedParts: [] });
+    const conflict = new MediaHttpError(409, 'MEDIA_OBJECT_MISMATCH');
+    const api = client({ status: jest.fn(async () => { throw conflict; }) });
+    await expect(new ExternalMediaTransferRunner(api, store).transfer(
+      input, mockSource(request.artifact.bytes, []))).rejects.toBe(conflict);
+    expect(api.status).toHaveBeenCalledTimes(1);
   });
 
   it('prevents two executors in the same offscreen document from racing the same journal', async () => {

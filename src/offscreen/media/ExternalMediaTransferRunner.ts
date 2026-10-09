@@ -13,6 +13,14 @@ const RETRIES = 4;
 
 type Ready = { state: 'ready'; artifactId: string };
 
+/** A completion/status 409 means the receiver still owns a bounded completion lease. */
+export class MediaUploadCompletingError extends Error {
+  constructor(readonly httpError: MediaHttpError) {
+    super('Media upload completion is still in progress');
+    this.name = 'MediaUploadCompletingError';
+  }
+}
+
 function assertUploadParameters(partSize: number, maxConcurrency: number): number {
   if (!Number.isSafeInteger(partSize) || partSize < 5 * MiB || partSize > MAX_IN_FLIGHT ||
       !Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 3) {
@@ -26,9 +34,16 @@ async function retry<T>(operation: () => Promise<T>, signal?: AbortSignal,
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
     try { return await operation(); } catch (error) {
+      const completing = retryCompleting && error instanceof MediaHttpError &&
+        error.status === 409 && error.code === 'MEDIA_UPLOAD_COMPLETING';
       const transient = error instanceof TypeError || (error instanceof MediaHttpError &&
-        (error.status === 429 || error.status >= 500 || (retryCompleting && error.status === 409)));
-      if (!transient || signal?.aborted || attempt >= RETRIES) throw error;
+        (error.status === 429 || error.status >= 500 || completing));
+      if (!transient || signal?.aborted || attempt >= RETRIES) {
+        if (completing && error instanceof MediaHttpError) {
+          throw new MediaUploadCompletingError(error);
+        }
+        throw error;
+      }
       const delay = Math.min(500 * 2 ** attempt, 5_000);
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, delay);
@@ -70,6 +85,10 @@ export class ExternalMediaTransferRunner {
     if (state?.state === 'ready-unacknowledged') {
       if (!state.artifactId) throw new Error('Missing confirmed artifact');
       return { state: 'ready', artifactId: state.artifactId };
+    }
+    if (state?.state === 'verifying-capability') {
+      if (!state.artifactId) throw new Error('Missing confirmed artifact');
+      return await this.ready(state, state.artifactId);
     }
     if (state?.state === 'canceled' || state?.state === 'acknowledged') {
       throw new Error('External media transfer is already terminal');
@@ -157,8 +176,14 @@ export class ExternalMediaTransferRunner {
 
   private async ready(state: ExternalMediaTransfer, artifactId: string): Promise<Ready> {
     // The server verifies HEAD/size before returning ready. Confirm playback capability too.
+    const verifying: ExternalMediaTransfer = {
+      ...state,
+      state: 'verifying-capability',
+      artifactId,
+    };
+    await this.store.put(verifying);
     await this.client.playback(artifactId);
-    await this.store.put({ ...state, state: 'ready-unacknowledged', artifactId });
+    await this.store.put({ ...verifying, state: 'ready-unacknowledged', artifactId });
     return { state: 'ready', artifactId };
   }
 }
