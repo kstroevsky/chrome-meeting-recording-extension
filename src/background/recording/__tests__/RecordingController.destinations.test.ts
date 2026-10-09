@@ -75,7 +75,14 @@ describe('RecordingController — Save to destination at Start', () => {
     expect(result.ok).toBe(true);
     expect(destinations.resolveForStart).toHaveBeenCalledWith('profile-crm', 'drive');
     expect(snapshot.runConfig).toEqual(expect.objectContaining({ storageMode: 'local', destinationProfileId: 'profile-crm' }));
-    expect(contexts.begin).toHaveBeenCalledWith(snapshot.historyId, expect.any(Number), expect.anything(), 'profile-crm');
+    expect(contexts.begin).toHaveBeenCalledWith(
+      snapshot.historyId,
+      expect.any(Number),
+      expect.anything(),
+      'profile-crm',
+      { kind: 'local' },
+      CRM.dataRoutes,
+    );
     expect(routing.begin).toHaveBeenCalledWith(snapshot.historyId, CRM.dataRoutes);
     expect(order).toEqual(['routing', 'offscreen']);
     expect(destinations.remember).toHaveBeenCalledWith('profile-crm');
@@ -87,7 +94,14 @@ describe('RecordingController — Save to destination at Start', () => {
     await expect(start({ storageMode: 'local', destinationProfileId: 'profile-crm' })).resolves.toEqual(
       expect.objectContaining({ ok: true }),
     );
-    expect(contexts.begin).toHaveBeenCalledWith(expect.any(String), expect.any(Number), expect.anything(), 'profile-crm');
+    expect(contexts.begin).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Number),
+      expect.anything(),
+      'profile-crm',
+      { kind: 'local' },
+      CRM.dataRoutes,
+    );
     expect(routing.begin).not.toHaveBeenCalled();
   });
 

@@ -165,6 +165,8 @@ export type UploadJob = {
   /** Stable id/name of the per-recording Drive folder for post-upload metadata changes. */
   driveFolderId?: string;
   driveFolderName?: string;
+  /** Destination preset selected by the recording profile at Start, when any. */
+  driveFolderPresetId?: string;
   /** One-time post-upload naming workflow state. Set only for completed uploads. */
   namingStatus?: RecordingNamingStatus;
   /** A crash-recovery attempt retained its OPFS source and will retry when the recorder runtime starts again. */

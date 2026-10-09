@@ -13,7 +13,45 @@ describe('recording context destination profile', () => {
   });
 
   it('survives finishing the recording', () => {
-    const finished = normalizeRecordingContext({ ...normalizeRecordingContext({ ...base, destinationProfileId: 'p' }), endedAt: 20 });
-    expect(finished).toEqual({ ...base, endedAt: 20, destinationProfileId: 'p' });
+    const destinationMediaTarget = { kind: 'drive' as const, folderPresetId: 'drive-folder-1' };
+    const destinationRoutes = [{ destinationId: 'destination_crm', mode: 'auto' as const }];
+    const finished = normalizeRecordingContext({
+      ...normalizeRecordingContext({
+        ...base,
+        destinationProfileId: 'p',
+        destinationMediaTarget,
+        destinationRoutes,
+      }),
+      endedAt: 20,
+    });
+    expect(finished).toEqual({
+      ...base,
+      endedAt: 20,
+      destinationProfileId: 'p',
+      destinationMediaTarget,
+      destinationRoutes,
+    });
+  });
+
+  it('keeps an explicitly empty route snapshot', () => {
+    expect(normalizeRecordingContext({
+      ...base,
+      destinationMediaTarget: { kind: 'local', folderPresetId: 'folder-1' },
+      destinationRoutes: [],
+    })).toEqual({
+      ...base,
+      destinationMediaTarget: { kind: 'local', folderPresetId: 'folder-1' },
+      destinationRoutes: [],
+    });
+  });
+
+  it.each([
+    [[{ destinationId: 'destination_crm', mode: 'review' }]],
+    [[
+      { destinationId: 'destination_crm', mode: 'auto' },
+      { destinationId: 'destination_crm', mode: 'auto' },
+    ]],
+  ])('drops an invalid route snapshot rather than broadening it (%p)', (destinationRoutes) => {
+    expect(normalizeRecordingContext({ ...base, destinationRoutes })).toEqual(base);
   });
 });

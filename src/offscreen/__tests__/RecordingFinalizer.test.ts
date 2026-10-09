@@ -631,6 +631,37 @@ describe('RecordingFinalizer', () => {
     const failUpload = () => jest.spyOn(DriveTarget.prototype, 'upload').mockRejectedValue(new DOMException('network timeout', 'AbortError'));
     const staged = (name: string) => ({ ...makeArtifact(name), opfsFilename: `staging/${name}` });
 
+    it('uses the frozen custom destination for folder resolution and crash recovery metadata', async () => {
+      const resolve = jest.spyOn(DriveFolderResolver.prototype, 'resolveUploadParentId').mockResolvedValue('folder-1');
+      jest.spyOn(DriveTarget.prototype, 'upload').mockResolvedValue({ id: 'drive-1' } as any);
+      deps.pendingUploads = {
+        put: jest.fn().mockResolvedValue(undefined),
+        remove: jest.fn().mockResolvedValue(undefined),
+      };
+      finalizer = new RecordingFinalizer(deps);
+
+      await finalizer.finalize({
+        storageMode: 'drive',
+        historyId: 'recording:1',
+        uploadJobId: 'job-1',
+        driveRootFolderName: 'Meeting recordings',
+        driveDestinationFolderName: 'Recruiting',
+        artifacts: [{ stream: 'tab', artifact: staged('tab.webm') as any }],
+      } as any);
+
+      expect(resolve).toHaveBeenCalledWith({
+        rootFolderName: 'Meeting recordings',
+        destinationFolderName: 'Recruiting',
+        recordingFolderName: expect.any(String),
+      }, undefined);
+      expect(deps.pendingUploads.put).toHaveBeenCalledWith(expect.objectContaining({
+        rootFolderName: 'Meeting recordings',
+        destinationFolderName: 'Recruiting',
+        historyId: 'recording:1',
+        jobId: 'job-1',
+      }));
+    });
+
     it('promotes the failed artifact before falling back to a local download', async () => {
       withFolder(); failUpload();
       const retainedMedia = { promote: jest.fn().mockResolvedValue({ key: 'library/recording%3A1/recording%3A1%3Atab.webm', file: new File(['retained'], 'r.webm') }) };
@@ -706,4 +737,3 @@ describe('RecordingFinalizer', () => {
     });
   });
 });
-

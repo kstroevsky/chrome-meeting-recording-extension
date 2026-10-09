@@ -669,6 +669,8 @@ export type BgToOffscreenRpc =
        * carries it; absent falls back to the name the constant used to hold.
        */
       driveRootFolderName?: string;
+      /** Frozen custom Drive destination chosen by the recording profile. */
+      driveDestinationFolderName?: string;
     }>
   | RpcRequest<{
       type: 'OFFSCREEN_DISCARD';

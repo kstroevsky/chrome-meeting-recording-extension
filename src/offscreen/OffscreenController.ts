@@ -35,7 +35,10 @@ export type Sidecars = { notes?: NotesSidecar; transcript?: NotesSidecar };
  * is frozen per job so a change made while an upload is in flight cannot
  * re-aim it.
  */
-export type UploadHandoffContext = RecordingArtifactContext & { driveRootFolderName?: string };
+export type UploadHandoffContext = RecordingArtifactContext & {
+  driveRootFolderName?: string;
+  driveDestinationFolderName?: string;
+};
 
 /**
  * Wraps the rendered VTT as an artifact the finalizer can deliver like any
@@ -158,8 +161,12 @@ export class OffscreenController {
     if (this.phase !== 'idle') this.pushState(this.phase);
   };
 
-  onStopRequested = (sidecars?: Sidecars, driveRootFolderName?: string): Promise<void> => (
-    this.finalize(sidecars, driveRootFolderName)
+  onStopRequested = (
+    sidecars?: Sidecars,
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ): Promise<void> => (
+    this.finalize(sidecars, driveRootFolderName, driveDestinationFolderName)
   );
   onDiscardRequested = (): Promise<void> => this.discard();
 
@@ -196,7 +203,11 @@ export class OffscreenController {
    * Stops capture, uploads or saves the sealed artifacts, and returns the
    * session to idle. Concurrent calls share one in-flight run.
    */
-  finalize(sidecars: Sidecars = {}, driveRootFolderName?: string): Promise<void> {
+  finalize(
+    sidecars: Sidecars = {},
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ): Promise<void> {
     const existing = this.finalization;
     if (existing?.epoch === this.epoch) {
       if (existing.disposition !== 'kept') {
@@ -234,7 +245,12 @@ export class OffscreenController {
           // ADR-0004: capture is sealed — hand it to the background upload manager
           // and return to idle at once so a new recording can start while it uploads.
           if (!this.enqueueUpload) throw new Error('Drive finalize requires an upload manager');
-          this.enqueueUpload(artifacts, { historyId: this.historyId, telemetryRunId: this.telemetryRunId, driveRootFolderName });
+          this.enqueueUpload(artifacts, {
+            historyId: this.historyId,
+            telemetryRunId: this.telemetryRunId,
+            driveRootFolderName,
+            driveDestinationFolderName,
+          });
         } else {
           // Local saves are instant; finalize inline.
           await finalizer.finalize({ artifacts, storageMode: 'local', historyId: this.historyId });

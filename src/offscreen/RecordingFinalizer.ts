@@ -108,6 +108,8 @@ export type FinalizeArtifactsOptions = RecordingArtifactContext & {
    * installations are the ones still on the legacy name.
    */
   driveRootFolderName?: string;
+  /** Frozen custom Drive destination; absent means the default destination. */
+  driveDestinationFolderName?: string;
   /**
    * Suppresses the local-download failsafe when a Drive upload fails (ADR-0004). Set
    * for a *retry*: the file was already downloaded on the original failure, so failing
@@ -170,6 +172,7 @@ export class RecordingFinalizer {
         orderedArtifacts,
         recordingFolderName,
         options.driveRootFolderName?.trim() || DRIVE_ROOT_FOLDER_NAME,
+        options.driveDestinationFolderName?.trim() || DRIVE_DEFAULT_DESTINATION_NAME,
         options.onUploadProgress,
         options.skipLocalFallback === true,
         options.signal,
@@ -283,6 +286,7 @@ export class RecordingFinalizer {
     artifacts: CompletedRecordingArtifact[],
     recordingFolderName: string,
     rootFolderName: string,
+    destinationFolderName: string,
     onUploadProgress?: UploadProgressSink,
     skipLocalFallback = false,
     signal?: AbortSignal,
@@ -296,7 +300,7 @@ export class RecordingFinalizer {
     try {
       if (signal?.aborted) throw new DOMException('Upload canceled', 'AbortError');
       folderId = await folderResolver.resolveUploadParentId(
-        { rootFolderName, destinationFolderName: DRIVE_DEFAULT_DESTINATION_NAME, recordingFolderName },
+        { rootFolderName, destinationFolderName, recordingFolderName },
         signal,
       );
       if (signal?.aborted) throw new DOMException('Upload canceled', 'AbortError');
@@ -361,7 +365,7 @@ export class RecordingFinalizer {
 
         const driveTarget = new DriveTarget(artifact.filename, sharedGetUploadToken, (filename) => this.deps.log('Drive target complete:', filename), {
           rootFolderName,
-          destinationFolderName: DRIVE_DEFAULT_DESTINATION_NAME,
+          destinationFolderName,
           recordingFolderName,
           shared: { getUploadToken: sharedGetUploadToken, folderResolver, log: this.deps.log },
           onProgress: (uploaded) => { loadedPerFile[index] = uploaded; onDrivePerFile[index] = uploaded; reportProgress(); },
@@ -380,7 +384,7 @@ export class RecordingFinalizer {
             stream,
             recordingFolderName,
             rootFolderName,
-            destinationFolderName: DRIVE_DEFAULT_DESTINATION_NAME,
+            destinationFolderName,
             ...(context.historyId ? { historyId: context.historyId } : {}),
             ...(context.uploadJobId ? { jobId: context.uploadJobId } : {}),
           });

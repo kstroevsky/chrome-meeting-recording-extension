@@ -20,6 +20,7 @@ export class UploadStatePersistence {
     private readonly offscreen: OffscreenManager,
     private readonly telemetry: TelemetryRuntime,
     private readonly logger: Logger,
+    private readonly driveFolderPresetFor: (recordingId: string) => Promise<string | undefined> = async () => undefined,
   ) {}
 
   handleChanged(
@@ -52,13 +53,20 @@ export class UploadStatePersistence {
 
   private async persist(job: UploadJob): Promise<void> {
     try {
+      const driveFolderPresetId = job.historyId
+        ? await this.driveFolderPresetFor(job.historyId).catch(() => undefined)
+        : undefined;
+      const projectedJob = driveFolderPresetId ? { ...job, driveFolderPresetId } : job;
       if (job.status === 'uploading') {
-        this.session.upsertUploadJob(job);
+        this.session.upsertUploadJob(projectedJob);
         await this.session.flush();
         await this.history.applyUploadJob(job);
       } else {
         await this.history.applyUploadJob(job);
-        this.session.upsertUploadJob(job);
+        if (job.historyId && job.driveFolderId && driveFolderPresetId) {
+          await this.history.setDriveDestination(job.historyId, driveFolderPresetId);
+        }
+        this.session.upsertUploadJob(projectedJob);
         await this.session.flush();
       }
 

@@ -8,6 +8,8 @@ export type RecordingDestinationPort = {
     requestedStorageMode: StorageMode,
   ): Promise<{ profile: RecordingDestinationProfile; requested?: RecordingDestinationProfile; available: boolean }>;
   remember(profileId: string): Promise<void>;
+  /** Drive upload folder resolved from the recording's immutable Start snapshot. */
+  driveFolderNameFor?(recordingId: string): Promise<string | undefined>;
 };
 
 /** What recording lifecycle code needs from the integration routing owner. */

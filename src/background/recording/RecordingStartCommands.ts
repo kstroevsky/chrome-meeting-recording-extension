@@ -69,7 +69,7 @@ export class RecordingStartCommands {
       );
     }
 
-    const routes = await applyStartDestination(runConfig, this.deps);
+    const destination = await applyStartDestination(runConfig, this.deps);
 
     const telemetryRunId = this.deps.telemetry?.start(runConfig) ?? createTelemetryId();
     let recorderSettings: RecorderRuntimeSettingsSnapshot;
@@ -102,9 +102,11 @@ export class RecordingStartCommands {
         started.historyId,
         started.runningSince ?? started.updatedAt,
         target.source,
-        ...(runConfig.destinationProfileId ? [runConfig.destinationProfileId] : []),
+        runConfig.destinationProfileId,
+        destination.mediaTarget,
+        destination.expectedRoutes,
       ).catch((error) => this.deps.L.warn('Could not persist recording context:', error));
-      await beginStartRouting(started.historyId, routes, this.deps);
+      await beginStartRouting(started.historyId, destination.scheduledRoutes, this.deps);
     }
     rememberStartPick(runConfig, this.deps);
     this.deps.telemetry?.configureRun(

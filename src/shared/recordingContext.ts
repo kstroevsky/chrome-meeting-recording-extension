@@ -1,3 +1,9 @@
+import {
+  normalizeAutomaticRecordingDestinationRoutes,
+  type RecordingDestinationMediaTarget,
+  type RecordingDestinationRoute,
+} from './recordingDestinations';
+
 export type RecordingSourceContext = {
   kind: 'meeting' | 'tab';
   provider?: string;
@@ -15,6 +21,10 @@ export type RecordingContext = {
    * a recording that was never routed from one whose routing failed to write.
    */
   destinationProfileId?: string;
+  /** Immutable media choice resolved from the profile when Start was accepted. */
+  destinationMediaTarget?: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
+  /** Immutable expected data routes. Empty is meaningful and must survive normalization. */
+  destinationRoutes?: RecordingDestinationRoute[];
 };
 
 const MAX_PROVIDER_LENGTH = 128;
@@ -31,12 +41,34 @@ export function normalizeRecordingContext(value: unknown): RecordingContext | un
 
   const endedAt = normalizeTimestamp(candidate.endedAt);
   const destinationProfileId = normalizeString(candidate.destinationProfileId, 128);
+  const destinationMediaTarget = normalizeDestinationMediaTarget(candidate.destinationMediaTarget);
+  const destinationRoutes = candidate.destinationRoutes === undefined
+    ? undefined
+    : normalizeAutomaticRecordingDestinationRoutes(candidate.destinationRoutes);
   return {
     recordingId,
     startedAt,
     ...(endedAt != null && endedAt >= startedAt ? { endedAt } : {}),
     source,
     ...(destinationProfileId ? { destinationProfileId } : {}),
+    ...(destinationMediaTarget ? { destinationMediaTarget } : {}),
+    ...(destinationRoutes ? { destinationRoutes } : {}),
+  };
+}
+
+function normalizeDestinationMediaTarget(
+  value: unknown,
+): RecordingContext['destinationMediaTarget'] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== 'local' && candidate.kind !== 'drive') return undefined;
+  const folderPresetId = candidate.folderPresetId === undefined
+    ? undefined
+    : normalizeString(candidate.folderPresetId, 128);
+  if (candidate.folderPresetId !== undefined && !folderPresetId) return undefined;
+  return {
+    kind: candidate.kind,
+    ...(folderPresetId ? { folderPresetId } : {}),
   };
 }
 

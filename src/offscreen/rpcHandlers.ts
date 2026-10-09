@@ -34,7 +34,11 @@ export type RpcHandlerDeps = {
   isFinalizing: () => boolean;
   currentFinalization: () => OffscreenFinalizationState | null;
   onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number, historyId: string, telemetryRunId?: string) => void;
-  onStopRequested: (sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } }, driveRootFolderName?: string) => Promise<void> | void;
+  onStopRequested: (
+    sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } },
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ) => Promise<void> | void;
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
   retryUpload: (jobId: string) => boolean | Promise<boolean>;
@@ -143,7 +147,7 @@ async function handleOffscreenStop(
   void deps.onStopRequested({
     ...(msg.notesSidecar ? { notes: msg.notesSidecar } : {}),
     ...(msg.transcriptSidecar ? { transcript: msg.transcriptSidecar } : {}),
-  }, msg.driveRootFolderName);
+  }, msg.driveRootFolderName, msg.driveDestinationFolderName);
   return { ok: true };
 }
 

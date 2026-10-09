@@ -1,5 +1,6 @@
 import {
   storageModeOfProfile,
+  type RecordingDestinationMediaTarget,
   type RecordingDestinationRoute,
 } from '../../shared/recordingDestinations';
 import type { RecordingRunConfig } from '../../shared/recording';
@@ -9,6 +10,12 @@ type Deps = {
   L: { warn: (...a: any[]) => void };
   destinations?: RecordingDestinationPort;
   routing?: RecordingRoutingPort;
+};
+
+export type StartDestinationResolution = {
+  mediaTarget?: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
+  expectedRoutes: RecordingDestinationRoute[];
+  scheduledRoutes: RecordingDestinationRoute[];
 };
 
 /**
@@ -21,17 +28,25 @@ type Deps = {
 export async function applyStartDestination(
   runConfig: RecordingRunConfig,
   deps: Deps,
-): Promise<RecordingDestinationRoute[]> {
-  if (!deps.destinations) return [];
+): Promise<StartDestinationResolution> {
+  if (!deps.destinations) return { expectedRoutes: [], scheduledRoutes: [] };
   try {
     const resolved = await deps.destinations.resolveForStart(runConfig.destinationProfileId, runConfig.storageMode);
     const profile = resolved.requested ?? resolved.profile;
     runConfig.storageMode = storageModeOfProfile(profile);
     runConfig.destinationProfileId = profile.id;
-    return resolved.available ? [...profile.dataRoutes] : [];
+    const expectedRoutes = profile.dataRoutes.map((route) => ({ ...route }));
+    const mediaTarget = profile.mediaTarget.kind === 'external'
+      ? undefined
+      : { ...profile.mediaTarget };
+    return {
+      ...(mediaTarget ? { mediaTarget } : {}),
+      expectedRoutes,
+      scheduledRoutes: resolved.available ? expectedRoutes.map((route) => ({ ...route })) : [],
+    };
   } catch (error) {
     deps.L.warn('Could not resolve the Save to destination; recording without routing:', error);
-    return [];
+    return { expectedRoutes: [], scheduledRoutes: [] };
   }
 }
 

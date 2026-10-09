@@ -1,6 +1,7 @@
 import type { IntegrationDestination } from '../../../integrations/persistence';
 import { CONSERVATIVE_INTEGRATION_POLICY } from '../../../integrations/policy';
 import { BUILTIN_DRIVE_PROFILE_ID, BUILTIN_LOCAL_PROFILE_ID } from '../../../shared/recordingDestinations';
+import type { RecordingContext } from '../../../shared/recordingContext';
 import { normalizeExtensionSettings, type ExtensionSettings } from '../../../shared/settings';
 import { RecordingDestinationsRuntime } from '../RecordingDestinationsRuntime';
 
@@ -27,7 +28,7 @@ function harness(options: {
   integrations?: IntegrationDestination[];
   permitted?: boolean;
   pick?: string;
-  contexts?: Record<string, string>;
+  contexts?: Record<string, RecordingContext>;
 } = {}) {
   let settings: ExtensionSettings = normalizeExtensionSettings({
     storage: {
@@ -45,10 +46,7 @@ function harness(options: {
     loadPick: async () => pick,
     rememberPick: async (id) => { pick = id; },
     createId: () => `profile-${++ids}`,
-    getRecordingContext: async (recordingId) => {
-      const destinationProfileId = options.contexts?.[recordingId];
-      return destinationProfileId ? { destinationProfileId } as never : undefined;
-    },
+    getRecordingContext: async (recordingId) => options.contexts?.[recordingId],
   });
   return { runtime, settings: () => settings, pick: () => pick };
 }
@@ -185,12 +183,89 @@ describe('RecordingDestinationsRuntime', () => {
   });
 
   it('names the local folder a recording\'s destination files into', async () => {
-    const ctx = harness({ contexts: { r1: 'profile-1', r2: BUILTIN_LOCAL_PROFILE_ID, r3: 'profile-removed' } });
+    const recordingContext = (recordingId: string, destinationProfileId: string): RecordingContext => ({
+      recordingId,
+      startedAt: 1,
+      source: { kind: 'tab' },
+      destinationProfileId,
+    });
+    const ctx = harness({ contexts: {
+      r1: recordingContext('r1', 'profile-1'),
+      r2: recordingContext('r2', BUILTIN_LOCAL_PROFILE_ID),
+      r3: recordingContext('r3', 'profile-removed'),
+    } });
     await ctx.runtime.save({ destinationId: 'destination_crm', localFolderPresetId: 'folder-1' });
 
     await expect(ctx.runtime.localFolderFor('r1')).resolves.toBe('folder-1');
     await expect(ctx.runtime.localFolderFor('r2')).resolves.toBeUndefined();
     await expect(ctx.runtime.localFolderFor('r3')).resolves.toBeUndefined();
     await expect(ctx.runtime.localFolderFor('unknown')).resolves.toBeUndefined();
+  });
+
+  it('uses frozen routes instead of expanding historical authorization after a profile edit', async () => {
+    const journal = integration({
+      id: 'destination_journal',
+      producerId: 'producer_journal',
+      name: 'Journal',
+      endpoint: 'https://journal.example.test/hooks/recordings',
+      signingSecretId: 'secret_journal',
+    });
+    const frozenRoutes = [{ destinationId: 'destination_crm', mode: 'auto' as const }];
+    const ctx = harness({
+      integrations: [integration(), journal],
+      contexts: {
+        r1: {
+          recordingId: 'r1', startedAt: 1, source: { kind: 'tab' }, destinationProfileId: 'profile-1',
+          destinationMediaTarget: { kind: 'local' }, destinationRoutes: frozenRoutes,
+        },
+      },
+    });
+    await ctx.runtime.save({ destinationId: 'destination_crm' });
+    await ctx.runtime.save({
+      id: 'profile-1',
+      name: 'Expanded later',
+      mediaTarget: { kind: 'local' },
+      dataRoutes: [
+        { destinationId: 'destination_crm', mode: 'auto' },
+        { destinationId: 'destination_journal', mode: 'auto' },
+      ],
+    });
+
+    await expect(ctx.runtime.routesForRecording('r1')).resolves.toEqual(frozenRoutes);
+  });
+
+  it('uses the frozen media target even when the live profile later points somewhere else', async () => {
+    const ctx = harness({
+      contexts: {
+        r1: {
+          recordingId: 'r1', startedAt: 1, source: { kind: 'tab' }, destinationProfileId: 'profile-1',
+          destinationMediaTarget: { kind: 'local', folderPresetId: 'folder-1' }, destinationRoutes: [],
+        },
+      },
+    });
+    await ctx.runtime.save({ destinationId: 'destination_crm', localFolderPresetId: 'folder-1' });
+    await ctx.runtime.save({
+      id: 'profile-1',
+      name: 'Moved later',
+      mediaTarget: { kind: 'drive', folderPresetId: 'drive-folder-1' },
+      dataRoutes: [{ destinationId: 'destination_crm', mode: 'auto' }],
+    });
+
+    await expect(ctx.runtime.localFolderFor('r1')).resolves.toBe('folder-1');
+    await expect(ctx.runtime.driveFolderPresetFor('r1')).resolves.toBeUndefined();
+  });
+
+  it('resolves the frozen Drive preset identity and folder name', async () => {
+    const ctx = harness({
+      contexts: {
+        r1: {
+          recordingId: 'r1', startedAt: 1, source: { kind: 'tab' }, destinationProfileId: 'profile-1',
+          destinationMediaTarget: { kind: 'drive', folderPresetId: 'drive-folder-1' }, destinationRoutes: [],
+        },
+      },
+    });
+
+    await expect(ctx.runtime.driveFolderPresetFor('r1')).resolves.toBe('drive-folder-1');
+    await expect(ctx.runtime.driveFolderNameFor('r1')).resolves.toBe('Recruiting');
   });
 });

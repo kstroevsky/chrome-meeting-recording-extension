@@ -214,10 +214,20 @@ describe('offscreen rpc handlers', () => {
 
     it('marks stopping and requests stop when the recorder is active', async () => {
       const { port, deps, listener } = wire();
-      await listener({ __id: 'stop-2', type: 'OFFSCREEN_STOP', epoch: 1 });
+      await listener({
+        __id: 'stop-2',
+        type: 'OFFSCREEN_STOP',
+        epoch: 1,
+        driveRootFolderName: 'Meeting recordings',
+        driveDestinationFolderName: 'Recruiting',
+      });
 
       expect(deps.pushState).toHaveBeenCalledWith('stopping');
-      expect(deps.onStopRequested).toHaveBeenCalledTimes(1);
+      expect(deps.onStopRequested).toHaveBeenCalledWith(
+        {},
+        'Meeting recordings',
+        'Recruiting',
+      );
       expect(responseFor(port, 'stop-2')).toEqual({ ok: true });
     });
 

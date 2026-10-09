@@ -30,6 +30,7 @@ export class RecordingLifecycleCommands {
       notations?: RecordingNotationService;
       transcripts?: RecordingTranscriptService;
       transcriptCapture?: RecordingTranscriptCapture;
+      destinations?: Pick<import('./recordingRoutingPorts').RecordingDestinationPort, 'driveFolderNameFor'>;
       routing?: Pick<import('./recordingRoutingPorts').RecordingRoutingPort, 'forget'>;
       sidecars: RecordingSidecars;
       result: ResultFactory;
@@ -155,10 +156,17 @@ export class RecordingLifecycleCommands {
   ): Promise<CommandResult> {
     if (historyId) await this.finalizeKeptBackground(historyId);
 
-    const [notesSidecar, transcriptSidecar, driveRootFolderName] = await Promise.all([
+    const [notesSidecar, transcriptSidecar, driveRootFolderName, driveDestinationFolderName] = await Promise.all([
       this.deps.sidecars.notes(historyId),
       this.deps.sidecars.transcript(historyId),
       this.deps.sidecars.driveRootFolderName(),
+      historyId
+        ? this.deps.destinations?.driveFolderNameFor?.(historyId)
+          .catch((error) => {
+            this.deps.L.warn('Could not resolve the Drive destination for this recording:', error);
+            return undefined;
+          })
+        : undefined,
     ]);
 
     try {
@@ -170,6 +178,7 @@ export class RecordingLifecycleCommands {
         ...(notesSidecar ? { notesSidecar } : {}),
         ...(transcriptSidecar ? { transcriptSidecar } : {}),
         ...(driveRootFolderName ? { driveRootFolderName } : {}),
+        ...(driveDestinationFolderName ? { driveDestinationFolderName } : {}),
       });
       if (!response?.ok) {
         const message = response?.error || 'Stop failed in offscreen';

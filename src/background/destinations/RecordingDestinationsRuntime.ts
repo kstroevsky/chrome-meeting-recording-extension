@@ -125,14 +125,13 @@ export class RecordingDestinationsRuntime {
   }
 
   /**
-   * The data routes of the profile a recording was started with. Empty when the
-   * recording predates destinations, used a built-in, or its profile was
-   * removed since.
+   * The data routes frozen when this recording started. Never falls back to the
+   * live profile: doing so would let a later profile edit authorize a new
+   * receiver for historical data.
    */
   async routesForRecording(recordingId: string): Promise<RecordingDestinationRoute[]> {
     const context = await this.deps.getRecordingContext?.(recordingId).catch(() => undefined);
-    const profile = await this.find(context?.destinationProfileId).catch(() => undefined);
-    return profile ? [...profile.dataRoutes] : [];
+    return context?.destinationRoutes?.map((route) => ({ ...route })) ?? [];
   }
 
   /**
@@ -141,8 +140,25 @@ export class RecordingDestinationsRuntime {
    */
   async localFolderFor(recordingId: string): Promise<string | undefined> {
     const context = await this.deps.getRecordingContext?.(recordingId).catch(() => undefined);
-    const profile = await this.find(context?.destinationProfileId).catch(() => undefined);
-    return profile?.mediaTarget.kind === 'local' ? profile.mediaTarget.folderPresetId : undefined;
+    const target = context?.destinationMediaTarget
+      ?? (await this.find(context?.destinationProfileId).catch(() => undefined))?.mediaTarget;
+    return target?.kind === 'local' ? target.folderPresetId : undefined;
+  }
+
+  /** Resolves the frozen Drive preset to the folder name the offscreen uploader needs. */
+  async driveFolderNameFor(recordingId: string): Promise<string | undefined> {
+    const presetId = await this.driveFolderPresetFor(recordingId);
+    if (!presetId) return undefined;
+    const settings = await this.deps.loadSettings();
+    return settings.storage.driveFolderPresets.find((preset) => preset.id === presetId)?.name;
+  }
+
+  /** Stable preset identity frozen in the recording context for history projection. */
+  async driveFolderPresetFor(recordingId: string): Promise<string | undefined> {
+    const context = await this.deps.getRecordingContext?.(recordingId).catch(() => undefined);
+    const target = context?.destinationMediaTarget
+      ?? (await this.find(context?.destinationProfileId).catch(() => undefined))?.mediaTarget;
+    return target?.kind === 'drive' ? target.folderPresetId : undefined;
   }
 
   async save(input: SaveRecordingDestinationInput): Promise<RecordingDestinationProfile> {

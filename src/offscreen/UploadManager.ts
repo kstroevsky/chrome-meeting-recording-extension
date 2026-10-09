@@ -34,6 +34,7 @@ export interface JobFinalizer {
     historyId?: string;
     uploadJobId?: string;
     driveRootFolderName?: string;
+    driveDestinationFolderName?: string;
   }): Promise<UploadSummary | undefined>;
 }
 
@@ -83,8 +84,8 @@ export class UploadManager {
    * old budget, so a failed recording cannot pin its bytes in memory forever.
    */
   private lastFailed:
-    | { jobId: string; historyId?: string; telemetryRunId?: string; driveRootFolderName?: string; artifacts: CompletedRecordingArtifact[]; expiresAt: number; retainedKeys?: undefined }
-    | { jobId: string; historyId?: string; telemetryRunId?: string; driveRootFolderName?: string; artifacts?: undefined; expiresAt?: undefined; retainedKeys: RetainedRetry[] }
+    | { jobId: string; historyId?: string; telemetryRunId?: string; driveRootFolderName?: string; driveDestinationFolderName?: string; artifacts: CompletedRecordingArtifact[]; expiresAt: number; retainedKeys?: undefined }
+    | { jobId: string; historyId?: string; telemetryRunId?: string; driveRootFolderName?: string; driveDestinationFolderName?: string; artifacts?: undefined; expiresAt?: undefined; retainedKeys: RetainedRetry[] }
     | null = null;
   private retryExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -99,8 +100,16 @@ export class UploadManager {
    * job and returns its id. Reports the job's initial `uploading` state immediately
    * so a tab appears at once, then pumps the queue.
    */
-  enqueue(artifacts: CompletedRecordingArtifact[], historyId?: string, telemetryRunId?: string, driveRootFolderName?: string): string {
-    return this.enqueueJob(this.genId(), artifacts, false, historyId, telemetryRunId, driveRootFolderName);
+  enqueue(
+    artifacts: CompletedRecordingArtifact[],
+    historyId?: string,
+    telemetryRunId?: string,
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ): string {
+    return this.enqueueJob(
+      this.genId(), artifacts, false, historyId, telemetryRunId, driveRootFolderName, driveDestinationFolderName,
+    );
   }
 
   /**
@@ -112,7 +121,7 @@ export class UploadManager {
   async retry(jobId: string): Promise<boolean> {
     this.clearExpiredRetry();
     if (this.lastFailed?.jobId !== jobId) return false;
-    const { historyId, telemetryRunId, driveRootFolderName, retainedKeys } = this.lastFailed;
+    const { historyId, telemetryRunId, driveRootFolderName, driveDestinationFolderName, retainedKeys } = this.lastFailed;
     const artifacts = retainedKeys
       ? await this.rehydrate(retainedKeys)
       : this.lastFailed.artifacts;
@@ -125,7 +134,7 @@ export class UploadManager {
     this.clearRetryable();
     // The original failure already saved a local copy, so suppress the download
     // failsafe on the retry — a re-failure must not duplicate it (ADR-0004).
-    this.enqueueJob(jobId, artifacts, true, historyId, telemetryRunId, driveRootFolderName);
+    this.enqueueJob(jobId, artifacts, true, historyId, telemetryRunId, driveRootFolderName, driveDestinationFolderName);
     return true;
   }
 
@@ -137,7 +146,15 @@ export class UploadManager {
     return true;
   }
 
-  private enqueueJob(id: string, artifacts: CompletedRecordingArtifact[], skipLocalFallback = false, historyId?: string, telemetryRunId?: string, driveRootFolderName?: string): string {
+  private enqueueJob(
+    id: string,
+    artifacts: CompletedRecordingArtifact[],
+    skipLocalFallback = false,
+    historyId?: string,
+    telemetryRunId?: string,
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ): string {
     const job: UploadJob = {
       id,
       historyId,
@@ -155,7 +172,10 @@ export class UploadManager {
       startedAt: this.now(),
     };
     job.driveFolderName = job.label;
-    const task = { job, artifacts, skipLocalFallback, telemetryRunId, driveRootFolderName, controller: new AbortController() };
+    const task = {
+      job, artifacts, skipLocalFallback, telemetryRunId, driveRootFolderName, driveDestinationFolderName,
+      controller: new AbortController(),
+    };
     this.pending.push(task);
     this.jobs.set(id, task);
     void this.emit(job);
@@ -202,6 +222,7 @@ export class UploadManager {
         historyId: job.historyId,
         uploadJobId: job.id,
         driveRootFolderName: task.driveRootFolderName,
+        driveDestinationFolderName: task.driveDestinationFolderName,
         onUploadProgress: (fraction, loadedByFilename) => {
           lastProgress = fraction;
           const files = loadedByFilename
@@ -260,6 +281,7 @@ export class UploadManager {
           historyId: settled.historyId,
           telemetryRunId: this.jobs.get(settled.id)?.telemetryRunId,
           driveRootFolderName: this.jobs.get(settled.id)?.driveRootFolderName,
+          driveDestinationFolderName: this.jobs.get(settled.id)?.driveDestinationFolderName,
           // Deliberately not the artifacts: holding them would keep the Blobs
           // reachable and defeat the point of reading from the library.
           retainedKeys,
@@ -279,6 +301,7 @@ export class UploadManager {
         historyId: settled.historyId,
         telemetryRunId: this.jobs.get(settled.id)?.telemetryRunId,
         driveRootFolderName: this.jobs.get(settled.id)?.driveRootFolderName,
+        driveDestinationFolderName: this.jobs.get(settled.id)?.driveDestinationFolderName,
         artifacts: retryArtifacts,
         expiresAt: this.now() + RETRY_RETENTION_MS,
       };
@@ -380,5 +403,7 @@ type UploadTask = {
   telemetryRunId?: string;
   /** Frozen per job: a settings change mid-upload must not re-aim a job in flight. */
   driveRootFolderName?: string;
+  /** Frozen per job: the profile's Drive destination cannot change mid-upload/retry. */
+  driveDestinationFolderName?: string;
   controller: AbortController;
 };

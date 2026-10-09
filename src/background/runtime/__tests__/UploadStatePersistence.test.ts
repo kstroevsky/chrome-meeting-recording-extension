@@ -17,7 +17,7 @@ describe('UploadStatePersistence', () => {
 
   beforeEach(() => logger.warn.mockReset());
 
-  const createHarness = () => {
+  const createHarness = (driveFolderPresetFor: (recordingId: string) => Promise<string | undefined> = async () => undefined) => {
     const order: string[] = [];
     const session = {
       upsertUploadJob: jest.fn(() => { order.push('session-upsert'); }),
@@ -26,6 +26,7 @@ describe('UploadStatePersistence', () => {
     };
     const history = {
       applyUploadJob: jest.fn(async () => { order.push('history-apply'); }),
+      setDriveDestination: jest.fn(async () => { order.push('history-drive-destination'); }),
       setDuration: jest.fn(async () => { order.push('history-duration'); }),
     };
     const offscreen = {
@@ -44,6 +45,7 @@ describe('UploadStatePersistence', () => {
       offscreen as any,
       telemetry as any,
       logger,
+      driveFolderPresetFor,
     );
     return { order, session, history, offscreen, telemetry, persistence };
   };
@@ -78,5 +80,28 @@ describe('UploadStatePersistence', () => {
     expect(history.applyUploadJob).toHaveBeenCalledTimes(1);
     expect(offscreen.acknowledgeUploadState).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith('Could not persist upload state:', expect.any(Error));
+  });
+
+  it('projects the frozen Drive preset into the terminal job and history row', async () => {
+    const { history, session, persistence } = createHarness(async () => 'drive-folder-1');
+    persistence.handleChanged({ ...uploadJob('completed'), driveFolderId: 'drive-folder-object' });
+    await persistence.flush();
+
+    expect(history.setDriveDestination).toHaveBeenCalledWith('history-1', 'drive-folder-1');
+    expect(session.upsertUploadJob).toHaveBeenCalledWith(expect.objectContaining({
+      historyId: 'history-1',
+      driveFolderPresetId: 'drive-folder-1',
+    }));
+  });
+
+  it('does not invent a Drive preset when the recording has no frozen preset', async () => {
+    const { history, session, persistence } = createHarness();
+    persistence.handleChanged({ ...uploadJob('completed'), driveFolderId: 'drive-folder-object' });
+    await persistence.flush();
+
+    expect(history.setDriveDestination).not.toHaveBeenCalled();
+    expect(session.upsertUploadJob).toHaveBeenCalledWith(expect.not.objectContaining({
+      driveFolderPresetId: expect.anything(),
+    }));
   });
 });

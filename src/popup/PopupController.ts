@@ -620,7 +620,7 @@ export class PopupController {
     this.pendingLocal = this.pendingLocal.filter((pending) => pending.id !== recordingId);
   }
 
-  private async fileRecordingToDestination(recordingId: string, presetId: string): Promise<void> {
+  private async fileRecordingToDestination(recordingId: string, presetId: string | null): Promise<void> {
     const response = await sendToBackground({
       type: 'FILE_RECORDING_TO_DESTINATION', recordingId, presetId,
     });

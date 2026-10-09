@@ -89,7 +89,14 @@ export function createBackgroundRuntime() {
     logger,
   });
 
-  const uploadStatePersistence = new UploadStatePersistence(session, library.history, offscreen, telemetry, logger);
+  const uploadStatePersistence = new UploadStatePersistence(
+    session,
+    library.history,
+    offscreen,
+    telemetry,
+    logger,
+    (recordingId) => destinations.driveFolderPresetFor(recordingId),
+  );
   offscreen.onUploadJobChanged = (...args) => uploadStatePersistence.handleChanged(...args);
 
   const localDelivery = new LocalDeliveryOrchestrator(

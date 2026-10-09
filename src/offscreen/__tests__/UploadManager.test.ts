@@ -215,6 +215,38 @@ describe('UploadManager (ADR-0004)', () => {
     expect(finalize).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps the selected Drive destination across the first upload and retry', async () => {
+    const finalize = jest.fn(async (opts: any) => ({
+      uploaded: [],
+      localFallbacks: opts.artifacts.map((entry: any) => ({
+        stream: entry.stream,
+        filename: entry.artifact.filename,
+      })),
+    }));
+    const { manager } = setup(finalize as any);
+
+    const id = manager.enqueue(
+      [artifact('tab', 'tab.webm')],
+      'recording:n',
+      undefined,
+      'Meeting recordings',
+      'Recruiting',
+    );
+    await flush();
+    expect(await manager.retry(id)).toBe(true);
+    await flush();
+
+    expect(finalize).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      driveRootFolderName: 'Meeting recordings',
+      driveDestinationFolderName: 'Recruiting',
+    }));
+    expect(finalize).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      driveRootFolderName: 'Meeting recordings',
+      driveDestinationFolderName: 'Recruiting',
+      skipLocalFallback: true,
+    }));
+  });
+
   it('retries only the still-failed files of a partial job', async () => {
     let attempt = 0;
     const finalize = jest.fn(async (opts: any) => {

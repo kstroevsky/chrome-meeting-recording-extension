@@ -51,7 +51,7 @@ export type CompletedNamingActions = {
   /** Names already in the library, so the prompt can say a name is taken (7C). */
   recordingNames: () => readonly string[];
   /** Files the recording's Drive folder into the chosen destination. */
-  fileTo: (historyId: string, presetId: string) => Promise<unknown>;
+  fileTo: (historyId: string, presetId: string | null) => Promise<unknown>;
   /** Local folders offered to a recording that has not been written yet. */
   localFolders: () => DriveFolderPreset[];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
@@ -234,8 +234,10 @@ export class CompletedNamingPrompt {
       // Rename first: filing moves the folder this rename just retitled,
       // and a failed move must not cost the user the name they typed.
       await this.actions.rename(job.historyId!, name);
-      if (destinationId) await this.actions.fileTo(job.historyId!, destinationId);
-    });
+      if (destinationId !== (job.driveFolderPresetId ?? null)) {
+        await this.actions.fileTo(job.historyId!, destinationId);
+      }
+    }, job.driveFolderPresetId ?? null);
   }
 
   private async openNext(phase: RecordingPhase, session?: RecordingStatusView): Promise<void> {
@@ -285,6 +287,7 @@ export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[],
     DEFAULT_DRIVE_ROOT_FOLDER_NAME,
     async (name) => ({ id: `preview-${name}`, name }),
     async () => {},
+    pickedId,
   );
   return options.destinations ? { ...options, destinations: { ...options.destinations, initialId: pickedId } } : options;
 }
@@ -295,6 +298,7 @@ function driveNamingOptions(
   rootFolderName: string,
   onCreate: ((name: string) => Promise<DriveFolderPreset | null>) | undefined,
   onSave: RecordingNameDialogOptions['onSave'],
+  initialDestinationId: string | null = null,
 ): RecordingNameDialogOptions {
   const media = (job.files ?? []).filter((file) => file.kind !== 'notes');
   const bytes = media.reduce((total, file) => total + (file.bytes ?? 0), 0);
@@ -309,7 +313,12 @@ function driveNamingOptions(
     saveLabel: 'Save name',
     cancelLabel: 'Keep the default name',
     destinations: presets.length
-      ? { presets, unfiledLabel: DRIVE_DEFAULT_DESTINATION_NAME, initialId: null, ...(onCreate ? { onCreate } : {}) }
+      ? {
+        presets,
+        unfiledLabel: DRIVE_DEFAULT_DESTINATION_NAME,
+        initialId: presets.some((preset) => preset.id === initialDestinationId) ? initialDestinationId : null,
+        ...(onCreate ? { onCreate } : {}),
+      }
       : undefined,
     onSave,
   };
