@@ -25,6 +25,7 @@ const MEDIA = {
 const MEDIA_AUTHORIZATION = {
   producerId: 'producer_crm', endpoint: 'https://crm.example.test/events',
   apiBase: 'https://crm.example.test/api/media',
+  uploadOrigins: ['https://objects.example.test'],
 };
 
 function destination(overrides: Partial<IntegrationDestination> = {}): IntegrationDestination {
@@ -144,6 +145,16 @@ describe('RecordingRoutingService', () => {
     // Rotating a bearer for the same receiver does not retrospectively widen consent.
     await ctx.destinations.put(destination({ media: { ...MEDIA, secretId: 'media_credential_rotated' } }));
     expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([authorized]);
+
+    // Changing the advertised storage receiver must not widen older Start-time consent.
+    await ctx.destinations.put(destination({ media: {
+      ...MEDIA,
+      capability: {
+        ...MEDIA.capability,
+        upload: { ...MEDIA.capability.upload, origins: ['https://other-objects.example.test'] },
+      },
+    } }));
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
   });
 
   it('does not authorize older recordings when media is enabled after Start', async () => {
@@ -206,6 +217,17 @@ describe('RecordingRoutingService', () => {
       connectionVersion: 3, mediaAuthorization: { ...MEDIA_AUTHORIZATION, endpoint: 'http://crm.example.test/events' },
     }] });
     expect(invalid?.destinations[0]?.mediaAuthorization).toBeUndefined();
+
+    const legacy = normalizeRecordingIntegrationIntent({ recordingId: 'recording_legacy', destinations: [{
+      destinationId: 'destination_crm', mode: 'auto', state: 'selected', allowedPolicy: POLICY,
+      connectionVersion: 3, mediaAuthorization: {
+        producerId: MEDIA_AUTHORIZATION.producerId,
+        endpoint: MEDIA_AUTHORIZATION.endpoint,
+        apiBase: MEDIA_AUTHORIZATION.apiBase,
+      },
+    }] });
+    expect(legacy?.destinations[0]?.mediaAuthorization).toBeUndefined();
+
     await ctx.routing.put(invalid!);
     await ctx.streams.put({ destinationId: 'destination_crm', recordingId: 'recording_1',
       externalRecordingId: 'recording_old', nextRevision: 1, readyCreated: false, everAttempted: false });

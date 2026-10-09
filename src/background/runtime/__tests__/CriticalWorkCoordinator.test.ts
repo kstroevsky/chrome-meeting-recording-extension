@@ -14,13 +14,17 @@ describe('CriticalWorkCoordinator', () => {
   const logger = { log: jest.fn(), warn: jest.fn() };
   let snapshot: RecordingSessionSnapshot;
   let activeAnalysis: boolean;
+  let activeExternalMedia: boolean;
   let refreshAnalysisWork: jest.Mock<Promise<unknown>, []>;
+  let refreshExternalMediaWork: jest.Mock<Promise<unknown>, []>;
   let reload: jest.Mock;
 
   beforeEach(() => {
     snapshot = createIdleSession();
     activeAnalysis = false;
+    activeExternalMedia = false;
     refreshAnalysisWork = jest.fn(async () => activeAnalysis);
+    refreshExternalMediaWork = jest.fn(async () => activeExternalMedia);
     reload = jest.fn();
     logger.log.mockReset();
     logger.warn.mockReset();
@@ -32,6 +36,8 @@ describe('CriticalWorkCoordinator', () => {
     getSnapshot: () => snapshot,
     hasActiveAnalysisJobs: () => activeAnalysis,
     refreshAnalysisWork,
+    hasActiveExternalMediaTransfers: () => activeExternalMedia,
+    refreshExternalMediaWork,
     reload,
     logger,
   });
@@ -58,7 +64,36 @@ describe('CriticalWorkCoordinator', () => {
     await coordinator.applyUpdateWhenSafe();
 
     expect(refreshAnalysisWork).toHaveBeenCalledTimes(1);
+    expect(refreshExternalMediaWork).toHaveBeenCalledTimes(1);
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers reload while external media is live and resumes after handoff settles', async () => {
+    activeExternalMedia = true;
+    const coordinator = createCoordinator();
+
+    await coordinator.applyUpdateWhenSafe();
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(startKeepAliveMock).toHaveBeenCalled();
+    activeExternalMedia = false;
+    coordinator.sync();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an unanswerable external-media snapshot as critical work', async () => {
+    jest.useFakeTimers();
+    refreshExternalMediaWork.mockRejectedValue(new Error('offscreen unavailable'));
+    const coordinator = createCoordinator();
+
+    await coordinator.applyUpdateWhenSafe();
+
+    expect(coordinator.hasWork()).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+    coordinator.markExternalMediaWorkKnown();
+    coordinator.sync();
+    expect(reload).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
   });
 
   it('treats an unanswerable analysis data plane as critical work', async () => {

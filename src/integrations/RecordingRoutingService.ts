@@ -35,6 +35,10 @@ export type AuthorizedMediaRoute = {
   receiver: NonNullable<RecordingIntegrationIntentDestination['mediaAuthorization']>;
 };
 
+function sameOrigins(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((origin, index) => origin === right[index]);
+}
+
 export type RecordingRoutingBeginResult = {
   scheduled: string[];
   /** Routes whose destination is missing or disabled; nothing was written for them. */
@@ -100,6 +104,7 @@ export class RecordingRoutingService {
             producerId: destination.producerId,
             endpoint: destination.endpoint,
             apiBase: destination.media.capability.apiBase,
+            uploadOrigins: [...destination.media.capability.upload.origins],
           },
         } : {}),
         releaseAfter: 'save-confirmed',
@@ -134,7 +139,8 @@ export class RecordingRoutingService {
           entry.connectionVersion !== destination.connectionVersion ||
           entry.mediaAuthorization.producerId !== destination.producerId ||
           entry.mediaAuthorization.endpoint !== destination.endpoint ||
-          entry.mediaAuthorization.apiBase !== destination.media.capability.apiBase) continue;
+          entry.mediaAuthorization.apiBase !== destination.media.capability.apiBase ||
+          !sameOrigins(entry.mediaAuthorization.uploadOrigins, destination.media.capability.upload.origins)) continue;
       authorized.push({
         destinationId: entry.destinationId,
         externalRecordingId: stream.externalRecordingId,

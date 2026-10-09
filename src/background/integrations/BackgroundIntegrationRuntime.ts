@@ -24,6 +24,7 @@ import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../../in
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
 import { IntegrationPreviewService } from './IntegrationPreviewService';
 import type { AnalysisExportState } from '../library/analysis/RecordingAnalysisService';
+import { integrationDisconnectImpact, listIntegrationRecordings } from './integrationRuntimeQueries';
 
 type CanonicalRecordingReaders = {
   listHistory(): Promise<RecordingHistoryEntry[]>;
@@ -122,38 +123,40 @@ export class BackgroundIntegrationRuntime {
   }
 
   async listRecordings(): Promise<IntegrationRecordingOption[]> {
-    const entries = await this.readers.listHistory();
-    return await Promise.all(entries.map(async (entry) => {
-      const context = await this.readers.getContext(entry.id);
-      return context
-        ? { id: entry.id, name: entry.name, available: true }
-        : {
-            id: entry.id,
-            name: entry.name,
-            available: false,
-            unavailableReason: 'missing-recording-context' as const,
-          };
-    }));
+    return listIntegrationRecordings(this.readers);
   }
 
-  listDestinations() {
-    return this.coordinator.listDestinations();
+  listDestinations() { return this.coordinator.listDestinations(); }
+
+  createDestination(input: CreateIntegrationDestinationInput) { return this.coordinator.createDestination(input); }
+
+  testDestination(destinationId: string) { return this.coordinator.testDestination(destinationId); }
+
+  configureMedia(destinationId: string, bearer: string) { return this.coordinator.configureMedia(destinationId, bearer); }
+
+  async setDestinationEnabled(destinationId: string, enabled: boolean) {
+    const destination = await this.coordinator.setDestinationEnabled(destinationId, enabled);
+    await Promise.all([
+      this.deliveryScheduler.stateChanged(),
+      this.readinessScheduler.stateChanged(),
+    ]);
+    return destination;
   }
 
-  createDestination(input: CreateIntegrationDestinationInput) {
-    return this.coordinator.createDestination(input);
+  mediaClient(destinationId: string) { return this.coordinator.mediaClient(destinationId, async (origin) => containsHostPermission(`${origin}/*`)); }
+
+  playbackMediaClient(destinationId: string) {
+    return this.coordinator.playbackMediaClient(destinationId, async (origin) => containsHostPermission(`${origin}/*`));
   }
 
-  testDestination(destinationId: string) {
-    return this.coordinator.testDestination(destinationId);
+  mediaGrant(route: import('../../integrations/RecordingRoutingService').AuthorizedMediaRoute) {
+    return this.coordinator.mediaGrant(route);
   }
 
-  configureMedia(destinationId: string, bearer: string) {
-    return this.coordinator.configureMedia(destinationId, bearer);
-  }
-
-  mediaClient(destinationId: string) {
-    return this.coordinator.mediaClient(destinationId, async (origin) => containsHostPermission(`${origin}/*`));
+  async disconnectImpact(destinationId: string): Promise<{ affectedRecordings: number }> {
+    return integrationDisconnectImpact(
+      () => this.coordinator.listDestinations(), () => this.readers.listHistory(), destinationId,
+    );
   }
 
   async deleteDestination(destinationId: string) {

@@ -64,7 +64,7 @@ export class IntegrationUnitOfWork {
       const request = destinations.get(destinationId);
       request.onsuccess = () => {
         const current = normalizeIntegrationDestination(request.result);
-        if (!current || !current.enabled) {
+        if (!current) {
           transaction.abort();
           return;
         }
@@ -77,6 +77,45 @@ export class IntegrationUnitOfWork {
         if (current.media) secrets.delete(current.media.secretId);
       };
     }, 'Could not configure media connection');
+  }
+
+  /**
+   * Turns automatic routing on or off without discarding connection credentials.
+   * Disabling also removes historical routing intents and cancels unresolved
+   * deliveries so a later re-enable cannot resurrect work that was pending.
+   */
+  async setDestinationEnabled(destinationId: string, enabled: boolean, updatedAt: number): Promise<void> {
+    const database = await openIntegrationDatabase(this.factory);
+    await runTransaction(
+      database,
+      [
+        INTEGRATION_DESTINATIONS_STORE,
+        INTEGRATION_ROUTING_INTENTS_STORE,
+        INTEGRATION_DELIVERIES_STORE,
+      ],
+      (transaction) => {
+        const destinations = transaction.objectStore(INTEGRATION_DESTINATIONS_STORE);
+        const request = destinations.get(destinationId);
+        request.onsuccess = () => {
+          const current = normalizeIntegrationDestination(request.result);
+          if (!current) {
+            transaction.abort();
+            return;
+          }
+          const updated = normalizeIntegrationDestination({ ...current, enabled, updatedAt });
+          if (!updated) {
+            transaction.abort();
+            return;
+          }
+          destinations.put(updated);
+        };
+        if (!enabled) {
+          removeDestinationFromRouting(transaction, destinationId);
+          cancelDestinationDeliveries(transaction, destinationId, updatedAt, 'destination-disabled');
+        }
+      },
+      'Could not update integration automation state',
+    );
   }
 
   async planDelivery(delivery: IntegrationDelivery, stream: IntegrationStream): Promise<void> {
@@ -191,6 +230,9 @@ export class IntegrationUnitOfWork {
                   consent.producerId === current.producerId &&
                   consent.endpoint === current.endpoint &&
                   consent.apiBase === current.media.capability.apiBase &&
+                  consent.uploadOrigins.length === current.media.capability.upload.origins.length &&
+                  consent.uploadOrigins.every((origin, index) =>
+                    origin === current.media!.capability.upload.origins[index]) &&
                   entry.connectionVersion === current.connectionVersion;
                 live.push(mediaUnchanged ? entry : { ...entry, mediaAuthorization: undefined });
               }
@@ -390,6 +432,7 @@ function cancelDestinationDeliveries(
   transaction: IDBTransaction,
   destinationId: string,
   updatedAt: number,
+  errorCode = 'destination-deleted',
 ): void {
   const request = transaction.objectStore(INTEGRATION_DELIVERIES_STORE).openCursor();
   request.onsuccess = () => {
@@ -402,7 +445,7 @@ function cancelDestinationDeliveries(
       const next = {
         ...row,
         state: 'canceled' as const,
-        lastErrorCode: 'destination-deleted',
+        lastErrorCode: errorCode,
         updatedAt,
       };
       delete next.nextAttemptAt;

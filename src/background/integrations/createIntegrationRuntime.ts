@@ -9,7 +9,8 @@ import { BackgroundIntegrationRuntime } from './BackgroundIntegrationRuntime';
  */
 export function createIntegrationRuntime(library: ReturnType<typeof createLibraryRuntime>) {
   const integrations = new BackgroundIntegrationRuntime({
-    listHistory: () => library.history.list(),
+    listHistory: async () => (await library.historyRepository.listAllIncludingDeleted())
+      .filter((entry) => !entry.deletedAt),
     getHistory: (recordingId) => library.historyRepository.get(recordingId),
     getContext: (recordingId) => library.recordingContexts.get(recordingId),
     listNotations: (recordingId) => library.notations.list(recordingId),

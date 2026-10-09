@@ -15,11 +15,7 @@ import { RecordingSession } from '../recording/session/RecordingSession';
 import { UnsavedRecordingRecovery } from '../recording/UnsavedRecordingRecovery';
 import { readStorageUsage } from '../retention/storageDurability';
 import { CriticalWorkCoordinator } from './CriticalWorkCoordinator';
-import {
-  createSessionPersistor,
-  createTranscriptCapture,
-  wireRecordingSessionRuntime,
-} from './RecordingSessionRuntime';
+import { createSessionPersistor, createTranscriptCapture, wireRecordingSessionRuntime } from './RecordingSessionRuntime';
 import { StartupRecovery } from './StartupRecovery';
 import { UploadStatePersistence } from './UploadStatePersistence';
 import { wireAnalysisRuntime } from './AnalysisRuntime';
@@ -27,6 +23,7 @@ import { bootstrapBackground } from './bootstrap';
 import { BackgroundReadiness } from './BackgroundReadiness';
 import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 import { createIntegrationRuntime } from '../integrations/createIntegrationRuntime';
+import { createExternalMediaRuntime } from '../integrations/createExternalMediaRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
@@ -43,6 +40,8 @@ export function createBackgroundRuntime() {
     getSnapshot: () => session.getSnapshot(),
     hasActiveAnalysisJobs: () => offscreen.hasActiveAnalysisJobs(),
     refreshAnalysisWork: () => offscreen.refreshAnalysisWork(),
+    hasActiveExternalMediaTransfers: () => offscreen.hasActiveExternalMediaTransfers(),
+    refreshExternalMediaWork: () => offscreen.refreshExternalMediaWork(),
     reload: reloadRuntime,
     logger,
   });
@@ -57,21 +56,22 @@ export function createBackgroundRuntime() {
     onIntegrationChanged: (recordingId) => notifyIntegrationChanged(recordingId),
   });
   const { integrations, destinations, routing: recordingRouting } = createIntegrationRuntime(library);
-  notifyIntegrationChanged = (recordingId) => {
-    void integrations.consider(recordingId)
-      .catch((error) => logger.warn('Integration recording consideration deferred:', error));
-  };
+  const externalMediaRuntime = createExternalMediaRuntime({
+    offscreen,
+    integrations,
+    history: library.history,
+    historyRepository: library.historyRepository,
+    criticalWork,
+    logger,
+  });
+  notifyIntegrationChanged = externalMediaRuntime.notifyIntegrationChanged;
   wireAnalysisRuntime({
     offscreen,
     analysisCoordinator: library.analysisCoordinator,
     criticalWork,
     logger,
   });
-  const driveLibrary = new DriveLibraryCoordinator(
-    library.historyRepository,
-    library.history,
-    logger,
-  );
+  const driveLibrary = new DriveLibraryCoordinator(library.historyRepository, library.history, logger);
   const transcriptCapture = createTranscriptCapture(session, library.transcripts, logger);
 
   let sessionHydrated = false;
@@ -89,13 +89,7 @@ export function createBackgroundRuntime() {
     logger,
   });
 
-  const uploadStatePersistence = new UploadStatePersistence(
-    session,
-    library.history,
-    offscreen,
-    telemetry,
-    logger,
-  );
+  const uploadStatePersistence = new UploadStatePersistence(session, library.history, offscreen, telemetry, logger);
   offscreen.onUploadJobChanged = (...args) => uploadStatePersistence.handleChanged(...args);
 
   const localDelivery = new LocalDeliveryOrchestrator(
@@ -157,6 +151,7 @@ export function createBackgroundRuntime() {
     telemetry,
     sharing,
     integrations,
+    externalMedia: externalMediaRuntime.coordinator,
     destinations,
     e2eAnalysisWork: () => offscreen.refreshAnalysisWork(),
     waitUntilReady: () => readiness.wait(),
@@ -195,6 +190,8 @@ export function createBackgroundRuntime() {
       });
       await sharing.resumeIfPending().catch((error) => logger.warn('Pending sharing recovery deferred:', error));
       await integrations.reconcile().catch((error) => logger.warn('Integration delivery recovery deferred:', error));
+      await externalMediaRuntime.coordinator.reconcile()
+        .catch((error) => logger.warn('External media recovery deferred:', error));
     } catch (error) {
       if (!sessionHydrated) readiness.markFailed(error);
       logger.error('Critical background session hydration failed:', error);
@@ -213,9 +210,14 @@ export function createBackgroundRuntime() {
     handleAlarm: (alarm: chrome.alarms.Alarm) => {
       localDelivery.handleAlarm(alarm);
       integrations.handleAlarm(alarm);
+      externalMediaRuntime.retryScheduler.handleAlarm(alarm);
     },
     handleConnect: (port: chrome.runtime.Port) => {
-      if (port.name === 'offscreen') offscreen.attachPort(port);
+      if (port.name === 'offscreen' && offscreen.attachPort(port)) {
+        void readiness.wait()
+          .then(() => externalMediaRuntime.coordinator.reconcile())
+          .catch((error) => logger.warn('External media reconnect recovery deferred:', error));
+      }
     },
     handleSuspend: () => offscreen.stopIfPossibleOnSuspend(session.getSnapshot().epoch),
     applyUpdateWhenSafe: () => criticalWork.applyUpdateWhenSafe(),

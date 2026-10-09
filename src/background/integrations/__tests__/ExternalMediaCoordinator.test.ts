@@ -1,0 +1,231 @@
+import type { AuthorizedMediaRoute } from '../../../integrations/RecordingRoutingService';
+import type { ExternalMediaTransferView } from '../../../shared/protocol';
+import type { RecordingHistoryEntry } from '../../../shared/recordingHistory';
+import { ExternalMediaCoordinator } from '../ExternalMediaCoordinator';
+
+const route: AuthorizedMediaRoute = {
+  destinationId: 'crm',
+  externalRecordingId: 'recording_external',
+  connectionVersion: 2,
+  receiver: {
+    producerId: 'crm-receiver',
+    endpoint: 'https://crm.example.test/hooks',
+    apiBase: 'https://crm.example.test/media',
+    uploadOrigins: ['https://bucket.r2.cloudflarestorage.com'],
+  },
+};
+
+function entry(): RecordingHistoryEntry {
+  return {
+    id: 'recording-local',
+    name: 'Interview',
+    createdAt: 1,
+    storageMode: 'local',
+    status: 'complete',
+    files: [{
+      id: 'recording-local:tab',
+      stream: 'tab',
+      filename: 'interview.webm',
+      mimeType: 'video/webm',
+      locations: [{ kind: 'opfs', key: 'library/recording-local/recording-local%3Atab/interview.webm', retainedAt: 1 }],
+      delivery: { requested: 'local', status: 'downloaded' },
+      destination: 'local',
+      status: 'available',
+    }],
+  };
+}
+
+function transfer(state: ExternalMediaTransferView['state'] = 'ready-unacknowledged'): ExternalMediaTransferView {
+  return {
+    destinationId: 'crm',
+    source: { kind: 'opfs', key: 'library/recording-local/recording-local%3Atab/interview.webm' },
+    owner: {
+      recordingId: 'recording-local',
+      fileId: 'recording-local:tab',
+      connectionVersion: 2,
+      producerId: 'crm-receiver',
+      endpoint: 'https://crm.example.test/hooks',
+      apiBase: 'https://crm.example.test/media',
+      uploadOrigins: ['https://bucket.r2.cloudflarestorage.com'],
+    },
+    request: {
+      clientTransferId: 'transfer-1',
+      recordingId: 'recording_external',
+      artifact: { role: 'tab-recording', filename: 'interview.webm', mimeType: 'video/webm', bytes: 123 },
+    },
+    uploadedParts: [],
+    state,
+    artifactId: state === 'ready-unacknowledged' ? 'media-1' : undefined,
+  };
+}
+
+function setup() {
+  let current = entry();
+  let transfers: ExternalMediaTransferView[] = [];
+  const historyRepository = {
+    get: jest.fn(async () => current),
+    listAllIncludingDeleted: jest.fn(async () => [current]),
+  };
+  const history = {
+    recordArtifactLocation: jest.fn(async (_recordingId: string, fileId: string, location: any) => {
+      current = {
+        ...current,
+        files: current.files.map((file) => file.id === fileId
+          ? { ...file, locations: [...file.locations, location] }
+          : file),
+      };
+    }),
+  };
+  const integrations = {
+    authorizedMediaRoutes: jest.fn(async () => [route]),
+    listDestinations: jest.fn(async () => [{ id: 'crm', name: 'CheekyCheeseIT CRM' }]),
+    mediaGrant: jest.fn(async () => ({
+      destinationId: 'crm', connectionVersion: 2, producerId: 'crm-receiver',
+      endpoint: route.receiver.endpoint, capability: { apiBase: route.receiver.apiBase }, bearer: 'secret',
+    })),
+  };
+  const offscreen = {
+    ensureReady: jest.fn(async () => {}),
+    rpc: jest.fn(async (message: any) => {
+      if (message.type === 'OFFSCREEN_MEDIA_SNAPSHOT') return { ok: true, transfers };
+      if (message.type === 'OFFSCREEN_MEDIA_ENQUEUE') return { ok: true, transfer: transfer('queued') };
+      if (message.type === 'OFFSCREEN_MEDIA_RETRY') {
+        const original = transfers.find((candidate) =>
+          candidate.destinationId === message.destinationId &&
+          candidate.request.clientTransferId === message.clientTransferId);
+        return { ok: true, transfer: { ...original, state: 'queued', nextAttemptAt: undefined } };
+      }
+      return { ok: true };
+    }),
+  };
+  const retryScheduler = { sync: jest.fn(async () => {}), observe: jest.fn(async () => {}) };
+  const logger = { warn: jest.fn() };
+  const coordinator = new ExternalMediaCoordinator({
+    offscreen: offscreen as any,
+    integrations: integrations as any,
+    history: history as any,
+    historyRepository: historyRepository as any,
+    listHistory: async () => [current],
+    retryScheduler: retryScheduler as any,
+    logger,
+  });
+  return { coordinator, offscreen, integrations, history, historyRepository, retryScheduler,
+    setEntry: (next: RecordingHistoryEntry) => { current = next; },
+    setTransfers: (next: ExternalMediaTransferView[]) => { transfers = next; } };
+}
+
+describe('ExternalMediaCoordinator', () => {
+  it('persists and proves the exact external replica before acknowledging the journal', async () => {
+    const ctx = setup();
+
+    await ctx.coordinator.handleState(transfer());
+
+    expect(ctx.history.recordArtifactLocation).toHaveBeenCalledWith(
+      'recording-local',
+      'recording-local:tab',
+      { kind: 'external', destinationId: 'crm', artifactId: 'media-1' },
+    );
+    const ack = ctx.offscreen.rpc.mock.calls.find(([message]) => message.type === 'OFFSCREEN_MEDIA_ACK');
+    expect(ack?.[0]).toMatchObject({ destinationId: 'crm', clientTransferId: 'transfer-1' });
+    const rpcOrder = ctx.offscreen.rpc.mock.invocationCallOrder;
+    expect(ctx.history.recordArtifactLocation.mock.invocationCallOrder[0])
+      .toBeLessThan(rpcOrder[rpcOrder.length - 1]);
+  });
+
+  it('replays a lost acknowledgement without writing a second history replica', async () => {
+    const ctx = setup();
+    await ctx.coordinator.handleState(transfer());
+    ctx.history.recordArtifactLocation.mockClear();
+    ctx.offscreen.rpc.mockClear();
+
+    await ctx.coordinator.handleState(transfer());
+
+    expect(ctx.history.recordArtifactLocation).not.toHaveBeenCalled();
+    expect(ctx.offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({ type: 'OFFSCREEN_MEDIA_ACK' }));
+  });
+
+  it('cancels a ready journal instead of resurrecting deleted history', async () => {
+    const ctx = setup();
+    ctx.setEntry({ ...entry(), deletedAt: 10 });
+
+    await ctx.coordinator.handleState(transfer());
+
+    expect(ctx.history.recordArtifactLocation).not.toHaveBeenCalled();
+    expect(ctx.offscreen.rpc).toHaveBeenCalledWith({
+      type: 'OFFSCREEN_MEDIA_CANCEL',
+      recordingId: 'recording-local',
+      destinationId: 'crm',
+    });
+  });
+
+  it('discovers a missing transfer from complete history and the persisted Start authorization', async () => {
+    const ctx = setup();
+
+    await ctx.coordinator.reconcileRecording('recording-local');
+
+    expect(ctx.integrations.mediaGrant).toHaveBeenCalledWith(route);
+    expect(ctx.offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'OFFSCREEN_MEDIA_ENQUEUE',
+      recording: expect.objectContaining({ id: 'recording-local', status: 'complete' }),
+      route,
+      fileId: 'recording-local:tab',
+      sealed: true,
+    }));
+  });
+
+  it('projects only UI-safe progress and reacquires authorization for explicit retry', async () => {
+    const ctx = setup();
+    const waiting = {
+      ...transfer('action-required'),
+      state: 'action-required' as const,
+      artifactId: undefined,
+      partSize: 100,
+      uploadedParts: [{ partNumber: 1, etag: 'secret-provider-etag' }],
+      errorCategory: 'network' as const,
+      attempts: 2,
+    };
+    ctx.setTransfers([waiting]);
+
+    const statuses = await ctx.coordinator.userStatuses('recording-local');
+    expect(statuses).toEqual([expect.objectContaining({
+      recordingId: 'recording-local',
+      fileId: 'recording-local:tab',
+      destinationId: 'crm',
+      destinationName: 'CheekyCheeseIT CRM',
+      clientTransferId: 'transfer-1',
+      state: 'action-required',
+      bytesUploaded: 100,
+      bytesTotal: 123,
+      attempts: 2,
+      errorCategory: 'network',
+    })]);
+    const serialized = JSON.stringify(statuses);
+    expect(serialized).not.toContain('secret-provider-etag');
+    expect(serialized).not.toContain('receiver.example');
+    expect(serialized).not.toContain('library/');
+
+    await expect(ctx.coordinator.retryTransfer('crm', 'transfer-1')).resolves.toMatchObject({
+      state: 'queued',
+      destinationName: 'CheekyCheeseIT CRM',
+    });
+    expect(ctx.integrations.mediaGrant).toHaveBeenCalledWith(route);
+    expect(ctx.offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'OFFSCREEN_MEDIA_RETRY',
+      destinationId: 'crm',
+      clientTransferId: 'transfer-1',
+      grant: expect.objectContaining({ bearer: 'secret' }),
+    }));
+  });
+
+  it('makes disconnect cancellation strict while ordinary reconciliation remains best-effort', async () => {
+    const ctx = setup();
+    ctx.offscreen.rpc.mockImplementation(async (message: any) => {
+      if (message.type === 'OFFSCREEN_MEDIA_CANCEL') return { ok: false, error: 'offscreen busy' };
+      return { ok: true, transfers: [] };
+    });
+
+    await expect(ctx.coordinator.cancelDestinationStrict('crm')).rejects.toThrow('offscreen busy');
+    await expect(ctx.coordinator.cancelDestination('crm')).resolves.toBeUndefined();
+    expect(ctx.history.recordArtifactLocation).not.toHaveBeenCalled();
+  });
+});

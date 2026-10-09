@@ -46,6 +46,8 @@ export type RecordingIntegrationIntentDestination = {
     producerId: string;
     endpoint: string;
     apiBase: string;
+    /** Exact storage origins advertised by the receiver when Start consent was captured. */
+    uploadOrigins: string[];
   };
   approvedPolicyHash?: string;
   /**
@@ -326,15 +328,25 @@ function normalizeMediaAuthorization(value: unknown): RecordingIntegrationIntent
   const producerId = text(value.producerId);
   const endpoint = text(value.endpoint);
   const apiBase = text(value.apiBase);
-  if (!producerId || !endpoint || !apiBase) return undefined;
+  if (!producerId || !endpoint || !apiBase || !Array.isArray(value.uploadOrigins) ||
+      value.uploadOrigins.length < 1 || value.uploadOrigins.length > 8) return undefined;
+  const uploadOrigins: string[] = [];
   try {
     const control = new URL(endpoint);
     const base = new URL(apiBase);
     if (control.protocol !== 'https:' || base.protocol !== 'https:' ||
         control.origin !== base.origin || control.username || control.password ||
         base.username || base.password || base.search || base.hash) return undefined;
+    for (const raw of value.uploadOrigins) {
+      if (typeof raw !== 'string') return undefined;
+      const origin = new URL(raw);
+      if (raw !== origin.origin || origin.protocol !== 'https:' || origin.username || origin.password ||
+          origin.hostname.includes('*') || origin.pathname !== '/' || origin.search || origin.hash ||
+          uploadOrigins.includes(raw)) return undefined;
+      uploadOrigins.push(raw);
+    }
   } catch { return undefined; }
-  return { producerId, endpoint, apiBase };
+  return { producerId, endpoint, apiBase, uploadOrigins };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

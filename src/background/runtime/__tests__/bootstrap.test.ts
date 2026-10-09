@@ -123,6 +123,8 @@ describe('bootstrapBackground', () => {
       getSnapshot: () => current,
       hasActiveAnalysisJobs: () => false,
       refreshAnalysisWork: jest.fn().mockResolvedValue(undefined),
+      hasActiveExternalMediaTransfers: () => false,
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(undefined),
       reload: jest.fn(),
       logger,
     });
