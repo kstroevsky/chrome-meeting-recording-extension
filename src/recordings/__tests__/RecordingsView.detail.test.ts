@@ -27,6 +27,7 @@ function mount() {
   const callbacks = {
     rename: jest.fn(), note: jest.fn(), remove: jest.fn(), removeMany: jest.fn(),
     openLocal: jest.fn(), fileTo: jest.fn(), play: jest.fn(), loadMore: jest.fn(),
+    retryExternalMedia: jest.fn(),
     notes: {
       load: jest.fn(async () => notes),
       rename: jest.fn(async () => notes),
@@ -115,6 +116,68 @@ describe('RecordingsView detail (f2, f17)', () => {
     expect(list.querySelector('.detail-section-label')?.textContent).toBe('DESCRIPTION');
     list.querySelector<HTMLButtonElement>('.modal-button--watch')!.click();
     expect(callbacks.play).toHaveBeenCalledWith('weekly');
+  });
+
+  it('shows external-copy progress without transport secrets and offers explicit Retry', async () => {
+    const { view, list, callbacks } = mount();
+    view.setExternalMediaTransfers([{
+      recordingId: 'weekly',
+      fileId: 'weekly:tab',
+      destinationId: 'crm',
+      destinationName: 'CheekyCheeseIT CRM',
+      clientTransferId: 'opaque-transfer',
+      state: 'action-required',
+      bytesUploaded: 25,
+      bytesTotal: 100,
+      attempts: 5,
+      errorCategory: 'network',
+    }]);
+    view.render([entry()]);
+    await open(list);
+
+    const section = list.querySelector<HTMLElement>('.recording-external-media')!;
+    expect(section.hidden).toBe(false);
+    expect(section.textContent).toContain('CheekyCheeseIT CRM');
+    expect(section.textContent).toContain('UPLOAD PAUSED · 25%');
+    expect(section.textContent).not.toContain('opaque-transfer');
+    section.querySelector<HTMLButtonElement>('.external-media-retry')!.click();
+    expect(callbacks.retryExternalMedia).toHaveBeenCalledWith('crm', 'opaque-transfer');
+  });
+
+  it('updates external-copy progress in place while recording details are open', async () => {
+    const { view, list } = mount();
+    view.setExternalMediaTransfers([{
+      recordingId: 'weekly',
+      fileId: 'weekly:tab',
+      destinationId: 'crm',
+      destinationName: 'CRM',
+      clientTransferId: 'transfer-1',
+      state: 'uploading',
+      bytesUploaded: 10,
+      bytesTotal: 100,
+      attempts: 1,
+    }]);
+    view.render([entry()]);
+    await open(list);
+    const detail = list.querySelector<HTMLElement>('.recording-detail')!;
+    const title = detail.querySelector<HTMLElement>('.detail-title')!;
+    expect(detail.textContent).toContain('UPLOADING 10%');
+
+    view.setExternalMediaTransfers([{
+      recordingId: 'weekly',
+      fileId: 'weekly:tab',
+      destinationId: 'crm',
+      destinationName: 'CRM',
+      clientTransferId: 'transfer-1',
+      state: 'uploading',
+      bytesUploaded: 70,
+      bytesTotal: 100,
+      attempts: 1,
+    }]);
+
+    expect(list.querySelector('.recording-detail')).toBe(detail);
+    expect(list.querySelector('.detail-title')).toBe(title);
+    expect(detail.textContent).toContain('UPLOADING 70%');
   });
 
   it('opens once the notes are in, so the modal never grows after it appears', async () => {

@@ -24,6 +24,17 @@ const UNPLAYABLE: PlayerStatus = {
   title: 'This recording could not be played.',
   body: 'The file is there, but this browser could not decode it.',
 };
+const MAX_CONSECUTIVE_SOURCE_REFRESHES = 2;
+
+type TrackSourceState = {
+  track: PlaybackTrack;
+  element: HTMLMediaElement;
+  refresh: ResolvedTrackUrl['refresh'] | null;
+  revoke: (() => void) | null;
+  refreshesSinceMetadata: number;
+  refreshing: boolean;
+  masterRestore: { position: number; playing: boolean } | null;
+};
 
 export type PlayerControllerDeps = {
   getManifest: (recordingId: string) => Promise<PlaybackManifest | undefined>;
@@ -45,9 +56,8 @@ export type PlayerControllerDeps = {
 
 export class PlayerController {
   private readonly view: PlayerView;
-  private revoke: (() => void) | null = null;
-  /** One per attached auxiliary; an unrevoked URL pins its OPFS file. */
-  private auxRevokes: Array<() => void> = [];
+  /** One source/recovery state per attached master or auxiliary track. */
+  private readonly sourceStates = new Map<string, TrackSourceState>();
   private clock: PlaybackClock | null = null;
   private driftTimer: ReturnType<typeof setInterval> | null = null;
   private readonly onKeyDown = (event: KeyboardEvent) => this.handleKey(event);
@@ -63,9 +73,8 @@ export class PlayerController {
   private speed = 1;
   private manifest: PlaybackManifest | null = null;
   private track: PlaybackTrack | null = null;
-  /** One recovery attempt per open — see `onMediaError`. */
-  private refreshed = false;
-  private refresh: ResolvedTrackUrl['refresh'] | null = null;
+  /** User/autoplay intent survives the temporary pause while a master URL is replaced. */
+  private wantsPlayback = false;
 
   constructor(private readonly deps: PlayerControllerDeps) {
     this.view = new PlayerView({
@@ -289,6 +298,7 @@ export class PlayerController {
 
   private async togglePlay(): Promise<void> {
     const playing = !this.view.video.paused;
+    this.wantsPlayback = !playing;
     if (!this.clock) {
       await (playing ? this.view.video.pause() : this.view.video.play().catch(() => {}));
       return;
@@ -320,8 +330,9 @@ export class PlayerController {
       // maps every `.webm` to `video/webm`, so a microphone file claims to be
       // video and would render a second picture-in-picture.
       const element = this.view.addAuxiliary(track.stream === 'self-video' ? 'video' : 'audio');
-      if (resolved.revoke) this.auxRevokes.push(resolved.revoke);
-      element.src = resolved.url;
+      element.addEventListener('loadedmetadata', () => { void this.onTrackMetadata(track.fileId, element); });
+      element.addEventListener('error', () => { void this.recoverTrack(track.fileId, element); });
+      this.installSource(track, element, resolved);
       this.elements.set(track.fileId, element);
       this.attached.add(track.fileId);
       clock.add({ element, timelineOffsetMs: clockOffsetMs(track, master) });
@@ -346,12 +357,26 @@ export class PlayerController {
         ?? { title: 'This recording has no playable copy left.', body: KEPT, actions: ['remove'] });
       return;
     }
-    this.revoke?.();
-    this.revoke = resolved.revoke ?? null;
-    this.refresh = resolved.refresh ?? null;
+    this.installSource(track, this.view.video, resolved);
     this.view.setStatus(null);
-    this.view.video.src = resolved.url;
     this.attached.add(track.fileId);
+  }
+
+  private installSource(track: PlaybackTrack, element: HTMLMediaElement, resolved: ResolvedTrackUrl): void {
+    const previous = this.sourceStates.get(track.fileId);
+    if (previous?.element === element) previous.revoke?.();
+    const state: TrackSourceState = previous?.element === element
+      ? previous
+      : {
+          track, element, refresh: null, revoke: null,
+          refreshesSinceMetadata: 0, refreshing: false, masterRestore: null,
+        };
+    state.track = track;
+    state.refresh = resolved.refresh ?? null;
+    state.revoke = resolved.revoke ?? null;
+    state.refreshing = false;
+    this.sourceStates.set(track.fileId, state);
+    element.src = resolved.url;
   }
 
   private bindMedia(): void {
@@ -359,34 +384,89 @@ export class PlayerController {
     video.addEventListener('loadedmetadata', () => {
       // A recording whose duration history never recorded still needs a scrubber.
       if (Number.isFinite(video.duration)) this.view.setPosition(video.currentTime * 1000, video.duration * 1000);
+      if (this.track) void this.onTrackMetadata(this.track.fileId, video);
     });
     video.addEventListener('timeupdate', () => this.view.setPosition(video.currentTime * 1000));
     video.addEventListener('play', () => { this.view.setPlaying(true); this.startDriftWatch(); });
     video.addEventListener('pause', () => { this.view.setPlaying(false); this.stopDriftWatch(); });
-    video.addEventListener('error', () => { void this.onMediaError(); });
+    video.addEventListener('ended', () => { this.wantsPlayback = false; });
+    video.addEventListener('error', () => {
+      if (this.track) void this.recoverTrack(this.track.fileId, video);
+    });
   }
 
   /**
-   * The resolver may offer one replacement URL for an expiring source. The
-   * player does not know why that URL needs replacing or which backend minted it.
+   * The resolver may offer replacement URLs for expiring sources. A fresh URL
+   * that errors before metadata can be replaced once more, but a persistent
+   * failure cannot spin indefinitely. Metadata resets the budget, so a long
+   * session can cross any number of normal URL expiries.
    */
-  private async onMediaError(): Promise<void> {
-    if (!this.track || this.refreshed || !this.refresh) {
-      this.view.setStatus(UNPLAYABLE);
+  private async recoverTrack(fileId: string, element: HTMLMediaElement): Promise<void> {
+    const state = this.sourceStates.get(fileId);
+    if (!state || state.element !== element || state.refreshing) return;
+    if (!state.refresh || state.refreshesSinceMetadata >= MAX_CONSECUTIVE_SOURCE_REFRESHES) {
+      this.markTrackUnplayable(state);
       return;
     }
-    this.refreshed = true;
-    const position = this.view.video.currentTime;
-    const resolved = await this.refresh().catch((error) => {
+    if (element === this.view.video && !state.masterRestore) {
+      state.masterRestore = { position: element.currentTime, playing: this.wantsPlayback };
+      this.clock?.pause();
+    }
+    state.refreshesSinceMetadata += 1;
+    state.refreshing = true;
+    const resolved = await state.refresh().catch((error) => {
       this.deps.warn?.('Could not refresh the playback source', error);
       return undefined;
     });
+    if (this.sourceStates.get(fileId) !== state) {
+      resolved?.revoke?.();
+      return;
+    }
+    state.refreshing = false;
     if (!resolved) {
+      this.markTrackUnplayable(state);
+      return;
+    }
+    this.installSource(state.track, element, resolved);
+  }
+
+  private async onTrackMetadata(fileId: string, element: HTMLMediaElement): Promise<void> {
+    const state = this.sourceStates.get(fileId);
+    if (!state || state.element !== element) return;
+    state.refreshesSinceMetadata = 0;
+    if (element !== this.view.video) {
+      this.clock?.syncFromMaster();
+      return;
+    }
+    const restore = state.masterRestore;
+    if (!restore) return;
+    state.masterRestore = null;
+    element.currentTime = restore.position;
+    this.clock?.syncFromMaster();
+    if (restore.playing) {
+      if (this.clock) await this.clock.play().catch(() => {});
+      else await element.play().catch(() => {});
+    } else if (this.clock) {
+      this.clock.pause();
+    } else {
+      element.pause();
+    }
+  }
+
+  private markTrackUnplayable(state: TrackSourceState): void {
+    state.refreshing = false;
+    if (state.element === this.view.video) {
       this.view.setStatus(UNPLAYABLE);
       return;
     }
-    await this.attach(this.track, resolved);
-    if (this.view.video.src) this.view.video.currentTime = position;
+    state.revoke?.();
+    state.revoke = null;
+    state.element.pause();
+    state.element.removeAttribute('src');
+    state.element.load();
+    this.attached.delete(state.track.fileId);
+    this.applyTrackState();
+    this.deps.warn?.(`Could not recover the ${state.track.stream} playback source`);
   }
 
   /** A few times a second is enough: drift accrues slowly (ADR-0006 §21). */
@@ -434,14 +514,11 @@ export class PlayerController {
     this.attached.clear();
     this.shown = new Set();
     // Object URLs pin the underlying OPFS file; leaking them leaks the file.
-    this.revoke?.();
-    this.revoke = null;
-    for (const revoke of this.auxRevokes) revoke();
-    this.auxRevokes = [];
+    for (const state of this.sourceStates.values()) state.revoke?.();
+    this.sourceStates.clear();
     this.manifest = null;
     this.track = null;
-    this.refreshed = false;
-    this.refresh = null;
+    this.wantsPlayback = false;
     this.view.setStatus(null);
   }
 }

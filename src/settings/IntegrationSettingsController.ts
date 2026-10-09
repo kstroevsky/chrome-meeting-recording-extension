@@ -186,7 +186,7 @@ export class IntegrationSettingsController {
     test.textContent = 'Test';
     const media = this.el.document.createElement('div');
     media.className = 'integration-media';
-    media.hidden = !destination.media || !destination.enabled;
+    media.hidden = !destination.media;
     const mediaLabel = this.el.document.createElement('label');
     mediaLabel.textContent = 'Media bearer (issued separately by the receiver)';
     const mediaBearer = this.el.document.createElement('input');
@@ -204,20 +204,24 @@ export class IntegrationSettingsController {
     const send = this.el.document.createElement('button');
     send.type = 'button';
     send.textContent = 'Send recording';
-    send.disabled = !this.el.recording?.value;
+    send.disabled = !destination.enabled || !this.el.recording?.value;
     send.addEventListener('click', () => void this.send(destination, send));
     const retry = this.el.document.createElement('button');
     retry.type = 'button';
     retry.textContent = 'Retry last delivery';
-    retry.hidden = latest?.state !== 'failed' && latest?.state !== 'action-required';
+    retry.hidden = !destination.enabled || (latest?.state !== 'failed' && latest?.state !== 'action-required');
     retry.addEventListener('click', () => {
       if (latest) void this.retry(destination, latest.id, retry);
     });
-    const remove = this.el.document.createElement('button');
-    remove.type = 'button';
-    remove.textContent = 'Delete';
-    remove.addEventListener('click', () => void this.remove(destination, remove));
-    actions.append(test, send, retry, remove);
+    const automation = this.el.document.createElement('button');
+    automation.type = 'button';
+    automation.textContent = destination.enabled ? 'Disable automation' : 'Enable automation';
+    automation.addEventListener('click', () => void this.setAutomation(destination, !destination.enabled, automation));
+    const disconnect = this.el.document.createElement('button');
+    disconnect.type = 'button';
+    disconnect.textContent = 'Disconnect';
+    disconnect.addEventListener('click', () => void this.remove(destination, disconnect));
+    actions.append(test, send, retry, automation, disconnect);
     row.append(copy, actions, media);
     return row;
   }
@@ -302,7 +306,7 @@ export class IntegrationSettingsController {
       const response = await sendToBackground({ type: 'TEST_INTEGRATION', destinationId: destination.id });
       if (!response.ok) throw new Error(response.error);
       if (response.result.ok && response.result.mediaCapability) {
-        if (media && destination.enabled) media.hidden = false;
+        if (media) media.hidden = false;
         const origins = response.result.mediaCapability.upload.origins;
         const patterns = origins.map((origin) => `https://${new URL(origin).hostname}/*`);
         const missing: string[] = [];
@@ -386,10 +390,54 @@ export class IntegrationSettingsController {
     }
   }
 
+  private async setAutomation(
+    destination: IntegrationDestination,
+    enabled: boolean,
+    button: HTMLButtonElement,
+  ): Promise<void> {
+    button.disabled = true;
+    this.setStatus(`${enabled ? 'Enabling' : 'Disabling'} automation for ${destination.name}…`);
+    try {
+      const response = await sendToBackground({
+        type: 'SET_INTEGRATION_ENABLED',
+        destinationId: destination.id,
+        enabled,
+      });
+      if (!response.ok) throw new Error(response.error);
+      this.setStatus(enabled
+        ? `Automation enabled for ${destination.name}. New recordings can use this destination again.`
+        : `Automation disabled for ${destination.name}. New and pending exports are stopped; existing remote media stays playable while the connection is retained.`);
+      this.onDestinationsChanged();
+      await this.refresh();
+    } catch (error) {
+      this.setStatus(`Could not ${enabled ? 'enable' : 'disable'} automation: ${String(error)}`, true);
+      button.disabled = false;
+    }
+  }
+
   private async remove(destination: IntegrationDestination, button: HTMLButtonElement): Promise<void> {
     button.disabled = true;
-    this.setStatus(`Deleting ${destination.name}…`);
     try {
+      const impact = await sendToBackground({
+        type: 'GET_INTEGRATION_DISCONNECT_IMPACT',
+        destinationId: destination.id,
+      });
+      if (!impact.ok) throw new Error(impact.error);
+      const count = impact.affectedRecordings;
+      const playback = count === 1
+        ? '1 recording has a remote media copy through this connection.'
+        : `${count} recordings have remote media copies through this connection.`;
+      const confirmed = window.confirm(
+        `Disconnect ${destination.name}?\n\n`
+        + `${playback} Disconnecting removes the stored credentials, so those remote copies will no longer play in the extension. `
+        + 'Any pending exports are stopped. Data and media already stored by the receiver are not deleted.',
+      );
+      if (!confirmed) {
+        button.disabled = false;
+        this.setStatus(`Kept ${destination.name} connected.`);
+        return;
+      }
+      this.setStatus(`Disconnecting ${destination.name}…`);
       const response = await sendToBackground({
         type: 'DELETE_INTEGRATION',
         destinationId: destination.id,
@@ -397,16 +445,16 @@ export class IntegrationSettingsController {
       if (!response.ok) throw new Error(response.error);
       if (response.hostPermissionCleanup === 'failed') {
         this.setStatus(
-          `Deleted ${destination.name} and its stored credentials, but the browser host permission could not be cleaned up.`,
+          `Disconnected ${destination.name} and removed its stored credentials. Receiver data/media were not deleted, but the browser host permission could not be cleaned up.`,
           true,
         );
       } else {
-        this.setStatus(`Deleted ${destination.name} and its stored credentials.`);
+        this.setStatus(`Disconnected ${destination.name} and removed its stored credentials. Receiver data/media were not deleted.`);
       }
       this.onDestinationsChanged();
       await this.refresh();
     } catch (error) {
-      this.setStatus(`Delete failed: ${String(error)}`, true);
+      this.setStatus(`Disconnect failed: ${String(error)}`, true);
       button.disabled = false;
     }
   }

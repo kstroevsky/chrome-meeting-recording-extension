@@ -41,7 +41,7 @@ export async function handlePlaybackMessage(
       sendResponse({ ok: false, error: 'This recording no longer owns this media artifact' });
       return true;
     }
-    const client = await deps.integrations.mediaClient(msg.destinationId);
+    const client = await deps.integrations.playbackMediaClient(msg.destinationId);
     const signed = await client.playback(msg.artifactId);
     // The token stays in background; the page receives only the short-lived media URL.
     sendResponse({ ok: true, url: signed.url });

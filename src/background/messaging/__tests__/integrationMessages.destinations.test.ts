@@ -10,6 +10,8 @@ function deps(historyId?: string) {
     beginRecordingRouting: jest.fn(async () => ({ scheduled: ['destination_crm'], unavailable: [] })),
     retryRecordingRouting: jest.fn(async () => ({ scheduled: ['destination_crm'], unavailable: [] })),
     recordingRoutes: jest.fn(async () => VIEW),
+    setDestinationEnabled: jest.fn(async (_id: string, enabled: boolean) => ({ id: 'destination_crm', enabled })),
+    disconnectImpact: jest.fn(async () => ({ affectedRecordings: 63 })),
   };
   const destinations = {
     list: jest.fn(async () => ({ destinations: [], rememberedId: 'profile-crm' })),
@@ -18,7 +20,16 @@ function deps(historyId?: string) {
     routesForRecording: jest.fn(async () => ROUTES),
   };
   const session = { getSnapshot: () => ({ historyId }) };
-  return { integrations, destinations, all: { integrations, destinations, session } as never };
+  const externalMedia = {
+    reconcileRecording: jest.fn(async () => {}),
+    cancelDestination: jest.fn(async () => {}),
+    cancelDestinationStrict: jest.fn(async () => {}),
+    userStatuses: jest.fn(async () => [{ recordingId: 'r1', state: 'uploading' }]),
+    retryTransfer: jest.fn(async () => ({ recordingId: 'r1', state: 'queued' })),
+  };
+  const L = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  return { integrations, destinations, externalMedia,
+    all: { integrations, destinations, externalMedia, session, L } as never };
 }
 
 describe('destination and routing messages', () => {
@@ -55,8 +66,87 @@ describe('destination and routing messages', () => {
       ctx.all,
     );
     expect(ctx.integrations.confirmRecordingRoutes).toHaveBeenCalledWith('r1', ['destination_crm']);
+    expect(ctx.externalMedia.reconcileRecording).toHaveBeenCalledWith('r1');
     await handleIntegrationMessage({ type: 'RETRY_RECORDING_ROUTING', recordingId: 'r1' }, jest.fn(), ctx.all);
     expect(ctx.integrations.retryRecordingRouting).toHaveBeenCalledWith('r1', ROUTES);
+  });
+
+  it('disables automation and cancels media work without disconnecting the integration', async () => {
+    const ctx = deps();
+    const respond = jest.fn();
+
+    await handleIntegrationMessage(
+      { type: 'SET_INTEGRATION_ENABLED', destinationId: 'destination_crm', enabled: false },
+      respond,
+      ctx.all,
+    );
+
+    expect(ctx.integrations.setDestinationEnabled).toHaveBeenCalledWith('destination_crm', false);
+    expect(ctx.externalMedia.cancelDestination).toHaveBeenCalledWith('destination_crm');
+    expect(ctx.externalMedia.cancelDestinationStrict).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      ok: true,
+      destination: { id: 'destination_crm', enabled: false },
+    });
+  });
+
+  it('reports disconnect impact and stops local work before deleting credentials', async () => {
+    const ctx = deps();
+    const order: string[] = [];
+    ctx.integrations.setDestinationEnabled.mockImplementation(async () => {
+      order.push('disable');
+      return { id: 'destination_crm', enabled: false };
+    });
+    ctx.externalMedia.cancelDestinationStrict.mockImplementation(async () => { order.push('cancel-media'); });
+    (ctx.integrations as any).deleteDestination = jest.fn(async () => {
+      order.push('delete');
+      return { removed: true };
+    });
+    const respond = jest.fn();
+
+    await handleIntegrationMessage(
+      { type: 'GET_INTEGRATION_DISCONNECT_IMPACT', destinationId: 'destination_crm' },
+      respond,
+      ctx.all,
+    );
+    expect(respond).toHaveBeenLastCalledWith({ ok: true, affectedRecordings: 63 });
+
+    await handleIntegrationMessage(
+      { type: 'DELETE_INTEGRATION', destinationId: 'destination_crm' },
+      respond,
+      ctx.all,
+    );
+
+    expect(order).toEqual(['disable', 'cancel-media', 'delete']);
+    expect(respond).toHaveBeenLastCalledWith({ ok: true, removed: true });
+  });
+
+  it('lists sanitized media progress and routes explicit retry through the media coordinator', async () => {
+    const ctx = deps();
+    const respond = jest.fn();
+
+    await handleIntegrationMessage(
+      { type: 'LIST_EXTERNAL_MEDIA_TRANSFERS', recordingId: 'r1' },
+      respond,
+      ctx.all,
+    );
+    expect(ctx.externalMedia.userStatuses).toHaveBeenCalledWith('r1');
+    expect(respond).toHaveBeenLastCalledWith({
+      ok: true,
+      transfers: [{ recordingId: 'r1', state: 'uploading' }],
+    });
+
+    await handleIntegrationMessage(
+      { type: 'RETRY_EXTERNAL_MEDIA_TRANSFER', destinationId: 'crm', clientTransferId: 'transfer-1' },
+      respond,
+      ctx.all,
+    );
+    expect(ctx.externalMedia.retryTransfer).toHaveBeenCalledWith('crm', 'transfer-1');
+    expect(isPopupToBgMessage({
+      type: 'RETRY_EXTERNAL_MEDIA_TRANSFER',
+      destinationId: 'crm',
+      clientTransferId: 'transfer-1',
+    })).toBe(true);
   });
 
   it('lists finished recordings whose routes still wait, leaving out ones another prompt owns', async () => {
@@ -111,6 +201,9 @@ describe('destination and routing messages', () => {
 
   it('validates the new messages at the protocol boundary', () => {
     expect(isPopupToBgMessage({ type: 'LIST_RECORDING_DESTINATIONS' })).toBe(true);
+    expect(isPopupToBgMessage({ type: 'SET_INTEGRATION_ENABLED', destinationId: 'd', enabled: false })).toBe(true);
+    expect(isPopupToBgMessage({ type: 'SET_INTEGRATION_ENABLED', destinationId: 'd', enabled: 'no' })).toBe(false);
+    expect(isPopupToBgMessage({ type: 'GET_INTEGRATION_DISCONNECT_IMPACT', destinationId: 'd' })).toBe(true);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: 'd', name: 'CRM' } })).toBe(true);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: '' } })).toBe(false);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: 'd', id: 7 } })).toBe(false);

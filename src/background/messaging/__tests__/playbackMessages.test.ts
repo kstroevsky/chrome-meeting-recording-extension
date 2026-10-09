@@ -58,7 +58,7 @@ describe('playback message lease handoff', () => {
 
 describe('external playback capability authorization', () => {
   const artifactId = 'media_12345678-1234-1234-1234-123456789abc';
-  const mediaClient = jest.fn();
+  const playbackMediaClient = jest.fn();
   const playback = { getManifest: jest.fn() };
   const prepare = (overrides: Record<string, unknown> = {}) => ({
     type: 'PREPARE_EXTERNAL_PLAYBACK_SOURCE', recordingId: 'r1', fileId: 'r1:tab',
@@ -72,7 +72,7 @@ describe('external playback capability authorization', () => {
 
   beforeEach(() => {
     playback.getManifest.mockReset().mockResolvedValue(manifest);
-    mediaClient.mockReset().mockResolvedValue({ playback: jest.fn().mockResolvedValue({
+    playbackMediaClient.mockReset().mockResolvedValue({ playback: jest.fn().mockResolvedValue({
       url: 'https://storage.example.test/presigned?signature=1', expiresAt: '2026-10-09T00:00:00Z',
     }) });
   });
@@ -80,7 +80,7 @@ describe('external playback capability authorization', () => {
   async function send(msg = prepare(), from = sender) {
     const response = jest.fn();
     const handled = await handlePlaybackMessage(msg as never, from, response, {
-      playback, integrations: { mediaClient },
+      playback, integrations: { playbackMediaClient },
     } as never);
     expect(handled).toBe(true);
     return response;
@@ -88,7 +88,7 @@ describe('external playback capability authorization', () => {
 
   it('mints a URL only for a live track and returns no bearer credential', async () => {
     const response = await send();
-    expect(mediaClient).toHaveBeenCalledWith('destination_1');
+    expect(playbackMediaClient).toHaveBeenCalledWith('destination_1');
     expect(response).toHaveBeenCalledWith({
       ok: true, url: 'https://storage.example.test/presigned?signature=1',
     });
@@ -104,7 +104,7 @@ describe('external playback capability authorization', () => {
   ])('rejects %s', async (_reason, from) => {
     const response = await send(prepare(), from as chrome.runtime.MessageSender);
     expect(response).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
-    expect(mediaClient).not.toHaveBeenCalled();
+    expect(playbackMediaClient).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -116,13 +116,13 @@ describe('external playback capability authorization', () => {
   ])('rejects %s association', async (_reason, override) => {
     const response = await send(prepare(override));
     expect(response).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
-    expect(mediaClient).not.toHaveBeenCalled();
+    expect(playbackMediaClient).not.toHaveBeenCalled();
   });
 
   it('rejects deleted or tombstoned recordings before obtaining a client', async () => {
     playback.getManifest.mockResolvedValue(undefined);
     const response = await send();
     expect(response).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
-    expect(mediaClient).not.toHaveBeenCalled();
+    expect(playbackMediaClient).not.toHaveBeenCalled();
   });
 });

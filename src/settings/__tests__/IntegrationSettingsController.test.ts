@@ -78,6 +78,7 @@ function destination() {
 
 describe('IntegrationSettingsController', () => {
   beforeEach(() => {
+    window.confirm = jest.fn(() => true);
     containsPermission.mockReset().mockResolvedValue(false);
     removePermission.mockReset().mockResolvedValue(true);
     permission.mockReset().mockResolvedValue(true);
@@ -371,6 +372,93 @@ describe('IntegrationSettingsController', () => {
     expect(sendButton.disabled).toBe(true);
   });
 
+  it('separates automation disable from disconnect and keeps configured media visible', async () => {
+    let current = {
+      ...destination(),
+      media: {
+        secretId: 'secret_media',
+        capability: {
+          version: 1 as const,
+          apiBase: 'https://crm.example.test/api/media',
+          upload: { strategy: 'multipart-put-v1' as const, origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' as const },
+        },
+      },
+    };
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') {
+        return { ok: true, recordings: [{ id: 'recording_1', name: 'Weekly sync', available: true }] } as any;
+      }
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [current] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'SET_INTEGRATION_ENABLED') {
+        current = { ...current, enabled: message.enabled };
+        return { ok: true, destination: current } as any;
+      }
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+
+    const changed = jest.fn();
+    await mount(changed).init();
+    expect(document.querySelector<HTMLElement>('.integration-media')!.hidden).toBe(false);
+    const disable = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Disable automation')!;
+    disable.click();
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+
+    expect(send).toHaveBeenCalledWith({
+      type: 'SET_INTEGRATION_ENABLED',
+      destinationId: 'destination_1',
+      enabled: false,
+    });
+    expect(changed).toHaveBeenCalled();
+    expect(document.getElementById('integration-status')?.textContent).toContain('New and pending exports are stopped');
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'));
+    expect(buttons.find((button) => button.textContent === 'Enable automation')).toBeDefined();
+    expect(buttons.find((button) => button.textContent === 'Send recording')?.disabled).toBe(true);
+    expect(document.querySelector<HTMLElement>('.integration-media')!.hidden).toBe(false);
+  });
+
+  it('requires the disconnect playback consequence to be confirmed before deleting credentials', async () => {
+    const confirm = window.confirm as jest.MockedFunction<typeof window.confirm>;
+    confirm.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'GET_INTEGRATION_DISCONNECT_IMPACT') {
+        return { ok: true, affectedRecordings: 63 } as any;
+      }
+      if (message.type === 'DELETE_INTEGRATION') {
+        return {
+          ok: true,
+          removed: true,
+          hostPermissionRemoved: true,
+          hostPermissionCleanup: 'removed',
+        } as any;
+      }
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+
+    const disconnect = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Disconnect')!;
+    disconnect().click();
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'DELETE_INTEGRATION' }));
+    expect(confirm.mock.calls[0]?.[0]).toContain('63 recordings');
+    expect(confirm.mock.calls[0]?.[0]).toContain('will no longer play in the extension');
+    expect(confirm.mock.calls[0]?.[0]).toContain('are not deleted');
+
+    disconnect().click();
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+    expect(send).toHaveBeenCalledWith({
+      type: 'DELETE_INTEGRATION',
+      destinationId: 'destination_1',
+    });
+    expect(document.getElementById('integration-status')?.textContent).toContain('Receiver data/media were not deleted');
+  });
+
   it('reports a cleanup warning without calling a committed destination deletion failed', async () => {
     const controller = mount();
     send.mockImplementation(async (message: any) => {
@@ -379,6 +467,7 @@ describe('IntegrationSettingsController', () => {
       }
       if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
       if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'GET_INTEGRATION_DISCONNECT_IMPACT') return { ok: true, affectedRecordings: 2 } as any;
       if (message.type === 'DELETE_INTEGRATION') {
         return {
           ok: true,
@@ -391,15 +480,15 @@ describe('IntegrationSettingsController', () => {
     });
     await controller.init();
 
-    const deleteButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
-      .find((button) => button.textContent === 'Delete')!;
-    deleteButton.click();
+    const disconnectButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Disconnect')!;
+    disconnectButton.click();
     for (let i = 0; i < 8; i += 1) await Promise.resolve();
 
     const status = document.getElementById('integration-status')?.textContent ?? '';
-    expect(status).toContain('Deleted CRM');
+    expect(status).toContain('Disconnected CRM');
     expect(status).toContain('permission');
-    expect(status).not.toContain('Delete failed');
+    expect(status).not.toContain('Disconnect failed');
   });
 
   it('offers manual retry for the latest failed delivery and reuses its durable identity path', async () => {

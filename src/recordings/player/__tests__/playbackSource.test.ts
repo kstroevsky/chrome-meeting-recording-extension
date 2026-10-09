@@ -83,8 +83,12 @@ describe('createPlaybackTrackResolver', () => {
     const resolved = await resolve('r1', track([{ kind: 'external', destinationId: 'd1', artifactId: 'media_1' }]));
     expect(resolved?.url).toBe('https://storage.example/initial');
     expect(prepareExternalSource).toHaveBeenCalledWith('r1', 'r1:tab', 'd1', 'media_1', false);
-    await expect(resolved?.refresh?.()).resolves.toMatchObject({ url: 'https://storage.example/fresh' });
+    const refreshed = await resolved?.refresh?.();
+    expect(refreshed).toMatchObject({ url: 'https://storage.example/fresh' });
+    expect(refreshed?.refresh).toBeDefined();
+    await expect(refreshed?.refresh?.()).resolves.toMatchObject({ url: 'https://storage.example/fresh' });
     expect(prepareExternalSource).toHaveBeenLastCalledWith('r1', 'r1:tab', 'd1', 'media_1', true);
+    expect(prepareExternalSource).toHaveBeenCalledTimes(3);
   });
 
   it('tries a second external destination if the first fails', async () => {

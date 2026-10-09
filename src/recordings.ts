@@ -39,6 +39,8 @@ if (list && empty && error) {
     play: (recordingId) => void controller.play(recordingId),
     fileTo: (recordingId, presetId) => void controller.fileTo(recordingId, presetId),
     loadMore: () => void controller.loadMore(),
+    retryExternalMedia: (destinationId, clientTransferId) =>
+      void controller.retryExternalMedia(destinationId, clientTransferId),
     ...(sharingEnabled ? {
       share: (recordingIds, options, report) => controller.share(recordingIds, options, report),
       shareSnapshot: () => controller.shareSnapshot(),

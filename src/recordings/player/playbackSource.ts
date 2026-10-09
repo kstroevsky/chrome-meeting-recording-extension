@@ -45,19 +45,16 @@ export type PlaybackUrlDeps = {
  */
 export function createPlaybackTrackResolver(deps: PlaybackUrlDeps): TrackUrlResolver {
   return async (recordingId, track) => {
-    const resolved = await playbackUrl(recordingId, track, deps);
-    if (!resolved) return undefined;
-
     const canRefresh = track.sources.some((source) => source.kind === 'drive' || source.kind === 'external');
-    return {
-      ...resolved,
-      ...(canRefresh ? {
-        refresh: async (): Promise<ResolvedTrackUrl | undefined> => {
-          const fresh = await playbackUrl(recordingId, track, deps, true);
-          return fresh ? { ...fresh } : undefined;
-        },
-      } : {}),
+    const resolve = async (refresh: boolean): Promise<ResolvedTrackUrl | undefined> => {
+      const resolved = await playbackUrl(recordingId, track, deps, refresh);
+      if (!resolved) return undefined;
+      return {
+        ...resolved,
+        ...(canRefresh ? { refresh: () => resolve(true) } : {}),
+      };
     };
+    return resolve(false);
   };
 }
 

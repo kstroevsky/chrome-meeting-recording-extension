@@ -35,9 +35,25 @@ export async function handleIntegrationMessage(
       sendResponse({ ok: true, created, ...(profile ? { profile } : {}) });
       return true;
     }
-    case 'DELETE_INTEGRATION':
-      sendResponse({ ok: true, ...(await integrations.deleteDestination(msg.destinationId)) });
+    case 'SET_INTEGRATION_ENABLED': {
+      const destination = await integrations.setDestinationEnabled(msg.destinationId, msg.enabled);
+      if (!msg.enabled) await deps.externalMedia?.cancelDestination(msg.destinationId);
+      sendResponse({ ok: true, destination });
       return true;
+    }
+    case 'GET_INTEGRATION_DISCONNECT_IMPACT':
+      sendResponse({ ok: true, ...(await integrations.disconnectImpact(msg.destinationId)) });
+      return true;
+    case 'DELETE_INTEGRATION': {
+      // First close every local automation path while credentials still exist.
+      // If the offscreen transfer cannot be stopped, keep credentials so a
+      // durable job is never left running with an already-forgotten owner.
+      await integrations.setDestinationEnabled(msg.destinationId, false);
+      await deps.externalMedia?.cancelDestinationStrict(msg.destinationId);
+      const result = await integrations.deleteDestination(msg.destinationId);
+      sendResponse({ ok: true, ...result });
+      return true;
+    }
     case 'TEST_INTEGRATION':
       sendResponse({ ok: true, result: await integrations.testDestination(msg.destinationId) });
       return true;
@@ -70,6 +86,17 @@ export async function handleIntegrationMessage(
     case 'RETRY_INTEGRATION_DELIVERY':
       sendResponse({ ok: true, delivery: await integrations.retryDelivery(msg.deliveryId) });
       return true;
+    case 'LIST_EXTERNAL_MEDIA_TRANSFERS':
+      if (!deps.externalMedia) throw new Error('External media uploads are unavailable');
+      sendResponse({ ok: true, transfers: await deps.externalMedia.userStatuses(msg.recordingId) });
+      return true;
+    case 'RETRY_EXTERNAL_MEDIA_TRANSFER':
+      if (!deps.externalMedia) throw new Error('External media uploads are unavailable');
+      sendResponse({
+        ok: true,
+        transfer: await deps.externalMedia.retryTransfer(msg.destinationId, msg.clientTransferId),
+      });
+      return true;
     case 'LIST_RECORDING_DESTINATIONS':
       sendResponse({ ok: true, ...(await requireDestinations(deps).list()) });
       return true;
@@ -93,6 +120,8 @@ export async function handleIntegrationMessage(
       const expected = await deps.destinations?.routesForRecording(recordingId) ?? [];
       if (msg.type === 'CONFIRM_RECORDING_ROUTES') {
         await integrations.confirmRecordingRoutes(recordingId, msg.removedDestinationIds);
+        await deps.externalMedia?.reconcileRecording(recordingId)
+          .catch((error) => deps.L.warn('External media reconciliation deferred:', error));
       } else if (msg.type === 'RETRY_RECORDING_ROUTING' && expected.length) {
         await integrations.retryRecordingRouting(recordingId, expected);
       }

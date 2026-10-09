@@ -62,12 +62,14 @@ describe('REMOVE_RECORDING_HISTORY — routing', () => {
     for (const deleteFiles of [false, true]) {
       const { history, sharing } = deps();
       const integrations = { forgetRecordingRouting: jest.fn(async () => {}) };
+      const externalMedia = { cancelRecording: jest.fn(async () => {}) };
       await handleLibraryMessage(
         { type: 'REMOVE_RECORDING_HISTORY', id: 'r1', ...(deleteFiles ? { deleteFiles } : {}) },
         jest.fn(),
-        { history, sharing, integrations } as never,
+        { history, sharing, integrations, externalMedia } as never,
       );
       expect(integrations.forgetRecordingRouting).toHaveBeenCalledWith('r1');
+      expect(externalMedia.cancelRecording).toHaveBeenCalledWith('r1');
     }
   });
 

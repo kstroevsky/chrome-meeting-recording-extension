@@ -42,6 +42,8 @@ describe('background notation commands', () => {
       closeForUpdate: jest.fn().mockResolvedValue(true),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       releaseBufferedIngress: jest.fn(),
     };

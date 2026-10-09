@@ -11,8 +11,14 @@ import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
  * Best effort: the removal itself already happened and must still be reported.
  */
 async function forgetRouting(recordingId: string, deps: MessageHandlersDeps): Promise<void> {
-  await deps.integrations?.forgetRecordingRouting(recordingId)
-    .catch((error) => console.warn('[library] could not forget recording routing:', error));
+  await Promise.allSettled([
+    deps.integrations?.forgetRecordingRouting(recordingId),
+    deps.externalMedia?.cancelRecording(recordingId),
+  ]).then((results) => {
+    for (const result of results) {
+      if (result.status === 'rejected') console.warn('[library] could not finish recording route cleanup:', result.reason);
+    }
+  });
 }
 
 export async function handleLibraryMessage(

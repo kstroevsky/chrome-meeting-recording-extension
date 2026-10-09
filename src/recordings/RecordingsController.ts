@@ -7,6 +7,7 @@ import { PlayerController } from './player/PlayerController';
 import { createPlaybackTrackResolver } from './player/playbackSource';
 import type { PlayerStatus } from './player/PlayerView';
 import type { PlaybackTrack } from '../shared/playback';
+import type { ExternalMediaTransferStatus } from '../shared/protocol';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
 import type { PublishRecordingOptions, PublishedRecordingInput } from '../sharing/PublishedManifestBuilder';
 import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
@@ -24,13 +25,32 @@ export class RecordingsController {
   /** The whole library's size; `entries` is only what has been paged in. */
   private total: number | undefined;
   private loadingMore = false;
+  private externalMediaTransfers: ExternalMediaTransferStatus[] = [];
+  private externalMediaPoll: ReturnType<typeof setTimeout> | null = null;
   constructor(
     private readonly view: RecordingsView,
     private readonly sharing?: RecordingsSharing,
   ) {}
 
   async init() {
-    await Promise.all([this.refresh(), this.loadDestinations()]);
+    await Promise.all([this.refresh(), this.loadDestinations(), this.refreshExternalMediaTransfers()]);
+  }
+
+  async retryExternalMedia(destinationId: string, clientTransferId: string): Promise<void> {
+    try {
+      const response = await sendToBackground({
+        type: 'RETRY_EXTERNAL_MEDIA_TRANSFER',
+        destinationId,
+        clientTransferId,
+      });
+      if (!response.ok) throw new Error(response.error);
+      this.upsertExternalMediaTransfer(response.transfer);
+      this.view.setExternalMediaTransfers(this.externalMediaTransfers);
+    } catch (error) {
+      this.view.showError(error instanceof Error ? error.message : String(error));
+    } finally {
+      await this.refreshExternalMediaTransfers();
+    }
   }
 
   async share(
@@ -261,6 +281,34 @@ export class RecordingsController {
     }
   }
 
+  private async refreshExternalMediaTransfers(): Promise<void> {
+    if (this.externalMediaPoll) {
+      clearTimeout(this.externalMediaPoll);
+      this.externalMediaPoll = null;
+    }
+    try {
+      const response = await sendToBackground({ type: 'LIST_EXTERNAL_MEDIA_TRANSFERS' });
+      if (!response.ok) return;
+      this.externalMediaTransfers = response.transfers;
+      this.view.setExternalMediaTransfers(response.transfers);
+    } catch {
+      // Recording history stays usable when the offscreen media journal is unavailable.
+    }
+    if (this.externalMediaTransfers.some(pollsExternalMedia)) {
+      this.externalMediaPoll = setTimeout(() => {
+        this.externalMediaPoll = null;
+        void this.refreshExternalMediaTransfers();
+      }, 2_000);
+    }
+  }
+
+  private upsertExternalMediaTransfer(next: ExternalMediaTransferStatus): void {
+    const index = this.externalMediaTransfers.findIndex((transfer) =>
+      transfer.destinationId === next.destinationId && transfer.clientTransferId === next.clientTransferId);
+    if (index < 0) this.externalMediaTransfers.push(next);
+    else this.externalMediaTransfers[index] = next;
+  }
+
   private async refresh() {
     const response = await sendToBackground({ type: 'LIST_RECORDING_HISTORY' });
     if (!response.ok) throw new Error(response.error);
@@ -361,4 +409,10 @@ export class RecordingsController {
       // Same as notes: a missing digest costs search reach, not the list.
     }
   }
+}
+
+function pollsExternalMedia(transfer: ExternalMediaTransferStatus): boolean {
+  return transfer.state === 'pending' || transfer.state === 'queued' || transfer.state === 'uploading' ||
+    transfer.state === 'verifying-capability' || transfer.state === 'retry-wait' ||
+    transfer.state === 'ready-unacknowledged';
 }
