@@ -140,10 +140,13 @@ IndexedDB factory still produced no event delivery and no media route. The three
 focused dialog/routing/planner suites passed 43 tests, extension typecheck passed,
 and the browser Save-to case passed in 15.2 seconds.
 
-R0 is therefore green for JM1–JM10 and JM13–JM19. JM11 remains the explicit R1
-local-source-release milestone, and JM12 remains deliberately reserved for the
-M6 independent receiver. Local OPFS source release must not be enabled from
-capability/HEAD success alone.
+R0 is therefore green for JM1–JM10 and JM13–JM19. R1/JM11 is now green as well:
+the real Chrome/R2 gate verified native remote playback before release, an active
+playback lease deferred physical OPFS deletion while the durable release marker
+removed the history claim, browser restart reconciliation collected the retained
+bytes without re-adopting them, and normal playback then resumed from R2. JM12
+remains deliberately reserved for the M6 independent receiver. Local OPFS source
+release still cannot be enabled from capability/HEAD success alone.
 
 ## Scope and verdict
 
@@ -156,15 +159,15 @@ Phase 1 is deployed according to the owner. Local inspection confirms the events
 routing and receiver foundations exist. Production deployment and the Phase 1
 joint gates were not independently re-run in this review.
 
-The R0 portion of Phase 2 now has an operational, recovery-tested CRM replica and
-safe playback/disconnect behavior. The next implementation slice is R1/JM11:
-explicit “Free up space” with durable lease/release recovery. M3–M6 should follow
-only after that release gate is green; JM12 stays with M6.
+The R0/R1 portion of Phase 2 now has an operational, recovery-tested CRM replica,
+safe playback/disconnect behavior and verified explicit local-source release.
+The next implementation work can proceed to M3–M6 in order; JM12 stays with M6.
 
-Reviewed extension HEAD: `4dd680c` on `feat/save-to-destinations`.
-Reviewed CRM HEAD: `43ddd13d` on `codex/fix-retired-salary-index`.
-The CRM plan already has user/session-owned changes; the extension has unrelated
-untracked files. Preserve both and stage only the files belonging to each task.
+The original review baselines were extension `4dd680c` on
+`feat/save-to-destinations` and CRM `43ddd13d` on
+`codex/fix-retired-salary-index`; the implementation-status and R1 addenda above
+supersede those snapshots. The extension still has unrelated untracked files, so
+stage only files belonging to each task.
 
 ## What already exists
 
@@ -175,8 +178,8 @@ untracked files. Preserve both and stage only the files belonging to each task.
 | CRM provider | Create/status/part/complete/playback endpoints; hash-only tokens; immutable create fingerprint; attempt-specific ID-only storage keys; provider ListParts/HEAD checks; deployment wiring and real-R2 lifecycle coverage | Independent generic receiver proof remains M6/JM12 |
 | CRM limits | Aggregate connection-wide media throttle across handlers/tokens; four-active-upload cap includes completing work; 32 MiB parts, 8 GiB artifact limit, 64 GiB connection quota | Storage limits remain fixed receiver policy rather than negotiated protocol fields |
 | CRM reconciliation | Dedicated media-prefix multipart/object scans, pagination, grace period, DB/provider stale convergence, safe dry-run and redacted completed-orphan report | Completed orphan objects are intentionally report-only; automatic deletion is not part of R0 |
-| Extension executor | Production durable queue/coordinator, provider-authoritative resume, bounded part concurrency, expired-attempt restart, ready acknowledgement and startup reconciliation | Explicit local-source release is deliberately deferred to R1/JM11 |
-| Extension playback | External history locations written by successful transfers; background ownership checks; refreshable external playback with expiry recovery | Deliberate OPFS source release remains R1/JM11 |
+| Extension executor | Production durable queue/coordinator, provider-authoritative resume, bounded part concurrency, expired-attempt restart, ready acknowledgement, startup reconciliation and transfer-guarded retained-source release | R1/JM11 source-release gate is closed; M3–M6 remain |
+| Extension playback | External history locations written by successful transfers; background ownership checks; refreshable external playback with expiry recovery; native remote-playback proof gates explicit OPFS release | R1/JM11 source-release gate is closed; independent receiver proof remains M6/JM12 |
 | Save confirmation | Start-time stream identity and media authorization; held routes; one confirmation removal persists `skipped` and suppresses both event and media work across restart | R0 consent gate is closed; later receiver replacement still requires the existing exact receiver-identity checks |
 
 Primary committed foundations:
@@ -683,6 +686,26 @@ The two controller constructor failures directly match the changed constructor.
 No PostgreSQL integration tests, production schema inspection, real R2 transfers,
 browser E2E, deployment or security-review verdict were completed here.
 
+### R1/JM11 completion addendum
+
+The historical baseline above has since been superseded for the R0/R1 browser
+gates. On 2026-10-09, `@r1-real-media` passed against the local CRM HTTPS pilot
+and the private R2 media bucket. The gate recorded synthetic media into OPFS,
+completed the real multipart R2 transfer, proved native remote playback from the
+exact external artifact, and only then exposed `Free up space`. A live playback
+lease forced cleanup to return `deferred`; history atomically removed the OPFS
+location and persisted the release marker while the physical key remained. After
+the browser/profile restart, startup reconciliation completed with no stale lease
+or deferral, deleted the retained key, preserved the release marker and external
+playback proof, and normal playback advanced from R2.
+
+The gate exposed one runtime wiring bug before it passed: the library adapter
+awaited `PlaybackLeaseManager.deleteOrDefer()` but discarded its disposition, so
+deferred deletion was physically safe but reported as `deleted` to the UI. The
+adapter now propagates the disposition. The JM11 test also asserts the playback
+lease before release and the reconciled lease/deferral state after restart so the
+same reporting/recovery boundary remains observable.
+
 ### Revision 2 executable rechecks
 
 This subsection is also a historical Revision-2 snapshot. In particular, its
@@ -766,8 +789,7 @@ media confirmation, and resolve production limits before rollout. O3's recording
 retention/purge policy remains separately unresolved; receipt retention is already
 a different implemented job. Do not add automatic media deletion under that job.
 
-The first implementation work should be A1/A2 in CRM and B5 in the extension,
-followed by the provider lifecycle tests and durable queue. Prepare a reviewable
-staging migration/CORS plan and the real-R2 harness before changing external
-infrastructure. Only mark a milestone complete when its relevant gates have fresh
-evidence; a commit or unit-test pass alone is insufficient.
+R0 and R1 are now closed with fresh real-R2/browser evidence. Continue with M3,
+then M4 and M5, keeping M6/JM12 as the independent-receiver proof. Only mark a
+milestone complete when its relevant gates have fresh evidence; a commit or
+unit-test pass alone is insufficient.

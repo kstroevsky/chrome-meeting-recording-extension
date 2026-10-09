@@ -39,6 +39,7 @@ const RUN_ATTEMPT_EXPIRY = process.env.R0_RUN_ATTEMPT_EXPIRY === "1";
 const RUN_PLAYBACK_EXPIRY = process.env.R0_RUN_PLAYBACK_EXPIRY === "1";
 const RUN_AUTH_ISOLATION = process.env.R0_RUN_AUTH_ISOLATION === "1";
 const RUN_LIFECYCLE = process.env.R0_RUN_LIFECYCLE === "1";
+const RUN_LOCAL_RELEASE = process.env.R1_RUN_LOCAL_RELEASE === "1";
 const RUN_PROTOCOL_HARDENING =
   process.env.R0_RUN_PROTOCOL_HARDENING === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
@@ -1681,6 +1682,235 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
     }
   });
 
+  test("verifies remote playback before releasing retained media and survives restart @r1-real-media", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_LOCAL_RELEASE,
+      "Set R1_RUN_LOCAL_RELEASE=1 with the real-R2 pilot variables to run JM11.",
+    );
+    test.setTimeout(600_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r1-release-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r1-release-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        { extensionPath, ignoreHTTPSErrors: true },
+      );
+      const configured = await configureRealR2Destination(harness, proxy.origin);
+
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "off",
+        recordSelfVideo: false,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "CONFIRM_RECORDING_ROUTES",
+          recordingId,
+          removedDestinationIds: [],
+        }),
+      ).toEqual(expect.objectContaining({ ok: true }));
+      await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+        480_000,
+      );
+
+      const before = await historyEntry(harness.controlPage, recordingId);
+      const mediaFile = before.files.find((file) =>
+        !file.kind &&
+        file.locations.some((location) => location.kind === "opfs") &&
+        file.locations.some(
+          (location) =>
+            location.kind === "external" &&
+            location.destinationId === configured.created.destination.id,
+        ),
+      );
+      const retained = mediaFile?.locations.find(
+        (location) => location.kind === "opfs",
+      );
+      const external = mediaFile?.locations.find(
+        (location) =>
+          location.kind === "external" &&
+          location.destinationId === configured.created.destination.id,
+      );
+      if (!mediaFile || !retained || retained.kind !== "opfs" || !external || external.kind !== "external") {
+        throw new Error("JM11 recording is missing its retained or external replica");
+      }
+      expect(external.playbackVerifiedAt).toBeUndefined();
+      expect(await opfsKeyExists(harness.controlPage, retained.key)).toBe(true);
+
+      const verifyPage = await harness.context.newPage();
+      await verifyPage.goto(
+        `chrome-extension://${harness.extensionId}/recordings.html`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const verifyRow = verifyPage.locator(
+        `.recording-row[data-recording-id=${JSON.stringify(recordingId)}]`,
+      );
+      await expect(verifyRow).toBeVisible({ timeout: 20_000 });
+      await verifyRow.click();
+      await expect(verifyPage.getByRole("button", { name: "Play remote copy" })).toBeVisible();
+      await expect(verifyPage.getByRole("button", { name: "Free up space" })).toHaveCount(0);
+      await verifyPage.getByRole("button", { name: "Play remote copy" }).click();
+      await expect(verifyPage.locator(".player")).toBeVisible();
+      const remoteVideo = verifyPage.locator(".player__video");
+      await expect.poll(
+        async () => remoteVideo.evaluate((media: HTMLVideoElement) =>
+          media.src ? new URL(media.src).origin : ""),
+        { timeout: 30_000 },
+      ).toBe(R2_UPLOAD_ORIGIN);
+      await expect.poll(
+        async () => remoteVideo.evaluate((media: HTMLVideoElement) => media.currentTime),
+        { timeout: 20_000 },
+      ).toBeGreaterThan(0);
+      await expect.poll(
+        async () => {
+          const current = await historyEntry(harness!.controlPage, recordingId);
+          const location = current.files.find((file) => file.id === mediaFile.id)?.locations.find(
+            (candidate) => candidate.kind === "external" && candidate.artifactId === external.artifactId,
+          );
+          return location?.kind === "external" ? location.playbackVerifiedAt ?? 0 : 0;
+        },
+        { timeout: 20_000, intervals: [100, 250, 500] },
+      ).toBeGreaterThan(0);
+
+      await expect.poll(
+        async () => playbackLeaseCount(verifyPage, recordingId),
+        { timeout: 10_000, intervals: [100, 250, 500] },
+      ).toBe(1);
+
+      // Keep this player tab open: GET_RECORDING_PLAYBACK_MANIFEST acquired an
+      // OPFS lease before the page narrowed the manifest to external-only.
+      // Releasing from a second recordings tab must therefore persist intent
+      // while deferring the physical delete.
+      const releasePage = await harness.context.newPage();
+      await releasePage.goto(
+        `chrome-extension://${harness.extensionId}/recordings.html`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const releaseRow = releasePage.locator(
+        `.recording-row[data-recording-id=${JSON.stringify(recordingId)}]`,
+      );
+      await expect(releaseRow).toBeVisible({ timeout: 20_000 });
+      await releaseRow.click();
+      await expect(releasePage.getByRole("button", { name: "Free up space" })).toBeVisible();
+      expect(await playbackLeaseCount(releasePage, recordingId)).toBe(1);
+      await releasePage.getByRole("button", { name: "Free up space" }).click();
+      await expect(releasePage.locator("#recordings-error")).toContainText(
+        "marked for release and will be cleaned up automatically",
+      );
+
+      await expect.poll(
+        async () => {
+          const current = await historyEntry(harness!.controlPage, recordingId);
+          const file = current.files.find((candidate) => candidate.id === mediaFile.id);
+          return {
+            retainedLocations: file?.locations.filter((location) => location.kind === "opfs").length ?? -1,
+            releaseMarkers: file?.releasedRetainedMedia?.filter((marker) => marker.key === retained.key).length ?? 0,
+          };
+        },
+        { timeout: 20_000, intervals: [100, 250, 500] },
+      ).toEqual({ retainedLocations: 0, releaseMarkers: 1 });
+      expect(await opfsKeyExists(releasePage, retained.key)).toBe(true);
+
+      harness = await restartExtensionHarness(harness, { ignoreHTTPSErrors: true });
+      await expect.poll(
+        async () => (await retainedMediaRecoverySnapshot(harness!.controlPage, recordingId)).reconciled,
+        { timeout: 30_000, intervals: [100, 250, 500, 1_000] },
+      ).toBe(true);
+      expect(await retainedMediaRecoverySnapshot(harness.controlPage, recordingId)).toEqual({
+        reconciled: true,
+        leaseCount: 0,
+        deferred: false,
+      });
+      await expect.poll(
+        async () => opfsKeyExists(harness!.controlPage, retained.key),
+        { timeout: 30_000, intervals: [100, 250, 500, 1_000] },
+      ).toBe(false);
+      const recovered = await historyEntry(harness.controlPage, recordingId);
+      const recoveredFile = recovered.files.find((file) => file.id === mediaFile.id);
+      expect(recoveredFile?.locations.some((location) => location.kind === "opfs")).toBe(false);
+      expect(recoveredFile?.releasedRetainedMedia).toEqual(
+        expect.arrayContaining([expect.objectContaining({ key: retained.key })]),
+      );
+      expect(recoveredFile?.locations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "external",
+            destinationId: configured.created.destination.id,
+            artifactId: external.artifactId,
+            playbackVerifiedAt: expect.any(Number),
+          }),
+        ]),
+      );
+
+      const afterRestart = await harness.context.newPage();
+      await afterRestart.goto(
+        `chrome-extension://${harness.extensionId}/recordings.html`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const restartedRow = afterRestart.locator(
+        `.recording-row[data-recording-id=${JSON.stringify(recordingId)}]`,
+      );
+      await expect(restartedRow).toBeVisible({ timeout: 20_000 });
+      await restartedRow.click();
+      await afterRestart.locator(".modal-button--watch").click();
+      await expect(afterRestart.locator(".player")).toBeVisible();
+      const restartedVideo = afterRestart.locator(".player__video");
+      await expect.poll(
+        async () => restartedVideo.evaluate((media: HTMLVideoElement) =>
+          media.src ? new URL(media.src).origin : ""),
+        { timeout: 30_000 },
+      ).toBe(R2_UPLOAD_ORIGIN);
+      await expect.poll(
+        async () => restartedVideo.evaluate((media: HTMLVideoElement) => media.currentTime),
+        { timeout: 20_000 },
+      ).toBeGreaterThan(0);
+
+      await testInfo.attach("jm11-retained-release-evidence.json", {
+        body: JSON.stringify(
+          {
+            recordingId,
+            destinationId: configured.created.destination.id,
+            artifactId: external.artifactId,
+            externalPlaybackVerified: true,
+            releaseDeferredByPlaybackLease: true,
+            retainedBytesPresentAfterReleaseIntent: true,
+            retainedBytesPresentAfterRestart: false,
+            releaseMarkerSurvivedRestart: true,
+            externalPlaybackAfterRestart: true,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
+
   test("rejects unsafe upload metadata and keeps R2 keys and content type canonical", async ({}, testInfo) => {
     test.skip(
       !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_PROTOCOL_HARDENING,
@@ -2395,6 +2625,55 @@ async function historyEntry(
   if (!entry)
     throw new Error("Completed recording is missing from extension history");
   return entry;
+}
+
+async function opfsKeyExists(page: Page, key: string): Promise<boolean> {
+  return page.evaluate(async (candidate) => {
+    try {
+      const parts = candidate.split('/').filter(Boolean);
+      if (!parts.length) return false;
+      let directory = await navigator.storage.getDirectory();
+      for (const part of parts.slice(0, -1)) {
+        directory = await directory.getDirectoryHandle(part);
+      }
+      await directory.getFileHandle(parts[parts.length - 1]);
+      return true;
+    } catch {
+      return false;
+    }
+  }, key);
+}
+
+async function playbackLeaseCount(page: Page, recordingId: string): Promise<number> {
+  return page.evaluate(async (id) => {
+    const stored = (await chrome.storage.session.get("playbackLeases")) as {
+      playbackLeases?: { leases?: Array<{ recordingId?: string }> };
+    };
+    return stored.playbackLeases?.leases?.filter((lease) => lease.recordingId === id).length ?? 0;
+  }, recordingId);
+}
+
+async function retainedMediaRecoverySnapshot(
+  page: Page,
+  recordingId: string,
+): Promise<{ reconciled: boolean; leaseCount: number; deferred: boolean }> {
+  return page.evaluate(async (id) => {
+    const stored = (await chrome.storage.session.get([
+      "playbackLeases",
+      "retainedMediaReconciled",
+    ])) as {
+      retainedMediaReconciled?: boolean;
+      playbackLeases?: {
+        leases?: Array<{ recordingId?: string }>;
+        deferred?: Record<string, string[]>;
+      };
+    };
+    return {
+      reconciled: stored.retainedMediaReconciled === true,
+      leaseCount: stored.playbackLeases?.leases?.filter((lease) => lease.recordingId === id).length ?? 0,
+      deferred: Boolean(stored.playbackLeases?.deferred?.[id]?.length),
+    };
+  }, recordingId);
 }
 
 async function waitForCrmRecording(

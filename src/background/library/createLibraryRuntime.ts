@@ -94,7 +94,7 @@ export function createLibraryRuntime({
       if (failed) throw new Error('Dependent recording cleanup incomplete');
     },
     async (keys, historyId) => {
-      await playbackLeases.deleteOrDefer(historyId, keys);
+      return await playbackLeases.deleteOrDefer(historyId, keys);
     },
     logger.warn,
     onIntegrationChanged,
