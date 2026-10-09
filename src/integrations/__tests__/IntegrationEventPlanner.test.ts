@@ -457,7 +457,7 @@ describe('IntegrationEventPlanner — routes held until the save is confirmed', 
     await routing.begin(recordingId, [{ destinationId: 'destination_1', mode: 'auto' }]);
 
     expect(await routing.authorizedMediaRoutes(recordingId)).toEqual([]);
-    await routing.confirm(recordingId, ['destination_1']);
+    await routing.confirm(recordingId, [{ destinationId: 'destination_1', action: 'skip' }]);
     expect(await ctx.routing.get(recordingId)).toEqual(expect.objectContaining({
       destinations: [expect.objectContaining({
         destinationId: 'destination_1',
