@@ -132,6 +132,10 @@ describe('RecordingController — Save to destination at Start', () => {
       expectedRoutes,
     );
     expect(routing.begin).toHaveBeenCalledWith(historyId, expectedRoutes);
+    expect(offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'OFFSCREEN_START',
+      externalPrimaryDestinationId: 'destination_crm',
+    }));
   });
 
   it('uses one combined route when the external primary receiver also receives data', async () => {

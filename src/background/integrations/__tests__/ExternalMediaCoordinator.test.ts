@@ -114,17 +114,26 @@ function setup() {
     }),
   };
   const retryScheduler = { sync: jest.fn(async () => {}), observe: jest.fn(async () => {}) };
+  const recordingContexts: { get: jest.Mock } = {
+    get: jest.fn(async () => ({
+      recordingId: 'recording-local',
+      startedAt: 1,
+      endedAt: 2,
+      source: { kind: 'meeting' as const },
+    })),
+  };
   const logger = { warn: jest.fn() };
   const coordinator = new ExternalMediaCoordinator({
     offscreen: offscreen as any,
     integrations: integrations as any,
     history: history as any,
     historyRepository: historyRepository as any,
+    recordingContexts: recordingContexts as any,
     listHistory: async () => [current],
     retryScheduler: retryScheduler as any,
     logger,
   });
-  return { coordinator, offscreen, integrations, history, historyRepository, retryScheduler,
+  return { coordinator, offscreen, integrations, history, historyRepository, recordingContexts, retryScheduler,
     setEntry: (next: RecordingHistoryEntry) => { current = next; },
     setTransfers: (next: ExternalMediaTransferView[]) => { transfers = next; } };
 }
@@ -185,6 +194,83 @@ describe('ExternalMediaCoordinator', () => {
       route,
       fileId: 'recording-local:tab',
       sealed: true,
+    }));
+  });
+
+  it('does not upload before capture finalization even when retained media is already present', async () => {
+    const ctx = setup();
+    ctx.recordingContexts.get.mockResolvedValueOnce({
+      recordingId: 'recording-local',
+      startedAt: 1,
+      source: { kind: 'meeting' },
+    });
+
+    await ctx.coordinator.reconcileRecording('recording-local');
+
+    expect(ctx.integrations.mediaGrant).not.toHaveBeenCalled();
+    expect(ctx.offscreen.rpc).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'OFFSCREEN_MEDIA_ENQUEUE' }));
+  });
+
+  it('uploads sealed media after capture finalization even when a local sidecar makes history partial', async () => {
+    const ctx = setup();
+    const current = externalPrimaryEntry();
+    ctx.setEntry({
+      ...current,
+      status: 'partial',
+      files: [
+        ...current.files,
+        {
+          id: 'recording-local:notes',
+          stream: 'tab',
+          kind: 'notes',
+          filename: 'interview-notes.vtt',
+          mimeType: 'text/vtt',
+          locations: [],
+          delivery: { requested: 'local', status: 'failed' },
+          destination: 'local',
+          status: 'unavailable',
+        },
+      ],
+    });
+
+    await ctx.coordinator.reconcileRecording('recording-local');
+
+    expect(ctx.offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'OFFSCREEN_MEDIA_ENQUEUE',
+      fileId: 'recording-local:tab',
+    }));
+  });
+
+  it('reruns reconciliation when the retained OPFS location lands during an in-flight pass', async () => {
+    const ctx = setup();
+    const retained = externalPrimaryEntry();
+    const beforeRetention = {
+      ...retained,
+      files: retained.files.map((file) => ({ ...file, locations: [] })),
+    };
+    ctx.setEntry(beforeRetention);
+
+    let entered!: () => void;
+    let release!: () => void;
+    const firstReadStarted = new Promise<void>((resolve) => { entered = resolve; });
+    const firstReadBlocked = new Promise<void>((resolve) => { release = resolve; });
+    ctx.historyRepository.get.mockImplementationOnce(async () => {
+      entered();
+      await firstReadBlocked;
+      return beforeRetention;
+    });
+
+    const first = ctx.coordinator.reconcileRecording('recording-local');
+    await firstReadStarted;
+    ctx.setEntry(retained);
+    const second = ctx.coordinator.reconcileRecording('recording-local');
+    release();
+    await Promise.all([first, second]);
+
+    expect(ctx.historyRepository.get).toHaveBeenCalledTimes(2);
+    expect(ctx.offscreen.rpc).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'OFFSCREEN_MEDIA_ENQUEUE',
+      fileId: 'recording-local:tab',
     }));
   });
 

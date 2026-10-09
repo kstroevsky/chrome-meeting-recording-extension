@@ -250,6 +250,29 @@ describe('OffscreenManager', () => {
     );
   });
 
+  it('routes only well-formed external-primary retention handoffs', () => {
+    manager.attachPort(mockPort);
+    manager.onRetainedPrimary = jest.fn();
+    const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
+    const valid = {
+      type: 'OFFSCREEN_RETAINED_PRIMARY',
+      historyId: 'recording:1',
+      destinationId: 'destination_crm',
+      stream: 'tab',
+      filename: 'tab.webm',
+      bytes: 1024,
+      retainedKey: 'library/recording%3A1/recording%3A1%3Atab/tab.webm',
+      retainedAt: 100,
+    };
+
+    onMessageListener(valid);
+    onMessageListener({ ...valid, bytes: -1 });
+    onMessageListener({ ...valid, stream: 'notes' });
+
+    expect(manager.onRetainedPrimary).toHaveBeenCalledTimes(1);
+    expect(manager.onRetainedPrimary).toHaveBeenCalledWith(valid);
+  });
+
   it('buffers state replay until canonical session hydration releases ingress', () => {
     const gated = new OffscreenManager();
     const onStateChanged = jest.fn();

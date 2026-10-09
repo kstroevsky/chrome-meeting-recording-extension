@@ -207,6 +207,28 @@ describe('OffscreenController', () => {
       expect(finalize).toHaveBeenCalledWith({ artifacts: [expect.objectContaining({ stream: 'tab' })], storageMode: 'local', historyId: 'history-local-with-uploads' });
     });
 
+    it('passes the frozen external primary destination into local capture finalization', async () => {
+      const { controller } = makeController();
+      const { finalize } = attach(controller, { artifacts: [artifact('tab')] });
+      controller.onStartRequested(
+        { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        'local',
+        10,
+        'history-external',
+        'telemetry-1',
+        'destination_crm',
+      );
+
+      await controller.finalize();
+
+      expect(finalize).toHaveBeenCalledWith({
+        artifacts: [expect.objectContaining({ stream: 'tab' })],
+        storageMode: 'local',
+        historyId: 'history-external',
+        externalPrimaryDestinationId: 'destination_crm',
+      });
+    });
+
     it('shares one in-flight run across concurrent finalize calls', async () => {
       const { controller } = makeController();
       let release!: () => void;

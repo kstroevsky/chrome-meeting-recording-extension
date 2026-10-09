@@ -35,6 +35,7 @@ function wire(overrides: Partial<Record<string, any>> = {}) {
     retryUpload: overrides.retryUpload ?? jest.fn().mockReturnValue(true),
     cancelUpload: overrides.cancelUpload ?? jest.fn().mockReturnValue(true),
     acknowledgeUploadState: overrides.acknowledgeUploadState ?? jest.fn().mockResolvedValue(undefined),
+    acknowledgeRetainedPrimary: overrides.acknowledgeRetainedPrimary,
     analyzeTranscript: overrides.analyzeTranscript,
     listAnalysisWork: overrides.listAnalysisWork,
     cancelAnalysis: overrides.cancelAnalysis,
@@ -167,6 +168,37 @@ describe('offscreen rpc handlers', () => {
         error: 'Missing or invalid recorder settings snapshot',
       });
       expect(engine.startFromStreamId).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed external primary destination snapshot', async () => {
+      const { port, engine, listener } = wire();
+      await listener({ ...validStart(), externalPrimaryDestinationId: '   ' });
+
+      expect(responseFor(port, 'start-1')).toEqual({
+        ok: false,
+        error: 'Missing or invalid external primary destination snapshot',
+      });
+      expect(engine.startFromStreamId).not.toHaveBeenCalled();
+    });
+
+    it('normalizes and freezes the external primary destination for the controller', async () => {
+      const { deps, listener } = wire();
+      await listener({
+        ...validStart(),
+        historyId: 'history-1',
+        telemetryRunId: 'telemetry-1',
+        epoch: 4,
+        externalPrimaryDestinationId: '  destination_crm  ',
+      });
+
+      expect(deps.onStartRequested).toHaveBeenCalledWith(
+        expect.objectContaining({ storageMode: 'local' }),
+        'local',
+        4,
+        'history-1',
+        'telemetry-1',
+        'destination_crm',
+      );
     });
 
     it('rejects a start while the recorder is busy', async () => {
@@ -634,6 +666,27 @@ describe('offscreen rpc handlers', () => {
       await listener({ type: 'OFFSCREEN_ACK_UPLOAD_STATE', jobId: 'job-1' });
 
       expect(acknowledgeUploadState).toHaveBeenCalledWith('job-1');
+    });
+  });
+
+  describe('OFFSCREEN_ACK_RETAINED_PRIMARY (one-way)', () => {
+    it('releases only a well-formed durable retained-media handoff', async () => {
+      const acknowledgeRetainedPrimary = jest.fn().mockResolvedValue(undefined);
+      const { listener } = wire({ acknowledgeRetainedPrimary });
+
+      await listener({
+        type: 'OFFSCREEN_ACK_RETAINED_PRIMARY',
+        historyId: 'recording:1',
+        stream: 'tab',
+      });
+      await listener({
+        type: 'OFFSCREEN_ACK_RETAINED_PRIMARY',
+        historyId: 'recording:1',
+        stream: 'notes',
+      });
+
+      expect(acknowledgeRetainedPrimary).toHaveBeenCalledTimes(1);
+      expect(acknowledgeRetainedPrimary).toHaveBeenCalledWith('recording:1', 'tab');
     });
   });
 });

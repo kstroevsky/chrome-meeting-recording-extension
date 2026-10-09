@@ -6,6 +6,7 @@ import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
 import type { RecordingHistoryRepository } from '../library/history/RecordingHistoryRepository';
 import type { ExternalMediaRetryScheduler } from './ExternalMediaRetryScheduler';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import {
   hasExternalReplica,
   isUploadableMedia,
@@ -23,6 +24,7 @@ type Deps = {
   integrations: BackgroundIntegrationRuntime;
   history: RecordingHistoryService;
   historyRepository: RecordingHistoryRepository;
+  recordingContexts: Pick<RecordingContextService, 'get'>;
   listHistory: () => Promise<RecordingHistoryEntry[]>;
   retryScheduler: ExternalMediaRetryScheduler;
   logger: Logger;
@@ -30,7 +32,7 @@ type Deps = {
 
 /** Background owner of consent/history reconciliation for external media. */
 export class ExternalMediaCoordinator {
-  private readonly recordingRuns = new Map<string, Promise<void>>();
+  private readonly recordingRuns = new Map<string, { again: boolean; done: Promise<void> }>();
   private readonly readyRuns = new Map<string, Promise<void>>();
   private reconcileRun: Promise<void> | null = null;
   private readonly sourceReleaseLocks = new Set<string>();
@@ -59,12 +61,14 @@ export class ExternalMediaCoordinator {
   reconcileRecording(recordingId: string): Promise<void> {
     if (this.sourceReleaseLocks.has(recordingId)) return Promise.resolve();
     const running = this.recordingRuns.get(recordingId);
-    if (running) return running;
-    const run = this.reconcileRecordingNow(recordingId).finally(() => {
-      if (this.recordingRuns.get(recordingId) === run) this.recordingRuns.delete(recordingId);
-    });
-    this.recordingRuns.set(recordingId, run);
-    return run;
+    if (running) {
+      running.again = true;
+      return running.done;
+    }
+    const entry = { again: false, done: Promise.resolve() };
+    this.recordingRuns.set(recordingId, entry);
+    entry.done = this.drainRecordingReconciliation(recordingId, entry);
+    return entry.done;
   }
 
   async withRetainedSourceRelease<T>(
@@ -73,7 +77,7 @@ export class ExternalMediaCoordinator {
     release: () => Promise<T>,
   ): Promise<{ busy: true } | { busy: false; value: T }> {
     const running = this.recordingRuns.get(recordingId);
-    if (running) await running;
+    if (running) await running.done;
     if (this.sourceReleaseLocks.has(recordingId)) return { busy: true };
     this.sourceReleaseLocks.add(recordingId);
     try {
@@ -87,6 +91,27 @@ export class ExternalMediaCoordinator {
       this.sourceReleaseLocks.delete(recordingId);
       void this.reconcileRecording(recordingId);
     }
+  }
+
+  private async drainRecordingReconciliation(
+    recordingId: string,
+    entry: { again: boolean },
+  ): Promise<void> {
+    let failure: { error: unknown } | undefined;
+    try {
+      do {
+        entry.again = false;
+        failure = undefined;
+        try {
+          await this.reconcileRecordingNow(recordingId);
+        } catch (error) {
+          failure = { error };
+        }
+      } while (entry.again);
+    } finally {
+      if (this.recordingRuns.get(recordingId) === entry) this.recordingRuns.delete(recordingId);
+    }
+    if (failure) throw failure.error;
   }
 
   async handleState(transfer: ExternalMediaTransferView): Promise<void> {
@@ -136,7 +161,11 @@ export class ExternalMediaCoordinator {
       await this.cancel({ recordingId });
       return;
     }
-    if (entry.status !== 'complete') return;
+    // Capture finalization is a recording-level fact; aggregate history status
+    // also includes notes/transcript delivery and must not gate media ownership.
+    // A failed local sidecar cannot strand otherwise sealed external-primary media.
+    const context = await this.deps.recordingContexts.get(recordingId);
+    if (context?.endedAt == null) return;
     const [routes, routeViews] = await Promise.all([
       this.deps.integrations.authorizedMediaRoutes(recordingId),
       this.deps.integrations.recordingRoutes(recordingId),

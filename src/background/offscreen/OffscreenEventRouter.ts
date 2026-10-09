@@ -20,6 +20,9 @@ export type OffscreenStateListener = (
 export type OffscreenSaveListener = (
   msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>,
 ) => void;
+export type OffscreenRetainedPrimaryListener = (
+  msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_RETAINED_PRIMARY' }>,
+) => void;
 export type OffscreenUploadListener = (
   job: UploadJob,
   telemetryRunId?: string,
@@ -43,6 +46,7 @@ export class OffscreenEventRouter {
 
   onStateChanged?: OffscreenStateListener;
   onSaveRequested?: OffscreenSaveListener;
+  onRetainedPrimary?: OffscreenRetainedPrimaryListener;
   onUploadJobChanged?: OffscreenUploadListener;
   onAnalysisJobChanged?: OffscreenAnalysisListener;
   onAnalysisResult?: OffscreenAnalysisResultListener;
@@ -135,7 +139,11 @@ export class OffscreenEventRouter {
       return;
     }
 
-    if (msg.type === 'OFFSCREEN_SAVE') this.onSaveRequested?.(msg);
+    if (msg.type === 'OFFSCREEN_SAVE') {
+      this.onSaveRequested?.(msg);
+      return;
+    }
+    if (msg.type === 'OFFSCREEN_RETAINED_PRIMARY') this.onRetainedPrimary?.(msg);
   }
 
   hydratePhase(phase: RecordingPhase): void {

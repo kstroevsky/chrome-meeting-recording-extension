@@ -165,6 +165,9 @@ export class RecordingStartCommands {
         perfSettings: getPerfSettingsSnapshot(),
         historyId: started.historyId ?? '',
         telemetryRunId,
+        ...(destination.mediaTarget?.kind === 'external'
+          ? { externalPrimaryDestinationId: destination.mediaTarget.destinationId }
+          : {}),
         epoch: started.epoch ?? 0,
       });
       await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);

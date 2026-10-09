@@ -33,7 +33,14 @@ export type RpcHandlerDeps = {
   currentEpoch: () => number;
   isFinalizing: () => boolean;
   currentFinalization: () => OffscreenFinalizationState | null;
-  onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number, historyId: string, telemetryRunId?: string) => void;
+  onStartRequested: (
+    runConfig: RecordingRunConfig,
+    storageMode: 'local' | 'drive',
+    epoch: number,
+    historyId: string,
+    telemetryRunId?: string,
+    externalPrimaryDestinationId?: string,
+  ) => void;
   onStopRequested: (
     sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } },
     driveRootFolderName?: string,
@@ -51,6 +58,10 @@ export type RpcHandlerDeps = {
   /** Cancels an active/queued upload and starts local fallback downloads. */
   cancelUpload: (jobId: string) => boolean;
   acknowledgeUploadState: (jobId: string) => Promise<void>;
+  acknowledgeRetainedPrimary?: (
+    historyId: string,
+    stream: import('../shared/recording').RecordingStream,
+  ) => Promise<void>;
   /** Queues topic analysis for a recording; returns the new job's id (HOST-01). */
   analyzeTranscript?: (
     historyId: string,
@@ -114,6 +125,10 @@ async function handleOffscreenStart(
   if (!streamId)        return { ok: false, error: 'Missing streamId' };
   if (!runConfig)       return { ok: false, error: 'Missing run configuration' };
   if (!recorderSettings) return { ok: false, error: 'Missing or invalid recorder settings snapshot' };
+  const externalPrimaryDestinationId = normalizeExternalPrimaryDestinationId(msg.externalPrimaryDestinationId);
+  if (msg.externalPrimaryDestinationId !== undefined && !externalPrimaryDestinationId) {
+    return { ok: false, error: 'Missing or invalid external primary destination snapshot' };
+  }
   const currentPhase = deps.currentPhase();
   if (isBusyPhase(currentPhase) || deps.isFinalizing()) {
     return { ok: false, error: `Recorder is busy (${currentPhase})` };
@@ -121,7 +136,14 @@ async function handleOffscreenStart(
 
   deps.clearWarnings();
   applyPerfSettings(msg.perfSettings);
-  deps.onStartRequested(runConfig, runConfig.storageMode, msg.epoch, msg.historyId, msg.telemetryRunId);
+  deps.onStartRequested(
+    runConfig,
+    runConfig.storageMode,
+    msg.epoch,
+    msg.historyId,
+    msg.telemetryRunId,
+    externalPrimaryDestinationId,
+  );
   deps.pushState('starting');
 
   try {
@@ -132,6 +154,14 @@ async function handleOffscreenStart(
     deps.pushState('failed', { error });
     return { ok: false, error };
   }
+}
+
+function normalizeExternalPrimaryDestinationId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 128 || /[\x00-\x1f\x7f]/.test(normalized)) return undefined;
+  return normalized;
 }
 
 async function handleOffscreenStop(
@@ -372,6 +402,15 @@ async function handleAcknowledgeUploadState(
   if (typeof msg.jobId === 'string' && msg.jobId) await deps.acknowledgeUploadState(msg.jobId);
 }
 
+async function handleAcknowledgeRetainedPrimary(
+  msg: Extract<BgToOffscreenOneWay, { type: 'OFFSCREEN_ACK_RETAINED_PRIMARY' }>,
+  deps: RpcHandlerDeps,
+): Promise<void> {
+  if (typeof msg.historyId !== 'string' || !msg.historyId.trim()) return;
+  if (msg.stream !== 'tab' && msg.stream !== 'mic' && msg.stream !== 'self-video') return;
+  await deps.acknowledgeRetainedPrimary?.(msg.historyId, msg.stream);
+}
+
 async function handleAcknowledgeAnalysisState(
   msg: Extract<BgToOffscreenOneWay, { type: 'OFFSCREEN_ACK_ANALYSIS_STATE' }>,
   deps: RpcHandlerDeps,
@@ -515,6 +554,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_RENAME_DRIVE_RESOURCES: (msg) => handleOffscreenRenameDriveResources(msg, deps),
       REVOKE_BLOB_URL:   (msg) => handleRevokeBlobUrl(msg, deps),
       OFFSCREEN_ACK_UPLOAD_STATE: (msg) => handleAcknowledgeUploadState(msg, deps),
+      OFFSCREEN_ACK_RETAINED_PRIMARY: (msg) => handleAcknowledgeRetainedPrimary(msg, deps),
       OFFSCREEN_ANALYZE_TRANSCRIPT: (msg) => handleOffscreenAnalyzeTranscript(msg, deps),
       OFFSCREEN_CANCEL_ANALYSIS: (msg) => handleOffscreenCancelAnalysis(msg, deps),
       OFFSCREEN_SHARE_PUBLISH: (msg) => handleSharePublish(msg, deps),

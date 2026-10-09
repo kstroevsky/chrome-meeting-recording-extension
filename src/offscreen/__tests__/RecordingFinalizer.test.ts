@@ -71,6 +71,62 @@ describe('RecordingFinalizer', () => {
       .toEqual(['meeting-20260830T1000-notes.vtt', 'tab.webm', 'mic.webm']);
   });
 
+  it('retains external primary media without Downloads while keeping sidecars local', async () => {
+    const notes = { ...makeArtifact('meeting-notes.vtt'), opfsFilename: 'staging/notes.vtt' };
+    const tab = { ...makeArtifact('tab.webm'), opfsFilename: 'staging/tab.webm', startOffsetMs: 125 };
+    deps.recordRetainedPrimary = jest.fn();
+    deps.retainedMedia = {
+      promote: jest.fn().mockImplementation(async (stagingKey: string) => stagingKey.includes('notes')
+        ? { key: 'library/r/r:notes.vtt', retainedAt: 10, file: new File(['notes'], 'notes.vtt') }
+        : { key: 'library/r/r:tab.webm', retainedAt: 20, file: new File(['media'], 'tab.webm') }),
+    };
+    finalizer = new RecordingFinalizer(deps);
+
+    await finalizer.finalize({
+      storageMode: 'local',
+      historyId: 'recording:1',
+      externalPrimaryDestinationId: 'destination_crm',
+      artifacts: [
+        { stream: 'tab', artifact: tab as any },
+        { stream: 'tab', kind: 'notes', artifact: notes as any },
+      ],
+    });
+
+    expect(deps.requestSave).toHaveBeenCalledTimes(1);
+    expect(deps.requestSave).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'notes',
+      filename: 'meeting-notes.vtt',
+    }));
+    expect(deps.recordRetainedPrimary).toHaveBeenCalledTimes(1);
+    expect(deps.recordRetainedPrimary).toHaveBeenCalledWith({
+      historyId: 'recording:1',
+      destinationId: 'destination_crm',
+      stream: 'tab',
+      filename: 'tab.webm',
+      bytes: 5,
+      startOffsetMs: 125,
+      retainedKey: 'library/r/r:tab.webm',
+      retainedAt: 20,
+    });
+  });
+
+  it('fails external primary finalization when OPFS promotion fails instead of falling back to Downloads', async () => {
+    deps.recordRetainedPrimary = jest.fn();
+    deps.retainedMedia = { promote: jest.fn().mockRejectedValue(new Error('quota')) };
+    finalizer = new RecordingFinalizer(deps);
+    const tab = { ...makeArtifact('tab.webm'), opfsFilename: 'staging/tab.webm' };
+
+    await expect(finalizer.finalize({
+      storageMode: 'local',
+      historyId: 'recording:1',
+      externalPrimaryDestinationId: 'destination_crm',
+      artifacts: [{ stream: 'tab', artifact: tab as any }],
+    })).rejects.toThrow('quota');
+
+    expect(deps.recordRetainedPrimary).not.toHaveBeenCalled();
+    expect(deps.requestSave).not.toHaveBeenCalled();
+  });
+
   it('keeps the recording identity with a local fallback after another recording starts', async () => {
     const tab = makeArtifact('tab.webm');
 

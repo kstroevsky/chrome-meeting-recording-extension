@@ -25,6 +25,7 @@ import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 import { createIntegrationRuntime } from '../integrations/createIntegrationRuntime';
 import { createExternalMediaRuntime } from '../integrations/createExternalMediaRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
+import { recordingHistoryFileId } from '../../shared/recordingHistory';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
@@ -61,10 +62,35 @@ export function createBackgroundRuntime() {
     integrations,
     history: library.history,
     historyRepository: library.historyRepository,
+    recordingContexts: library.recordingContexts,
     criticalWork,
     logger,
   });
   notifyIntegrationChanged = externalMediaRuntime.notifyIntegrationChanged;
+  offscreen.onRetainedPrimary = (retained) => {
+    const durationMs = session.runDurationMs(retained.historyId);
+    void (async () => {
+      const fileId = recordingHistoryFileId(retained.historyId, retained.stream);
+      await library.history.createPending(
+        retained.historyId,
+        [{
+          id: fileId,
+          stream: retained.stream,
+          filename: retained.filename,
+          bytes: retained.bytes,
+          ...(retained.startOffsetMs != null ? { captureStartOffsetMs: retained.startOffsetMs } : {}),
+        }],
+        { kind: 'external', destinationId: retained.destinationId },
+      );
+      await library.history.setDuration(retained.historyId, durationMs);
+      await library.history.recordArtifactLocation(retained.historyId, fileId, {
+        kind: 'opfs',
+        key: retained.retainedKey,
+        retainedAt: retained.retainedAt,
+      });
+      offscreen.acknowledgeRetainedPrimary(retained.historyId, retained.stream);
+    })().catch((error) => logger.warn('External primary retention handoff deferred:', error));
+  };
   wireAnalysisRuntime({
     offscreen,
     analysisCoordinator: library.analysisCoordinator,

@@ -43,6 +43,7 @@ export type RecordingFinalizerDeps = {
   log: (...a: any[]) => void;
   warn: (...a: any[]) => void;
   requestSave: (request: LocalSaveRequest) => void;
+  recordRetainedPrimary?: (request: RetainedPrimaryRequest) => Promise<void>;
   getDriveToken: TokenProvider;
   reportWarning?: (warning: string) => void;
   /**
@@ -57,8 +58,19 @@ export type RecordingFinalizerDeps = {
    * history row to retain against, such as legacy orphan recovery.
    */
   retainedMedia?: {
-    promote(stagingKey: string, recordingId: string, fileId: string, filename?: string): Promise<{ key: string; file: File }>;
+    promote(stagingKey: string, recordingId: string, fileId: string, filename?: string): Promise<{ key: string; retainedAt: number; file: File }>;
   };
+};
+
+export type RetainedPrimaryRequest = {
+  historyId: string;
+  destinationId: string;
+  stream: RecordingStream;
+  filename: string;
+  bytes: number;
+  startOffsetMs?: number;
+  retainedKey: string;
+  retainedAt: number;
 };
 
 /** One local-download request with explicit artifact ownership. */
@@ -93,6 +105,8 @@ export type LocalSaveRequest = RecordingArtifactContext & {
 export type FinalizeArtifactsOptions = RecordingArtifactContext & {
   artifacts: CompletedRecordingArtifact[];
   storageMode: 'local' | 'drive';
+  /** Frozen external primary-media owner. Only primary media uses it; sidecars keep local delivery. */
+  externalPrimaryDestinationId?: string;
   /**
    * Per-call aggregate Drive-upload progress (fraction in [0, 1], throttled to
    * whole-percent steps). Lets a per-job caller (the UploadManager, ADR-0004) get
@@ -187,7 +201,16 @@ export class RecordingFinalizer {
     }
 
     for (const entry of orderedArtifacts) {
-      await this.saveArtifactLocally(entry.artifact, entry.stream, 'local', context, entry.kind);
+      if (options.externalPrimaryDestinationId && !entry.kind) {
+        await this.retainExternalPrimary(
+          entry.artifact,
+          entry.stream,
+          context,
+          options.externalPrimaryDestinationId,
+        );
+      } else {
+        await this.saveArtifactLocally(entry.artifact, entry.stream, 'local', context, entry.kind);
+      }
     }
     logPerf(this.deps.log, 'finalizer', 'finalize_complete', {
       durationMs: roundMs(nowMs() - startedAt),
@@ -195,6 +218,38 @@ export class RecordingFinalizer {
       storageMode: options.storageMode,
     });
     return undefined;
+  }
+
+  private async retainExternalPrimary(
+    artifact: SealedStorageFile,
+    stream: RecordingStream,
+    context: RecordingArtifactContext,
+    destinationId: string,
+  ): Promise<void> {
+    if (!context.historyId) throw new Error('External primary media requires a recording history owner');
+    if (!artifact.opfsFilename) throw new Error('External primary media requires a retained OPFS source');
+    if (!this.deps.retainedMedia) throw new Error('External primary media retention is unavailable');
+    if (!this.deps.recordRetainedPrimary) throw new Error('External primary media history handoff is unavailable');
+
+    const fileId = recordingHistoryFileId(context.historyId, stream);
+    const retained = await this.deps.retainedMedia.promote(
+      artifact.opfsFilename,
+      context.historyId,
+      fileId,
+      artifact.filename,
+    );
+    artifact.retainedKey = retained.key;
+    this.deps.log('Promoted external primary media to the retained library', retained.key);
+    await this.deps.recordRetainedPrimary({
+      historyId: context.historyId,
+      destinationId,
+      stream,
+      filename: artifact.filename,
+      bytes: retained.file.size,
+      ...(artifact.startOffsetMs != null ? { startOffsetMs: artifact.startOffsetMs } : {}),
+      retainedKey: retained.key,
+      retainedAt: retained.retainedAt,
+    });
   }
 
   /**

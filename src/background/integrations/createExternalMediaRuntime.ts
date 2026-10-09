@@ -1,5 +1,6 @@
 import type { RecordingHistoryRepository } from '../library/history/RecordingHistoryRepository';
 import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { CriticalWorkCoordinator } from '../runtime/CriticalWorkCoordinator';
 import type { BackgroundIntegrationRuntime } from './BackgroundIntegrationRuntime';
@@ -13,6 +14,7 @@ export function createExternalMediaRuntime(deps: {
   integrations: BackgroundIntegrationRuntime;
   history: RecordingHistoryService;
   historyRepository: RecordingHistoryRepository;
+  recordingContexts: RecordingContextService;
   criticalWork: CriticalWorkCoordinator;
   logger: Logger;
 }) {
@@ -23,6 +25,7 @@ export function createExternalMediaRuntime(deps: {
     integrations: deps.integrations,
     history: deps.history,
     historyRepository: deps.historyRepository,
+    recordingContexts: deps.recordingContexts,
     listHistory: () => deps.historyRepository.listAllIncludingDeleted(),
     retryScheduler,
     logger: deps.logger,

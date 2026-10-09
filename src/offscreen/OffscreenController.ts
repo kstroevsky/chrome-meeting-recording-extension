@@ -80,6 +80,7 @@ export interface ArtifactFinalizer {
     artifacts: CompletedRecordingArtifact[];
     storageMode: StorageMode;
     historyId?: string;
+    externalPrimaryDestinationId?: string;
   }): Promise<UploadSummary | undefined>;
 }
 
@@ -107,6 +108,7 @@ export class OffscreenController {
   private storageMode: StorageMode = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
   private historyId: string | undefined;
   private telemetryRunId: string | undefined;
+  private externalPrimaryDestinationId: string | undefined;
   /** Device labels from the tracks opened for the active run. */
   private capturedDevices: RecordingCaptureDevices | undefined;
   /** Run epoch from the latest OFFSCREEN_START; echoed in every OFFSCREEN_STATE (ADR-0003). */
@@ -146,11 +148,19 @@ export class OffscreenController {
   );
   clearWarnings = (): void => { this.warnings = []; };
 
-  onStartRequested = (_runConfig: RecordingRunConfig, storageMode: StorageMode, epoch: number, historyId: string, telemetryRunId?: string): void => {
+  onStartRequested = (
+    _runConfig: RecordingRunConfig,
+    storageMode: StorageMode,
+    epoch: number,
+    historyId: string,
+    telemetryRunId?: string,
+    externalPrimaryDestinationId?: string,
+  ): void => {
     this.storageMode = storageMode;
     this.epoch = epoch;
     this.historyId = historyId || undefined;
     this.telemetryRunId = telemetryRunId || undefined;
+    this.externalPrimaryDestinationId = externalPrimaryDestinationId?.trim() || undefined;
     this.capturedDevices = undefined;
     this.finalization = null;
   };
@@ -253,7 +263,14 @@ export class OffscreenController {
           });
         } else {
           // Local saves are instant; finalize inline.
-          await finalizer.finalize({ artifacts, storageMode: 'local', historyId: this.historyId });
+          await finalizer.finalize({
+            artifacts,
+            storageMode: 'local',
+            historyId: this.historyId,
+            ...(this.externalPrimaryDestinationId
+              ? { externalPrimaryDestinationId: this.externalPrimaryDestinationId }
+              : {}),
+          });
         }
       }
       this.finalization = { epoch: this.epoch, disposition: 'kept', status: 'completed' };

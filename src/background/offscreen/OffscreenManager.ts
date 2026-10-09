@@ -25,6 +25,7 @@ import {
   type OffscreenAnalysisListener,
   type OffscreenAnalysisResultListener,
   type OffscreenExternalMediaListener,
+  type OffscreenRetainedPrimaryListener,
   type OffscreenSaveListener,
   type OffscreenStateListener,
   type OffscreenUploadListener,
@@ -38,6 +39,7 @@ export type {
   OffscreenAnalysisListener,
   OffscreenAnalysisResultListener,
   OffscreenExternalMediaListener,
+  OffscreenRetainedPrimaryListener,
   OffscreenSaveListener,
   OffscreenStateListener,
   OffscreenUploadListener,
@@ -56,6 +58,8 @@ export class OffscreenManager {
   set onStateChanged(listener: OffscreenStateListener | undefined) { this.events.onStateChanged = listener; }
   get onSaveRequested(): OffscreenSaveListener | undefined { return this.events.onSaveRequested; }
   set onSaveRequested(listener: OffscreenSaveListener | undefined) { this.events.onSaveRequested = listener; }
+  get onRetainedPrimary(): OffscreenRetainedPrimaryListener | undefined { return this.events.onRetainedPrimary; }
+  set onRetainedPrimary(listener: OffscreenRetainedPrimaryListener | undefined) { this.events.onRetainedPrimary = listener; }
   get onUploadJobChanged(): OffscreenUploadListener | undefined { return this.events.onUploadJobChanged; }
   set onUploadJobChanged(listener: OffscreenUploadListener | undefined) { this.events.onUploadJobChanged = listener; }
   get onAnalysisJobChanged(): OffscreenAnalysisListener | undefined { return this.events.onAnalysisJobChanged; }
@@ -151,6 +155,13 @@ export class OffscreenManager {
 
   acknowledgeUploadState(jobId: string): void {
     this.connection.post({ type: 'OFFSCREEN_ACK_UPLOAD_STATE', jobId });
+  }
+
+  acknowledgeRetainedPrimary(
+    historyId: string,
+    stream: import('../../shared/recording').RecordingStream,
+  ): void {
+    this.connection.post({ type: 'OFFSCREEN_ACK_RETAINED_PRIMARY', historyId, stream });
   }
 
   hydrateAnalysisJobs(jobs: AnalysisJob[] | undefined): void {

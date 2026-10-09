@@ -123,7 +123,21 @@ describe('LocalDeliveryOrchestrator', () => {
 
   describe('the folder a Save to destination files into', () => {
     const pendingEntry = (id: string) => ({
-      id, name: id, status: 'complete', files: [{ kind: 'tab', delivery: { status: 'pending' }, locations: [{ kind: 'opfs' }] }],
+      id,
+      name: id,
+      status: 'complete',
+      storageMode: 'local',
+      createdAt: 1,
+      files: [{
+        id: `${id}:tab`,
+        stream: 'tab',
+        filename: `${id}.webm`,
+        mimeType: 'video/webm',
+        delivery: { requested: 'local', status: 'pending' },
+        locations: [{ kind: 'opfs', key: `library/${id}`, retainedAt: 1 }],
+        destination: 'local',
+        status: 'available',
+      }],
     });
     const listPage = () => jest.fn().mockResolvedValue({ entries: [pendingEntry('r1'), pendingEntry('r2'), pendingEntry('r3')] });
 

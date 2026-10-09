@@ -657,6 +657,8 @@ export type BgToOffscreenRpc =
       historyId: string;
       /** Random telemetry-only identity, never derived from history, meeting, or upload identifiers. */
       telemetryRunId: string;
+      /** Frozen external primary-media owner selected at Start; absent for local/Drive media. */
+      externalPrimaryDestinationId?: string;
       /** Monotonic run epoch the offscreen must echo in OFFSCREEN_STATE; see ADR-0003. */
       epoch: number;
     }>
@@ -793,6 +795,8 @@ export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string }
   /** Background persisted a terminal upload outcome and history state. */
   | { type: 'OFFSCREEN_ACK_UPLOAD_STATE'; jobId: string }
+  /** Background durably recorded an external-primary OPFS handoff. */
+  | { type: 'OFFSCREEN_ACK_RETAINED_PRIMARY'; historyId: string; stream: import('./recording').RecordingStream }
   /** Background persisted a completed analysis; the data plane may release it. */
   | { type: 'OFFSCREEN_ACK_ANALYSIS_STATE'; jobId: string };
 
@@ -804,6 +808,7 @@ export type OffscreenToBg =
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
   | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: import('./recordingTypes').RecordingArtifactKind; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
+  | { type: 'OFFSCREEN_RETAINED_PRIMARY'; historyId: string; destinationId: string; stream: import('./recording').RecordingStream; filename: string; bytes: number; startOffsetMs?: number; retainedKey: string; retainedAt: number }
   | { type: 'OFFSCREEN_ANALYSIS_STATE'; job: import('./analysis/job').AnalysisJob }
   | { type: 'OFFSCREEN_MEDIA_STATE'; transfer: ExternalMediaTransferView }
   /**
@@ -984,6 +989,20 @@ export function isTranscriptCaptureStateRequest(
 
 /** Checks whether a port/runtime message belongs to the offscreen -> background set. */
 export function isOffscreenToBgMessage(value: unknown): value is OffscreenToBg {
+  if (getMessageType(value) === 'OFFSCREEN_RETAINED_PRIMARY') {
+    if (!isRecord(value) || Array.isArray(value)) return false;
+    const stream = value.stream;
+    const startOffsetMs = value.startOffsetMs;
+    return nonEmptyText(value.historyId)
+      && nonEmptyText(value.destinationId)
+      && (stream === 'tab' || stream === 'mic' || stream === 'self-video')
+      && nonEmptyText(value.filename)
+      && typeof value.bytes === 'number' && Number.isFinite(value.bytes) && value.bytes >= 0
+      && (startOffsetMs === undefined
+        || (typeof startOffsetMs === 'number' && Number.isFinite(startOffsetMs) && startOffsetMs >= 0))
+      && nonEmptyText(value.retainedKey)
+      && typeof value.retainedAt === 'number' && Number.isFinite(value.retainedAt) && value.retainedAt >= 0;
+  }
   return hasKnownMessageType(value, OFFSCREEN_TO_BG_MESSAGE_TYPES);
 }
 
