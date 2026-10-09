@@ -8,6 +8,7 @@ function deps(historyId?: string) {
   const integrations = {
     confirmRecordingRoutes: jest.fn(async () => {}),
     beginRecordingRouting: jest.fn(async () => ({ scheduled: ['destination_crm'], unavailable: [] })),
+    retryRecordingRouting: jest.fn(async () => ({ scheduled: ['destination_crm'], unavailable: [] })),
     recordingRoutes: jest.fn(async () => VIEW),
   };
   const destinations = {
@@ -55,7 +56,7 @@ describe('destination and routing messages', () => {
     );
     expect(ctx.integrations.confirmRecordingRoutes).toHaveBeenCalledWith('r1', ['destination_crm']);
     await handleIntegrationMessage({ type: 'RETRY_RECORDING_ROUTING', recordingId: 'r1' }, jest.fn(), ctx.all);
-    expect(ctx.integrations.beginRecordingRouting).toHaveBeenCalledWith('r1', ROUTES);
+    expect(ctx.integrations.retryRecordingRouting).toHaveBeenCalledWith('r1', ROUTES);
   });
 
   it('lists finished recordings whose routes still wait, leaving out ones another prompt owns', async () => {

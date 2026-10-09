@@ -25,7 +25,8 @@ export type RecordingRouteActions = {
 /** Only what the dialog can act on; released and skipped routes are already decided. */
 export function undecidedRoutes(routes: readonly RecordingRouteView[]): RecordingNameDialogRoute[] {
   return routes.flatMap((route) => route.state === 'held' || route.state === 'not-scheduled'
-    ? [{ destinationId: route.destinationId, destinationName: route.destinationName, state: route.state }]
+    ? [{ destinationId: route.destinationId, destinationName: route.destinationName, state: route.state,
+      ...(route.includesMedia ? { includesMedia: true as const } : {}) }]
     : []);
 }
 

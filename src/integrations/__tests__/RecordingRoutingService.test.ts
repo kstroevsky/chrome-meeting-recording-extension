@@ -9,9 +9,23 @@ import { IntegrationUnitOfWork } from '../IntegrationUnitOfWork';
 import { CONSERVATIVE_INTEGRATION_POLICY } from '../policy';
 import { RecordingRoutingService } from '../RecordingRoutingService';
 import type { IntegrationDelivery, IntegrationDestination } from '../persistence';
+import { normalizeRecordingIntegrationIntent } from '../persistence';
 
 const POLICY: IntegrationDataPolicy = { ...CONSERVATIVE_INTEGRATION_POLICY, metadata: true, transcript: true };
 const ROUTE = [{ destinationId: 'destination_crm', mode: 'auto' as const }];
+const MEDIA = {
+  secretId: 'media_credential_1',
+  capability: {
+    version: 1 as const,
+    apiBase: 'https://crm.example.test/api/media',
+    upload: { strategy: 'multipart-put-v1' as const, origins: ['https://objects.example.test'] },
+    playback: { strategy: 'refreshable-url-v1' as const },
+  },
+};
+const MEDIA_AUTHORIZATION = {
+  producerId: 'producer_crm', endpoint: 'https://crm.example.test/events',
+  apiBase: 'https://crm.example.test/api/media',
+};
 
 function destination(overrides: Partial<IntegrationDestination> = {}): IntegrationDestination {
   return {
@@ -63,6 +77,7 @@ function harness() {
   const service = new RecordingRoutingService({
     destinations,
     routing,
+    streams,
     unitOfWork: new IntegrationUnitOfWork(factory),
     consider,
     now: () => 100,
@@ -108,6 +123,93 @@ describe('RecordingRoutingService', () => {
     ])).resolves.toEqual({ scheduled: [], unavailable: ['destination_gone', 'destination_off'] });
     await expect(ctx.routing.get('recording_1')).resolves.toBeUndefined();
     await expect(ctx.streams.list()).resolves.toEqual([]);
+  });
+
+  it('holds video consent from Start, discloses it, and releases media with the data route', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    await ctx.service.begin('recording_1', ROUTE);
+
+    expect((await ctx.routing.get('recording_1'))?.destinations[0]?.mediaAuthorization).toEqual(MEDIA_AUTHORIZATION);
+    expect(await ctx.service.routes('recording_1')).toEqual([{ destinationId: 'destination_crm',
+      destinationName: 'CheekyCheeseIT CRM', state: 'held', includesMedia: true }]);
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+
+    await ctx.service.confirm('recording_1', []);
+    const [authorized] = await ctx.service.authorizedMediaRoutes('recording_1');
+    expect(authorized).toEqual({ destinationId: 'destination_crm',
+      externalRecordingId: (await ctx.streams.get('destination_crm', 'recording_1'))?.externalRecordingId,
+      connectionVersion: 3, receiver: MEDIA_AUTHORIZATION });
+
+    // Rotating a bearer for the same receiver does not retrospectively widen consent.
+    await ctx.destinations.put(destination({ media: { ...MEDIA, secretId: 'media_credential_rotated' } }));
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([authorized]);
+  });
+
+  it('does not authorize older recordings when media is enabled after Start', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination());
+    await ctx.service.begin('recording_1', ROUTE);
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    await ctx.service.confirm('recording_1', []);
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+    await ctx.service.begin('recording_1', ROUTE); // Start may be replayed; older intent wins.
+    expect((await ctx.routing.get('recording_1'))?.destinations[0]?.mediaAuthorization).toBeUndefined();
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+  });
+
+  it('makes retrying a failed Start data-only even when media exists', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    await ctx.service.begin('recording_1', ROUTE, false);
+    await ctx.service.confirm('recording_1', []);
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+  });
+
+  it('denies video export when the user skips, removes, or changes the receiver', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    await ctx.service.begin('recording_skipped', ROUTE);
+    await ctx.service.confirm('recording_skipped', ['destination_crm']);
+    expect(await ctx.service.authorizedMediaRoutes('recording_skipped')).toEqual([]);
+
+    await ctx.service.begin('recording_1', ROUTE);
+    await ctx.service.confirm('recording_1', []);
+    await ctx.destinations.put(destination({ media: {
+      ...MEDIA, capability: { ...MEDIA.capability, apiBase: 'https://crm.example.test/other' },
+    } }));
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+    await ctx.destinations.put(destination({ media: MEDIA, connectionVersion: 4 }));
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+    await ctx.destinations.put(destination({ media: MEDIA, enabled: false }));
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+    await ctx.unitOfWork.deleteDestination(destination({ media: MEDIA }), 101);
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
+  });
+
+  it('strips Start-time media permission when receiver changes before the IDB transaction', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination()); // Actual row has no media.
+    const service = new RecordingRoutingService({
+      destinations: { get: async () => destination({ media: MEDIA }) },
+      routing: ctx.routing, streams: ctx.streams, unitOfWork: ctx.unitOfWork, consider: ctx.consider,
+    });
+    await service.begin('recording_1', ROUTE);
+    expect((await ctx.routing.get('recording_1'))?.destinations[0]?.mediaAuthorization).toBeUndefined();
+  });
+
+  it('treats malformed and legacy persisted consent as data-only', async () => {
+    const ctx = harness();
+    await ctx.destinations.put(destination({ media: MEDIA }));
+    const invalid = normalizeRecordingIntegrationIntent({ recordingId: 'recording_1', destinations: [{
+      destinationId: 'destination_crm', mode: 'auto', state: 'selected', allowedPolicy: POLICY,
+      connectionVersion: 3, mediaAuthorization: { ...MEDIA_AUTHORIZATION, endpoint: 'http://crm.example.test/events' },
+    }] });
+    expect(invalid?.destinations[0]?.mediaAuthorization).toBeUndefined();
+    await ctx.routing.put(invalid!);
+    await ctx.streams.put({ destinationId: 'destination_crm', recordingId: 'recording_1',
+      externalRecordingId: 'recording_old', nextRevision: 1, readyCreated: false, everAttempted: false });
+    expect(await ctx.service.authorizedMediaRoutes('recording_1')).toEqual([]);
   });
 
   it('is additive: an existing entry for the same destination wins', async () => {
@@ -203,6 +305,7 @@ describe('RecordingRoutingService', () => {
     const service = new RecordingRoutingService({
       destinations: { get: async () => destination() },
       routing: ctx.routing,
+      streams: ctx.streams,
       unitOfWork: ctx.unitOfWork,
       consider: ctx.consider,
     });

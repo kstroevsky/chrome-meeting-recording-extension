@@ -99,6 +99,7 @@ export class BackgroundIntegrationRuntime {
     this.recordingRouting = new RecordingRoutingService({
       destinations,
       routing,
+      streams,
       unitOfWork,
       consider: (recordingId) => this.consider(recordingId),
     });
@@ -176,6 +177,16 @@ export class BackgroundIntegrationRuntime {
   /** Holds the routes of a "Save to" destination for a recording that is starting. */
   beginRecordingRouting(recordingId: string, routes: readonly RecordingDestinationRoute[]) {
     return this.recordingRouting.begin(recordingId, routes);
+  }
+
+  /** Recovered Start failures may retry data routing, but cannot retroactively consent to media. */
+  retryRecordingRouting(recordingId: string, routes: readonly RecordingDestinationRoute[]) {
+    return this.recordingRouting.begin(recordingId, routes, false);
+  }
+
+  /** Receiver candidates only. E1 will verify sealed OPFS source ownership before enqueueing. */
+  authorizedMediaRoutes(recordingId: string) {
+    return this.recordingRouting.authorizedMediaRoutes(recordingId);
   }
 
   /** The end dialog's answer: release the held routes, except the removed ones. */

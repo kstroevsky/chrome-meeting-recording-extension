@@ -258,16 +258,38 @@ describe('RecordingNameDialog when that name is taken', () => {
         title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
         routes: { items: [held], onChange },
       });
-      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
 
       routeRows()[0]!.querySelector('button')!.click();
       expect(onChange).toHaveBeenLastCalledWith(['destination_crm']);
-      expect(rowText()).toEqual(["Won't send to CheekyCheeseIT CRM"]);
+      expect(rowText()).toEqual(["Won't send recording data to CheekyCheeseIT CRM"]);
       expect(document.activeElement?.textContent).toBe('Undo');
 
       routeRows()[0]!.querySelector('button')!.click();
       expect(onChange).toHaveBeenLastCalledWith([]);
-      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
+    });
+
+    it('discloses video/audio alongside data and removes both together', async () => {
+      const onChange = jest.fn();
+      const onSave = jest.fn(async () => {});
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave,
+        routes: { items: [{ ...held, includesMedia: true }], onChange },
+      });
+      expect(rowText()).toEqual(['Will send recording video/audio and data to CheekyCheeseIT CRM']);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith(['destination_crm']);
+      expect(rowText()).toEqual(["Won't send recording video/audio and data to CheekyCheeseIT CRM"]);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith([]);
+      expect(rowText()).toEqual(['Will send recording video/audio and data to CheekyCheeseIT CRM']);
+
+      save().click();
+      await flush();
+      expect(onSave).toHaveBeenCalledWith('Acme interview', null);
     });
 
     it('says when automation could not be scheduled, and retries it in place', async () => {
@@ -282,7 +304,7 @@ describe('RecordingNameDialog when that name is taken', () => {
       expect(routeRows()[0]!.querySelector('button')!.disabled).toBe(true);
       await flush();
       expect(onRetry).toHaveBeenCalledTimes(1);
-      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
     });
 
     it('keeps the row and shows the error when the retry fails', async () => {
@@ -319,7 +341,7 @@ describe('RecordingNameDialog when that name is taken', () => {
       routeRows()[0]!.querySelector('button')!.click();
       dialog.dismiss();
       void dialog.ask(options);
-      expect(rowText()).toEqual(['Will send to CheekyCheeseIT CRM']);
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
     });
   });
 });

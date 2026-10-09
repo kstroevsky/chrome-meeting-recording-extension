@@ -94,7 +94,7 @@ export async function handleIntegrationMessage(
       if (msg.type === 'CONFIRM_RECORDING_ROUTES') {
         await integrations.confirmRecordingRoutes(recordingId, msg.removedDestinationIds);
       } else if (msg.type === 'RETRY_RECORDING_ROUTING' && expected.length) {
-        await integrations.beginRecordingRouting(recordingId, expected);
+        await integrations.retryRecordingRouting(recordingId, expected);
       }
       sendResponse({ ok: true, recordingId, routes: await integrations.recordingRoutes(recordingId, expected) });
       return true;

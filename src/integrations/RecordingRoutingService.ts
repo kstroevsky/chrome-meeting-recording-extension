@@ -23,6 +23,16 @@ export type RecordingRouteView = {
   /** Null when the destination no longer exists. */
   destinationName: string | null;
   state: RecordingRouteState;
+  /** True only when video/audio was explicitly authorized at recording Start. */
+  includesMedia?: true;
+};
+
+/** Candidate for upload; the caller must also prove the OPFS artifact is sealed and owned. */
+export type AuthorizedMediaRoute = {
+  destinationId: string;
+  externalRecordingId: string;
+  connectionVersion: number;
+  receiver: NonNullable<RecordingIntegrationIntentDestination['mediaAuthorization']>;
 };
 
 export type RecordingRoutingBeginResult = {
@@ -37,6 +47,7 @@ type Deps = {
     get(recordingId: string): Promise<RecordingIntegrationIntent | undefined>;
     list(): Promise<RecordingIntegrationIntent[]>;
   };
+  streams: { get(destinationId: string, recordingId: string): Promise<IntegrationStream | undefined> };
   unitOfWork: {
     beginRecordingRouting(
       recordingId: string,
@@ -67,8 +78,9 @@ export class RecordingRoutingService {
   async begin(
     recordingId: string,
     routes: readonly RecordingDestinationRoute[],
+    /** Retries at the end of capture must never acquire media permission retroactively. */
+    allowMediaAuthorization = true,
   ): Promise<RecordingRoutingBeginResult> {
-    const scheduled: string[] = [];
     const unavailable: string[] = [];
     const entries: RecordingIntegrationIntentDestination[] = [];
     for (const route of routes) {
@@ -83,11 +95,17 @@ export class RecordingRoutingService {
         state: 'selected',
         allowedPolicy: { ...destination.dataPolicy },
         connectionVersion: destination.connectionVersion,
+        ...(allowMediaAuthorization && destination.media ? {
+          mediaAuthorization: {
+            producerId: destination.producerId,
+            endpoint: destination.endpoint,
+            apiBase: destination.media.capability.apiBase,
+          },
+        } : {}),
         releaseAfter: 'save-confirmed',
       });
-      scheduled.push(destination.id);
     }
-    if (!entries.length) return { scheduled, unavailable };
+    if (!entries.length) return { scheduled: [], unavailable };
 
     // Every candidate gets a fresh identity; the transaction keeps an existing one.
     const streams: IntegrationStream[] = entries.map((entry) => ({
@@ -98,8 +116,33 @@ export class RecordingRoutingService {
       readyCreated: false,
       everAttempted: false,
     }));
-    await this.deps.unitOfWork.beginRecordingRouting(recordingId, entries, streams);
+    const scheduled = await this.deps.unitOfWork.beginRecordingRouting(recordingId, entries, streams);
     return { scheduled, unavailable };
+  }
+
+  /** Only persisted Start consent, confirmation and the original stream can authorize media. */
+  async authorizedMediaRoutes(recordingId: string): Promise<AuthorizedMediaRoute[]> {
+    const intent = await this.deps.routing.get(recordingId);
+    const authorized: AuthorizedMediaRoute[] = [];
+    for (const entry of intent?.destinations ?? []) {
+      if (entry.mode !== 'auto' || entry.state !== 'selected' || entry.releaseAfter || !entry.mediaAuthorization) continue;
+      const [destination, stream] = await Promise.all([
+        this.deps.destinations.get(entry.destinationId),
+        this.deps.streams.get(entry.destinationId, recordingId),
+      ]);
+      if (!destination?.enabled || !destination.media || !stream ||
+          entry.connectionVersion !== destination.connectionVersion ||
+          entry.mediaAuthorization.producerId !== destination.producerId ||
+          entry.mediaAuthorization.endpoint !== destination.endpoint ||
+          entry.mediaAuthorization.apiBase !== destination.media.capability.apiBase) continue;
+      authorized.push({
+        destinationId: entry.destinationId,
+        externalRecordingId: stream.externalRecordingId,
+        connectionVersion: entry.connectionVersion,
+        receiver: entry.mediaAuthorization,
+      });
+    }
+    return authorized;
   }
 
   async confirm(recordingId: string, removedDestinationIds: readonly string[]): Promise<void> {
@@ -130,6 +173,7 @@ export class RecordingRoutingService {
         destinationId: entry.destinationId,
         destinationName: await this.nameOf(entry.destinationId),
         state: entry.releaseAfter ? 'held' : entry.state === 'skipped' ? 'skipped' : 'released',
+        ...(entry.mediaAuthorization ? { includesMedia: true as const } : {}),
       });
     }
     for (const route of expected) {

@@ -28,6 +28,7 @@ export type RecordingNameDialogRoute = {
   destinationName: string | null;
   /** Held routes can be removed; ones that could not be scheduled can be retried. */
   state: 'held' | 'not-scheduled';
+  includesMedia?: true;
 };
 
 export type RecordingNameDialogRoutes = {
@@ -379,7 +380,10 @@ export class RecordingNameDialog {
       }
       const removed = this.removedRoutes.has(route.destinationId);
       row.classList.toggle('recording-name-route--removed', removed);
-      text.textContent = removed ? `Won't send to ${name ?? 'this integration'}` : `Will send to ${name ?? 'this integration'}`;
+      const payload = route.includesMedia ? 'recording video/audio and data' : 'recording data';
+      text.textContent = removed
+        ? `Won't send ${payload} to ${name ?? 'this integration'}`
+        : `Will send ${payload} to ${name ?? 'this integration'}`;
       row.appendChild(removed
         ? this.routeButton('Undo', `Send to ${name ?? 'this integration'} after all`, () => this.toggleRoute(route.destinationId))
         : this.routeButton('\u00d7', `Don't send to ${name ?? 'this integration'}`, () => this.toggleRoute(route.destinationId), 'recording-name-route__remove'));

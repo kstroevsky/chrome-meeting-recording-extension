@@ -182,7 +182,18 @@ export class IntegrationUnitOfWork {
           for (const entry of candidates) {
             const destination = destinationStore.get(entry.destinationId);
             destination.onsuccess = () => {
-              if ((destination.result as IntegrationDestination | undefined)?.enabled) live.push(entry);
+              const current = normalizeIntegrationDestination(destination.result);
+              if (current?.enabled) {
+                // Recheck the receiver inside the same transaction as the Start intent.
+                // A concurrent media enable or receiver edit must never widen consent.
+                const consent = entry.mediaAuthorization;
+                const mediaUnchanged = consent && current.media &&
+                  consent.producerId === current.producerId &&
+                  consent.endpoint === current.endpoint &&
+                  consent.apiBase === current.media.capability.apiBase &&
+                  entry.connectionVersion === current.connectionVersion;
+                live.push(mediaUnchanged ? entry : { ...entry, mediaAuthorization: undefined });
+              }
               remaining -= 1;
               if (!remaining) finish();
             };

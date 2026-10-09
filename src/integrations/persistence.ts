@@ -41,6 +41,12 @@ export type RecordingIntegrationIntentDestination = {
   state: 'selected' | 'skipped' | 'needs-review' | 'approved';
   allowedPolicy: IntegrationDataPolicy;
   connectionVersion: number;
+  /** Explicit permission captured at recording Start. Absent on older intents: no video export. */
+  mediaAuthorization?: {
+    producerId: string;
+    endpoint: string;
+    apiBase: string;
+  };
   approvedPolicyHash?: string;
   /**
    * Holds an entry written when the recording started until the user confirms
@@ -298,6 +304,7 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
   const allowedPolicy = normalizeIntegrationDataPolicy(value.allowedPolicy);
   const connectionVersion = positiveInteger(value.connectionVersion);
   const approvedPolicyHash = optionalText(value.approvedPolicyHash);
+  const mediaAuthorization = normalizeMediaAuthorization(value.mediaAuthorization);
   if (!destinationId || !allowedPolicy || connectionVersion == null) return undefined;
   if ((value.mode !== 'auto' && value.mode !== 'review') || !isIntentState(value.state)) return undefined;
   if (value.releaseAfter != null && value.releaseAfter !== 'save-confirmed') return undefined;
@@ -307,9 +314,27 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
     state: value.state,
     allowedPolicy,
     connectionVersion,
+    ...(mediaAuthorization ? { mediaAuthorization } : {}),
     ...(approvedPolicyHash ? { approvedPolicyHash } : {}),
     ...(value.releaseAfter === 'save-confirmed' ? { releaseAfter: 'save-confirmed' as const } : {}),
   };
+}
+
+/** An invalid or legacy consent snapshot cannot grant permission to export media. */
+function normalizeMediaAuthorization(value: unknown): RecordingIntegrationIntentDestination['mediaAuthorization'] {
+  if (!isRecord(value)) return undefined;
+  const producerId = text(value.producerId);
+  const endpoint = text(value.endpoint);
+  const apiBase = text(value.apiBase);
+  if (!producerId || !endpoint || !apiBase) return undefined;
+  try {
+    const control = new URL(endpoint);
+    const base = new URL(apiBase);
+    if (control.protocol !== 'https:' || base.protocol !== 'https:' ||
+        control.origin !== base.origin || control.username || control.password ||
+        base.username || base.password || base.search || base.hash) return undefined;
+  } catch { return undefined; }
+  return { producerId, endpoint, apiBase };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
