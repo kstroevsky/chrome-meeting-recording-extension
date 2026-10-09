@@ -13,6 +13,7 @@ import {
   findMockMeetTabId,
   launchExtensionHarness,
   openMockMeetPage,
+  restartExtensionHarness,
   saveRecordingSettings,
   sendRuntimeMessage,
   stopRecording,
@@ -31,7 +32,9 @@ const R2_UPLOAD_ORIGIN = process.env.R0_R2_UPLOAD_ORIGIN;
 const CRM_ADMIN_EMAIL =
   process.env.R0_CRM_ADMIN_EMAIL ?? "yaremenkomaksym99@gmail.com";
 const RUN_LARGE_TRANSFER = process.env.R0_RUN_LARGE_TRANSFER === "1";
+const RUN_RESTART_RECOVERY = process.env.R0_RUN_RESTART_RECOVERY === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
+const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
 
 const METADATA_POLICY: IntegrationDataPolicy = {
   metadata: true,
@@ -464,6 +467,167 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       await proxy?.stop().catch(() => {});
     }
   });
+
+  test("resumes the same multipart artifact after a browser restart", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_RESTART_RECOVERY,
+      "Set R0_RUN_RESTART_RECOVERY=1 with the real-R2 pilot variables to run JM3.",
+    );
+    test.setTimeout(1_200_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-restart-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r0-restart-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        { extensionPath, ignoreHTTPSErrors: true },
+      );
+      const configured = await configureRealR2Destination(harness, proxy.origin);
+
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "off",
+        recordSelfVideo: false,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      const before = await historyEntry(harness.controlPage, recordingId);
+      const retained = before.files.find(
+        (file) => !file.kind && file.locations.some((location) => location.kind === "opfs"),
+      );
+      const opfs = retained?.locations.find((location) => location.kind === "opfs");
+      if (!retained || !opfs || opfs.kind !== "opfs") {
+        throw new Error("JM3 recording has no retained OPFS media");
+      }
+      expect(
+        await resizeRetainedOpfsFixture(
+          harness.controlPage,
+          opfs.key,
+          RESTART_FIXTURE_BYTES,
+        ),
+      ).toBe(RESTART_FIXTURE_BYTES);
+
+      const confirmed = await sendRuntimeMessage<any>(harness.controlPage, {
+        type: "CONFIRM_RECORDING_ROUTES",
+        recordingId,
+        removedDestinationIds: [],
+      });
+      expect(confirmed.ok).toBe(true);
+
+      let beforeRestart: any;
+      await expect.poll(
+        async () => {
+          beforeRestart = await externalMediaJournal(
+            harness!.controlPage,
+            recordingId,
+            configured.created.destination.id,
+          );
+          return Boolean(
+            beforeRestart?.state === "uploading" &&
+              beforeRestart?.uploadedParts?.length > 0 &&
+              beforeRestart?.uploadedParts?.length <
+                Math.ceil(RESTART_FIXTURE_BYTES / beforeRestart.partSize),
+          );
+        },
+        { timeout: 240_000, intervals: [250, 500, 1_000, 2_000] },
+      ).toBe(true);
+      const identityBefore = {
+        clientTransferId: beforeRestart.request.clientTransferId,
+        artifactId: beforeRestart.artifactId,
+        uploadId: beforeRestart.uploadId,
+        uploadedParts: beforeRestart.uploadedParts.length,
+      };
+      expect(identityBefore.artifactId).toBeTruthy();
+      expect(identityBefore.uploadId).toBeTruthy();
+
+      harness = await restartExtensionHarness(harness, {
+        ignoreHTTPSErrors: true,
+      });
+      const transfers = await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+        900_000,
+      );
+      expect(transfers).toHaveLength(1);
+      expect(transfers[0]).toMatchObject({
+        clientTransferId: identityBefore.clientTransferId,
+        state: "acknowledged",
+        bytesUploaded: RESTART_FIXTURE_BYTES,
+        bytesTotal: RESTART_FIXTURE_BYTES,
+      });
+      const afterRestart = await externalMediaJournal(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+      );
+      expect(afterRestart).toMatchObject({
+        state: "acknowledged",
+        artifactId: identityBefore.artifactId,
+        uploadId: identityBefore.uploadId,
+      });
+      expect(afterRestart.request.clientTransferId).toBe(identityBefore.clientTransferId);
+      expect(afterRestart.uploadedParts.length).toBe(
+        Math.ceil(RESTART_FIXTURE_BYTES / afterRestart.partSize),
+      );
+
+      const admin = harness.context.request;
+      await crmLogin(admin, proxy.origin);
+      const crmRecording = await waitForCrmRecording(
+        admin,
+        proxy.origin,
+        configured.connection.id,
+      );
+      const crmMedia = await crmGet<any[]>(
+        admin,
+        proxy.origin,
+        `/api/interview-recordings/${crmRecording.id}/media`,
+      );
+      expect(crmMedia).toEqual([
+        expect.objectContaining({
+          artifactId: identityBefore.artifactId,
+          bytes: RESTART_FIXTURE_BYTES,
+        }),
+      ]);
+
+      await testInfo.attach("jm3-restart-recovery-evidence.json", {
+        body: JSON.stringify(
+          {
+            bytes: RESTART_FIXTURE_BYTES,
+            uploadedPartsBeforeRestart: identityBefore.uploadedParts,
+            clientTransferIdPreserved:
+              afterRestart.request.clientTransferId === identityBefore.clientTransferId,
+            artifactIdPreserved: afterRestart.artifactId === identityBefore.artifactId,
+            uploadAttemptPreserved: afterRestart.uploadId === identityBefore.uploadId,
+            finalPartCount: afterRestart.uploadedParts.length,
+            transferState: afterRestart.state,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
 });
 
 async function preparePilotExtension(
@@ -584,6 +748,63 @@ async function createIntegration(
     );
   }
   return { ...response.created, profile: response.profile };
+}
+
+async function configureRealR2Destination(
+  harness: ExtensionHarness,
+  crmOrigin: string,
+): Promise<{
+  connection: { id: string; webhookPath: string };
+  created: Awaited<ReturnType<typeof createIntegration>>;
+}> {
+  const admin = harness.context.request;
+  await crmLogin(admin, crmOrigin);
+  const connection = await crmCreateConnection(admin, crmOrigin);
+  const created = await createIntegration(
+    harness.controlPage,
+    `${crmOrigin}${connection.webhookPath}`,
+  );
+  await crmSetSigningSecret(
+    admin,
+    crmOrigin,
+    connection.id,
+    created.signingSecret,
+  );
+  const mediaBearer = await crmReplaceMediaToken(
+    admin,
+    crmOrigin,
+    connection.id,
+  );
+  const discovery = await sendRuntimeMessage<any>(harness.controlPage, {
+    type: "TEST_INTEGRATION",
+    destinationId: created.destination.id,
+  });
+  expect(discovery).toEqual(
+    expect.objectContaining({
+      ok: true,
+      result: expect.objectContaining({
+        ok: true,
+        status: 200,
+        mediaCapability: expect.objectContaining({
+          version: 1,
+          apiBase: `${crmOrigin}/api/integrations/meeting-recorder/media`,
+          upload: expect.objectContaining({
+            strategy: "multipart-put-v1",
+            origins: [R2_UPLOAD_ORIGIN],
+          }),
+          playback: { strategy: "refreshable-url-v1" },
+        }),
+      }),
+    }),
+  );
+  expect(
+    await sendRuntimeMessage<any>(harness.controlPage, {
+      type: "CONFIGURE_INTEGRATION_MEDIA",
+      destinationId: created.destination.id,
+      bearer: mediaBearer,
+    }),
+  ).toEqual({ ok: true });
+  return { connection, created };
 }
 
 async function record(

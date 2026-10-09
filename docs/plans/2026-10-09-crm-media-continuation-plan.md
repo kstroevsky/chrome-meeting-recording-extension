@@ -46,10 +46,18 @@ the exact artifact byte count, and a browser tail Range request returned 206 wit
 the exact total in `Content-Range`. The real-R2 run completed the large test in
 4.1 minutes; the small JM1 plus large JM2 suite passed in 4.3 minutes.
 
-The remaining R0 work is restart/expiry recovery (JM3–JM5), playback-expiry and
-deep-seek cases (JM6–JM7), and the remaining isolation/auth/lifecycle rows in the
-verification table below. Explicit local-source release remains R1 and must not
-be enabled from capability/HEAD success alone.
+JM3 is now proven with the real browser profile as well. A 256 MiB + 12,345-byte
+artifact was allowed to upload at least one real R2 part, Chromium was then
+closed, and the extension was relaunched against the same profile. Startup
+reconciliation resumed the provider-authoritative multipart session and finished
+with the same `clientTransferId`, artifact ID and upload-attempt ID; the JM3 case
+completed in 1.1 minutes.
+
+The remaining R0 work is signed-URL/upload-attempt expiry recovery (JM4–JM5),
+playback-expiry and deep-seek cases (JM6–JM7), and the remaining
+isolation/auth/lifecycle rows in the verification table below. Explicit
+local-source release remains R1 and must not be enabled from capability/HEAD
+success alone.
 
 ## Scope and verdict
 
