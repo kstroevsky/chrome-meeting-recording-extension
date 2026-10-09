@@ -205,6 +205,29 @@ describe('destination and routing messages', () => {
     expect(isPopupToBgMessage({ type: 'SET_INTEGRATION_ENABLED', destinationId: 'd', enabled: 'no' })).toBe(false);
     expect(isPopupToBgMessage({ type: 'GET_INTEGRATION_DISCONNECT_IMPACT', destinationId: 'd' })).toBe(true);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: 'd', name: 'CRM' } })).toBe(true);
+    expect(isPopupToBgMessage({
+      type: 'SAVE_RECORDING_DESTINATION',
+      input: {
+        name: 'Drive + CRM',
+        mediaTarget: { kind: 'drive', folderPresetId: 'folder-1' },
+        dataRoutes: [
+          { destinationId: 'd', mode: 'auto' },
+          { destinationId: 'journal', mode: 'auto' },
+        ],
+      },
+    })).toBe(true);
+    expect(isPopupToBgMessage({
+      type: 'SAVE_RECORDING_DESTINATION',
+      input: { mediaTarget: { kind: 'local' }, dataRoutes: [] },
+    })).toBe(true);
+    expect(isPopupToBgMessage({
+      type: 'SAVE_RECORDING_DESTINATION',
+      input: { mediaTarget: { kind: 'external', destinationId: 'd' }, dataRoutes: [] },
+    })).toBe(false);
+    expect(isPopupToBgMessage({
+      type: 'SAVE_RECORDING_DESTINATION',
+      input: { mediaTarget: { kind: 'local' }, dataRoutes: [{ destinationId: 'd', mode: 'review' }] },
+    })).toBe(false);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: '' } })).toBe(false);
     expect(isPopupToBgMessage({ type: 'SAVE_RECORDING_DESTINATION', input: { destinationId: 'd', id: 7 } })).toBe(false);
     expect(isPopupToBgMessage({ type: 'REMOVE_RECORDING_DESTINATION', profileId: ' ' })).toBe(false);

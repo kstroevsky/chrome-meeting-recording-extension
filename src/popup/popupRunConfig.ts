@@ -69,7 +69,13 @@ export function buildRunConfigFromForm(elements: PopupElements): RecordingRunCon
 
   // "Save to" holds a destination; the storage mode follows from it. The
   // background re-derives both from the stored profile at Start.
-  const saveTo = elements.storageModeSelect ? parseSaveToValue(elements.storageModeSelect.value) : null;
+  const selectedStorageMode = elements.storageModeSelect?.selectedOptions[0]?.dataset.storageMode;
+  const saveTo = elements.storageModeSelect
+    ? parseSaveToValue(
+      elements.storageModeSelect.value,
+      selectedStorageMode === 'local' || selectedStorageMode === 'drive' ? selectedStorageMode : undefined,
+    )
+    : null;
   return getRunConfigOrDefault({
     storageMode: saveTo?.storageMode,
     ...(saveTo ? { destinationProfileId: saveTo.profileId } : {}),

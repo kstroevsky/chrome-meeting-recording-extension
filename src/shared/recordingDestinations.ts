@@ -5,8 +5,9 @@
  *
  * A destination profile says where a recording's media goes (`mediaTarget`)
  * and which external services receive its data (`dataRoutes`). The type is the
- * final one, so later phases add capabilities without migrating stored data;
- * what a profile may *contain today* is decided by the V1 normalizer below.
+ * final one, so later phases add capabilities without migrating stored data.
+ * M3 accepts local or Drive media plus several automatic data routes; external
+ * primary media and review routing remain reserved for their later milestones.
  *
  * Folder presets stay storage-level concepts: a profile references them by
  * their stable ID. Integration destinations live in the integration database
@@ -37,6 +38,7 @@ export const BUILTIN_DRIVE_PROFILE_ID = 'builtin:drive';
 export const BUILTIN_LOCAL_PROFILE_ID = 'builtin:local';
 export const MAX_RECORDING_DESTINATION_PROFILES = 20;
 export const MAX_RECORDING_DESTINATION_NAME_LENGTH = 60;
+export const MAX_RECORDING_DESTINATION_ROUTES = 20;
 const MAX_ID_LENGTH = 128;
 /** Popup select values for user profiles; the built-ins keep `drive` / `local`. */
 const PROFILE_VALUE_PREFIX = 'profile:';
@@ -54,10 +56,10 @@ export function isBuiltinRecordingDestinationId(id: string): boolean {
 }
 
 /**
- * User profiles as stored in settings, restricted to the V1 shape: files in
- * Local downloads (optionally a local folder preset) and exactly one AUTO data
- * route. Anything else is dropped rather than repaired, so a profile never
- * routes data somewhere the user did not see when they created it.
+ * User profiles as stored in settings. Existing V1 profiles remain valid, and
+ * M3 additionally permits Drive media, folder-only profiles and several AUTO
+ * data routes. Anything else is dropped rather than repaired, so malformed or
+ * duplicate routing never broadens what a profile author explicitly selected.
  */
 export function normalizeRecordingDestinationProfiles(value: unknown): RecordingDestinationProfile[] {
   if (!Array.isArray(value)) return [];
@@ -65,7 +67,7 @@ export function normalizeRecordingDestinationProfiles(value: unknown): Recording
   const profiles: RecordingDestinationProfile[] = [];
   for (const candidate of value) {
     if (profiles.length >= MAX_RECORDING_DESTINATION_PROFILES) break;
-    const profile = normalizeV1Profile(candidate);
+    const profile = normalizeProfile(candidate);
     if (!profile || seen.has(profile.id)) continue;
     seen.add(profile.id);
     profiles.push(profile);
@@ -73,26 +75,42 @@ export function normalizeRecordingDestinationProfiles(value: unknown): Recording
   return profiles;
 }
 
-function normalizeV1Profile(value: unknown): RecordingDestinationProfile | undefined {
+function normalizeProfile(value: unknown): RecordingDestinationProfile | undefined {
   if (!isRecord(value)) return undefined;
   const id = boundedText(value.id, MAX_ID_LENGTH);
   const name = boundedText(value.name, MAX_RECORDING_DESTINATION_NAME_LENGTH);
   if (!id || !name || isBuiltinRecordingDestinationId(id)) return undefined;
   const media = isRecord(value.mediaTarget) ? value.mediaTarget : undefined;
-  if (!media || media.kind !== 'local') return undefined;
+  if (!media || (media.kind !== 'local' && media.kind !== 'drive')) return undefined;
   const folderPresetId = media.folderPresetId == null ? undefined : boundedText(media.folderPresetId, MAX_ID_LENGTH);
   if (media.folderPresetId != null && !folderPresetId) return undefined;
-  if (!Array.isArray(value.dataRoutes) || value.dataRoutes.length !== 1) return undefined;
-  const route = value.dataRoutes[0];
-  if (!isRecord(route) || route.mode !== 'auto') return undefined;
-  const destinationId = boundedText(route.destinationId, MAX_ID_LENGTH);
-  if (!destinationId) return undefined;
+  const dataRoutes = normalizeAutomaticRoutes(value.dataRoutes);
+  if (!dataRoutes) return undefined;
   return {
     id,
     name,
-    mediaTarget: { kind: 'local', ...(folderPresetId ? { folderPresetId } : {}) },
-    dataRoutes: [{ destinationId, mode: 'auto' }],
+    mediaTarget: { kind: media.kind, ...(folderPresetId ? { folderPresetId } : {}) },
+    dataRoutes,
   };
+}
+
+/** Strict route snapshot normalizer shared by settings and recording context. */
+export function normalizeAutomaticRecordingDestinationRoutes(value: unknown): RecordingDestinationRoute[] | undefined {
+  return normalizeAutomaticRoutes(value);
+}
+
+function normalizeAutomaticRoutes(value: unknown): RecordingDestinationRoute[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_RECORDING_DESTINATION_ROUTES) return undefined;
+  const seen = new Set<string>();
+  const routes: RecordingDestinationRoute[] = [];
+  for (const route of value) {
+    if (!isRecord(route) || route.mode !== 'auto') return undefined;
+    const destinationId = boundedText(route.destinationId, MAX_ID_LENGTH);
+    if (!destinationId || seen.has(destinationId)) return undefined;
+    seen.add(destinationId);
+    routes.push({ destinationId, mode: 'auto' });
+  }
+  return routes;
 }
 
 export function storageModeOfProfile(profile: RecordingDestinationProfile): StorageMode {
@@ -115,15 +133,18 @@ export function saveToValueOf(profileId: string): string {
 }
 
 /**
- * Reads a popup select value back. User profiles are local media in V1, so the
- * popup can derive the storage mode without loading them; the background start
- * command re-derives it from the stored profile and never trusts this.
+ * Reads a popup select value back. For a user profile the rendered option
+ * supplies its storage mode; the background start command still re-derives the
+ * authoritative mode from the stored profile and never trusts this UI hint.
  */
-export function parseSaveToValue(value: unknown): { storageMode: StorageMode; profileId: string } {
+export function parseSaveToValue(
+  value: unknown,
+  profileStorageMode?: StorageMode,
+): { storageMode: StorageMode; profileId: string } {
   if (value === 'local') return { storageMode: 'local', profileId: BUILTIN_LOCAL_PROFILE_ID };
   if (typeof value === 'string' && value.startsWith(PROFILE_VALUE_PREFIX)) {
     const profileId = boundedText(value.slice(PROFILE_VALUE_PREFIX.length), MAX_ID_LENGTH);
-    if (profileId) return { storageMode: 'local', profileId };
+    if (profileId) return { storageMode: profileStorageMode ?? 'local', profileId };
   }
   return { storageMode: 'drive', profileId: BUILTIN_DRIVE_PROFILE_ID };
 }

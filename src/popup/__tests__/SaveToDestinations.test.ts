@@ -6,7 +6,7 @@ import type { RecordingDestinationOption } from '../../background/destinations/R
 const CRM: RecordingDestinationOption = {
   id: 'profile-crm',
   name: 'CheekyCheeseIT',
-  kind: 'integration',
+  kind: 'custom',
   storageMode: 'local',
   filesLabel: 'Local downloads',
   dataRoutes: [{ destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM' }],
@@ -64,6 +64,16 @@ describe('Save to destinations in the popup', () => {
     expect(select.value).toBe('profile:profile-crm');
     expect(buildRunConfigFromForm(elements)).toEqual(expect.objectContaining({
       storageMode: 'local', destinationProfileId: 'profile-crm',
+    }));
+  });
+
+  it('uses a custom Drive profile\'s rendered storage mode in the run config', () => {
+    const { select, list, elements } = mount();
+    const drive = { ...CRM, id: 'profile-drive', storageMode: 'drive' as const, filesLabel: 'Google Drive / Recruiting' };
+    renderSaveToDestinations(select, list, [drive]);
+    select.value = 'profile:profile-drive';
+    expect(buildRunConfigFromForm(elements)).toEqual(expect.objectContaining({
+      storageMode: 'drive', destinationProfileId: 'profile-drive',
     }));
   });
 

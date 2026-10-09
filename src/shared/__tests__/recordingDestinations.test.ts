@@ -2,6 +2,7 @@ import {
   BUILTIN_DRIVE_PROFILE_ID,
   BUILTIN_LOCAL_PROFILE_ID,
   MAX_RECORDING_DESTINATION_PROFILES,
+  MAX_RECORDING_DESTINATION_ROUTES,
   builtinRecordingDestinations,
   normalizeRecordingDestinationProfiles,
   parseSaveToValue,
@@ -27,7 +28,7 @@ describe('recording destination profiles', () => {
     ]);
   });
 
-  it('keeps a well-formed V1 integration profile', () => {
+  it('keeps a well-formed V1 integration profile unchanged', () => {
     expect(normalizeRecordingDestinationProfiles([crm()])).toEqual([crm()]);
   });
 
@@ -36,16 +37,37 @@ describe('recording destination profiles', () => {
     expect(normalizeRecordingDestinationProfiles([profile])).toEqual([profile]);
   });
 
-  it('rejects shapes V1 does not allow yet: Drive media, external media, review routes, zero or several routes', () => {
-    expect(normalizeRecordingDestinationProfiles([
-      crm({ id: 'a', mediaTarget: { kind: 'drive' } }),
-      crm({ id: 'b', mediaTarget: { kind: 'external', destinationId: 'destination_crm' } }),
-      crm({ id: 'c', dataRoutes: [{ destinationId: 'destination_crm', mode: 'review' }] }),
-      crm({ id: 'd', dataRoutes: [] }),
-      crm({ id: 'e', dataRoutes: [
+  it('accepts M3 local/Drive media with zero or several automatic data routes', () => {
+    const drive = crm({
+      id: 'drive-profile',
+      mediaTarget: { kind: 'drive', folderPresetId: 'drive-folder' },
+      dataRoutes: [],
+    });
+    const several = crm({
+      id: 'several',
+      dataRoutes: [
         { destinationId: 'destination_crm', mode: 'auto' },
         { destinationId: 'destination_journal', mode: 'auto' },
+      ],
+    });
+    expect(normalizeRecordingDestinationProfiles([drive, several])).toEqual([drive, several]);
+  });
+
+  it('rejects external media, review routes, duplicate routes and overlong route lists', () => {
+    expect(normalizeRecordingDestinationProfiles([
+      crm({ id: 'external', mediaTarget: { kind: 'external', destinationId: 'destination_crm' } }),
+      crm({ id: 'review', dataRoutes: [{ destinationId: 'destination_crm', mode: 'review' }] }),
+      crm({ id: 'duplicate', dataRoutes: [
+        { destinationId: 'destination_crm', mode: 'auto' },
+        { destinationId: 'destination_crm', mode: 'auto' },
       ] }),
+      crm({
+        id: 'too-many',
+        dataRoutes: Array.from({ length: MAX_RECORDING_DESTINATION_ROUTES + 1 }, (_, index) => ({
+          destinationId: `destination-${index}`,
+          mode: 'auto' as const,
+        })),
+      }),
     ])).toEqual([]);
   });
 
@@ -74,6 +96,7 @@ describe('recording destination profiles', () => {
     expect(storageModeOfProfile(builtinRecordingDestinations()[0])).toBe('drive');
     expect(storageModeOfProfile(builtinRecordingDestinations()[1])).toBe('local');
     expect(storageModeOfProfile(crm())).toBe('local');
+    expect(storageModeOfProfile(crm({ mediaTarget: { kind: 'drive' } }))).toBe('drive');
   });
 
   it('resolves built-in and user profiles by ID, and nothing else', () => {
@@ -90,6 +113,7 @@ describe('recording destination profiles', () => {
     expect(parseSaveToValue('drive')).toEqual({ storageMode: 'drive', profileId: BUILTIN_DRIVE_PROFILE_ID });
     expect(parseSaveToValue('local')).toEqual({ storageMode: 'local', profileId: BUILTIN_LOCAL_PROFILE_ID });
     expect(parseSaveToValue('profile:profile-crm')).toEqual({ storageMode: 'local', profileId: 'profile-crm' });
+    expect(parseSaveToValue('profile:profile-crm', 'drive')).toEqual({ storageMode: 'drive', profileId: 'profile-crm' });
     expect(parseSaveToValue('profile:')).toEqual({ storageMode: 'drive', profileId: BUILTIN_DRIVE_PROFILE_ID });
     expect(parseSaveToValue(undefined)).toEqual({ storageMode: 'drive', profileId: BUILTIN_DRIVE_PROFILE_ID });
   });

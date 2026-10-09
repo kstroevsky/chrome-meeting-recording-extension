@@ -30,7 +30,10 @@ function harness(options: {
   contexts?: Record<string, string>;
 } = {}) {
   let settings: ExtensionSettings = normalizeExtensionSettings({
-    storage: { localFolderPresets: [{ id: 'folder-1', name: 'Interviews' }] },
+    storage: {
+      localFolderPresets: [{ id: 'folder-1', name: 'Interviews' }],
+      driveFolderPresets: [{ id: 'drive-folder-1', name: 'Recruiting' }],
+    },
   } as never);
   let pick = options.pick;
   let ids = 0;
@@ -60,7 +63,7 @@ describe('RecordingDestinationsRuntime', () => {
     expect(destinations[2]).toEqual({
       id: 'profile-1',
       name: 'CheekyCheeseIT',
-      kind: 'integration',
+      kind: 'custom',
       storageMode: 'local',
       filesLabel: 'Local downloads / Interviews',
       dataRoutes: [{ destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM' }],
@@ -73,6 +76,54 @@ describe('RecordingDestinationsRuntime', () => {
     await expect(ctx.runtime.save({ destinationId: 'destination_crm' })).resolves.toEqual(
       expect.objectContaining({ name: 'CheekyCheeseIT CRM', mediaTarget: { kind: 'local' } }),
     );
+  });
+
+  it('saves Drive media with several automatic routes and reports all destinations', async () => {
+    const journal = integration({
+      id: 'destination_journal',
+      producerId: 'producer_journal',
+      name: 'Journal',
+      endpoint: 'https://journal.example.test/hooks/recordings',
+      signingSecretId: 'secret_journal',
+    });
+    const ctx = harness({ integrations: [integration(), journal] });
+    await expect(ctx.runtime.save({
+      name: 'Recruiting archive',
+      mediaTarget: { kind: 'drive', folderPresetId: 'drive-folder-1' },
+      dataRoutes: [
+        { destinationId: 'destination_crm', mode: 'auto' },
+        { destinationId: 'destination_journal', mode: 'auto' },
+      ],
+    })).resolves.toEqual(expect.objectContaining({
+      name: 'Recruiting archive',
+      mediaTarget: { kind: 'drive', folderPresetId: 'drive-folder-1' },
+    }));
+
+    expect((await ctx.runtime.list()).destinations[2]).toEqual(expect.objectContaining({
+      kind: 'custom',
+      storageMode: 'drive',
+      filesLabel: 'Google Drive / Recruiting',
+      dataRoutes: [
+        { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM' },
+        { destinationId: 'destination_journal', destinationName: 'Journal' },
+      ],
+      available: true,
+    }));
+  });
+
+  it('allows a folder-only profile and rejects unknown folder presets', async () => {
+    const ctx = harness();
+    await expect(ctx.runtime.save({
+      mediaTarget: { kind: 'local', folderPresetId: 'folder-1' },
+      dataRoutes: [],
+    })).resolves.toEqual(expect.objectContaining({
+      name: 'Local downloads / Interviews',
+      dataRoutes: [],
+    }));
+    await expect(ctx.runtime.save({
+      mediaTarget: { kind: 'drive', folderPresetId: 'missing' },
+      dataRoutes: [],
+    })).rejects.toThrow('Folder preset does not exist');
   });
 
   it('marks a profile unavailable when its destination is gone, disabled, or lacks host permission', async () => {

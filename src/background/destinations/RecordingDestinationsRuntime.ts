@@ -8,12 +8,13 @@ import {
   normalizeRecordingDestinationProfiles,
   resolveRecordingDestination,
   storageModeOfProfile,
+  type RecordingDestinationMediaTarget,
   type RecordingDestinationProfile,
+  type RecordingDestinationRoute,
 } from '../../shared/recordingDestinations';
 import type { StorageMode } from '../../shared/recordingTypes';
 import type { ExtensionSettings } from '../../shared/settings';
 import type { RecordingContext } from '../../shared/recordingContext';
-import type { RecordingDestinationRoute } from '../../shared/recordingDestinations';
 
 export type RecordingDestinationUnavailableReason =
   | 'destination-missing'
@@ -24,7 +25,7 @@ export type RecordingDestinationUnavailableReason =
 export type RecordingDestinationOption = {
   id: string;
   name: string;
-  kind: 'builtin' | 'integration';
+  kind: 'builtin' | 'custom';
   storageMode: StorageMode;
   /** Where the files go, e.g. `Local downloads / Interviews`. */
   filesLabel: string;
@@ -33,12 +34,26 @@ export type RecordingDestinationOption = {
   unavailableReason?: RecordingDestinationUnavailableReason;
 };
 
-export type SaveRecordingDestinationInput = {
+type SaveRecordingDestinationBaseInput = {
   id?: string;
   name?: string;
+};
+
+/** Kept so existing callers and stored V1 setup flows continue to work. */
+export type LegacySaveRecordingDestinationInput = SaveRecordingDestinationBaseInput & {
   destinationId: string;
   localFolderPresetId?: string;
 };
+
+/** M3 profile editor payload. External primary media is introduced in M5. */
+export type GeneralSaveRecordingDestinationInput = SaveRecordingDestinationBaseInput & {
+  mediaTarget: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
+  dataRoutes: RecordingDestinationRoute[];
+};
+
+export type SaveRecordingDestinationInput =
+  | LegacySaveRecordingDestinationInput
+  | GeneralSaveRecordingDestinationInput;
 
 type Deps = {
   loadSettings(): Promise<ExtensionSettings>;
@@ -132,22 +147,40 @@ export class RecordingDestinationsRuntime {
 
   async save(input: SaveRecordingDestinationInput): Promise<RecordingDestinationProfile> {
     const integrations = await this.deps.listIntegrationDestinations();
-    const destination = integrations.find((candidate) => candidate.id === input.destinationId);
-    if (!destination) throw new Error('Integration destination does not exist');
     if (input.id && isBuiltinRecordingDestinationId(input.id)) {
       throw new Error('Built-in destinations cannot be changed');
     }
 
     const settings = await this.deps.loadSettings();
+    const normalizedInput = normalizeSaveInput(input);
+    const routedDestinations = normalizedInput.dataRoutes.map((route) =>
+      integrations.find((candidate) => candidate.id === route.destinationId));
+    if (routedDestinations.some((destination) => !destination)) {
+      throw new Error('Integration destination does not exist');
+    }
+    if (normalizedInput.mediaTarget.folderPresetId) {
+      const presets = normalizedInput.mediaTarget.kind === 'drive'
+        ? settings.storage.driveFolderPresets
+        : settings.storage.localFolderPresets;
+      if (!presets.some((preset) => preset.id === normalizedInput.mediaTarget.folderPresetId)) {
+        throw new Error('Folder preset does not exist');
+      }
+    }
+
     const id = input.id ?? this.createId();
+    const defaultName = routedDestinations.length === 1
+      ? routedDestinations[0]!.name
+      : filesLabelOf({
+        id,
+        name: '',
+        mediaTarget: normalizedInput.mediaTarget,
+        dataRoutes: [],
+      }, settings);
     const profile: RecordingDestinationProfile = {
       id,
-      name: (input.name ?? '').trim() || destination.name,
-      mediaTarget: {
-        kind: 'local',
-        ...(input.localFolderPresetId ? { folderPresetId: input.localFolderPresetId } : {}),
-      },
-      dataRoutes: [{ destinationId: destination.id, mode: 'auto' }],
+      name: (input.name ?? '').trim() || defaultName,
+      mediaTarget: normalizedInput.mediaTarget,
+      dataRoutes: normalizedInput.dataRoutes,
     };
     const others = settings.storage.recordingDestinations.filter((existing) => existing.id !== id);
     const candidate = normalizeRecordingDestinationProfiles([...others, profile]);
@@ -185,7 +218,7 @@ export class RecordingDestinationsRuntime {
     const option: RecordingDestinationOption = {
       id: profile.id,
       name: profile.name,
-      kind: isBuiltinRecordingDestinationId(profile.id) ? 'builtin' : 'integration',
+      kind: isBuiltinRecordingDestinationId(profile.id) ? 'builtin' : 'custom',
       storageMode,
       filesLabel: filesLabelOf(profile, settings),
       dataRoutes: profile.dataRoutes.map((route) => ({
@@ -213,6 +246,25 @@ export class RecordingDestinationsRuntime {
       return false;
     }
   }
+}
+
+function normalizeSaveInput(input: SaveRecordingDestinationInput): {
+  mediaTarget: Extract<RecordingDestinationMediaTarget, { kind: 'local' | 'drive' }>;
+  dataRoutes: RecordingDestinationRoute[];
+} {
+  if ('mediaTarget' in input) {
+    return {
+      mediaTarget: { ...input.mediaTarget },
+      dataRoutes: input.dataRoutes.map((route) => ({ ...route })),
+    };
+  }
+  return {
+    mediaTarget: {
+      kind: 'local',
+      ...(input.localFolderPresetId ? { folderPresetId: input.localFolderPresetId } : {}),
+    },
+    dataRoutes: [{ destinationId: input.destinationId, mode: 'auto' }],
+  };
 }
 
 function filesLabelOf(profile: RecordingDestinationProfile, settings: ExtensionSettings): string {

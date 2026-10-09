@@ -192,14 +192,18 @@
         <h2 id="save-to-heading" class="section-eyebrow">DESTINATIONS</h2>
         <p class="destinations-intro">
           What you can pick under <strong>Save to</strong> before you record. Google Drive and Local
-          downloads are always there. Connecting an integration below adds one more: the files are
-          saved to this computer, and the recording's data is sent to the integration once you
-          confirm it at the end.
+          downloads are always there. Add a custom destination to choose a folder and, optionally,
+          send the recording's data to one or more connected integrations after you confirm it.
         </p>
         <div id="save-to-list" class="save-to-list"></div>
-        <div id="save-to-add-row" class="save-to-add" hidden>
-          <select id="save-to-integration" aria-label="Integration that receives the data"></select>
+        <div id="save-to-add-row" class="save-to-add">
+          <input id="save-to-name" type="text" maxlength="60" placeholder="Destination name (optional)" aria-label="Destination name">
+          <select id="save-to-media" aria-label="Where recording files are saved">
+            <option value="local">Files: Local downloads</option>
+            <option value="drive">Files: Google Drive</option>
+          </select>
           <select id="save-to-folder" aria-label="Folder for the files"></select>
+          <select id="save-to-integration" multiple size="3" aria-label="Integrations that receive the data"></select>
           <button id="save-to-add" class="destination-add" type="button">Add destination</button>
         </div>
         <p id="save-to-status" class="destinations-note destinations-note--quiet" role="status" aria-live="polite"></p>

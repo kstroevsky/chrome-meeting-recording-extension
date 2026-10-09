@@ -889,9 +889,22 @@ function isIntegrationPopupMessage(value: unknown): boolean {
 function isSaveRecordingDestinationInput(value: unknown): boolean {
   if (!isRecord(value) || Array.isArray(value)) return false;
   const optionalText = (field: unknown) => field === undefined || nonEmptyText(field);
-  return nonEmptyText(value.destinationId)
-    && optionalText(value.id)
-    && (value.name === undefined || typeof value.name === 'string')
+  if (!optionalText(value.id) || (value.name !== undefined && typeof value.name !== 'string')) return false;
+
+  if (value.mediaTarget !== undefined || value.dataRoutes !== undefined) {
+    if (value.destinationId !== undefined || value.localFolderPresetId !== undefined) return false;
+    if (!isRecord(value.mediaTarget) || Array.isArray(value.mediaTarget)) return false;
+    if (value.mediaTarget.kind !== 'local' && value.mediaTarget.kind !== 'drive') return false;
+    if (!optionalText(value.mediaTarget.folderPresetId) || !Array.isArray(value.dataRoutes)) return false;
+    return value.dataRoutes.every((route) => isRecord(route)
+      && !Array.isArray(route)
+      && nonEmptyText(route.destinationId)
+      && route.mode === 'auto');
+  }
+
+  return value.mediaTarget === undefined
+    && value.dataRoutes === undefined
+    && nonEmptyText(value.destinationId)
     && optionalText(value.localFolderPresetId);
 }
 

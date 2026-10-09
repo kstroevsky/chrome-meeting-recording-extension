@@ -1,10 +1,10 @@
 /**
  * @file popup/SaveToDestinations.ts
  *
- * Fills the popup's "Save to" list with the user's integration destinations.
+ * Fills the popup's "Save to" list with the user's custom destinations.
  *
  * The two built-ins (Google Drive, Local downloads) stay authored in
- * popup.html with their legacy select values; integration profiles are added
+ * popup.html with their legacy select values; custom profiles are added
  * after them, before the divider, as `profile:<id>` values. The background
  * owns the profiles and their availability; this module only renders what
  * LIST_RECORDING_DESTINATIONS returns.
@@ -33,13 +33,14 @@ export function renderSaveToDestinations(
   }
   const divider = list.querySelector('.select-divider');
   for (const option of options) {
-    if (option.kind !== 'integration') continue;
+    if (option.kind !== 'custom') continue;
     const value = saveToValueOf(option.id);
 
     const native = doc.createElement('option');
     native.value = value;
     native.textContent = option.name;
     native.disabled = !option.available;
+    native.dataset.storageMode = option.storageMode;
     native.setAttribute(RENDERED, option.id);
     select.appendChild(native);
 

@@ -8,7 +8,8 @@
  * a second folder.
  *
  * The background owns the profiles; this page only lists, adds and removes
- * them through it, so the popup and this page can never disagree.
+ * them through it, so the popup and this page can never disagree. M3 lets one
+ * profile combine a local/Drive file target with several automatic data routes.
  */
 
 import type { RecordingDestinationOption } from '../background/destinations/RecordingDestinationsRuntime';
@@ -22,6 +23,8 @@ type Elements = {
   document: Document;
   list: HTMLElement | null;
   addRow: HTMLElement | null;
+  name: HTMLInputElement | null;
+  media: HTMLSelectElement | null;
   integration: HTMLSelectElement | null;
   folder: HTMLSelectElement | null;
   add: HTMLButtonElement | null;
@@ -29,14 +32,20 @@ type Elements = {
 };
 
 type Deps = {
-  localFolders: () => Promise<FolderPreset[]>;
+  folders: () => Promise<{ local: FolderPreset[]; drive: FolderPreset[] }>;
 };
 
 export class DestinationSettingsController {
   constructor(
     private readonly el: Elements,
     private readonly deps: Deps = {
-      localFolders: async () => (await loadExtensionSettingsFromStorage()).storage.localFolderPresets,
+      folders: async () => {
+        const settings = await loadExtensionSettingsFromStorage();
+        return {
+          local: settings.storage.localFolderPresets,
+          drive: settings.storage.driveFolderPresets,
+        };
+      },
     },
   ) {}
 
@@ -45,6 +54,8 @@ export class DestinationSettingsController {
       document: doc,
       list: doc.getElementById('save-to-list'),
       addRow: doc.getElementById('save-to-add-row'),
+      name: doc.getElementById('save-to-name') as HTMLInputElement | null,
+      media: doc.getElementById('save-to-media') as HTMLSelectElement | null,
       integration: doc.getElementById('save-to-integration') as HTMLSelectElement | null,
       folder: doc.getElementById('save-to-folder') as HTMLSelectElement | null,
       add: doc.getElementById('save-to-add') as HTMLButtonElement | null,
@@ -54,6 +65,7 @@ export class DestinationSettingsController {
 
   async init(): Promise<void> {
     this.el.add?.addEventListener('click', () => void this.addDestination());
+    this.el.media?.addEventListener('change', () => void this.refreshFolders());
     await this.refresh();
   }
 
@@ -64,12 +76,12 @@ export class DestinationSettingsController {
       const [destinationsResponse, integrationsResponse, folders] = await Promise.all([
         sendToBackground({ type: 'LIST_RECORDING_DESTINATIONS' }),
         sendToBackground({ type: 'LIST_INTEGRATIONS' }),
-        this.deps.localFolders().catch(() => [] as FolderPreset[]),
+        this.deps.folders().catch(() => ({ local: [] as FolderPreset[], drive: [] as FolderPreset[] })),
       ]);
       if (!destinationsResponse.ok) throw new Error(destinationsResponse.error);
       const integrations = integrationsResponse.ok ? integrationsResponse.destinations : [];
       this.renderList(destinationsResponse.destinations);
-      this.renderAddRow(destinationsResponse.destinations, integrations, folders);
+      this.renderAddRow(integrations, folders);
     } catch (error) {
       this.setStatus(`Could not load destinations: ${String(error)}`, true);
     }
@@ -90,7 +102,7 @@ export class DestinationSettingsController {
       detail.textContent = option.kind === 'builtin' ? 'Built in' : describeDestination(option);
       copy.append(title, detail);
       row.append(copy);
-      if (option.kind === 'integration') {
+      if (option.kind === 'custom') {
         const actions = doc.createElement('div');
         actions.className = 'integration-destination__actions';
         const remove = doc.createElement('button');
@@ -105,45 +117,39 @@ export class DestinationSettingsController {
     }));
   }
 
-  /** Offered only for integrations that no destination sends to yet. */
   private renderAddRow(
-    destinations: RecordingDestinationOption[],
     integrations: IntegrationDestination[],
-    folders: FolderPreset[],
+    folders: { local: FolderPreset[]; drive: FolderPreset[] },
   ): void {
     const doc = this.el.document;
-    const routed = new Set(destinations.flatMap((option) => option.dataRoutes.map((route) => route.destinationId)));
-    const candidates = integrations.filter((integration) => !routed.has(integration.id));
-    if (this.el.addRow) this.el.addRow.hidden = candidates.length === 0;
-    this.el.integration?.replaceChildren(...candidates.map((integration) => {
+    if (this.el.addRow) this.el.addRow.hidden = false;
+    this.el.integration?.replaceChildren(...integrations.map((integration) => {
       const option = doc.createElement('option');
       option.value = integration.id;
       option.textContent = integration.name;
       return option;
     }));
-    this.el.folder?.replaceChildren(
-      ...[{ id: '', name: 'Files: Local downloads' }, ...folders.map((folder) => ({ id: folder.id, name: `Files: Local downloads / ${folder.name}` }))]
-        .map((folder) => {
-          const option = doc.createElement('option');
-          option.value = folder.id;
-          option.textContent = folder.name;
-          return option;
-        }),
-    );
+    this.renderFolderOptions(folders);
   }
 
   private async addDestination(): Promise<void> {
-    const destinationId = this.el.integration?.value;
-    if (!destinationId) return;
+    const mediaKind = this.el.media?.value === 'drive' ? 'drive' : 'local';
     const folderId = this.el.folder?.value || undefined;
+    const destinationIds = Array.from(this.el.integration?.selectedOptions ?? []).map((option) => option.value);
+    const name = this.el.name?.value.trim() || undefined;
     this.setBusy(true);
     try {
       const response = await sendToBackground({
         type: 'SAVE_RECORDING_DESTINATION',
-        input: { destinationId, ...(folderId ? { localFolderPresetId: folderId } : {}) },
+        input: {
+          ...(name ? { name } : {}),
+          mediaTarget: { kind: mediaKind, ...(folderId ? { folderPresetId: folderId } : {}) },
+          dataRoutes: destinationIds.map((destinationId) => ({ destinationId, mode: 'auto' as const })),
+        },
       });
       if (!response.ok) throw new Error(response.error);
       this.setStatus(`Added ${response.profile.name}. Pick it under Save to before you record.`);
+      if (this.el.name) this.el.name.value = '';
       await this.refresh();
     } catch (error) {
       this.setStatus(`Could not add the destination: ${String(error)}`, true);
@@ -168,6 +174,32 @@ export class DestinationSettingsController {
 
   private setBusy(busy: boolean): void {
     if (this.el.add) this.el.add.disabled = busy;
+  }
+
+  private async refreshFolders(): Promise<void> {
+    try {
+      const folders = await this.deps.folders();
+      this.renderFolderOptions(folders);
+    } catch {
+      this.renderFolderOptions({ local: [], drive: [] });
+    }
+  }
+
+  private renderFolderOptions(folders: { local: FolderPreset[]; drive: FolderPreset[] }): void {
+    if (!this.el.folder) return;
+    const doc = this.el.document;
+    const mediaKind = this.el.media?.value === 'drive' ? 'drive' : 'local';
+    const base = mediaKind === 'drive' ? 'Google Drive' : 'Local downloads';
+    const presets = mediaKind === 'drive' ? folders.drive : folders.local;
+    this.el.folder.replaceChildren(
+      ...[{ id: '', name: `Files: ${base}` }, ...presets.map((folder) => ({ id: folder.id, name: `Files: ${base} / ${folder.name}` }))]
+        .map((folder) => {
+          const option = doc.createElement('option');
+          option.value = folder.id;
+          option.textContent = folder.name;
+          return option;
+        }),
+    );
   }
 
   private setStatus(message: string, error = false): void {
