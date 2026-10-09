@@ -161,4 +161,37 @@ describe('ExternalMediaClient signed storage upload', () => {
     await expect(harness(fetcher).client.status(uploadId))
       .rejects.toEqual(new MediaHttpError(409, 'MEDIA_UPLOAD_COMPLETING'));
   });
+
+  it('accepts a protocol-scale status manifest larger than the normal control-response limit', async () => {
+    const uploadedParts = Array.from({ length: 10_000 }, (_, index) => ({
+      partNumber: index + 1,
+      etag: `\"${String(index + 1).padStart(5, '0')}-${'a'.repeat(64)}\"`,
+    }));
+    const fetcher = jest.fn().mockResolvedValue(response({ state: 'uploading', artifactId, uploadedParts }));
+
+    await expect(harness(fetcher).client.status(uploadId)).resolves.toEqual({
+      state: 'uploading',
+      artifactId,
+      uploadedParts,
+    });
+  });
+
+  it('keeps large status manifests bounded by part count and opaque ETag size', async () => {
+    const tooMany = Array.from({ length: 10_001 }, (_, index) => ({
+      partNumber: (index % 10_000) + 1,
+      etag: '"etag"',
+    }));
+    const tooManyFetch = jest.fn().mockResolvedValue(response({
+      state: 'uploading', artifactId, uploadedParts: tooMany,
+    }));
+    await expect(harness(tooManyFetch).client.status(uploadId))
+      .rejects.toThrow('Invalid media upload status');
+
+    const longEtagFetch = jest.fn().mockResolvedValue(response({
+      state: 'uploading', artifactId,
+      uploadedParts: [{ partNumber: 1, etag: `"${'a'.repeat(1025)}"` }],
+    }));
+    await expect(harness(longEtagFetch).client.status(uploadId))
+      .rejects.toThrow('Invalid media parts manifest');
+  });
 });

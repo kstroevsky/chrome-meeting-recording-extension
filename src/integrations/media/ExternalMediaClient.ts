@@ -27,6 +27,8 @@ export type UploadStatus = { state: 'ready'; artifactId: string } |
   { state: 'uploading'; artifactId: string; uploadedParts: MediaPart[] };
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const MAX_STATUS_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_ETAG_BYTES = 1024;
 const ID = /^(?:media|upload)_[0-9a-f-]{36}$/i;
 const browserFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
@@ -66,9 +68,12 @@ function checkCapability(capability: MediaCapability, endpoint: string): string 
   return base.href.replace(/\/$/, '');
 }
 
-async function jsonBounded(response: Response): Promise<Record<string, unknown>> {
+async function jsonBounded(
+  response: Response,
+  maxBytes = MAX_RESPONSE_BYTES,
+): Promise<Record<string, unknown>> {
   const length = Number(response.headers.get('content-length'));
-  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error('Media response too large');
+  if (Number.isFinite(length) && length > maxBytes) throw new Error('Media response too large');
   if (!response.body) throw new Error('Empty media response');
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -78,7 +83,7 @@ async function jsonBounded(response: Response): Promise<Record<string, unknown>>
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_RESPONSE_BYTES) throw new Error('Media response too large');
+      if (total > maxBytes) throw new Error('Media response too large');
       chunks.push(value);
     }
   } finally { await reader.cancel().catch(() => undefined); }
@@ -117,7 +122,13 @@ export class ExternalMediaClient {
     this.base = checkCapability(capability, webhookEndpoint);
   }
 
-  private async request(method: 'GET' | 'POST', path: string, body?: unknown, signal?: AbortSignal) {
+  private async request(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    maxResponseBytes = MAX_RESPONSE_BYTES,
+  ) {
     const token = await this.getBearer();
     if (!token || /[\r\n]/.test(token)) throw new Error('Invalid media credential');
     const response = await this.fetcher(`${this.base}/v1/${path}`, {
@@ -135,7 +146,7 @@ export class ExternalMediaClient {
       }
       throw new MediaHttpError(response.status, code);
     }
-    return jsonBounded(response);
+    return jsonBounded(response, maxResponseBytes);
   }
 
   async create(input: UploadCreate, signal?: AbortSignal): Promise<UploadResponse> {
@@ -144,15 +155,23 @@ export class ExternalMediaClient {
 
   async status(uploadId: string, signal?: AbortSignal): Promise<UploadStatus> {
     mediaId(uploadId, 'upload');
-    const response = await this.request('GET', `uploads/${uploadId}`, undefined, signal);
+    const response = await this.request(
+      'GET',
+      `uploads/${uploadId}`,
+      undefined,
+      signal,
+      MAX_STATUS_RESPONSE_BYTES,
+    );
     const artifactId = mediaId(response.artifactId, 'media');
     if (response.state === 'ready') return { state: 'ready', artifactId };
-    if (response.state !== 'uploading' || !Array.isArray(response.uploadedParts)) throw new Error('Invalid media upload status');
+    if (response.state !== 'uploading' || !Array.isArray(response.uploadedParts) ||
+        response.uploadedParts.length > 10_000) throw new Error('Invalid media upload status');
     const uploadedParts: MediaPart[] = [];
     for (const item of response.uploadedParts) {
       const part = object(item);
       if (!Number.isSafeInteger(part.partNumber) || (part.partNumber as number) < 1 ||
           (part.partNumber as number) > 10000 || typeof part.etag !== 'string' || !part.etag ||
+          /[\r\n]/.test(part.etag) || new TextEncoder().encode(part.etag).byteLength > MAX_ETAG_BYTES ||
           uploadedParts.some((entry) => entry.partNumber === part.partNumber)) throw new Error('Invalid media parts manifest');
       uploadedParts.push({ partNumber: part.partNumber as number, etag: part.etag });
     }
