@@ -35,6 +35,7 @@ const RUN_LARGE_TRANSFER = process.env.R0_RUN_LARGE_TRANSFER === "1";
 const RUN_RESTART_RECOVERY = process.env.R0_RUN_RESTART_RECOVERY === "1";
 const RUN_URL_EXPIRY = process.env.R0_RUN_URL_EXPIRY === "1";
 const RUN_ATTEMPT_EXPIRY = process.env.R0_RUN_ATTEMPT_EXPIRY === "1";
+const RUN_PLAYBACK_EXPIRY = process.env.R0_RUN_PLAYBACK_EXPIRY === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
 const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
 const URL_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
@@ -925,6 +926,214 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       await proxy?.stop().catch(() => {});
     }
   });
+
+  test("plays and seeks external multi-track media across repeated URL expiry", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_PLAYBACK_EXPIRY,
+      "Set R0_RUN_PLAYBACK_EXPIRY=1 and a short CRM playback-URL TTL to run JM6/JM7.",
+    );
+    test.setTimeout(600_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    const playbackSignRequests = new Map<string, number>();
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-playback-expiry-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+        {
+          responseDelayMs: ({ method, pathname }) => {
+            const match = pathname.match(
+              /\/media\/v1\/artifacts\/(media_[^/]+)\/playback$/,
+            );
+            if (method === "POST" && match?.[1]) {
+              playbackSignRequests.set(
+                match[1],
+                (playbackSignRequests.get(match[1]) ?? 0) + 1,
+              );
+            }
+            return 0;
+          },
+        },
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r0-playback-expiry-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        { extensionPath, ignoreHTTPSErrors: true },
+      );
+      const configured = await configureRealR2Destination(harness, proxy.origin);
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "separate",
+        recordSelfVideo: true,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+        { micMode: "separate", recordSelfVideo: true, captureMs: 4_000 },
+      );
+      const recorded = await historyEntry(harness.controlPage, recordingId);
+      expect(recorded.files.filter((file) => !file.kind)).toHaveLength(3);
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "CONFIRM_RECORDING_ROUTES",
+          recordingId,
+          removedDestinationIds: [],
+        }),
+      ).toEqual(expect.objectContaining({ ok: true }));
+      const transfers = await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+        480_000,
+      );
+      expect(transfers).toHaveLength(3);
+
+      const externalTracks = await projectHistoryToExternalOnly(
+        harness.controlPage,
+        recordingId,
+      );
+      expect(externalTracks).toHaveLength(3);
+      const master =
+        externalTracks.find((track) => track.stream === "tab") ?? externalTracks[0];
+      if (!master) throw new Error("JM6/JM7 has no external master track");
+
+      const player = await harness.context.newPage();
+      const rangeReads: string[] = [];
+      player.on("request", (request) => {
+        try {
+          if (
+            request.method() === "GET" &&
+            new URL(request.url()).origin === R2_UPLOAD_ORIGIN
+          ) {
+            const range = request.headers()["range"];
+            if (range) rangeReads.push(range);
+          }
+        } catch {
+          // Ignore non-URL browser-internal requests.
+        }
+      });
+      await player.goto(
+        `chrome-extension://${harness.extensionId}/recordings.html`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await player.evaluate(() => {
+        (window as any).__r0CspViolations = [];
+        document.addEventListener("securitypolicyviolation", (event) => {
+          let blockedOrigin = event.blockedURI;
+          try {
+            blockedOrigin = new URL(event.blockedURI).origin;
+          } catch {}
+          (window as any).__r0CspViolations.push({
+            directive: event.effectiveDirective,
+            blockedOrigin,
+          });
+        });
+      });
+      await expect(player.locator(".recording-row").first()).toBeVisible({
+        timeout: 20_000,
+      });
+      await player.locator(".recording-row").first().click();
+      await player.locator(".modal-button--watch").click();
+      await expect(player.locator(".player")).toBeVisible();
+
+      const video = player.locator(".player__video");
+      const selfcam = player.locator(".player__selfcam");
+      const microphone = player.locator(".player__aux audio");
+      for (const element of [video, selfcam, microphone]) {
+        await expect.poll(
+          async () =>
+            element.evaluate((media: HTMLMediaElement) =>
+              media.src ? new URL(media.src).origin : "",
+            ),
+          { timeout: 30_000 },
+        ).toBe(R2_UPLOAD_ORIGIN);
+        await expect.poll(
+          async () => element.evaluate((media: HTMLMediaElement) => media.readyState),
+          { timeout: 30_000 },
+        ).toBeGreaterThanOrEqual(1);
+      }
+
+      const initialMasterSigns = playbackSignRequests.get(master.artifactId) ?? 0;
+      expect(initialMasterSigns).toBeGreaterThanOrEqual(1);
+      for (let expiry = 0; expiry < 2; expiry += 1) {
+        await player.waitForTimeout(3_000);
+        const beforeRefresh = playbackSignRequests.get(master.artifactId) ?? 0;
+        await video.evaluate((media: HTMLMediaElement) => media.load());
+        await expect.poll(
+          () => playbackSignRequests.get(master.artifactId) ?? 0,
+          { timeout: 30_000, intervals: [100, 250, 500, 1_000] },
+        ).toBeGreaterThan(beforeRefresh);
+        await expect.poll(
+          async () => video.evaluate((media: HTMLMediaElement) => media.readyState),
+          { timeout: 30_000 },
+        ).toBeGreaterThanOrEqual(1);
+      }
+      expect(playbackSignRequests.get(master.artifactId)).toBeGreaterThanOrEqual(
+        initialMasterSigns + 2,
+      );
+
+      await video.evaluate(async (media: HTMLVideoElement) => {
+        media.currentTime = 1.5;
+        await media.play().catch(() => {});
+      });
+      await expect.poll(
+        async () => video.evaluate((media: HTMLVideoElement) => media.currentTime),
+        { timeout: 15_000 },
+      ).toBeGreaterThan(1.4);
+      await expect.poll(
+        async () => microphone.evaluate((media: HTMLAudioElement) => media.currentTime),
+        { timeout: 15_000 },
+      ).toBeGreaterThan(1.0);
+      const spread = await player.evaluate(() => {
+        const tab = document.querySelector(".player__video") as HTMLVideoElement;
+        const cam = document.querySelector(".player__selfcam") as HTMLVideoElement;
+        const mic = document.querySelector(".player__aux audio") as HTMLAudioElement;
+        return [
+          Math.abs(cam.currentTime - tab.currentTime),
+          Math.abs(mic.currentTime - tab.currentTime),
+        ];
+      });
+      for (const delta of spread) expect(delta).toBeLessThan(0.6);
+      await expect.poll(() => rangeReads.length, { timeout: 20_000 }).toBeGreaterThan(0);
+      expect(rangeReads.every((range) => /^bytes=\d+-/i.test(range))).toBe(true);
+      const cspViolations = await player.evaluate(
+        () => (window as any).__r0CspViolations as Array<unknown>,
+      );
+      expect(cspViolations).toEqual([]);
+      await expect(player.locator(".player__status")).toBeHidden();
+
+      await testInfo.attach("jm6-jm7-playback-expiry-evidence.json", {
+        body: JSON.stringify(
+          {
+            tracks: externalTracks.map((track) => track.stream).sort(),
+            masterPlaybackSignRequests:
+              playbackSignRequests.get(master.artifactId) ?? 0,
+            repeatedExpiriesRecovered: 2,
+            nativeRangeRequestsObserved: rangeReads.length,
+            deepSeekSeconds: 1.5,
+            auxiliaryMaxDriftSeconds: Math.max(...spread),
+            cspViolationCount: cspViolations.length,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
 });
 
 async function preparePilotExtension(
@@ -1109,14 +1318,19 @@ async function record(
   meet: Page,
   tabId: number,
   destinationProfileId: string,
+  options: {
+    micMode?: "off" | "mixed" | "separate";
+    recordSelfVideo?: boolean;
+    captureMs?: number;
+  } = {},
 ): Promise<string> {
   const response = await sendRuntimeMessage<any>(page, {
     type: "START_RECORDING",
     tabId,
     runConfig: {
       storageMode: "local",
-      micMode: "off",
-      recordSelfVideo: false,
+      micMode: options.micMode ?? "off",
+      recordSelfVideo: options.recordSelfVideo ?? false,
       destinationProfileId,
     },
   });
@@ -1130,9 +1344,57 @@ async function record(
   );
   if (!recordingId)
     throw new Error("Recording session did not expose its history id");
-  await meet.waitForTimeout(2_500);
+  await meet.waitForTimeout(options.captureMs ?? 2_500);
   await stopRecording(page);
   return recordingId;
+}
+
+async function projectHistoryToExternalOnly(
+  page: Page,
+  recordingId: string,
+): Promise<Array<{ fileId: string; stream: string; artifactId: string }>> {
+  return page.evaluate(async (recordingId) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("recording-history");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const transaction = database.transaction("recordings", "readwrite");
+      const store = transaction.objectStore("recordings");
+      const entry = await new Promise<any>((resolve, reject) => {
+        const request = store.get(recordingId);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      if (!entry) throw new Error("JM6/JM7 recording is missing from history");
+      const tracks: Array<{ fileId: string; stream: string; artifactId: string }> = [];
+      for (const file of entry.files ?? []) {
+        if (file.kind) continue;
+        const external = (file.locations ?? []).filter(
+          (location: any) => location.kind === "external",
+        );
+        if (external.length !== 1) {
+          throw new Error(`JM6/JM7 expected one external replica for ${file.stream}`);
+        }
+        file.locations = external;
+        tracks.push({
+          fileId: file.id,
+          stream: file.stream,
+          artifactId: external[0].artifactId,
+        });
+      }
+      store.put(entry);
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      return tracks;
+    } finally {
+      database.close();
+    }
+  }, recordingId);
 }
 
 async function recordingRoutes(

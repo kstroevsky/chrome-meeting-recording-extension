@@ -68,10 +68,18 @@ the extension recreated the upload, and the replacement finished with the same
 `clientTransferId` and artifact ID but a different multipart upload-attempt ID.
 The 64 MiB + 12,345-byte JM5 case completed in 1.1 minutes.
 
-The remaining R0 work is playback-expiry and deep-seek cases (JM6–JM7), and the
-remaining isolation/auth/lifecycle rows in the verification table below.
-Explicit local-source release remains R1 and must not be enabled from
-capability/HEAD success alone.
+JM6–JM7 are proven with the real recordings player and three external replicas.
+The isolated CRM used a two-second playback-URL lifetime; after the tab, mic and
+self-camera tracks loaded from R2, the pilot let the master URL expire twice and
+forced Chromium to reload it. Both native media errors went through the player's
+refresh callback and minted a new CRM URL. The player then deep-seeked to 1.5s,
+kept both auxiliary tracks within the sync bound, emitted native byte Range
+requests to R2, and recorded zero CSP violations. The combined JM6/JM7 case
+completed in 22.8 seconds.
+
+The remaining R0 work is the isolation/auth/lifecycle rows in the verification
+table below. Explicit local-source release remains R1 and must not be enabled
+from capability/HEAD success alone.
 
 ## Scope and verdict
 
