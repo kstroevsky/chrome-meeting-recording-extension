@@ -91,7 +91,21 @@ disabled, proving bearer revocation does not revoke historical interview access.
 The combined live gate completed in 6.6 seconds; raw bearer values and signed R2
 URLs are excluded from the attached evidence.
 
-The remaining R0 work is the lifecycle, input/protocol hardening,
+JM9–JM10 are also proven through the real browser/CRM/R2 path. With a ready
+external replica, disabling extension automation stopped a newly-recorded run
+from scheduling the CRM route while the recordings page could still mint and
+play the existing external replica. The pilot then re-enabled automation, left
+another recording held, injected 60 valid external-history rows and proved the
+disconnect-impact count was 61, beyond the 50-row UI page. Removing the Save-to
+profile did not cancel the already-started held route or touch CRM media.
+Disconnect then canceled that held route and removed the local integration, so
+extension playback could no longer resolve the destination; the stored CRM
+artifact and CRM-user playback still worked. Finally, removing the original
+recording from local history left the same CRM artifact/playback intact. The
+combined lifecycle gate completed in 12.9 seconds and keeps OPFS release out of
+scope for R0.
+
+The remaining R0 work is the input/protocol hardening,
 reconciliation/throttling and end-dialog consent rows in the verification table
 below. Explicit local-source release remains R1 and must not be enabled from
 capability/HEAD success alone.

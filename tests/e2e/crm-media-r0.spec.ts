@@ -38,6 +38,7 @@ const RUN_URL_EXPIRY = process.env.R0_RUN_URL_EXPIRY === "1";
 const RUN_ATTEMPT_EXPIRY = process.env.R0_RUN_ATTEMPT_EXPIRY === "1";
 const RUN_PLAYBACK_EXPIRY = process.env.R0_RUN_PLAYBACK_EXPIRY === "1";
 const RUN_AUTH_ISOLATION = process.env.R0_RUN_AUTH_ISOLATION === "1";
+const RUN_LIFECYCLE = process.env.R0_RUN_LIFECYCLE === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
 const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
 const URL_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
@@ -1368,6 +1369,315 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       await proxy?.stop().catch(() => {});
     }
   });
+
+  test("separates disable, Save-to removal, local deletion, and disconnect without deleting CRM media", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_LIFECYCLE,
+      "Set R0_RUN_LIFECYCLE=1 with the real-R2 pilot variables to run JM9/JM10.",
+    );
+    test.setTimeout(600_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-lifecycle-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r0-lifecycle-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        { extensionPath, ignoreHTTPSErrors: true },
+      );
+      const configured = await configureRealR2Destination(harness, proxy.origin);
+      const admin = harness.context.request;
+
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "off",
+        recordSelfVideo: false,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "CONFIRM_RECORDING_ROUTES",
+          recordingId,
+          removedDestinationIds: [],
+        }),
+      ).toEqual(expect.objectContaining({ ok: true }));
+      await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+        480_000,
+      );
+
+      const entry = await historyEntry(harness.controlPage, recordingId);
+      const mediaFile = entry.files.find((file) =>
+        !file.kind &&
+        file.locations.some(
+          (location) =>
+            location.kind === "external" &&
+            location.destinationId === configured.created.destination.id,
+        ),
+      );
+      const external = mediaFile?.locations.find(
+        (location) =>
+          location.kind === "external" &&
+          location.destinationId === configured.created.destination.id,
+      );
+      if (!mediaFile || !external || external.kind !== "external") {
+        throw new Error("JM9/JM10 recording has no ready external replica");
+      }
+      const crmRecording = await waitForCrmRecording(
+        admin,
+        proxy.origin,
+        configured.connection.id,
+      );
+      const crmMediaPath = `/api/interview-recordings/${crmRecording.id}/media`;
+      const crmPlaybackPath =
+        `${crmMediaPath}/${external.artifactId}/playback`;
+      expect(
+        await crmGet<any[]>(admin, proxy.origin, crmMediaPath),
+      ).toEqual([
+        expect.objectContaining({ artifactId: external.artifactId }),
+      ]);
+
+      const disabled = await sendRuntimeMessage<any>(harness.controlPage, {
+        type: "SET_INTEGRATION_ENABLED",
+        destinationId: configured.created.destination.id,
+        enabled: false,
+      });
+      expect(disabled).toEqual(
+        expect.objectContaining({
+          ok: true,
+          destination: expect.objectContaining({ enabled: false }),
+        }),
+      );
+
+      const player = await harness.context.newPage();
+      await player.goto(
+        `chrome-extension://${harness.extensionId}/recordings.html`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const disabledPlayback = await prepareExternalPlayback(player, {
+        recordingId,
+        fileId: mediaFile.id,
+        destinationId: configured.created.destination.id,
+        artifactId: external.artifactId,
+      });
+      expect(disabledPlayback.ok).toBe(true);
+      expect(new URL(disabledPlayback.url!).origin).toBe(R2_UPLOAD_ORIGIN);
+      await proveBrowserPlayback(player, disabledPlayback.url!, mediaFile.mimeType);
+
+      const disabledRecordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      expect(await recordingRoutes(harness.controlPage, disabledRecordingId)).toEqual([
+        expect.objectContaining({
+          destinationId: configured.created.destination.id,
+          state: "not-scheduled",
+        }),
+      ]);
+      const disabledTransfers = await sendRuntimeMessage<any>(
+        harness.controlPage,
+        {
+          type: "LIST_EXTERNAL_MEDIA_TRANSFERS",
+          recordingId: disabledRecordingId,
+        },
+      );
+      expect(disabledTransfers).toEqual(
+        expect.objectContaining({ ok: true, transfers: [] }),
+      );
+
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "SET_INTEGRATION_ENABLED",
+          destinationId: configured.created.destination.id,
+          enabled: true,
+        }),
+      ).toEqual(
+        expect.objectContaining({
+          ok: true,
+          destination: expect.objectContaining({ enabled: true }),
+        }),
+      );
+
+      const heldRecordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      expect(await recordingRoutes(harness.controlPage, heldRecordingId)).toEqual([
+        expect.objectContaining({
+          destinationId: configured.created.destination.id,
+          state: "held",
+          includesMedia: true,
+        }),
+      ]);
+      await expect
+        .poll(
+          async () => {
+            const response = await sendRuntimeMessage<any>(
+              harness!.controlPage,
+              { type: "LIST_HELD_RECORDING_ROUTES" },
+            );
+            return response.recordings?.some(
+              (candidate: any) => candidate.recordingId === heldRecordingId,
+            );
+          },
+          { timeout: 20_000, intervals: [100, 250, 500] },
+        )
+        .toBe(true);
+
+      const syntheticCount = 60;
+      await injectExternalHistoryRows(
+        harness.controlPage,
+        configured.created.destination.id,
+        syntheticCount,
+      );
+      const impact = await sendRuntimeMessage<any>(harness.controlPage, {
+        type: "GET_INTEGRATION_DISCONNECT_IMPACT",
+        destinationId: configured.created.destination.id,
+      });
+      expect(impact).toEqual({
+        ok: true,
+        affectedRecordings: syntheticCount + 1,
+      });
+
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "REMOVE_RECORDING_DESTINATION",
+          profileId: configured.created.profile.id,
+        }),
+      ).toEqual({ ok: true, removed: true });
+      const heldAfterProfileRemoval = await sendRuntimeMessage<any>(
+        harness.controlPage,
+        { type: "LIST_HELD_RECORDING_ROUTES" },
+      );
+      expect(
+        heldAfterProfileRemoval.recordings.some(
+          (candidate: any) => candidate.recordingId === heldRecordingId,
+        ),
+      ).toBe(true);
+      expect(
+        await crmGet<any[]>(admin, proxy.origin, crmMediaPath),
+      ).toEqual([
+        expect.objectContaining({ artifactId: external.artifactId }),
+      ]);
+      expect(
+        await crmStatus(admin, proxy.origin, crmPlaybackPath, "POST"),
+      ).toBe(201);
+
+      const disconnected = await sendRuntimeMessage<any>(harness.controlPage, {
+        type: "DELETE_INTEGRATION",
+        destinationId: configured.created.destination.id,
+      });
+      expect(disconnected).toEqual(
+        expect.objectContaining({ ok: true, removed: true }),
+      );
+      const destinationsAfterDisconnect = await sendRuntimeMessage<any>(
+        harness.controlPage,
+        { type: "LIST_INTEGRATIONS" },
+      );
+      expect(
+        destinationsAfterDisconnect.destinations.some(
+          (destination: any) =>
+            destination.id === configured.created.destination.id,
+        ),
+      ).toBe(false);
+      const heldAfterDisconnect = await sendRuntimeMessage<any>(
+        harness.controlPage,
+        { type: "LIST_HELD_RECORDING_ROUTES" },
+      );
+      expect(
+        heldAfterDisconnect.recordings.some(
+          (candidate: any) => candidate.recordingId === heldRecordingId,
+        ),
+      ).toBe(false);
+      const disconnectedPlayback = await prepareExternalPlayback(player, {
+        recordingId,
+        fileId: mediaFile.id,
+        destinationId: configured.created.destination.id,
+        artifactId: external.artifactId,
+      });
+      expect(disconnectedPlayback.ok).toBe(false);
+      expect(disconnectedPlayback.error).toContain("does not exist");
+
+      expect(
+        await crmGet<any[]>(admin, proxy.origin, crmMediaPath),
+      ).toEqual([
+        expect.objectContaining({ artifactId: external.artifactId }),
+      ]);
+      expect(
+        await crmStatus(admin, proxy.origin, crmPlaybackPath, "POST"),
+      ).toBe(201);
+
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "REMOVE_RECORDING_HISTORY",
+          id: recordingId,
+        }),
+      ).toEqual(expect.objectContaining({ ok: true, removed: true }));
+      const removedPage = await sendRuntimeMessage<any>(harness.controlPage, {
+        type: "LIST_RECORDING_HISTORY",
+      });
+      expect(
+        removedPage.entries.some((candidate: any) => candidate.id === recordingId),
+      ).toBe(false);
+      expect(
+        await crmGet<any[]>(admin, proxy.origin, crmMediaPath),
+      ).toEqual([
+        expect.objectContaining({ artifactId: external.artifactId }),
+      ]);
+      expect(
+        await crmStatus(admin, proxy.origin, crmPlaybackPath, "POST"),
+      ).toBe(201);
+
+      await testInfo.attach("jm9-jm10-lifecycle-evidence.json", {
+        body: JSON.stringify(
+          {
+            playbackWhileAutomationDisabled: true,
+            newRecordingWhileDisabled: {
+              routeState: "not-scheduled",
+              externalTransferCount: 0,
+            },
+            disconnectImpactCount: impact.affectedRecordings,
+            saveToProfileRemovalPreservedHeldRoute: true,
+            disconnectCanceledHeldRoute: true,
+            localPlaybackAfterDisconnectAvailable: disconnectedPlayback.ok,
+            crmMediaAfterProfileRemoval: true,
+            crmMediaAfterDisconnect: true,
+            crmMediaAfterLocalHistoryRemoval: true,
+            crmPlaybackStatusAfterDisconnect: 201,
+            crmPlaybackStatusAfterLocalHistoryRemoval: 201,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
 });
 
 async function preparePilotExtension(
@@ -1555,6 +1865,25 @@ async function crmRoleContext(origin: string, email: string): Promise<APIRequest
   return context;
 }
 
+async function prepareExternalPlayback(
+  page: Page,
+  input: {
+    recordingId: string;
+    fileId: string;
+    destinationId: string;
+    artifactId: string;
+  },
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  return page.evaluate(
+    async (request) =>
+      (await chrome.runtime.sendMessage({
+        type: "PREPARE_EXTERNAL_PLAYBACK_SOURCE",
+        ...request,
+      })) as { ok: boolean; url?: string; error?: string },
+    input,
+  );
+}
+
 async function record(
   page: Page,
   meet: Page,
@@ -1637,6 +1966,65 @@ async function projectHistoryToExternalOnly(
       database.close();
     }
   }, recordingId);
+}
+
+async function injectExternalHistoryRows(
+  page: Page,
+  destinationId: string,
+  count: number,
+): Promise<void> {
+  await page.evaluate(
+    async ({ destinationId, count }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("recording-history");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction("recordings", "readwrite");
+          const store = transaction.objectStore("recordings");
+          const base = Date.now() + 100_000;
+          for (let index = 0; index < count; index += 1) {
+            const id = `recording:jm9-synthetic-${index}`;
+            const createdAt = base + index;
+            store.put({
+              id,
+              name: `JM9 synthetic external recording ${index}`,
+              createdAt,
+              activeCreatedAt: createdAt,
+              storageMode: "local",
+              status: "complete",
+              files: [
+                {
+                  id: `${id}:tab`,
+                  stream: "tab",
+                  filename: `jm9-synthetic-${index}.webm`,
+                  mimeType: "audio/webm",
+                  destination: "local",
+                  status: "available",
+                  delivery: { requested: "local", status: "downloaded" },
+                  locations: [
+                    {
+                      kind: "external",
+                      destinationId,
+                      artifactId: `media_jm9_synthetic_${index}`,
+                    },
+                  ],
+                },
+              ],
+            });
+          }
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+        });
+      } finally {
+        database.close();
+      }
+    },
+    { destinationId, count },
+  );
 }
 
 async function recordingRoutes(
