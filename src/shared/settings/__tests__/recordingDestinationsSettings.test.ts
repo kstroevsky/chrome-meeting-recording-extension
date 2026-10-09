@@ -13,11 +13,18 @@ describe('recording destinations in settings', () => {
     expect(normalizeExtensionSettings({ storage: {} } as never).storage.recordingDestinations).toEqual([]);
   });
 
-  it('keeps valid V1 profiles and drops the rest', () => {
+  it('keeps valid local and Drive profiles and drops unsupported external media', () => {
+    const driveProfile = { ...profile, id: 'drive', mediaTarget: { kind: 'drive' } };
     const settings = normalizeExtensionSettings({
-      storage: { recordingDestinations: [profile, { ...profile, id: 'drive', mediaTarget: { kind: 'drive' } }] },
+      storage: {
+        recordingDestinations: [
+          profile,
+          driveProfile,
+          { ...profile, id: 'external', mediaTarget: { kind: 'external', destinationId: 'destination_crm' } },
+        ],
+      },
     } as never);
-    expect(settings.storage.recordingDestinations).toEqual([profile]);
+    expect(settings.storage.recordingDestinations).toEqual([profile, driveProfile]);
   });
 
   it('clones deeply, so editing a copy never edits the stored profile', () => {
