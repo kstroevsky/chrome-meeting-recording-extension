@@ -34,9 +34,11 @@ const CRM_ADMIN_EMAIL =
 const RUN_LARGE_TRANSFER = process.env.R0_RUN_LARGE_TRANSFER === "1";
 const RUN_RESTART_RECOVERY = process.env.R0_RUN_RESTART_RECOVERY === "1";
 const RUN_URL_EXPIRY = process.env.R0_RUN_URL_EXPIRY === "1";
+const RUN_ATTEMPT_EXPIRY = process.env.R0_RUN_ATTEMPT_EXPIRY === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
 const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
 const URL_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
+const ATTEMPT_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
 
 const METADATA_POLICY: IntegrationDataPolicy = {
   metadata: true,
@@ -740,6 +742,178 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
             delayMs: 4500,
             firstPartSignRequests: partOneSignRequests,
             transferState: journal.state,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
+
+  test("replaces an expired multipart attempt without changing artifact identity", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_ATTEMPT_EXPIRY,
+      "Set R0_RUN_ATTEMPT_EXPIRY=1 and a short CRM upload lifetime to run JM5.",
+    );
+    test.setTimeout(600_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    let delayed = false;
+    let createRequests = 0;
+    let partOneSignRequests = 0;
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-attempt-expiry-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+        {
+          responseDelayMs: ({ method, pathname }) => {
+            if (method === "POST" && /\/media\/v1\/uploads$/.test(pathname)) {
+              createRequests += 1;
+            }
+            if (
+              method === "POST" &&
+              /\/media\/v1\/uploads\/upload_[^/]+\/parts\/1$/.test(pathname)
+            ) {
+              partOneSignRequests += 1;
+              if (!delayed) {
+                delayed = true;
+                return 35_000;
+              }
+            }
+            return 0;
+          },
+        },
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r0-attempt-expiry-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        { extensionPath, ignoreHTTPSErrors: true },
+      );
+      const configured = await configureRealR2Destination(harness, proxy.origin);
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "off",
+        recordSelfVideo: false,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      const before = await historyEntry(harness.controlPage, recordingId);
+      const retained = before.files.find(
+        (file) => !file.kind && file.locations.some((location) => location.kind === "opfs"),
+      );
+      const opfs = retained?.locations.find((location) => location.kind === "opfs");
+      if (!retained || !opfs || opfs.kind !== "opfs") {
+        throw new Error("JM5 recording has no retained OPFS media");
+      }
+      expect(
+        await resizeRetainedOpfsFixture(
+          harness.controlPage,
+          opfs.key,
+          ATTEMPT_EXPIRY_FIXTURE_BYTES,
+        ),
+      ).toBe(ATTEMPT_EXPIRY_FIXTURE_BYTES);
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "CONFIRM_RECORDING_ROUTES",
+          recordingId,
+          removedDestinationIds: [],
+        }),
+      ).toEqual(expect.objectContaining({ ok: true }));
+
+      let firstAttempt: any;
+      await expect.poll(
+        async () => {
+          firstAttempt = await externalMediaJournal(
+            harness!.controlPage,
+            recordingId,
+            configured.created.destination.id,
+          );
+          return Boolean(firstAttempt?.uploadId && firstAttempt?.artifactId);
+        },
+        { timeout: 60_000, intervals: [100, 250, 500] },
+      ).toBe(true);
+      const firstIdentity = {
+        clientTransferId: firstAttempt.request.clientTransferId,
+        artifactId: firstAttempt.artifactId,
+        uploadId: firstAttempt.uploadId,
+      };
+
+      const transfers = await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+        480_000,
+      );
+      const finalJournal = await externalMediaJournal(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+      );
+      expect(delayed).toBe(true);
+      expect(createRequests).toBeGreaterThanOrEqual(2);
+      expect(partOneSignRequests).toBeGreaterThanOrEqual(2);
+      expect(finalJournal).toMatchObject({
+        state: "acknowledged",
+        artifactId: firstIdentity.artifactId,
+      });
+      expect(finalJournal.request.clientTransferId).toBe(firstIdentity.clientTransferId);
+      expect(finalJournal.uploadId).not.toBe(firstIdentity.uploadId);
+      expect(transfers).toEqual([
+        expect.objectContaining({
+          clientTransferId: firstIdentity.clientTransferId,
+          state: "acknowledged",
+          bytesUploaded: ATTEMPT_EXPIRY_FIXTURE_BYTES,
+          bytesTotal: ATTEMPT_EXPIRY_FIXTURE_BYTES,
+        }),
+      ]);
+
+      const admin = harness.context.request;
+      await crmLogin(admin, proxy.origin);
+      const crmRecording = await waitForCrmRecording(
+        admin,
+        proxy.origin,
+        configured.connection.id,
+      );
+      const crmMedia = await crmGet<any[]>(
+        admin,
+        proxy.origin,
+        `/api/interview-recordings/${crmRecording.id}/media`,
+      );
+      expect(crmMedia).toEqual([
+        expect.objectContaining({
+          artifactId: firstIdentity.artifactId,
+          bytes: ATTEMPT_EXPIRY_FIXTURE_BYTES,
+        }),
+      ]);
+
+      await testInfo.attach("jm5-attempt-expiry-evidence.json", {
+        body: JSON.stringify(
+          {
+            bytes: ATTEMPT_EXPIRY_FIXTURE_BYTES,
+            forcedDelayMs: 35000,
+            createRequests,
+            partOneSignRequests,
+            clientTransferIdPreserved:
+              finalJournal.request.clientTransferId === firstIdentity.clientTransferId,
+            artifactIdPreserved: finalJournal.artifactId === firstIdentity.artifactId,
+            uploadAttemptReplaced: finalJournal.uploadId !== firstIdentity.uploadId,
+            transferState: finalJournal.state,
           },
           null,
           2,

@@ -61,10 +61,17 @@ the 64 MiB + 12,345-byte transfer still converged to `acknowledged`. The JM4 cas
 completed in 33.4 seconds; signed URLs themselves are never persisted in the
 evidence.
 
-The remaining R0 work is upload-attempt expiry/replacement (JM5), playback-expiry
-and deep-seek cases (JM6–JM7), and the remaining isolation/auth/lifecycle rows in
-the verification table below. Explicit local-source release remains R1 and must
-not be enabled from capability/HEAD success alone.
+JM5 is proven with a real expired CRM upload attempt. The isolated CRM used a
+30-second attempt lifetime while the pilot proxy held one first-attempt part
+response for 35 seconds. Completion returned the expected expired-attempt path,
+the extension recreated the upload, and the replacement finished with the same
+`clientTransferId` and artifact ID but a different multipart upload-attempt ID.
+The 64 MiB + 12,345-byte JM5 case completed in 1.1 minutes.
+
+The remaining R0 work is playback-expiry and deep-seek cases (JM6–JM7), and the
+remaining isolation/auth/lifecycle rows in the verification table below.
+Explicit local-source release remains R1 and must not be enabled from
+capability/HEAD success alone.
 
 ## Scope and verdict
 
