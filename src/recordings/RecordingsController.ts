@@ -229,6 +229,17 @@ export class RecordingsController {
       const player = new PlayerController({
         getManifest: this.playback.getManifest,
         resolveTrack: createPlaybackTrackResolver(this.playback),
+        externalPlaybackStarted: async (recordingId, fileId, destinationId, artifactId) => {
+          const response = await sendToBackground({
+            type: 'REPORT_EXTERNAL_PLAYBACK_STARTED',
+            recordingId,
+            fileId,
+            destinationId,
+            artifactId,
+          });
+          if (!response.ok) throw new Error(response.error);
+          await this.refresh();
+        },
         unavailableStatus: (track) => this.unavailablePlaybackStatus(track),
         warn: this.playback.warn,
         getTranscript: (id) => this.transcript(id),

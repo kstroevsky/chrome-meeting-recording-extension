@@ -31,6 +31,7 @@ type TrackSourceState = {
   element: HTMLMediaElement;
   refresh: ResolvedTrackUrl['refresh'] | null;
   revoke: (() => void) | null;
+  external: ResolvedTrackUrl['external'] | null;
   refreshesSinceMetadata: number;
   refreshing: boolean;
   masterRestore: { position: number; playing: boolean } | null;
@@ -51,6 +52,13 @@ export type PlayerControllerDeps = {
   getTranscript?: (recordingId: string) => Promise<Transcript | undefined>;
   /** Renames a note from its rail heading (f18); the same write the details dialog makes. */
   renameNotation?: (recordingId: string, id: string, text: string) => Promise<RecordingNotation[] | void>;
+  /** Durable proof is written only after native playback starts for an external artifact. */
+  externalPlaybackStarted?: (
+    recordingId: string,
+    fileId: string,
+    destinationId: string,
+    artifactId: string,
+  ) => Promise<void> | void;
   warn?: (...args: unknown[]) => void;
 };
 
@@ -75,6 +83,7 @@ export class PlayerController {
   private track: PlaybackTrack | null = null;
   /** User/autoplay intent survives the temporary pause while a master URL is replaced. */
   private wantsPlayback = false;
+  private readonly reportedExternalPlayback = new Set<string>();
 
   constructor(private readonly deps: PlayerControllerDeps) {
     this.view = new PlayerView({
@@ -331,6 +340,7 @@ export class PlayerController {
       // video and would render a second picture-in-picture.
       const element = this.view.addAuxiliary(track.stream === 'self-video' ? 'video' : 'audio');
       element.addEventListener('loadedmetadata', () => { void this.onTrackMetadata(track.fileId, element); });
+      element.addEventListener('playing', () => { void this.onTrackPlaying(track.fileId, element); });
       element.addEventListener('error', () => { void this.recoverTrack(track.fileId, element); });
       this.installSource(track, element, resolved);
       this.elements.set(track.fileId, element);
@@ -369,11 +379,13 @@ export class PlayerController {
       ? previous
       : {
           track, element, refresh: null, revoke: null,
+          external: null,
           refreshesSinceMetadata: 0, refreshing: false, masterRestore: null,
         };
     state.track = track;
     state.refresh = resolved.refresh ?? null;
     state.revoke = resolved.revoke ?? null;
+    state.external = resolved.external ?? null;
     state.refreshing = false;
     this.sourceStates.set(track.fileId, state);
     element.src = resolved.url;
@@ -388,11 +400,33 @@ export class PlayerController {
     });
     video.addEventListener('timeupdate', () => this.view.setPosition(video.currentTime * 1000));
     video.addEventListener('play', () => { this.view.setPlaying(true); this.startDriftWatch(); });
+    video.addEventListener('playing', () => {
+      if (this.track) void this.onTrackPlaying(this.track.fileId, video);
+    });
     video.addEventListener('pause', () => { this.view.setPlaying(false); this.stopDriftWatch(); });
     video.addEventListener('ended', () => { this.wantsPlayback = false; });
     video.addEventListener('error', () => {
       if (this.track) void this.recoverTrack(this.track.fileId, video);
     });
+  }
+
+  private async onTrackPlaying(fileId: string, element: HTMLMediaElement): Promise<void> {
+    const state = this.sourceStates.get(fileId);
+    const manifest = this.manifest;
+    const external = state?.element === element ? state.external : null;
+    if (!manifest || !external || !this.deps.externalPlaybackStarted) return;
+    const key = `${manifest.recordingId}\u0000${fileId}\u0000${external.destinationId}\u0000${external.artifactId}`;
+    if (this.reportedExternalPlayback.has(key)) return;
+    this.reportedExternalPlayback.add(key);
+    try {
+      await this.deps.externalPlaybackStarted(
+        manifest.recordingId, fileId, external.destinationId, external.artifactId,
+      );
+    } catch (error) {
+      // Playback already happened; failure to persist proof must never interrupt it.
+      this.reportedExternalPlayback.delete(key);
+      this.deps.warn?.('Could not persist external playback verification', error);
+    }
   }
 
   /**

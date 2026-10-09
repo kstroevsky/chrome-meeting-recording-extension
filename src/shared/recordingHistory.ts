@@ -14,7 +14,13 @@ export type ArtifactLocation =
   | { kind: 'opfs'; key: string; retainedAt: number }
   | { kind: 'download'; downloadId: number }
   | { kind: 'drive'; fileId: string; webViewLink?: string }
-  | { kind: 'external'; destinationId: string; artifactId: string };
+  | {
+      kind: 'external';
+      destinationId: string;
+      artifactId: string;
+      /** Native browser playback reached `playing` for this exact artifact. */
+      playbackVerifiedAt?: number;
+    };
 
 export type ArtifactDeliveryStatus = 'pending' | 'downloaded' | 'uploaded' | 'local-fallback' | 'failed';
 
@@ -262,11 +268,18 @@ function normalizeArtifactLocation(value: unknown): ArtifactLocation | undefined
   if (candidate.kind === 'external') {
     const destinationId = typeof candidate.destinationId === 'string' ? candidate.destinationId.trim() : '';
     const artifactId = typeof candidate.artifactId === 'string' ? candidate.artifactId.trim() : '';
+    const playbackVerifiedAt = typeof candidate.playbackVerifiedAt === 'number'
+      && Number.isFinite(candidate.playbackVerifiedAt) && candidate.playbackVerifiedAt >= 0
+      ? candidate.playbackVerifiedAt
+      : undefined;
     // Stored identifiers are opaque; reject control characters and excessively
     // large/corrupted values without assuming the identifier scheme of a receiver.
     if (!destinationId || !artifactId || destinationId.length > 200 || artifactId.length > 200 ||
         /[\x00-\x1f\x7f]/.test(destinationId) || /[\x00-\x1f\x7f]/.test(artifactId)) return undefined;
-    return { kind: 'external', destinationId, artifactId };
+    return {
+      kind: 'external', destinationId, artifactId,
+      ...(playbackVerifiedAt != null ? { playbackVerifiedAt } : {}),
+    };
   }
   return undefined;
 }
@@ -331,9 +344,17 @@ export function deliveryFromLegacyFields(file: LegacyDeliveryFields, requested: 
 
 /** Adds or replaces a replica, scoped by receiver for external destinations. */
 export function upsertArtifactLocation(locations: ArtifactLocation[], next: ArtifactLocation): ArtifactLocation[] {
-  return [...locations.filter((location) => location.kind !== next.kind ||
-    (location.kind === 'external' && next.kind === 'external' &&
-      location.destinationId !== next.destinationId)), next];
+  if (next.kind === 'external') {
+    const current = locations.find((location) => location.kind === 'external'
+      && location.destinationId === next.destinationId);
+    const merged = current?.kind === 'external' && current.artifactId === next.artifactId
+      && current.playbackVerifiedAt != null && next.playbackVerifiedAt == null
+      ? { ...next, playbackVerifiedAt: current.playbackVerifiedAt }
+      : next;
+    return [...locations.filter((location) => location.kind !== 'external'
+      || location.destinationId !== next.destinationId), merged];
+  }
+  return [...locations.filter((location) => location.kind !== next.kind), next];
 }
 
 /** ADR-0006 fields for a freshly created row that has no replicas yet. */

@@ -126,3 +126,57 @@ describe('external playback capability authorization', () => {
     expect(playbackMediaClient).not.toHaveBeenCalled();
   });
 });
+
+describe('external playback verification', () => {
+  const artifactId = 'media_12345678-1234-1234-1234-123456789abc';
+  const message = {
+    type: 'REPORT_EXTERNAL_PLAYBACK_STARTED',
+    recordingId: 'r1',
+    fileId: 'r1:tab',
+    destinationId: 'destination_1',
+    artifactId,
+  } as const;
+  const manifest = { recordingId: 'r1', tracks: [{
+    fileId: 'r1:tab', sources: [{ kind: 'external', destinationId: 'destination_1', artifactId }],
+  }] };
+
+  it('persists proof only for the live exact artifact tuple', async () => {
+    const history = { markExternalPlaybackVerified: jest.fn().mockResolvedValue(true) };
+    const response = jest.fn();
+
+    await expect(handlePlaybackMessage(message, sender, response, {
+      playback: { getManifest: jest.fn().mockResolvedValue(manifest) }, history,
+    } as never)).resolves.toBe(true);
+
+    expect(history.markExternalPlaybackVerified).toHaveBeenCalledWith(
+      'r1', 'r1:tab', 'destination_1', artifactId,
+    );
+    expect(response).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('does not persist proof for a stale artifact association', async () => {
+    const history = { markExternalPlaybackVerified: jest.fn() };
+    const response = jest.fn();
+
+    await handlePlaybackMessage({ ...message, artifactId: 'old-artifact' }, sender, response, {
+      playback: { getManifest: jest.fn().mockResolvedValue(manifest) }, history,
+    } as never);
+
+    expect(history.markExternalPlaybackVerified).not.toHaveBeenCalled();
+    expect(response).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+  });
+
+  it('rejects verification from a non-player extension page', async () => {
+    const history = { markExternalPlaybackVerified: jest.fn() };
+    const response = jest.fn();
+
+    await handlePlaybackMessage(message, {
+      ...sender, url: 'chrome-extension://ext-id/settings.html',
+    }, response, {
+      playback: { getManifest: jest.fn().mockResolvedValue(manifest) }, history,
+    } as never);
+
+    expect(history.markExternalPlaybackVerified).not.toHaveBeenCalled();
+    expect(response).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+  });
+});

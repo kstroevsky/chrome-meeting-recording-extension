@@ -48,6 +48,35 @@ export async function handlePlaybackMessage(
     return true;
   }
 
+  if (msg.type === 'REPORT_EXTERNAL_PLAYBACK_STARTED') {
+    if (sender.tab?.id == null || !isExtensionPlayerSender(sender)) {
+      sendResponse({ ok: false, error: 'Playback can only be verified by the recordings page' });
+      return true;
+    }
+    if (!playback || !history) throw new Error('Playback history is unavailable');
+    if (![msg.recordingId, msg.fileId, msg.destinationId, msg.artifactId]
+      .every((field) => typeof field === 'string' && field.length > 0 && field.length <= 256)) {
+      sendResponse({ ok: false, error: 'Invalid media playback verification' });
+      return true;
+    }
+    const manifest = await playback.getManifest(msg.recordingId);
+    const track = manifest?.recordingId === msg.recordingId
+      ? manifest.tracks.find((candidate) => candidate.fileId === msg.fileId)
+      : undefined;
+    if (!track?.sources.some((source) => source.kind === 'external'
+      && source.destinationId === msg.destinationId && source.artifactId === msg.artifactId)) {
+      sendResponse({ ok: false, error: 'This recording no longer owns this media artifact' });
+      return true;
+    }
+    const verified = await history.markExternalPlaybackVerified(
+      msg.recordingId, msg.fileId, msg.destinationId, msg.artifactId,
+    );
+    sendResponse(verified
+      ? { ok: true }
+      : { ok: false, error: 'This recording no longer owns this media artifact' });
+    return true;
+  }
+
   if (msg.type === 'GET_RECORDING_PLAYBACK_MANIFEST') {
     if (!playback) throw new Error('Playback is unavailable');
     let manifest = await playback.getManifest(msg.recordingId);

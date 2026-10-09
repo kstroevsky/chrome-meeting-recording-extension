@@ -149,6 +149,32 @@ describe('playing what can be reached', () => {
     await controller.open('r1');
     expect(controller.element.querySelector('.player__status')).toHaveProperty('hidden', true);
   });
+
+  it('reports an external replica only after native playback reaches playing', async () => {
+    const externalPlaybackStarted = jest.fn().mockResolvedValue(undefined);
+    const controller = new PlayerController({
+      getManifest: async () => manifest([{ kind: 'external', destinationId: 'crm', artifactId: 'media-1' }]),
+      resolveTrack: async () => ({
+        url: 'https://storage.example/signed',
+        external: { destinationId: 'crm', artifactId: 'media-1' },
+      }),
+      externalPlaybackStarted,
+    });
+    document.body.append(controller.element);
+    const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
+    Object.defineProperty(video, 'play', { configurable: true, value: jest.fn(async () => {}) });
+
+    await controller.open('r1');
+    expect(externalPlaybackStarted).not.toHaveBeenCalled();
+
+    video.dispatchEvent(new Event('playing'));
+    await Promise.resolve();
+    expect(externalPlaybackStarted).toHaveBeenCalledWith('r1', 'r1:tab', 'crm', 'media-1');
+
+    video.dispatchEvent(new Event('playing'));
+    await Promise.resolve();
+    expect(externalPlaybackStarted).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('closing', () => {

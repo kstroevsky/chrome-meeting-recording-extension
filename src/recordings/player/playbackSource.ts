@@ -69,7 +69,7 @@ export async function playbackUrl(
   track: PlaybackTrack,
   deps: PlaybackUrlDeps,
   refresh = false,
-): Promise<{ url: string; revoke?: () => void } | undefined> {
+): Promise<{ url: string; revoke?: () => void; external?: { destinationId: string; artifactId: string } } | undefined> {
   if (!refresh) {
     const remote = track.sources.find((source) => source.kind === 'remote');
     if (remote) return { url: remote.url };
@@ -88,7 +88,10 @@ export async function playbackUrl(
       if (source.kind !== 'external') continue;
       const url = await deps.prepareExternalSource(recordingId, track.fileId, source.destinationId, source.artifactId, refresh)
         .catch((error) => { deps.warn?.('External playback preparation failed', error); return undefined; });
-      if (url) return { url };
+      if (url) return {
+        url,
+        external: { destinationId: source.destinationId, artifactId: source.artifactId },
+      };
     }
   }
   return undefined;

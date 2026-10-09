@@ -178,6 +178,20 @@ export class RecordingHistoryService {
     this.onChanged?.(historyId);
   }
 
+  /** Persists proof only after the recordings page reports native media playback. */
+  async markExternalPlaybackVerified(
+    historyId: string,
+    fileId: string,
+    destinationId: string,
+    artifactId: string,
+  ): Promise<boolean> {
+    const verified = await this.localDelivery.markExternalPlaybackVerified(
+      historyId, fileId, destinationId, artifactId, this.now(),
+    );
+    if (verified) this.onChanged?.(historyId);
+    return verified;
+  }
+
   async setDriveDestination(historyId: string, presetId: string | null): Promise<void> {
     await this.repository.update(historyId, (current) => {
       if (!current || current.deletedAt) return current;

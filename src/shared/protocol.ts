@@ -220,6 +220,14 @@ export type PopupPrepareExternalPlaybackSource = {
   destinationId: string;
   artifactId: string;
 };
+/** Sent only after the native media element emits `playing` for the exact external source. */
+export type PopupReportExternalPlaybackStarted = {
+  type: 'REPORT_EXTERNAL_PLAYBACK_STARTED';
+  recordingId: string;
+  fileId: string;
+  destinationId: string;
+  artifactId: string;
+};
 /** Adds a notation to a finished recording at an explicit media offset. */
 export type PopupAddRecordingNotation = {
   type: 'ADD_RECORDING_NOTATION';
@@ -347,6 +355,7 @@ export type PopupToBg =
   | PopupPreparePlaybackSource
   | PopupRefreshPlaybackSource
   | PopupPrepareExternalPlaybackSource
+  | PopupReportExternalPlaybackStarted
   | PopupListRecordingNotationSummaries
   | PopupListRecordingTopicSummaries
   | PopupAddRecordingNotation
@@ -427,6 +436,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupPreparePlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupRefreshPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupPrepareExternalPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
+  T extends PopupReportExternalPlaybackStarted ? { ok: true } | { ok: false; error: string } :
   T extends PopupListRecordingNotationSummaries ?
     { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
   T extends PopupListRecordingTopicSummaries ?

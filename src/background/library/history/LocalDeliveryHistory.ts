@@ -115,4 +115,31 @@ export class LocalDeliveryHistory {
       return { ...current, files };
     });
   }
+
+  async markExternalPlaybackVerified(
+    historyId: string,
+    fileId: string,
+    destinationId: string,
+    artifactId: string,
+    verifiedAt: number,
+  ): Promise<boolean> {
+    let verified = false;
+    await this.repository.update(historyId, (current) => {
+      if (!current || current.deletedAt) return current;
+      const files = current.files.map((file) => {
+        if (file.id !== fileId) return file;
+        const locations = file.locations.map((location) => {
+          if (location.kind !== 'external' || location.destinationId !== destinationId
+              || location.artifactId !== artifactId) return location;
+          verified = true;
+          return location.playbackVerifiedAt != null
+            ? location
+            : { ...location, playbackVerifiedAt: verifiedAt };
+        });
+        return verified ? { ...file, locations } : file;
+      });
+      return verified ? { ...current, files } : current;
+    });
+    return verified;
+  }
 }

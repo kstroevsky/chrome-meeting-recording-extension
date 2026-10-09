@@ -100,7 +100,10 @@ describe('createPlaybackTrackResolver', () => {
       { kind: 'external', destinationId: 'd1', artifactId: 'media_1' },
       { kind: 'external', destinationId: 'd2', artifactId: 'media_2' },
     ]), { prepareExternalSource, warn: jest.fn() });
-    expect(result).toEqual({ url: 'https://archive.example/second' });
+    expect(result).toEqual({
+      url: 'https://archive.example/second',
+      external: { destinationId: 'd2', artifactId: 'media_2' },
+    });
     expect(prepareExternalSource).toHaveBeenCalledTimes(2);
   });
   it('keeps Drive refresh mechanics inside the extension adapter', async () => {

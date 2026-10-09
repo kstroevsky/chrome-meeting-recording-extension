@@ -4,6 +4,8 @@ import type { PlaybackTrack } from '../../shared/playback';
 export type ResolvedTrackUrl = {
   url: string;
   revoke?: () => void;
+  /** Safe identity of the external replica behind `url`; never the signed URL itself. */
+  external?: { destinationId: string; artifactId: string };
   /** Optional recovery path for an expired or otherwise replaceable URL. */
   refresh?: () => Promise<ResolvedTrackUrl | undefined>;
 };
