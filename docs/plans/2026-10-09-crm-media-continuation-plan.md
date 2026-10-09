@@ -13,16 +13,17 @@ state. The original architecture plan has also been reconciled in
 `CheekyCheeseIT_CRM/docs/architecture/2026-10-07-meeting-recorder-integration-plan.md`
 under _Phase 2 implementation reconciliation — 2026-10-09_ (D132–D143).
 
-Rechecked implemented heads:
+Rechecked implemented heads for the completed R0 slices:
 
-- Extension `6f2ba4f`: Start-time media authorization including exact upload
-  origins, durable IndexedDB/offscreen queue, immutable logical transfer
+- Extension through `a3de5dd`: Start-time media authorization including exact
+  upload origins, durable IndexedDB/offscreen queue, immutable logical transfer
   ownership, recovery/retry scheduling, ready-result acknowledgement, progress,
-  external playback and recovery controls.
-- CRM `56820170`: deployment-wired Phase-2 schema, CRM-user playback independent
-  of connection disable, aggregate connection throttling, completion/missing-
-  session recovery, provisioning and ranged playback, and conservative media
-  reconciliation/orphan reporting.
+  external playback/recovery controls and the real-R2 JM14–JM16 protocol gate.
+- CRM through `05f1a4db`: deployment-wired Phase-2 schema, CRM-user playback
+  independent of connection disable, aggregate connection throttling,
+  completion/missing-session recovery, provisioning/ranged playback and
+  conservative media reconciliation/orphan reporting with explicit prefix
+  isolation coverage.
 
 The most important post-audit corrections are now implemented: legacy intents
 without explicit media authorization fail closed; current receiver/upload origins
@@ -117,9 +118,32 @@ alongside the JM1 baseline and passed in 1.2 seconds; a focused transfer-runner
 unit test also passed and proves invalid server part sizes are rejected before
 the byte source is read or completion is attempted.
 
-The remaining R0 work is reconciliation/throttling and end-dialog consent
-(JM17–JM19) in the verification table below. Explicit local-source release
-remains R1 and must not be enabled from capability/HEAD success alone.
+JM17–JM18 are closed by focused CRM regression coverage over the production
+storage/reconciliation/guard classes. Both multipart and completed-object scans
+request and enforce the dedicated `meeting-recordings/` prefix, so document keys
+cannot enter media cleanup. Stale provider work converges the DB attempt to an
+aborted tombstone before provider abort, a concurrent lifecycle transition wins
+safely, dry-run performs no writes/aborts, and completed orphan reporting is
+read-only with hashed references instead of raw keys. The connection throttle
+shares one budget across bearer rotations and distinct media handlers, and the
+four-active-upload cap counts live `completing` attempts before any new provider
+upload starts. The focused four-suite run passed 23 tests and CRM API typecheck.
+
+JM19 is now proven at both the browser/dialog boundary and the durable routing
+boundary. The Playwright Save-to flow passed with the end-dialog removal leaving
+the receiver request count unchanged and the route persisted as `skipped`. A
+combined IndexedDB regression then used a media-capable destination, applied the
+same single confirmation removal, and proved both the event planner and media
+authorization returned no work. Reconstructing the destination, routing,
+stream, delivery, unit-of-work, planner and routing services over the same
+IndexedDB factory still produced no event delivery and no media route. The three
+focused dialog/routing/planner suites passed 43 tests, extension typecheck passed,
+and the browser Save-to case passed in 15.2 seconds.
+
+R0 is therefore green for JM1–JM10 and JM13–JM19. JM11 remains the explicit R1
+local-source-release milestone, and JM12 remains deliberately reserved for the
+M6 independent receiver. Local OPFS source release must not be enabled from
+capability/HEAD success alone.
 
 ## Scope and verdict
 
@@ -132,9 +156,10 @@ Phase 1 is deployed according to the owner. Local inspection confirms the events
 routing and receiver foundations exist. Production deployment and the Phase 1
 joint gates were not independently re-run in this review.
 
-Phase 2 has substantial foundations, but M1 is not operational and M2 is incomplete.
-The next implementation slice should finish a tested additional CRM replica and
-its safe playback/disconnect behavior. M3–M6 should follow only after those gates.
+The R0 portion of Phase 2 now has an operational, recovery-tested CRM replica and
+safe playback/disconnect behavior. The next implementation slice is R1/JM11:
+explicit “Free up space” with durable lease/release recovery. M3–M6 should follow
+only after that release gate is green; JM12 stays with M6.
 
 Reviewed extension HEAD: `4dd680c` on `feat/save-to-destinations`.
 Reviewed CRM HEAD: `43ddd13d` on `codex/fix-retired-salary-index`.
@@ -147,12 +172,12 @@ untracked files. Preserve both and stage only the files belonging to each task.
 | --- | --- | --- |
 | Generic protocol | Extension ADR-0009, capability parsing, same-origin HTTPS control plane, dedicated bearer credential | No independent receiver proof; large valid part manifests exceed the client's current response bound |
 | Byte sources | `src/media/ArtifactByteSource.ts` and OPFS/Drive resolver; sharing uses the neutral abstraction | Downloads cannot supply upload bytes |
-| CRM provider | Create/status/part/complete/playback endpoints; hash-only tokens; immutable create fingerprint; attempt-specific storage keys; provider ListParts and HEAD checks | Core service lacks dedicated lifecycle tests and deployment wiring |
-| CRM limits | Connection tracking within each handler, upload-count check, 32 MiB parts, 8 GiB artifact limit, 64 GiB connection quota | 600/min budget is per handler, not shared across media endpoints; count excludes completing attempts; storage limits are hardcoded and undisclosed |
-| CRM reconciliation | Dedicated multipart scan, pagination, grace period, stale aborts | No completed-object orphan report; aborts do not reconcile DB lifecycle/quota state |
-| Extension executor | Durable multipart runner, provider-authoritative resume, bounded part concurrency, expired-attempt restart, ready marker awaiting acknowledgement | Instantiated only in tests; no production queue/coordinator |
-| Extension playback | External history locations, player source resolution, background ownership and sender checks | No media-transfer path writes these locations; expiry recovery is limited |
-| Save confirmation | Start-time stream identity; held routes; confirmation and skipped destinations; deletion forgets routing | Intents contain no explicit start-time permission to export media |
+| CRM provider | Create/status/part/complete/playback endpoints; hash-only tokens; immutable create fingerprint; attempt-specific ID-only storage keys; provider ListParts/HEAD checks; deployment wiring and real-R2 lifecycle coverage | Independent generic receiver proof remains M6/JM12 |
+| CRM limits | Aggregate connection-wide media throttle across handlers/tokens; four-active-upload cap includes completing work; 32 MiB parts, 8 GiB artifact limit, 64 GiB connection quota | Storage limits remain fixed receiver policy rather than negotiated protocol fields |
+| CRM reconciliation | Dedicated media-prefix multipart/object scans, pagination, grace period, DB/provider stale convergence, safe dry-run and redacted completed-orphan report | Completed orphan objects are intentionally report-only; automatic deletion is not part of R0 |
+| Extension executor | Production durable queue/coordinator, provider-authoritative resume, bounded part concurrency, expired-attempt restart, ready acknowledgement and startup reconciliation | Explicit local-source release is deliberately deferred to R1/JM11 |
+| Extension playback | External history locations written by successful transfers; background ownership checks; refreshable external playback with expiry recovery | Deliberate OPFS source release remains R1/JM11 |
+| Save confirmation | Start-time stream identity and media authorization; held routes; one confirmation removal persists `skipped` and suppresses both event and media work across restart | R0 consent gate is closed; later receiver replacement still requires the existing exact receiver-identity checks |
 
 Primary committed foundations:
 
@@ -246,9 +271,11 @@ ready result without requiring source bytes that may no longer be present. After
 writing the external location, re-read history to prove the write succeeded:
 `recordArtifactLocation()` silently ignores a deleted/missing row or file.
 
-### 7. Provider/client recovery edge cases need tests and corrections
+### 7. Historical provider/client recovery findings from the initial audit
 
-Confirmed implementation limitations:
+These were the confirmed implementation limitations when this audit was written.
+The implementation-status addendum above records which are now closed; keep this
+list as the evidence trail that motivated those fixes:
 
 - Client retry handles HTTP 429/5xx but immediately exits on fetch/network errors.
 - A stored completing upload can stall indefinitely: CRM status returns 409 even
@@ -657,6 +684,10 @@ No PostgreSQL integration tests, production schema inspection, real R2 transfers
 browser E2E, deployment or security-review verdict were completed here.
 
 ### Revision 2 executable rechecks
+
+This subsection is also a historical Revision-2 snapshot. In particular, its
+per-handler throttle observation predates the aggregate connection-key fix
+recorded in the implementation-status addendum.
 
 No source/spec files were added or changed. Temporary Node harnesses transpiled
 the existing TypeScript classes using installed TypeScript. All credentials,

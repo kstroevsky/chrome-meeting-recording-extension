@@ -10,6 +10,7 @@ import { IntegrationRoutingRepository } from '../IntegrationRoutingRepository';
 import { IntegrationStreamRepository } from '../IntegrationStreamRepository';
 import { IntegrationUnitOfWork } from '../IntegrationUnitOfWork';
 import { CONSERVATIVE_INTEGRATION_POLICY } from '../policy';
+import { RecordingRoutingService } from '../RecordingRoutingService';
 import { stableJsonSerialize, utf8ByteLength } from '../serialization';
 
 const BASE_POLICY: IntegrationDataPolicy = {
@@ -130,6 +131,7 @@ function harness(policy: IntegrationDataPolicy, start = 1_000) {
   };
 
   return {
+    factory,
     source,
     planner,
     snapshots,
@@ -137,6 +139,7 @@ function harness(policy: IntegrationDataPolicy, start = 1_000) {
     deliveries,
     destinations,
     routing,
+    unitOfWork,
     seed,
     setNow(value: number) { now = value; },
   };
@@ -421,5 +424,78 @@ describe('IntegrationEventPlanner — routes held until the save is confirmed', 
     await expect(ctx.routing.get('recording_1')).resolves.toEqual(expect.objectContaining({
       destinations: [expect.objectContaining({ releaseAfter: 'save-confirmed' })],
     }));
+  });
+
+  it('keeps one removed end-dialog destination suppressed for both events and media after restart', async () => {
+    const ctx = harness(BASE_POLICY);
+    await ctx.seed();
+    const destination = (await ctx.destinations.get('destination_1'))!;
+    await ctx.destinations.put({
+      ...destination,
+      media: {
+        secretId: 'media_credential_1',
+        capability: {
+          version: 1,
+          apiBase: 'https://crm.example.test/api/media',
+          upload: {
+            strategy: 'multipart-put-v1',
+            origins: ['https://objects.example.test'],
+          },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      },
+    });
+
+    const recordingId = 'recording_removed-at-confirmation';
+    const routing = new RecordingRoutingService({
+      destinations: ctx.destinations,
+      routing: ctx.routing,
+      streams: ctx.streams,
+      unitOfWork: ctx.unitOfWork,
+      consider: async (id) => { await ctx.planner.consider('destination_1', id); },
+    });
+    await routing.begin(recordingId, [{ destinationId: 'destination_1', mode: 'auto' }]);
+
+    expect(await routing.authorizedMediaRoutes(recordingId)).toEqual([]);
+    await routing.confirm(recordingId, ['destination_1']);
+    expect(await ctx.routing.get(recordingId)).toEqual(expect.objectContaining({
+      destinations: [expect.objectContaining({
+        destinationId: 'destination_1',
+        state: 'skipped',
+      })],
+    }));
+    expect((await ctx.routing.get(recordingId))?.destinations[0]).not.toHaveProperty('releaseAfter');
+    expect(await routing.authorizedMediaRoutes(recordingId)).toEqual([]);
+    await expect(ctx.planner.consider('destination_1', recordingId)).resolves.toEqual({ kind: 'noop' });
+    await expect(ctx.deliveries.listStream('destination_1', recordingId)).resolves.toEqual([]);
+
+    // Recreate every routing/planning repository as a restarted service worker would.
+    const restartedDestinations = new IntegrationDestinationRepository(ctx.factory);
+    const restartedRouting = new IntegrationRoutingRepository(ctx.factory);
+    const restartedStreams = new IntegrationStreamRepository(ctx.factory);
+    const restartedDeliveries = new IntegrationDeliveryRepository(ctx.factory);
+    const restartedUnitOfWork = new IntegrationUnitOfWork(ctx.factory);
+    const restartedPlanner = new IntegrationEventPlanner({
+      destinations: restartedDestinations,
+      routing: restartedRouting,
+      streams: restartedStreams,
+      unitOfWork: restartedUnitOfWork,
+      snapshots: ctx.snapshots,
+      isRecordingFinalized: async () => ctx.source.finalized,
+      eventTypePrefix: INTEGRATION_EVENT_TYPE_PREFIX,
+      readyTimeoutMs: 100,
+      now: () => 1_000,
+    });
+    const restartedRoutes = new RecordingRoutingService({
+      destinations: restartedDestinations,
+      routing: restartedRouting,
+      streams: restartedStreams,
+      unitOfWork: restartedUnitOfWork,
+      consider: async (id) => { await restartedPlanner.consider('destination_1', id); },
+    });
+
+    await expect(restartedRoutes.authorizedMediaRoutes(recordingId)).resolves.toEqual([]);
+    await expect(restartedPlanner.consider('destination_1', recordingId)).resolves.toEqual({ kind: 'noop' });
+    await expect(restartedDeliveries.listStream('destination_1', recordingId)).resolves.toEqual([]);
   });
 });
