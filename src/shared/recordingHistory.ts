@@ -409,6 +409,18 @@ export function verifiedRetainedMediaReleaseTargets(
   });
 }
 
+/** Retained media that has an external replica but still needs native playback proof. */
+export function hasRetainedMediaAwaitingExternalPlayback(entry: RecordingHistoryEntry): boolean {
+  if (entry.deletedAt || entry.status !== 'complete') return false;
+  return entry.files.some((file) => {
+    if (file.kind || !file.locations.some((location) => location.kind === 'opfs')) return false;
+    const external = file.locations.filter(
+      (location): location is Extract<ArtifactLocation, { kind: 'external' }> => location.kind === 'external',
+    );
+    return external.length > 0 && external.every((location) => location.playbackVerifiedAt == null);
+  });
+}
+
 /** ADR-0006 fields for a freshly created row that has no replicas yet. */
 export function pendingArtifactFields(
   filename: string,

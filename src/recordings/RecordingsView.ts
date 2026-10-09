@@ -18,6 +18,7 @@ import { checkIcon, cloudIcon, diskIcon, editIcon } from './recordingsIcons';
 import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
 import {
+  hasRetainedMediaAwaitingExternalPlayback,
   verifiedRetainedMediaReleaseTargets,
   type RecordingHistoryEntry,
   type RecordingHistoryFile,
@@ -42,6 +43,7 @@ export type RecordingsViewCallbacks = {
   openLocal: (recordingId: string, fileId: string) => void;
   fileTo: (recordingId: string, presetId: string | null) => void;
   play: (recordingId: string) => void;
+  playRemote?: (recordingId: string) => void;
   loadMore: () => void;
   retryExternalMedia?: (destinationId: string, clientTransferId: string) => void;
   share?: (
@@ -868,6 +870,18 @@ export class RecordingsView {
     const remove = document.createElement('button'); remove.className = 'modal-button modal-button--remove'; remove.type = 'button'; remove.textContent = 'Remove from history';
     remove.addEventListener('click', () => void this.confirmRemove(entry));
     const actions = $('span', 'recording-detail__footer-actions');
+    if (this.callbacks.playRemote && hasRetainedMediaAwaitingExternalPlayback(entry)) {
+      const playRemote = document.createElement('button');
+      playRemote.className = 'modal-button modal-button--close';
+      playRemote.type = 'button';
+      playRemote.textContent = 'Play remote copy';
+      playRemote.title = 'Play the saved external copy before freeing local space';
+      playRemote.addEventListener('click', () => {
+        this.closeDetail();
+        this.callbacks.playRemote?.(entry.id);
+      });
+      actions.append(playRemote);
+    }
     if (this.callbacks.freeSpace && verifiedRetainedMediaReleaseTargets(entry).length) {
       const freeSpace = document.createElement('button');
       freeSpace.className = 'modal-button modal-button--close';

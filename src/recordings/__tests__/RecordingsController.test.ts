@@ -1,7 +1,7 @@
 import { sendToBackground } from '../../shared/messages';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
-import { RecordingsController } from '../RecordingsController';
+import { externalOnlyPlaybackManifest, RecordingsController } from '../RecordingsController';
 import type { RecordingsView } from '../RecordingsView';
 import type { PlaybackManifest } from '../../shared/playback';
 
@@ -53,6 +53,25 @@ function respond(handlers: Record<string, unknown[]>) {
 
 describe('RecordingsController', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it('builds remote verification playback from external sources only', () => {
+    const manifest: PlaybackManifest = {
+      recordingId: 'one', title: 'One', createdAt: 1, transcriptStatus: 'none', notations: [], topics: [],
+      tracks: [{
+        fileId: 'one:tab', stream: 'tab', filename: 'one.webm', mimeType: 'video/webm', captureStartOffsetMs: 0,
+        sources: [
+          { kind: 'opfs', key: 'library/one/tab.webm' },
+          { kind: 'drive', fileId: 'drive-1' },
+          { kind: 'external', destinationId: 'crm', artifactId: 'media-1' },
+        ],
+      }],
+    };
+
+    expect(externalOnlyPlaybackManifest(manifest)?.tracks[0].sources).toEqual([
+      { kind: 'external', destinationId: 'crm', artifactId: 'media-1' },
+    ]);
+    expect(manifest.tracks[0].sources).toHaveLength(3);
+  });
 
   it('sends a confirmed file deletion straight through: the dialog already asked', async () => {
     const nativeConfirm = jest.spyOn(window, 'confirm');

@@ -27,7 +27,7 @@ function mount() {
   const callbacks = {
     rename: jest.fn(), note: jest.fn(), remove: jest.fn(), removeMany: jest.fn(),
     freeSpace: jest.fn(),
-    openLocal: jest.fn(), fileTo: jest.fn(), play: jest.fn(), loadMore: jest.fn(),
+    openLocal: jest.fn(), fileTo: jest.fn(), play: jest.fn(), playRemote: jest.fn(), loadMore: jest.fn(),
     retryExternalMedia: jest.fn(),
     notes: {
       load: jest.fn(async () => notes),
@@ -195,9 +195,12 @@ describe('RecordingsView detail (f2, f17)', () => {
     await open(list);
     expect(Array.from(list.querySelectorAll('button'))
       .some((button) => button.textContent === 'Free up space')).toBe(false);
+    const playRemote = Array.from(list.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Play remote copy')!;
+    expect(playRemote).toBeDefined();
+    playRemote.click();
+    expect(callbacks.playRemote).toHaveBeenCalledWith('weekly');
 
-    Array.from(list.querySelectorAll<HTMLButtonElement>('button'))
-      .find((button) => button.textContent === 'Close')!.click();
     retained.files = [{
       ...retained.files[0],
       locations: [
@@ -207,6 +210,9 @@ describe('RecordingsView detail (f2, f17)', () => {
     }];
     view.render([retained]);
     await open(list);
+
+    expect(Array.from(list.querySelectorAll('button'))
+      .some((button) => button.textContent === 'Play remote copy')).toBe(false);
 
     const free = Array.from(list.querySelectorAll<HTMLButtonElement>('button'))
       .find((button) => button.textContent === 'Free up space')!;

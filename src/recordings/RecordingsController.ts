@@ -6,7 +6,7 @@ import { openRemovalProgress } from './RemovalProgressDialog';
 import { PlayerController } from './player/PlayerController';
 import { createPlaybackTrackResolver } from './player/playbackSource';
 import type { PlayerStatus } from './player/PlayerView';
-import type { PlaybackTrack } from '../shared/playback';
+import type { PlaybackManifest, PlaybackTrack } from '../shared/playback';
 import type { ExternalMediaTransferStatus } from '../shared/protocol';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
 import type { PublishRecordingOptions, PublishedRecordingInput } from '../sharing/PublishedManifestBuilder';
@@ -129,7 +129,7 @@ export class RecordingsController {
         this.entries = this.entries.map((entry) => entry.id === id ? response.entry! : entry);
       }
       this.render();
-      if (response.cleanup === 'pending') {
+      if (response.cleanup === 'deferred') {
         this.view.showError('The local copy is marked for release and will be cleaned up automatically.');
       }
     } catch (error) {
@@ -240,10 +240,21 @@ export class RecordingsController {
    * background scope a Drive authorization to `sender.tab.id`.
    */
   async play(recordingId: string) {
+    await this.openPlayer(recordingId, false);
+  }
+
+  /** Plays only receiver-backed sources so native media playback can prove the remote replica. */
+  async playRemote(recordingId: string) {
+    await this.openPlayer(recordingId, true);
+  }
+
+  private async openPlayer(recordingId: string, externalOnly: boolean) {
     try {
       this.player?.close();
       const player = new PlayerController({
-        getManifest: this.playback.getManifest,
+        getManifest: externalOnly
+          ? async (id) => externalOnlyPlaybackManifest(await this.playback.getManifest(id))
+          : this.playback.getManifest,
         resolveTrack: createPlaybackTrackResolver(this.playback),
         externalPlaybackStarted: async (recordingId, fileId, destinationId, artifactId) => {
           const response = await sendToBackground({
@@ -436,6 +447,19 @@ export class RecordingsController {
       // Same as notes: a missing digest costs search reach, not the list.
     }
   }
+}
+
+export function externalOnlyPlaybackManifest(
+  manifest: PlaybackManifest | undefined,
+): PlaybackManifest | undefined {
+  if (!manifest) return undefined;
+  return {
+    ...manifest,
+    tracks: manifest.tracks.map((track) => ({
+      ...track,
+      sources: track.sources.filter((source) => source.kind === 'external'),
+    })),
+  };
 }
 
 function pollsExternalMedia(transfer: ExternalMediaTransferStatus): boolean {

@@ -419,7 +419,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ok: true;
     entry?: RecordingHistoryEntry;
     releasedFiles: number;
-    cleanup: 'deleted' | 'deferred' | 'pending';
+    cleanup: 'deleted' | 'deferred';
   } | { ok: false; error: string } :
   T extends PopupOpenRecordingHistoryFile ? { ok: true } | { ok: false; error: string } :
   T extends PopupMarkNotation ? NotationResult :

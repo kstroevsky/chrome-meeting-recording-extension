@@ -38,6 +38,7 @@ if (list && empty && error) {
     syncDrive: () => void controller.syncDrive(),
     openLocal: (recordingId, fileId) => void controller.openLocal(recordingId, fileId),
     play: (recordingId) => void controller.play(recordingId),
+    playRemote: (recordingId) => void controller.playRemote(recordingId),
     fileTo: (recordingId, presetId) => void controller.fileTo(recordingId, presetId),
     loadMore: () => void controller.loadMore(),
     retryExternalMedia: (destinationId, clientTransferId) =>
