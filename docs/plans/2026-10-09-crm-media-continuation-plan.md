@@ -53,11 +53,18 @@ reconciliation resumed the provider-authoritative multipart session and finished
 with the same `clientTransferId`, artifact ID and upload-attempt ID; the JM3 case
 completed in 1.1 minutes.
 
-The remaining R0 work is signed-URL/upload-attempt expiry recovery (JM4–JM5),
-playback-expiry and deep-seek cases (JM6–JM7), and the remaining
-isolation/auth/lifecycle rows in the verification table below. Explicit
-local-source release remains R1 and must not be enabled from capability/HEAD
-success alone.
+JM4 is proven with a real expired R2 signature. The isolated CRM used a two-second
+part-URL lifetime while the HTTPS pilot proxy held the first part-1 signing
+response for 4.5 seconds. Chromium's first PUT therefore reached R2 with an aged
+signature, the extension requested a second CRM signature for the same part, and
+the 64 MiB + 12,345-byte transfer still converged to `acknowledged`. The JM4 case
+completed in 33.4 seconds; signed URLs themselves are never persisted in the
+evidence.
+
+The remaining R0 work is upload-attempt expiry/replacement (JM5), playback-expiry
+and deep-seek cases (JM6–JM7), and the remaining isolation/auth/lifecycle rows in
+the verification table below. Explicit local-source release remains R1 and must
+not be enabled from capability/HEAD success alone.
 
 ## Scope and verdict
 

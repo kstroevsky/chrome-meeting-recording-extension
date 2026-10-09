@@ -33,8 +33,10 @@ const CRM_ADMIN_EMAIL =
   process.env.R0_CRM_ADMIN_EMAIL ?? "yaremenkomaksym99@gmail.com";
 const RUN_LARGE_TRANSFER = process.env.R0_RUN_LARGE_TRANSFER === "1";
 const RUN_RESTART_RECOVERY = process.env.R0_RUN_RESTART_RECOVERY === "1";
+const RUN_URL_EXPIRY = process.env.R0_RUN_URL_EXPIRY === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
 const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
+const URL_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
 
 const METADATA_POLICY: IntegrationDataPolicy = {
   metadata: true,
@@ -617,6 +619,127 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
             uploadAttemptPreserved: afterRestart.uploadId === identityBefore.uploadId,
             finalPartCount: afterRestart.uploadedParts.length,
             transferState: afterRestart.state,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
+
+  test("renews an actually expired R2 part URL in Chromium", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_URL_EXPIRY,
+      "Set R0_RUN_URL_EXPIRY=1 and a short CRM part-URL TTL to run JM4.",
+    );
+    test.setTimeout(600_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    let partOneSignRequests = 0;
+    let delayed = false;
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-url-expiry-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+        {
+          responseDelayMs: ({ method, pathname }) => {
+            if (
+              method === "POST" &&
+              /\/media\/v1\/uploads\/upload_[^/]+\/parts\/1$/.test(pathname)
+            ) {
+              partOneSignRequests += 1;
+              if (!delayed) {
+                delayed = true;
+                return 4_500;
+              }
+            }
+            return 0;
+          },
+        },
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r0-url-expiry-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        { extensionPath, ignoreHTTPSErrors: true },
+      );
+      const configured = await configureRealR2Destination(harness, proxy.origin);
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "off",
+        recordSelfVideo: false,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      const before = await historyEntry(harness.controlPage, recordingId);
+      const retained = before.files.find(
+        (file) => !file.kind && file.locations.some((location) => location.kind === "opfs"),
+      );
+      const opfs = retained?.locations.find((location) => location.kind === "opfs");
+      if (!retained || !opfs || opfs.kind !== "opfs") {
+        throw new Error("JM4 recording has no retained OPFS media");
+      }
+      expect(
+        await resizeRetainedOpfsFixture(
+          harness.controlPage,
+          opfs.key,
+          URL_EXPIRY_FIXTURE_BYTES,
+        ),
+      ).toBe(URL_EXPIRY_FIXTURE_BYTES);
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "CONFIRM_RECORDING_ROUTES",
+          recordingId,
+          removedDestinationIds: [],
+        }),
+      ).toEqual(expect.objectContaining({ ok: true }));
+
+      const transfers = await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+        480_000,
+      );
+      expect(delayed).toBe(true);
+      expect(partOneSignRequests).toBeGreaterThanOrEqual(2);
+      expect(transfers).toEqual([
+        expect.objectContaining({
+          state: "acknowledged",
+          bytesUploaded: URL_EXPIRY_FIXTURE_BYTES,
+          bytesTotal: URL_EXPIRY_FIXTURE_BYTES,
+        }),
+      ]);
+      const journal = await externalMediaJournal(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+      );
+      expect(journal).toMatchObject({ state: "acknowledged" });
+      expect(journal.request.artifact.bytes).toBe(URL_EXPIRY_FIXTURE_BYTES);
+
+      await testInfo.attach("jm4-url-expiry-evidence.json", {
+        body: JSON.stringify(
+          {
+            bytes: URL_EXPIRY_FIXTURE_BYTES,
+            delayedPart: 1,
+            delayMs: 4500,
+            firstPartSignRequests: partOneSignRequests,
+            transferState: journal.state,
           },
           null,
           2,

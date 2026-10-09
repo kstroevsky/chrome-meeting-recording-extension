@@ -9,6 +9,11 @@ export type HttpsReverseProxy = {
   stop(): Promise<void>;
 };
 
+export type HttpsReverseProxyOptions = {
+  /** Test-only latency injected after the upstream response exists but before it reaches Chromium. */
+  responseDelayMs?: (request: { method: string; pathname: string }) => number;
+};
+
 /**
  * Gives a local HTTP CRM API the exact HTTPS origin its media capability advertises.
  * The browser is launched with ignoreHTTPSErrors for this one-day self-signed cert.
@@ -17,6 +22,7 @@ export async function startHttpsReverseProxy(
   workDir: string,
   publicOrigin: string,
   upstreamOrigin: string,
+  options: HttpsReverseProxyOptions = {},
 ): Promise<HttpsReverseProxy> {
   const published = new URL(publicOrigin);
   const upstream = new URL(upstreamOrigin);
@@ -71,11 +77,19 @@ export async function startHttpsReverseProxy(
         ...(target.protocol === "https:" ? { rejectUnauthorized: false } : {}),
       },
       (upstreamResponse) => {
-        response.writeHead(
-          upstreamResponse.statusCode ?? 502,
-          upstreamResponse.headers,
-        );
-        upstreamResponse.pipe(response);
+        const send = () => {
+          response.writeHead(
+            upstreamResponse.statusCode ?? 502,
+            upstreamResponse.headers,
+          );
+          upstreamResponse.pipe(response);
+        };
+        const delay = options.responseDelayMs?.({
+          method: request.method ?? "GET",
+          pathname: target.pathname,
+        }) ?? 0;
+        if (delay > 0) setTimeout(send, delay);
+        else send();
       },
     );
     proxied.on("error", (error) => {
