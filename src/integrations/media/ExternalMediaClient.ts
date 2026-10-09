@@ -150,10 +150,18 @@ export class ExternalMediaClient {
         typeof value !== 'string' || !/^[a-z0-9-]+$/i.test(key) ||
         /^(authorization|cookie|proxy-authorization|host|content-length|set-cookie)$/i.test(key) ||
         /[\r\n]/.test(value))) throw new Error('Invalid signed media headers');
-      const response = await this.fetcher(url.href, {
-        method: 'PUT', headers: headers as Record<string, string>, body,
-        redirect: 'manual', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal,
-      });
+      let response: Response;
+      try {
+        response = await this.fetcher(url.href, {
+          method: 'PUT', headers: headers as Record<string, string>, body,
+          redirect: 'manual', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal,
+        });
+      } catch (error) {
+        // A storage error can be reported as a network failure when a signed URL
+        // expires without CORS headers. Obtain a fresh, independently checked URL.
+        if (error instanceof TypeError && !signal?.aborted && refresh < 2) continue;
+        throw error;
+      }
       if (response.status === 403) continue; // Presigned URL expired: sign again.
       if (!response.ok) throw new MediaHttpError(response.status);
       const etag = response.headers.get('etag');

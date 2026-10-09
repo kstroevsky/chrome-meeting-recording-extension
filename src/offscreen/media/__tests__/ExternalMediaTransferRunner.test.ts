@@ -74,6 +74,62 @@ describe('durable external media transfer runner', () => {
     expect(await store.list()).toEqual([]);
   });
 
+  it('replays an acknowledged-by-provider result when the retained source is no longer available', async () => {
+    const store = memoryStore();
+    await store.put({ ...input, state: 'ready-unacknowledged', artifactId, uploadedParts: [] });
+    const api = client();
+    await expect(new ExternalMediaTransferRunner(api, store).transfer(input))
+      .resolves.toEqual({ state: 'ready', artifactId });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.status).not.toHaveBeenCalled();
+    expect(api.playback).not.toHaveBeenCalled();
+  });
+
+  it('retries a temporary network failure while retaining the original transfer identity', async () => {
+    const api = client();
+    api.create.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const store = memoryStore();
+    await expect(new ExternalMediaTransferRunner(api, store).transfer(
+      input, mockSource(request.artifact.bytes, []))).resolves.toEqual({ state: 'ready', artifactId });
+    expect(api.create).toHaveBeenCalledTimes(2);
+    expect(api.create).toHaveBeenNthCalledWith(1, request, undefined);
+    expect(api.create).toHaveBeenNthCalledWith(2, request, undefined);
+    expect((await store.list())[0]).toMatchObject({ state: 'ready-unacknowledged', artifactId });
+  });
+
+  it('retries temporary completing conflicts on status and completion without starting another attempt', async () => {
+    const store = memoryStore();
+    await store.put({ ...input, uploadId, artifactId, partSize: 5 * MiB,
+      maxConcurrency: 2, state: 'uploading', uploadedParts: [] });
+    const api = client();
+    api.status.mockRejectedValueOnce(new MediaHttpError(409));
+    api.complete.mockRejectedValueOnce(new MediaHttpError(409));
+    await expect(new ExternalMediaTransferRunner(api, store).transfer(
+      input, mockSource(request.artifact.bytes, []))).resolves.toEqual({ state: 'ready', artifactId });
+    expect(api.status).toHaveBeenCalledTimes(2);
+    expect(api.complete).toHaveBeenCalledTimes(2);
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it('prevents two executors in the same offscreen document from racing the same journal', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const api = client({ create: jest.fn(async () => {
+      await pending;
+      return { state: 'uploading' as const, artifactId, uploadId, partSize: 5 * MiB,
+        maxConcurrency: 2, strategy: 'multipart-put-v1' as const };
+    }) });
+    const store = memoryStore();
+    const first = new ExternalMediaTransferRunner(api, store).transfer(
+      input, mockSource(request.artifact.bytes, []));
+    await expect(new ExternalMediaTransferRunner(api, store).transfer(
+      input, mockSource(request.artifact.bytes, [])))
+      .rejects.toThrow('already running');
+    release();
+    await expect(first).resolves.toEqual({ state: 'ready', artifactId });
+    expect(api.create).toHaveBeenCalledTimes(1);
+  });
+
   it('resumes from provider ListParts, never trusts a stale local ETag', async () => {
     const store = memoryStore();
     const saved: ExternalMediaTransfer = {

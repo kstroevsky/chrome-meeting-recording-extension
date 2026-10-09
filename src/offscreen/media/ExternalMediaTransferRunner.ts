@@ -21,12 +21,14 @@ function assertUploadParameters(partSize: number, maxConcurrency: number): numbe
   return Math.min(maxConcurrency, Math.floor(MAX_IN_FLIGHT / partSize));
 }
 
-async function retry<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+async function retry<T>(operation: () => Promise<T>, signal?: AbortSignal,
+  retryCompleting = false): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
     try { return await operation(); } catch (error) {
-      if (!(error instanceof MediaHttpError) ||
-          (error.status !== 429 && error.status < 500) || attempt >= RETRIES) throw error;
+      const transient = error instanceof TypeError || (error instanceof MediaHttpError &&
+        (error.status === 429 || error.status >= 500 || (retryCompleting && error.status === 409)));
+      if (!transient || signal?.aborted || attempt >= RETRIES) throw error;
       const delay = Math.min(500 * 2 ** attempt, 5_000);
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, delay);
@@ -42,43 +44,45 @@ async function retry<T>(operation: () => Promise<T>, signal?: AbortSignal): Prom
  * has durably stored its external ArtifactLocation and explicitly acknowledges it.
  */
 export class ExternalMediaTransferRunner {
-  private readonly active = new Set<string>();
+  // Offscreen operations can instantiate more than one runner in the same document.
+  private static readonly active = new Set<string>();
 
   constructor(private readonly client: Pick<ExternalMediaClient,
     'create' | 'status' | 'uploadPart' | 'complete' | 'playback'>,
     private readonly store: ExternalMediaTransferStore) {}
 
   async transfer(input: Pick<ExternalMediaTransfer, 'destinationId' | 'source' | 'request'>,
-    bytes: ArtifactByteSource, signal?: AbortSignal): Promise<Ready> {
+    bytes?: ArtifactByteSource, signal?: AbortSignal): Promise<Ready> {
     const key = externalTransferKey(input.destinationId, input.request.clientTransferId);
-    if (this.active.has(key)) throw new Error('External media transfer is already running');
-    this.active.add(key);
+    if (ExternalMediaTransferRunner.active.has(key)) throw new Error('External media transfer is already running');
+    ExternalMediaTransferRunner.active.add(key);
     try { return await this.run(input, bytes, signal); }
-    finally { this.active.delete(key); }
+    finally { ExternalMediaTransferRunner.active.delete(key); }
   }
 
   private async run(input: Pick<ExternalMediaTransfer, 'destinationId' | 'source' | 'request'>,
-    bytes: ArtifactByteSource, signal?: AbortSignal): Promise<Ready> {
-    if (!Number.isSafeInteger(bytes.size) || bytes.size <= 0 || bytes.size !== input.request.artifact.bytes) {
-      throw new Error('Media source does not match declared upload size');
-    }
+    bytes?: ArtifactByteSource, signal?: AbortSignal): Promise<Ready> {
     let state = await this.store.get(input.destinationId, input.request.clientTransferId);
     if (state && (JSON.stringify(state.request) !== JSON.stringify(input.request) ||
         JSON.stringify(state.source) !== JSON.stringify(input.source))) {
       throw new Error('Transfer identity was reused with different content');
     }
-    state ??= { ...input, uploadedParts: [], state: 'pending' };
-    await this.store.put(state);
-    if (state.state === 'ready-unacknowledged') {
+    if (state?.state === 'ready-unacknowledged') {
       if (!state.artifactId) throw new Error('Missing confirmed artifact');
       return { state: 'ready', artifactId: state.artifactId };
     }
+    if (!bytes || !Number.isSafeInteger(bytes.size) || bytes.size <= 0 ||
+        bytes.size !== input.request.artifact.bytes) {
+      throw new Error('Media source does not match declared upload size');
+    }
+    state ??= { ...input, uploadedParts: [], state: 'pending' };
+    await this.store.put(state);
 
     for (let restart = 0; restart < MAX_RESTARTS; restart++) {
       signal?.throwIfAborted();
       try {
         // The server's ListParts (and underlying provider) always wins after a restart.
-        let status = state.uploadId ? await retry(() => this.client.status(state!.uploadId!, signal), signal) : undefined;
+        let status = state.uploadId ? await retry(() => this.client.status(state!.uploadId!, signal), signal, true) : undefined;
         if (status?.state === 'ready') return await this.ready(state, status.artifactId);
         if (!state.uploadId || !status || !state.partSize || !state.maxConcurrency) {
           const created = await retry(() => this.client.create(input.request, signal), signal);
@@ -89,7 +93,7 @@ export class ExternalMediaTransferRunner {
             artifactId: created.artifactId, partSize: created.partSize,
             maxConcurrency: created.maxConcurrency };
           await this.store.put(state);
-          status = await retry(() => this.client.status(created.uploadId, signal), signal);
+          status = await retry(() => this.client.status(created.uploadId, signal), signal, true);
           if (status.state === 'ready') return await this.ready(state, status.artifactId);
         }
         const partSize = state.partSize!;
@@ -135,7 +139,7 @@ export class ExternalMediaTransferRunner {
         const manifest: MediaPart[] = Array.from({ length: count }, (_, index) => ({
           partNumber: index + 1, etag: parts.get(index + 1)!,
         }));
-        const completed = await retry(() => this.client.complete(state!.uploadId!, manifest, signal), signal);
+        const completed = await retry(() => this.client.complete(state!.uploadId!, manifest, signal), signal, true);
         return await this.ready(state, completed.artifactId);
       } catch (error) {
         if (!(error instanceof MediaHttpError) || error.status !== 410 || restart === MAX_RESTARTS - 1) throw error;
