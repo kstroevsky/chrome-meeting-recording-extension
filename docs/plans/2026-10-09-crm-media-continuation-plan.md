@@ -105,10 +105,21 @@ recording from local history left the same CRM artifact/playback intact. The
 combined lifecycle gate completed in 12.9 seconds and keeps OPFS release out of
 scope for R0.
 
-The remaining R0 work is the input/protocol hardening,
-reconciliation/throttling and end-dialog consent rows in the verification table
-below. Explicit local-source release remains R1 and must not be enabled from
-capability/HEAD success alone.
+JM14–JM16 are now proven with the live local CRM and private R2 path. Five unsafe
+create variants (invalid role, disallowed MIME, control-only filename, filename
+over 255 characters and an unexpected storage-key field) all returned 422 with
+`MEDIA_UPLOAD_INVALID`. A valid mixed-case `VIDEO/WEBM; codecs=vp8` request was
+canonicalized to `video/webm`; its presigned UploadPart URL used only connection,
+artifact and attempt IDs, returned no signed request headers, and did not contain
+the hostile filename. The five-byte object completed successfully and ranged
+playback returned the canonical content type and exact bytes. The real gate ran
+alongside the JM1 baseline and passed in 1.2 seconds; a focused transfer-runner
+unit test also passed and proves invalid server part sizes are rejected before
+the byte source is read or completion is attempted.
+
+The remaining R0 work is reconciliation/throttling and end-dialog consent
+(JM17–JM19) in the verification table below. Explicit local-source release
+remains R1 and must not be enabled from capability/HEAD success alone.
 
 ## Scope and verdict
 

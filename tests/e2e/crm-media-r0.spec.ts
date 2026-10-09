@@ -39,6 +39,8 @@ const RUN_ATTEMPT_EXPIRY = process.env.R0_RUN_ATTEMPT_EXPIRY === "1";
 const RUN_PLAYBACK_EXPIRY = process.env.R0_RUN_PLAYBACK_EXPIRY === "1";
 const RUN_AUTH_ISOLATION = process.env.R0_RUN_AUTH_ISOLATION === "1";
 const RUN_LIFECYCLE = process.env.R0_RUN_LIFECYCLE === "1";
+const RUN_PROTOCOL_HARDENING =
+  process.env.R0_RUN_PROTOCOL_HARDENING === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
 const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
 const URL_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
@@ -1678,6 +1680,244 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       await proxy?.stop().catch(() => {});
     }
   });
+
+  test("rejects unsafe upload metadata and keeps R2 keys and content type canonical", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_PROTOCOL_HARDENING,
+      "Set R0_RUN_PROTOCOL_HARDENING=1 with the real-R2 pilot variables to run JM14–JM16.",
+    );
+    test.setTimeout(180_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    const admin = await playwrightRequest.newContext({
+      ignoreHTTPSErrors: true,
+    });
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-protocol-hardening-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+      );
+      await crmLogin(admin, proxy.origin);
+      const connection = await crmCreateConnection(admin, proxy.origin);
+      const bearer = await crmReplaceMediaToken(
+        admin,
+        proxy.origin,
+        connection.id,
+      );
+      const recordingId =
+        "recording_77777777-7777-4777-8777-777777777777";
+      const base = {
+        clientTransferId: "jm14_invalid",
+        recordingId,
+        artifact: {
+          role: "tab-recording",
+          filename: "meeting.webm",
+          mimeType: "video/webm",
+          bytes: 5,
+        },
+      };
+
+      const invalidCases: Array<{ name: string; body: unknown; status: number }> = [
+        {
+          name: "role",
+          body: {
+            ...base,
+            artifact: { ...base.artifact, role: "transcript" },
+          },
+          status: 422,
+        },
+        {
+          name: "mime",
+          body: {
+            ...base,
+            artifact: { ...base.artifact, mimeType: "text/html" },
+          },
+          status: 422,
+        },
+        {
+          name: "filename-controls-only",
+          body: {
+            ...base,
+            artifact: { ...base.artifact, filename: "\r\n\u0000\u007f" },
+          },
+          status: 422,
+        },
+        {
+          name: "filename-too-long",
+          body: {
+            ...base,
+            artifact: {
+              ...base.artifact,
+              filename: `${"x".repeat(252)}.webm`,
+            },
+          },
+          status: 422,
+        },
+        {
+          name: "strict-extra-field",
+          body: { ...base, storageKey: "attacker-controlled" },
+          status: 422,
+        },
+      ];
+      const invalidStatuses: Record<string, number> = {};
+      for (const candidate of invalidCases) {
+        const response = await mediaJsonRequest(
+          admin,
+          proxy.origin,
+          bearer,
+          "POST",
+          "/uploads",
+          candidate.body,
+        );
+        invalidStatuses[candidate.name] = response.status;
+        expect(response.status).toBe(candidate.status);
+        expect(response.code).toBe("MEDIA_UPLOAD_INVALID");
+      }
+
+      const hostileFilename = '../candidate"\r\n..\\meeting.webm';
+      const create = await mediaJsonRequest<{
+        state?: unknown;
+        artifactId?: unknown;
+        uploadId?: unknown;
+        partSize?: unknown;
+        maxConcurrency?: unknown;
+      }>(
+        admin,
+        proxy.origin,
+        bearer,
+        "POST",
+        "/uploads",
+        {
+          clientTransferId: "jm14_canonical",
+          recordingId,
+          artifact: {
+            role: "tab-recording",
+            filename: hostileFilename,
+            mimeType: "VIDEO/WEBM; codecs=vp8",
+            bytes: 5,
+          },
+        },
+      );
+      expect(create.status).toBe(200);
+      if (
+        create.body?.state !== "uploading" ||
+        typeof create.body.artifactId !== "string" ||
+        typeof create.body.uploadId !== "string"
+      ) {
+        throw new Error("JM14–JM16 create response was not an upload attempt");
+      }
+      const artifactId = create.body.artifactId;
+      const uploadId = create.body.uploadId;
+      const artifactUuid = artifactId.slice("media_".length);
+      const attemptUuid = uploadId.slice("upload_".length);
+
+      const part = await mediaJsonRequest<{
+        method?: unknown;
+        url?: unknown;
+        headers?: unknown;
+      }>(
+        admin,
+        proxy.origin,
+        bearer,
+        "POST",
+        `/uploads/${uploadId}/parts/1`,
+      );
+      if (
+        part.status !== 200 ||
+        part.body?.method !== "PUT" ||
+        typeof part.body.url !== "string" ||
+        !part.body.headers ||
+        typeof part.body.headers !== "object" ||
+        Array.isArray(part.body.headers)
+      ) {
+        throw new Error("JM14–JM16 part signing response was invalid");
+      }
+      const signedUrl = new URL(part.body.url);
+      const expectedKey =
+        `meeting-recordings/${connection.id}/${artifactUuid}/${attemptUuid}`;
+      const objectPathIsIdOnly = decodeURIComponent(signedUrl.pathname).endsWith(
+        `/${expectedKey}`,
+      );
+      const signedHeaderNames = Object.keys(
+        part.body.headers as Record<string, unknown>,
+      );
+
+      const payload = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x00]);
+      const put = await fetch(signedUrl.href, {
+        method: "PUT",
+        headers: part.body.headers as Record<string, string>,
+        body: payload,
+      });
+      expect(put.ok).toBe(true);
+      const etag = put.headers.get("etag");
+      if (!etag) throw new Error("R2 did not return an ETag for JM14–JM16");
+
+      const completed = await mediaJsonRequest<{
+        state?: unknown;
+        artifactId?: unknown;
+      }>(
+        admin,
+        proxy.origin,
+        bearer,
+        "POST",
+        `/uploads/${uploadId}/complete`,
+        { parts: [{ partNumber: 1, etag }] },
+      );
+      expect(completed.status).toBe(200);
+      expect(completed.body?.state).toBe("ready");
+      expect(completed.body?.artifactId).toBe(artifactId);
+
+      const playback = await mediaJsonRequest<{
+        url?: unknown;
+        expiresAt?: unknown;
+      }>(
+        admin,
+        proxy.origin,
+        bearer,
+        "POST",
+        `/artifacts/${artifactId}/playback`,
+      );
+      if (playback.status !== 200 || typeof playback.body?.url !== "string") {
+        throw new Error("JM14–JM16 playback response was invalid");
+      }
+      const ranged = await fetch(playback.body.url, {
+        headers: { Range: "bytes=0-4" },
+      });
+      const playbackBytes = new Uint8Array(await ranged.arrayBuffer());
+      const playbackContentType =
+        ranged.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+
+      expect(signedUrl.origin).toBe(R2_UPLOAD_ORIGIN);
+      expect(objectPathIsIdOnly).toBe(true);
+      expect(signedHeaderNames).toEqual([]);
+      expect(signedUrl.pathname).not.toContain("candidate");
+      expect(signedUrl.pathname).not.toContain("meeting.webm");
+      expect(playbackContentType).toBe("video/webm");
+      expect([200, 206]).toContain(ranged.status);
+      expect(playbackBytes).toEqual(payload);
+
+      await testInfo.attach("jm14-jm16-protocol-hardening-evidence.json", {
+        body: JSON.stringify(
+          {
+            invalidStatuses,
+            validCreateStatus: create.status,
+            objectPathIsIdOnly,
+            signedHeaderNames,
+            playbackStatus: ranged.status,
+            playbackContentType,
+            playbackBytes: playbackBytes.byteLength,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      await admin.dispose().catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
 });
 
 async function preparePilotExtension(
@@ -2248,6 +2488,38 @@ async function mediaRequest(
     // failures are still represented by the status if the body is not JSON.
   }
   return { status: response.status(), ...(code ? { code } : {}) };
+}
+
+async function mediaJsonRequest<T extends Record<string, unknown>>(
+  request: APIRequestContext,
+  origin: string,
+  bearer: string,
+  method: "GET" | "POST",
+  pathname: string,
+  data?: unknown,
+): Promise<{ status: number; code?: string; body?: T }> {
+  const response = await request.fetch(
+    `${origin}/api/integrations/meeting-recorder/media/v1${pathname}`,
+    {
+      method,
+      headers: { Authorization: `Bearer ${bearer}` },
+      ...(data === undefined ? {} : { data }),
+    },
+  );
+  let body: T | undefined;
+  let code: string | undefined;
+  try {
+    body = (await response.json()) as T;
+    const candidate = body as Record<string, unknown>;
+    if (typeof candidate.code === "string") code = candidate.code;
+  } catch {
+    // Status still captures malformed/non-JSON receiver failures.
+  }
+  return {
+    status: response.status(),
+    ...(code ? { code } : {}),
+    ...(body ? { body } : {}),
+  };
 }
 
 async function expectResponse(
