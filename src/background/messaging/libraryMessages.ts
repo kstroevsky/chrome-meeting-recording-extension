@@ -3,6 +3,7 @@ import { normalizeDriveSyncChoice } from '../../shared/driveSync';
 import { toStatusView } from '../../shared/recording';
 import { createRecordingFileDeletionPorts } from '../drive/recordingFileDeletionPorts';
 import { deleteRecordingFiles } from '../library/history/RecordingFileDeletion';
+import { requireRetainedMediaRecovery } from '../retention/retainedMediaRecoveryState';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 /**
@@ -79,6 +80,36 @@ export async function handleLibraryMessage(
       ? await deleteRecordingFiles(entry, createRecordingFileDeletionPorts())
       : { deleted: 0, errors: [] };
     sendResponse({ ok: true, removed, filesDeleted: files.deleted, fileErrors: files.errors, sharesEnded });
+    return true;
+  }
+  if (msg.type === 'FREE_RECORDING_SPACE') {
+    if (!history) throw new Error('Recording history is unavailable');
+    if (!deps.externalMedia) throw new Error('External media is unavailable');
+    const planned = await history.planVerifiedRetainedMediaRelease(msg.id);
+    if (!planned.length) {
+      sendResponse({ ok: true, entry: await history.get(msg.id), releasedFiles: 0, cleanup: 'deleted' });
+      return true;
+    }
+    const guarded = await deps.externalMedia.withRetainedSourceRelease(
+      msg.id,
+      planned.map((target) => target.key),
+      async () => {
+        await requireRetainedMediaRecovery();
+        const marked = await history.markVerifiedRetainedMediaReleased(msg.id, planned);
+        const cleanup = await history.deleteReleasedRetainedMedia(msg.id, marked.released);
+        return { marked, cleanup };
+      },
+    );
+    if (guarded.busy) {
+      sendResponse({ ok: false, error: 'This recording is still being transferred. Try again when the transfer finishes.' });
+      return true;
+    }
+    sendResponse({
+      ok: true,
+      entry: guarded.value.marked.entry,
+      releasedFiles: guarded.value.marked.released.length,
+      cleanup: guarded.value.cleanup,
+    });
     return true;
   }
   if (msg.type === 'SYNC_DRIVE_PLAN' || msg.type === 'SYNC_DRIVE_APPLY') {

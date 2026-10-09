@@ -56,6 +56,34 @@ describe('reconcileRetainedMedia', () => {
     expect(deps.removeRetained).not.toHaveBeenCalled();
   });
 
+  it('honors a durable explicit-release marker instead of re-adopting the OPFS key', async () => {
+    const released = entry();
+    released.files = [{
+      ...released.files[0],
+      releasedRetainedMedia: [{ key: KEY, releasedAt: 9 }],
+    }];
+    const releaseRetained = jest.fn(async () => 'deleted' as const);
+    const deps = makeDeps({ getEntry: jest.fn(async () => released), releaseRetained });
+
+    await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ collected: 1, repaired: 0 });
+    expect(releaseRetained).toHaveBeenCalledWith(HISTORY, FILE_ID, KEY);
+    expect(deps.recordLocation).not.toHaveBeenCalled();
+  });
+
+  it('keeps the release marker authoritative while an active playback lease defers deletion', async () => {
+    const released = withRetained([{ kind: 'opfs', key: KEY, retainedAt: 1 }]);
+    released.files = [{
+      ...released.files[0],
+      releasedRetainedMedia: [{ key: KEY, releasedAt: 9 }],
+    }];
+    const releaseRetained = jest.fn(async () => 'deferred' as const);
+    const deps = makeDeps({ getEntry: jest.fn(async () => released), releaseRetained });
+
+    await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ deferred: 1, healthy: 0, repaired: 0 });
+    expect(releaseRetained).toHaveBeenCalledWith(HISTORY, FILE_ID, KEY);
+    expect(deps.recordLocation).not.toHaveBeenCalled();
+  });
+
   it('repairs metadata when the move landed but the write did not', async () => {
     const deps = makeDeps();
     await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ repaired: 1 });
@@ -166,4 +194,3 @@ describe('reconcileRetainedMedia', () => {
     await expect(reconcileRetainedMedia(deps)).resolves.toMatchObject({ repaired: 1 });
   });
 });
-

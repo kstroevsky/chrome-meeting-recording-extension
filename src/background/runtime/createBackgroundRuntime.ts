@@ -107,6 +107,7 @@ export function createBackgroundRuntime() {
     driveAuthLease,
     playbackLeases,
     logger,
+    externalMediaRuntime.coordinator,
   );
   const unsavedRecovery = new UnsavedRecordingRecovery(offscreen, session, logger);
   const controller = new RecordingController({

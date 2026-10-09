@@ -121,6 +121,22 @@ export class RecordingsController {
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
+  async freeSpace(id: string): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'FREE_RECORDING_SPACE', id });
+      if (!response.ok) throw new Error(response.error);
+      if (response.entry) {
+        this.entries = this.entries.map((entry) => entry.id === id ? response.entry! : entry);
+      }
+      this.render();
+      if (response.cleanup === 'pending') {
+        this.view.showError('The local copy is marked for release and will be cleaned up automatically.');
+      }
+    } catch (error) {
+      this.view.showError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   /** Called once the page's dialog (and, for files, the native check) said yes. */
   async remove(id: string, deleteFiles = false) {
     try {

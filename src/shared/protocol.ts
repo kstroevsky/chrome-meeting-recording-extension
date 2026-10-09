@@ -30,7 +30,11 @@ import {
   POPUP_TO_CONTENT_MESSAGE_TYPES,
 } from './protocolMessageTypes';
 import { getMessageType, hasKnownMessageType, isRecord } from './typeGuards';
-import type { RecordingHistoryCursor, RecordingHistoryEntry } from './recordingHistory';
+import type {
+  RecordingHistoryCursor,
+  RecordingHistoryEntry,
+  RecordingHistoryMessage,
+} from './recordingHistory';
 import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../integrations/contracts';
 import type { IntegrationPayloadPreview } from '../integrations/preview';
 import {
@@ -335,6 +339,7 @@ export type PopupToBg =
   | PopupRenameRecordingHistory
   | PopupSetRecordingHistoryNote
   | PopupRemoveRecordingHistory
+  | Extract<RecordingHistoryMessage, { type: 'FREE_RECORDING_SPACE' }>
   | PopupOpenRecordingHistoryFile
   | PopupMarkNotation
   | PopupEndNotation
@@ -410,6 +415,12 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupDismissInterruption ? { session: RecordingStatusView } :
   T extends PopupSetRecordingHistoryNote ? { ok: true; entry?: RecordingHistoryEntry } | { ok: false; error: string } :
   T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean; filesDeleted?: number; fileErrors?: string[]; sharesEnded?: number } | { ok: false; error: string } :
+  T extends Extract<RecordingHistoryMessage, { type: 'FREE_RECORDING_SPACE' }> ? {
+    ok: true;
+    entry?: RecordingHistoryEntry;
+    releasedFiles: number;
+    cleanup: 'deleted' | 'deferred' | 'pending';
+  } | { ok: false; error: string } :
   T extends PopupOpenRecordingHistoryFile ? { ok: true } | { ok: false; error: string } :
   T extends PopupMarkNotation ? NotationResult :
   T extends PopupEndNotation ? NotationResult :

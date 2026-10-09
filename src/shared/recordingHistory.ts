@@ -32,6 +32,18 @@ export type ArtifactDelivery = {
   error?: string;
 };
 
+export type RetainedMediaReleaseMarker = {
+  /** Exact OPFS key that must never be re-adopted by startup reconciliation. */
+  key: string;
+  releasedAt: number;
+};
+
+export type RetainedMediaReleaseTarget = {
+  fileId: string;
+  key: string;
+  bytes?: number;
+};
+
 export type RecordingHistoryFile = {
   id: string;
   stream: RecordingStream;
@@ -56,6 +68,8 @@ export type RecordingHistoryFile = {
   captureStartOffsetMs?: number;
   /** Every physical replica of these bytes. Empty means the extension owns none. */
   locations: ArtifactLocation[];
+  /** Permanent local-release intent. It survives physical deletion and restarts. */
+  releasedRetainedMedia?: RetainedMediaReleaseMarker[];
   delivery: ArtifactDelivery;
 
   // Legacy single-destination fields, retained for one migration period
@@ -121,6 +135,7 @@ export type RecordingHistoryMessage =
   | { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string }
   | { type: 'SET_RECORDING_HISTORY_NOTE'; id: string; note: string }
   | { type: 'REMOVE_RECORDING_HISTORY'; id: string; deleteFiles?: boolean }
+  | { type: 'FREE_RECORDING_SPACE'; id: string }
   | { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
 /**
@@ -219,6 +234,9 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
   const locations = Array.isArray(candidate.locations)
     ? candidate.locations.map(normalizeArtifactLocation).filter((location): location is ArtifactLocation => location != null)
     : locationsFromLegacyFields(legacy);
+  const releasedRetainedMedia = Array.isArray(candidate.releasedRetainedMedia)
+    ? normalizeRetainedMediaReleaseMarkers(candidate.releasedRetainedMedia)
+    : [];
   // Signed: a negative offset is valid data, so this cannot reuse the `>= 0`
   // guard the byte counts use.
   const captureStartOffsetMs = typeof candidate.captureStartOffsetMs === 'number' && Number.isFinite(candidate.captureStartOffsetMs)
@@ -232,6 +250,7 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     mimeType: normalizeRecordingFileContentType(optionalString('mimeType'), filename, stream),
     ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),
     locations,
+    ...(releasedRetainedMedia.length ? { releasedRetainedMedia } : {}),
     delivery: normalizeArtifactDelivery(candidate.delivery, legacy, requested),
     destination,
     status,
@@ -241,6 +260,21 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     ...(webViewLink ? { webViewLink } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+function normalizeRetainedMediaReleaseMarkers(values: unknown[]): RetainedMediaReleaseMarker[] {
+  const byKey = new Map<string, RetainedMediaReleaseMarker>();
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const candidate = value as Record<string, unknown>;
+    const key = typeof candidate.key === 'string' ? candidate.key.trim() : '';
+    const releasedAt = typeof candidate.releasedAt === 'number' && Number.isFinite(candidate.releasedAt)
+      && candidate.releasedAt >= 0 ? candidate.releasedAt : undefined;
+    if (!key || key.length > 4096 || /[\x00-\x1f\x7f]/.test(key) || releasedAt == null) continue;
+    const current = byKey.get(key);
+    if (!current || current.releasedAt < releasedAt) byKey.set(key, { key, releasedAt });
+  }
+  return [...byKey.values()];
 }
 
 function normalizeArtifactLocation(value: unknown): ArtifactLocation | undefined {
@@ -357,6 +391,24 @@ export function upsertArtifactLocation(locations: ArtifactLocation[], next: Arti
   return [...locations.filter((location) => location.kind !== next.kind), next];
 }
 
+/** Media OPFS replicas that may be deliberately released under R1/JM11. */
+export function verifiedRetainedMediaReleaseTargets(
+  entry: RecordingHistoryEntry,
+): RetainedMediaReleaseTarget[] {
+  if (entry.deletedAt || entry.status !== 'complete') return [];
+  return entry.files.flatMap((file) => {
+    if (file.kind || !file.locations.some((location) =>
+      location.kind === 'external' && location.playbackVerifiedAt != null)) return [];
+    return file.locations
+      .filter((location): location is Extract<ArtifactLocation, { kind: 'opfs' }> => location.kind === 'opfs')
+      .map((location) => ({
+        fileId: file.id,
+        key: location.key,
+        ...(file.bytes != null ? { bytes: file.bytes } : {}),
+      }));
+  });
+}
+
 /** ADR-0006 fields for a freshly created row that has no replicas yet. */
 export function pendingArtifactFields(
   filename: string,
@@ -428,6 +480,9 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
     // `deleteFiles` deletes files: only an explicit boolean may ask for that.
     return typeof message.id === 'string' && message.id.length > 0
       && (message.deleteFiles === undefined || typeof message.deleteFiles === 'boolean');
+  }
+  if (message.type === 'FREE_RECORDING_SPACE') {
+    return typeof message.id === 'string' && message.id.length > 0;
   }
   return message.type === 'OPEN_RECORDING_HISTORY_FILE'
     && typeof message.recordingId === 'string' && message.recordingId.length > 0

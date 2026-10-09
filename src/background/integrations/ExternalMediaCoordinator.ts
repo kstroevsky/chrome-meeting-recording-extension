@@ -33,6 +33,7 @@ export class ExternalMediaCoordinator {
   private readonly recordingRuns = new Map<string, Promise<void>>();
   private readonly readyRuns = new Map<string, Promise<void>>();
   private reconcileRun: Promise<void> | null = null;
+  private readonly sourceReleaseLocks = new Set<string>();
 
   constructor(private readonly deps: Deps) {}
 
@@ -56,6 +57,7 @@ export class ExternalMediaCoordinator {
   }
 
   reconcileRecording(recordingId: string): Promise<void> {
+    if (this.sourceReleaseLocks.has(recordingId)) return Promise.resolve();
     const running = this.recordingRuns.get(recordingId);
     if (running) return running;
     const run = this.reconcileRecordingNow(recordingId).finally(() => {
@@ -63,6 +65,28 @@ export class ExternalMediaCoordinator {
     });
     this.recordingRuns.set(recordingId, run);
     return run;
+  }
+
+  async withRetainedSourceRelease<T>(
+    recordingId: string,
+    sourceKeys: readonly string[],
+    release: () => Promise<T>,
+  ): Promise<{ busy: true } | { busy: false; value: T }> {
+    const running = this.recordingRuns.get(recordingId);
+    if (running) await running;
+    if (this.sourceReleaseLocks.has(recordingId)) return { busy: true };
+    this.sourceReleaseLocks.add(recordingId);
+    try {
+      await this.deps.offscreen.ensureReady();
+      const keys = new Set(sourceKeys);
+      const busy = (await this.snapshot()).some((transfer) =>
+        keys.has(transfer.source.key) && transferNeedsRetainedSource(transfer));
+      if (busy) return { busy: true };
+      return { busy: false, value: await release() };
+    } finally {
+      this.sourceReleaseLocks.delete(recordingId);
+      void this.reconcileRecording(recordingId);
+    }
   }
 
   async handleState(transfer: ExternalMediaTransferView): Promise<void> {
@@ -243,4 +267,12 @@ export class ExternalMediaCoordinator {
       this.deps.logger.warn('External media cancellation deferred:', filter, error);
     }
   }
+}
+
+export function transferNeedsRetainedSource(transfer: ExternalMediaTransferView): boolean {
+  if (transfer.state === 'verifying-capability' || transfer.state === 'ready-unacknowledged'
+      || transfer.state === 'acknowledged' || transfer.state === 'canceled') return false;
+  if ((transfer.state === 'retry-wait' || transfer.state === 'action-required')
+      && transfer.resumeFrom === 'verifying-capability') return false;
+  return true;
 }

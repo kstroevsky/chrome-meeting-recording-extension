@@ -228,4 +228,53 @@ describe('ExternalMediaCoordinator', () => {
     await expect(ctx.coordinator.cancelDestination('crm')).resolves.toBeUndefined();
     expect(ctx.history.recordArtifactLocation).not.toHaveBeenCalled();
   });
+
+  it('blocks retained-source release while an active transfer still needs those bytes', async () => {
+    const ctx = setup();
+    ctx.setTransfers([transfer('uploading')]);
+    const release = jest.fn(async () => 'released');
+
+    await expect(ctx.coordinator.withRetainedSourceRelease(
+      'recording-local',
+      ['library/recording-local/recording-local%3Atab/interview.webm'],
+      release,
+    )).resolves.toEqual({ busy: true });
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('allows release once transfer completion no longer needs the retained source', async () => {
+    const ctx = setup();
+    ctx.setTransfers([transfer('ready-unacknowledged')]);
+    const release = jest.fn(async () => 'released');
+
+    await expect(ctx.coordinator.withRetainedSourceRelease(
+      'recording-local',
+      ['library/recording-local/recording-local%3Atab/interview.webm'],
+      release,
+    )).resolves.toEqual({ busy: false, value: 'released' });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes concurrent release attempts for one recording', async () => {
+    const ctx = setup();
+    let entered!: () => void;
+    let unblock!: () => void;
+    const inside = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { unblock = resolve; });
+    const first = ctx.coordinator.withRetainedSourceRelease(
+      'recording-local',
+      ['library/recording-local/recording-local%3Atab/interview.webm'],
+      async () => { entered(); await held; return 'first'; },
+    );
+    await inside;
+
+    await expect(ctx.coordinator.withRetainedSourceRelease(
+      'recording-local',
+      ['library/recording-local/recording-local%3Atab/interview.webm'],
+      async () => 'second',
+    )).resolves.toEqual({ busy: true });
+
+    unblock();
+    await expect(first).resolves.toEqual({ busy: false, value: 'first' });
+  });
 });

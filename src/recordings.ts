@@ -34,6 +34,7 @@ if (list && empty && error) {
     note: (id, note) => void controller.setNote(id, note),
     remove: (id, deleteFiles) => void controller.remove(id, deleteFiles),
     removeMany: (ids, deleteFiles) => void controller.removeMany(ids, deleteFiles),
+    freeSpace: (id) => void controller.freeSpace(id),
     syncDrive: () => void controller.syncDrive(),
     openLocal: (recordingId, fileId) => void controller.openLocal(recordingId, fileId),
     play: (recordingId) => void controller.play(recordingId),

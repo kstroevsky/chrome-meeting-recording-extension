@@ -26,6 +26,7 @@ function mount() {
   let notes = [...NOTES];
   const callbacks = {
     rename: jest.fn(), note: jest.fn(), remove: jest.fn(), removeMany: jest.fn(),
+    freeSpace: jest.fn(),
     openLocal: jest.fn(), fileTo: jest.fn(), play: jest.fn(), loadMore: jest.fn(),
     retryExternalMedia: jest.fn(),
     notes: {
@@ -178,6 +179,40 @@ describe('RecordingsView detail (f2, f17)', () => {
     expect(list.querySelector('.recording-detail')).toBe(detail);
     expect(list.querySelector('.detail-title')).toBe(title);
     expect(detail.textContent).toContain('UPLOADING 70%');
+  });
+
+  it('offers Free up space only after verified playback of an external replica', async () => {
+    const { view, list, callbacks } = mount();
+    const retained = entry();
+    retained.files = [{
+      ...retained.files[0],
+      locations: [
+        { kind: 'opfs', key: 'library/weekly/weekly%3Atab/weekly.webm', retainedAt: 1 },
+        { kind: 'external', destinationId: 'crm', artifactId: 'media-1' },
+      ],
+    }];
+    view.render([retained]);
+    await open(list);
+    expect(Array.from(list.querySelectorAll('button'))
+      .some((button) => button.textContent === 'Free up space')).toBe(false);
+
+    Array.from(list.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Close')!.click();
+    retained.files = [{
+      ...retained.files[0],
+      locations: [
+        { kind: 'opfs', key: 'library/weekly/weekly%3Atab/weekly.webm', retainedAt: 1 },
+        { kind: 'external', destinationId: 'crm', artifactId: 'media-1', playbackVerifiedAt: 10 },
+      ],
+    }];
+    view.render([retained]);
+    await open(list);
+
+    const free = Array.from(list.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Free up space')!;
+    expect(free).toBeDefined();
+    free.click();
+    expect(callbacks.freeSpace).toHaveBeenCalledWith('weekly');
   });
 
   it('opens once the notes are in, so the modal never grows after it appears', async () => {

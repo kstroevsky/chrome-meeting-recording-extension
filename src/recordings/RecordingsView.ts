@@ -17,7 +17,11 @@ import {
 import { checkIcon, cloudIcon, diskIcon, editIcon } from './recordingsIcons';
 import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
-import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
+import {
+  verifiedRetainedMediaReleaseTargets,
+  type RecordingHistoryEntry,
+  type RecordingHistoryFile,
+} from '../shared/recordingHistory';
 import { fileDeletionFinalCheck, fileDeletionWarning } from './fileDeletion';
 import { RecordingNotesSection, type RecordingNotesSectionActions } from './RecordingNotesSection';
 import { NoteEditor, type NoteEditorDeps } from './NoteEditor';
@@ -32,6 +36,7 @@ export type RecordingsViewCallbacks = {
   /** `deleteFiles`: also delete the recording's Drive and Downloads files. */
   remove: (id: string, deleteFiles?: boolean) => void;
   removeMany: (ids: string[], deleteFiles?: boolean) => void;
+  freeSpace?: (id: string) => void;
   /** "Sync with Drive": check Drive, preview, apply what the user chooses. */
   syncDrive?: () => void;
   openLocal: (recordingId: string, fileId: string) => void;
@@ -863,6 +868,15 @@ export class RecordingsView {
     const remove = document.createElement('button'); remove.className = 'modal-button modal-button--remove'; remove.type = 'button'; remove.textContent = 'Remove from history';
     remove.addEventListener('click', () => void this.confirmRemove(entry));
     const actions = $('span', 'recording-detail__footer-actions');
+    if (this.callbacks.freeSpace && verifiedRetainedMediaReleaseTargets(entry).length) {
+      const freeSpace = document.createElement('button');
+      freeSpace.className = 'modal-button modal-button--close';
+      freeSpace.type = 'button';
+      freeSpace.textContent = 'Free up space';
+      freeSpace.title = 'Delete the extension-retained local copy after verified remote playback';
+      freeSpace.addEventListener('click', () => this.callbacks.freeSpace?.(entry.id));
+      actions.append(freeSpace);
+    }
     const close = document.createElement('button'); close.className = 'modal-button modal-button--close'; close.type = 'button'; close.textContent = 'Close';
     close.addEventListener('click', () => this.closeDetail());
     // The one action the modal was missing (f2 → f3).
