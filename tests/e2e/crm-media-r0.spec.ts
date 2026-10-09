@@ -1,5 +1,6 @@
 import {
   expect,
+  request as playwrightRequest,
   test,
   type APIRequestContext,
   type Page,
@@ -36,6 +37,7 @@ const RUN_RESTART_RECOVERY = process.env.R0_RUN_RESTART_RECOVERY === "1";
 const RUN_URL_EXPIRY = process.env.R0_RUN_URL_EXPIRY === "1";
 const RUN_ATTEMPT_EXPIRY = process.env.R0_RUN_ATTEMPT_EXPIRY === "1";
 const RUN_PLAYBACK_EXPIRY = process.env.R0_RUN_PLAYBACK_EXPIRY === "1";
+const RUN_AUTH_ISOLATION = process.env.R0_RUN_AUTH_ISOLATION === "1";
 const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
 const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
 const URL_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
@@ -1134,6 +1136,238 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       await proxy?.stop().catch(() => {});
     }
   });
+
+  test("isolates connections, revokes replaced tokens, and preserves CRM RBAC playback after disable", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_AUTH_ISOLATION,
+      "Set R0_RUN_AUTH_ISOLATION=1 with the real-R2 pilot variables to run JM8/JM13.",
+    );
+    test.setTimeout(600_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    const roleContexts: APIRequestContext[] = [];
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-auth-isolation-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r0-auth-isolation-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        { extensionPath, ignoreHTTPSErrors: true },
+      );
+      const configured = await configureRealR2Destination(harness, proxy.origin);
+      const admin = harness.context.request;
+      const otherConnection = await crmCreateConnection(admin, proxy.origin);
+      const otherBearer = await crmReplaceMediaToken(
+        admin,
+        proxy.origin,
+        otherConnection.id,
+      );
+
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "off",
+        recordSelfVideo: false,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        configured.created.profile.id,
+      );
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "CONFIRM_RECORDING_ROUTES",
+          recordingId,
+          removedDestinationIds: [],
+        }),
+      ).toEqual(expect.objectContaining({ ok: true }));
+      await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+        480_000,
+      );
+
+      const journal = await externalMediaJournal(
+        harness.controlPage,
+        recordingId,
+        configured.created.destination.id,
+      );
+      if (!journal?.uploadId || !journal?.artifactId) {
+        throw new Error("JM8/JM13 transfer did not retain provider identities");
+      }
+      const artifactId = journal.artifactId as string;
+      const uploadId = journal.uploadId as string;
+
+      const ownPlayback = await mediaRequest(
+        admin,
+        proxy.origin,
+        configured.mediaBearer,
+        "POST",
+        `/artifacts/${artifactId}/playback`,
+      );
+      expect(ownPlayback.status).toBe(200);
+
+      const crossUpload = await mediaRequest(
+        admin,
+        proxy.origin,
+        otherBearer,
+        "GET",
+        `/uploads/${uploadId}`,
+      );
+      expect(crossUpload).toMatchObject({ status: 403, code: "MEDIA_FORBIDDEN" });
+      const crossPlayback = await mediaRequest(
+        admin,
+        proxy.origin,
+        otherBearer,
+        "POST",
+        `/artifacts/${artifactId}/playback`,
+      );
+      expect(crossPlayback).toMatchObject({ status: 403, code: "MEDIA_FORBIDDEN" });
+
+      const rotatedBearer = await crmReplaceMediaToken(
+        admin,
+        proxy.origin,
+        configured.connection.id,
+      );
+      const oldBearerAfterRotation = await mediaRequest(
+        admin,
+        proxy.origin,
+        configured.mediaBearer,
+        "POST",
+        `/artifacts/${artifactId}/playback`,
+      );
+      expect(oldBearerAfterRotation).toMatchObject({
+        status: 401,
+        code: "MEDIA_UNAUTHORIZED",
+      });
+      expect(
+        await mediaRequest(
+          admin,
+          proxy.origin,
+          rotatedBearer,
+          "POST",
+          `/artifacts/${artifactId}/playback`,
+        ),
+      ).toMatchObject({ status: 200 });
+
+      const crmRecording = await waitForCrmRecording(
+        admin,
+        proxy.origin,
+        configured.connection.id,
+      );
+      const unmatchedAdmin = await crmGet<any[]>(
+        admin,
+        proxy.origin,
+        "/api/interview-recordings/unmatched",
+      );
+      expect(unmatchedAdmin.some((recording) => recording.id === crmRecording.id)).toBe(true);
+
+      const ownerSenior = await crmRoleContext(proxy.origin, "oleksiy.kovalenko@cheekycheese.dev");
+      const ownerHr = await crmRoleContext(proxy.origin, "anna.lysenko@cheekycheese.dev");
+      const otherSenior = await crmRoleContext(proxy.origin, "dmytro.marchenko@cheekycheese.dev");
+      const otherHr = await crmRoleContext(proxy.origin, "kateryna.shevchenko@cheekycheese.dev");
+      roleContexts.push(ownerSenior, ownerHr, otherSenior, otherHr);
+
+      for (const context of [ownerSenior, ownerHr]) {
+        expect(
+          await crmStatus(context, proxy.origin, "/api/interview-recordings/unmatched"),
+        ).toBe(403);
+      }
+
+      const interviews = await crmGet<any[]>(
+        admin,
+        proxy.origin,
+        "/api/interviews?seniorId=c1e2f3a4-b5c6-4d7e-8f9a-0b1c2d3e4f55",
+      );
+      const interviewId = interviews[0]?.id;
+      if (typeof interviewId !== "string") {
+        throw new Error("JM13 could not find the seeded Oleksiy interview");
+      }
+      await crmPatch(
+        admin,
+        proxy.origin,
+        `/api/interview-recordings/${crmRecording.id}/link`,
+        { interviewId },
+      );
+
+      const recordingPath = `/api/interview-recordings/${crmRecording.id}`;
+      const mediaPath = `${recordingPath}/media`;
+      const crmPlaybackPath = `${mediaPath}/${artifactId}/playback`;
+      for (const context of [ownerSenior, ownerHr]) {
+        expect(await crmStatus(context, proxy.origin, recordingPath)).toBe(200);
+        expect(await crmStatus(context, proxy.origin, mediaPath)).toBe(200);
+        expect(await crmStatus(context, proxy.origin, crmPlaybackPath, "POST")).toBe(201);
+      }
+      for (const context of [otherSenior, otherHr]) {
+        expect(await crmStatus(context, proxy.origin, recordingPath)).toBe(403);
+        expect(await crmStatus(context, proxy.origin, mediaPath)).toBe(403);
+        expect(await crmStatus(context, proxy.origin, crmPlaybackPath, "POST")).toBe(403);
+      }
+
+      await crmPatch(
+        admin,
+        proxy.origin,
+        `/api/integrations/meeting-recorder/connections/${configured.connection.id}`,
+        { enabled: false },
+      );
+      const disabledBearer = await mediaRequest(
+        admin,
+        proxy.origin,
+        rotatedBearer,
+        "POST",
+        `/artifacts/${artifactId}/playback`,
+      );
+      expect(disabledBearer).toMatchObject({
+        status: 410,
+        code: "MEDIA_CONNECTION_DISABLED",
+      });
+      expect(await crmStatus(admin, proxy.origin, crmPlaybackPath, "POST")).toBe(201);
+      expect(await crmStatus(ownerSenior, proxy.origin, crmPlaybackPath, "POST")).toBe(201);
+      expect(await crmStatus(ownerHr, proxy.origin, crmPlaybackPath, "POST")).toBe(201);
+
+      await testInfo.attach("jm8-jm13-auth-isolation-evidence.json", {
+        body: JSON.stringify(
+          {
+            connectionIsolation: {
+              uploadStatus: crossUpload.status,
+              playbackStatus: crossPlayback.status,
+            },
+            tokenReplacement: {
+              oldBearerStatus: oldBearerAfterRotation.status,
+              replacementBearerStatus: 200,
+            },
+            unmatchedNonAdminStatus: 403,
+            interviewRbac: {
+              ownerSenior: 201,
+              ownerHr: 201,
+              crossTeamSenior: 403,
+              crossTeamHr: 403,
+            },
+            disabledBearerStatus: disabledBearer.status,
+            crmPlaybackAfterDisableStatus: 201,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      for (const context of roleContexts) await context.dispose().catch(() => {});
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
 });
 
 async function preparePilotExtension(
@@ -1172,9 +1406,10 @@ function chromeHostPermission(origin: string): string {
 async function crmLogin(
   request: APIRequestContext,
   origin: string,
+  email = CRM_ADMIN_EMAIL,
 ): Promise<void> {
   const response = await request.post(`${origin}/api/auth/dev-login`, {
-    data: { email: CRM_ADMIN_EMAIL },
+    data: { email },
   });
   await expectResponse(response, "CRM dev-login");
 }
@@ -1262,6 +1497,7 @@ async function configureRealR2Destination(
 ): Promise<{
   connection: { id: string; webhookPath: string };
   created: Awaited<ReturnType<typeof createIntegration>>;
+  mediaBearer: string;
 }> {
   const admin = harness.context.request;
   await crmLogin(admin, crmOrigin);
@@ -1310,7 +1546,13 @@ async function configureRealR2Destination(
       bearer: mediaBearer,
     }),
   ).toEqual({ ok: true });
-  return { connection, created };
+  return { connection, created, mediaBearer };
+}
+
+async function crmRoleContext(origin: string, email: string): Promise<APIRequestContext> {
+  const context = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
+  await crmLogin(context, origin, email);
+  return context;
 }
 
 async function record(
@@ -1572,6 +1814,52 @@ async function crmPost<T>(
   );
   await expectResponse(response, `POST ${pathname}`);
   return (await response.json()) as T;
+}
+
+async function crmPatch<T>(
+  request: APIRequestContext,
+  origin: string,
+  pathname: string,
+  data: unknown,
+): Promise<T> {
+  const response = await request.patch(`${origin}${pathname}`, { data });
+  await expectResponse(response, `PATCH ${pathname}`);
+  return (await response.json()) as T;
+}
+
+async function crmStatus(
+  request: APIRequestContext,
+  origin: string,
+  pathname: string,
+  method: "GET" | "POST" = "GET",
+): Promise<number> {
+  const response = await request.fetch(`${origin}${pathname}`, { method });
+  return response.status();
+}
+
+async function mediaRequest(
+  request: APIRequestContext,
+  origin: string,
+  bearer: string,
+  method: "GET" | "POST",
+  pathname: string,
+): Promise<{ status: number; code?: string }> {
+  const response = await request.fetch(
+    `${origin}/api/integrations/meeting-recorder/media/v1${pathname}`,
+    {
+      method,
+      headers: { Authorization: `Bearer ${bearer}` },
+    },
+  );
+  let code: string | undefined;
+  try {
+    const body = (await response.json()) as { code?: unknown };
+    if (typeof body.code === "string") code = body.code;
+  } catch {
+    // Successful playback responses contain JSON, while provider or framework
+    // failures are still represented by the status if the body is not JSON.
+  }
+  return { status: response.status(), ...(code ? { code } : {}) };
 }
 
 async function expectResponse(

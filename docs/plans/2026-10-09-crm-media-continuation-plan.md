@@ -77,9 +77,24 @@ kept both auxiliary tracks within the sync bound, emitted native byte Range
 requests to R2, and recorded zero CSP violations. The combined JM6/JM7 case
 completed in 22.8 seconds.
 
-The remaining R0 work is the isolation/auth/lifecycle rows in the verification
-table below. Explicit local-source release remains R1 and must not be enabled
-from capability/HEAD success alone.
+JM8 and JM13 are now proven against the live local CRM and the same real-R2
+artifact path. A second connection could not inspect the first connection's
+upload attempt or mint playback for its artifact (both 403). Replacing the media
+token immediately made the old bearer return 401 while the replacement remained
+usable; disabling the CRM connection then made that replacement return 410.
+Before linking, the uploaded recording appeared in the ADMIN unmatched view and
+SENIOR/HR sessions were rejected there. After an ADMIN linked it to a seeded
+Oleksiy interview, the owning SENIOR and team HR could read the recording, list
+its media and mint CRM playback, while a SENIOR and HR from another team received
+403. Those CRM-user playback calls continued to succeed after the receiver was
+disabled, proving bearer revocation does not revoke historical interview access.
+The combined live gate completed in 6.6 seconds; raw bearer values and signed R2
+URLs are excluded from the attached evidence.
+
+The remaining R0 work is the lifecycle, input/protocol hardening,
+reconciliation/throttling and end-dialog consent rows in the verification table
+below. Explicit local-source release remains R1 and must not be enabled from
+capability/HEAD success alone.
 
 ## Scope and verdict
 
