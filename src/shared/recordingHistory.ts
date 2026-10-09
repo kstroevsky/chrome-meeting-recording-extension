@@ -24,10 +24,18 @@ export type ArtifactLocation =
 
 export type ArtifactDeliveryStatus = 'pending' | 'downloaded' | 'uploaded' | 'local-fallback' | 'failed';
 
+/**
+ * What must own this artifact for its requested delivery to count as complete.
+ * `storageMode` remains a legacy local/Drive capture switch; an external
+ * primary is recorded here so retained OPFS recovery cannot be mistaken for a
+ * pending Downloads delivery.
+ */
+export type ArtifactDeliveryTarget = StorageMode | { kind: 'external'; destinationId: string };
+
 /** Did the delivery the user asked for succeed? Not the same as where bytes are. */
 export type ArtifactDelivery = {
-  /** What the user requested at recording time. `StorageMode` is 'local' | 'drive'. */
-  requested: StorageMode;
+  /** What the user requested at recording time. */
+  requested: ArtifactDeliveryTarget;
   status: ArtifactDeliveryStatus;
   error?: string;
 };
@@ -242,6 +250,8 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
   const captureStartOffsetMs = typeof candidate.captureStartOffsetMs === 'number' && Number.isFinite(candidate.captureStartOffsetMs)
     ? candidate.captureStartOffsetMs
     : undefined;
+  const delivery = normalizeArtifactDelivery(candidate.delivery, legacy, requested);
+  if (!delivery) return undefined;
   return {
     id,
     stream,
@@ -251,7 +261,7 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),
     locations,
     ...(releasedRetainedMedia.length ? { releasedRetainedMedia } : {}),
-    delivery: normalizeArtifactDelivery(candidate.delivery, legacy, requested),
+    delivery,
     destination,
     status,
     ...(bytes != null ? { bytes } : {}),
@@ -326,14 +336,17 @@ const ARTIFACT_DELIVERY_STATUSES: readonly ArtifactDeliveryStatus[] = [
   'failed',
 ];
 
-function normalizeArtifactDelivery(value: unknown, legacy: LegacyDeliveryFields, requested: StorageMode): ArtifactDelivery {
+function normalizeArtifactDelivery(
+  value: unknown,
+  legacy: LegacyDeliveryFields,
+  requested: StorageMode,
+): ArtifactDelivery | undefined {
   if (value && typeof value === 'object') {
     const candidate = value as Record<string, unknown>;
     const stored = ARTIFACT_DELIVERY_STATUSES.find((entry) => entry === candidate.status);
     if (stored) {
-      const storedRequested = candidate.requested === 'drive' ? 'drive'
-        : candidate.requested === 'local' ? 'local'
-        : requested;
+      const storedRequested = normalizeArtifactDeliveryTarget(candidate.requested, requested);
+      if (!storedRequested) return undefined;
       const error = typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error.trim() : undefined;
       return { requested: storedRequested, status: stored, ...(error ? { error } : {}) };
     }
@@ -374,6 +387,25 @@ export function deliveryFromLegacyFields(file: LegacyDeliveryFields, requested: 
     : requested === 'drive' ? 'local-fallback'
     : 'downloaded';
   return { requested, status, ...(file.error ? { error: file.error } : {}) };
+}
+
+function normalizeArtifactDeliveryTarget(
+  value: unknown,
+  legacyRequested: StorageMode,
+): ArtifactDeliveryTarget | undefined {
+  if (value === undefined) return legacyRequested;
+  if (value === 'local' || value === 'drive') return value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== 'external') return undefined;
+  const destinationId = typeof candidate.destinationId === 'string' ? candidate.destinationId.trim() : '';
+  if (!destinationId || destinationId.length > 200 || /[\x00-\x1f\x7f]/.test(destinationId)) return undefined;
+  return { kind: 'external', destinationId };
+}
+
+/** Legacy capture/delivery APIs still require local|drive. External keeps local capture mechanics. */
+export function storageModeForArtifactDelivery(target: ArtifactDeliveryTarget): StorageMode {
+  return typeof target === 'string' ? target : 'local';
 }
 
 /** Adds or replaces a replica, scoped by receiver for external destinations. */
@@ -424,7 +456,7 @@ export function hasRetainedMediaAwaitingExternalPlayback(entry: RecordingHistory
 /** ADR-0006 fields for a freshly created row that has no replicas yet. */
 export function pendingArtifactFields(
   filename: string,
-  requested: StorageMode,
+  requested: ArtifactDeliveryTarget,
   stream?: RecordingStream,
 ): Pick<RecordingHistoryFile, 'mimeType' | 'locations' | 'delivery'> {
   return {
@@ -512,6 +544,7 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
  */
 export function awaitsLocalDelivery(file: RecordingHistoryFile): boolean {
   if (file.kind === 'notes') return false;
+  if (file.delivery.requested !== 'local') return false;
   if (file.delivery.status !== 'pending') return false;
   if (file.locations.some((location) => location.kind === 'download')) return false;
   return file.locations.some((location) => location.kind === 'opfs');

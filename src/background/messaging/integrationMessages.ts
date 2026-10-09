@@ -138,6 +138,13 @@ export async function handleIntegrationMessage(
           });
           return true;
         }
+        if (msg.fromDestinationId) {
+          await deps.history?.replaceExternalPrimaryDestination(
+            recordingId,
+            msg.fromDestinationId,
+            msg.toDestinationId,
+          );
+        }
       } else if (msg.type === 'RETRY_RECORDING_ROUTING' && expected.length) {
         await integrations.retryRecordingRouting(recordingId, expected);
       }

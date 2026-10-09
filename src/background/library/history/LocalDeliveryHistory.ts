@@ -58,9 +58,7 @@ export class LocalDeliveryHistory {
         const delivery: ArtifactDelivery = settled === 'complete'
           ? {
               requested: file.delivery.requested,
-              status: file.delivery.requested === 'drive'
-                ? 'local-fallback'
-                : 'downloaded',
+              status: file.delivery.requested === 'local' ? 'downloaded' : 'local-fallback',
             }
           : {
               requested: file.delivery.requested,
@@ -90,11 +88,87 @@ export class LocalDeliveryHistory {
   ): Promise<void> {
     await this.repository.update(historyId, (current) => {
       if (!current || current.deletedAt) return current;
-      const files = current.files.map((file) => file.id === fileId
-        ? { ...file, locations: upsertArtifactLocation(file.locations, location) }
-        : file);
-      return { ...current, files };
+      const files = current.files.map((file) => {
+        if (file.id !== fileId) return file;
+        const requested = file.delivery.requested;
+        const externalPrimary = typeof requested === 'object' && requested.kind === 'external';
+        const completesPrimary = externalPrimary && location.kind === 'external'
+          && requested.destinationId === location.destinationId;
+        const retainedPrimary = externalPrimary && location.kind === 'opfs';
+        return {
+          ...file,
+          ...(retainedPrimary || completesPrimary ? { status: 'available' as const, error: undefined } : {}),
+          locations: upsertArtifactLocation(file.locations, location),
+          ...(completesPrimary ? {
+            delivery: { requested, status: 'uploaded' as const },
+          } : {}),
+        };
+      });
+      return { ...current, files, status: summarizeHistoryFiles(files) };
     });
+  }
+
+  async setExternalDeliveryState(
+    historyId: string,
+    fileId: string,
+    destinationId: string,
+    status: 'pending' | 'failed',
+    error?: string,
+  ): Promise<boolean> {
+    let changed = false;
+    await this.repository.update(historyId, (current) => {
+      if (!current || current.deletedAt) return current;
+      const files = current.files.map((file) => {
+        if (file.id !== fileId) return file;
+        const requested = file.delivery.requested;
+        if (typeof requested !== 'object' || requested.kind !== 'external'
+            || requested.destinationId !== destinationId || file.delivery.status === 'uploaded') return file;
+        const normalizedError = error?.trim() || undefined;
+        if (file.delivery.status === status && file.delivery.error === normalizedError) return file;
+        changed = true;
+        return {
+          ...file,
+          delivery: {
+            requested,
+            status,
+            ...(normalizedError ? { error: normalizedError } : {}),
+          },
+        };
+      });
+      return changed ? { ...current, files } : current;
+    });
+    return changed;
+  }
+
+  async replaceExternalPrimaryDestination(
+    historyId: string,
+    fromDestinationId: string,
+    toDestinationId: string,
+  ): Promise<boolean> {
+    let changed = false;
+    await this.repository.update(historyId, (current) => {
+      if (!current || current.deletedAt) return current;
+      const files = current.files.map((file) => {
+        if (file.kind) return file;
+        const requested = file.delivery.requested;
+        if (typeof requested !== 'object' || requested.kind !== 'external'
+            || requested.destinationId !== fromDestinationId) return file;
+        const nextRequested = { kind: 'external' as const, destinationId: toDestinationId };
+        const alreadyOwned = file.locations.some((location) =>
+          location.kind === 'external' && location.destinationId === toDestinationId);
+        changed = true;
+        return {
+          ...file,
+          error: undefined,
+          delivery: {
+            requested: nextRequested,
+            status: alreadyOwned ? 'uploaded' as const : 'pending' as const,
+          },
+        };
+      });
+      return changed ? { ...current, files } : current;
+    });
+    return changed;
   }
 
   async dropArtifactLocation(

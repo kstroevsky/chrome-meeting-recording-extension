@@ -91,6 +91,7 @@ export class ExternalMediaCoordinator {
 
   async handleState(transfer: ExternalMediaTransferView): Promise<void> {
     await this.deps.retryScheduler.observe(transfer);
+    await this.syncPrimaryDelivery(transfer);
     if (transfer.state !== 'ready-unacknowledged') return;
     const key = `${transfer.destinationId}\u0000${transfer.request.clientTransferId}`;
     const running = this.readyRuns.get(key);
@@ -136,7 +137,20 @@ export class ExternalMediaCoordinator {
       return;
     }
     if (entry.status !== 'complete') return;
-    const routes = await this.deps.integrations.authorizedMediaRoutes(recordingId);
+    const [routes, routeViews] = await Promise.all([
+      this.deps.integrations.authorizedMediaRoutes(recordingId),
+      this.deps.integrations.recordingRoutes(recordingId),
+    ]);
+    for (const file of entry.files) {
+      const requested = file.delivery.requested;
+      if (typeof requested !== 'object' || requested.kind !== 'external') continue;
+      const route = routeViews.find((candidate) => candidate.destinationId === requested.destinationId);
+      if (route?.state === 'skipped') {
+        await this.deps.history.setExternalDeliveryState(
+          recordingId, file.id, requested.destinationId, 'failed', 'External delivery was skipped',
+        );
+      }
+    }
     const routeIds = new Set(routes.map((route) => route.destinationId));
     for (const transfer of await this.snapshot()) {
       if (transfer.owner?.recordingId === recordingId && !routeIds.has(transfer.destinationId)) {
@@ -246,6 +260,22 @@ export class ExternalMediaCoordinator {
       clientTransferId: transfer.request.clientTransferId,
     });
     if (!response?.ok) throw new Error(response?.error || 'External media acknowledgement failed');
+  }
+
+  private async syncPrimaryDelivery(transfer: ExternalMediaTransferView): Promise<void> {
+    const owner = transfer.owner;
+    if (!owner) return;
+    if (transfer.state === 'retry-wait' || transfer.state === 'action-required') {
+      await this.deps.history.setExternalDeliveryState(
+        owner.recordingId, owner.fileId, transfer.destinationId, 'pending',
+      );
+      return;
+    }
+    if (transfer.state === 'canceled') {
+      await this.deps.history.setExternalDeliveryState(
+        owner.recordingId, owner.fileId, transfer.destinationId, 'failed', 'External delivery was canceled',
+      );
+    }
   }
 
   private async snapshot(): Promise<ExternalMediaTransferView[]> {

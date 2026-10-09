@@ -35,6 +35,17 @@ function entry(): RecordingHistoryEntry {
   };
 }
 
+function externalPrimaryEntry(): RecordingHistoryEntry {
+  const current = entry();
+  return {
+    ...current,
+    files: current.files.map((file) => ({
+      ...file,
+      delivery: { requested: { kind: 'external' as const, destinationId: 'crm' }, status: 'pending' as const },
+    })),
+  };
+}
+
 function transfer(state: ExternalMediaTransferView['state'] = 'ready-unacknowledged'): ExternalMediaTransferView {
   return {
     destinationId: 'crm',
@@ -75,9 +86,13 @@ function setup() {
           : file),
       };
     }),
+    setExternalDeliveryState: jest.fn(async () => {}),
   };
   const integrations = {
     authorizedMediaRoutes: jest.fn(async () => [route]),
+    recordingRoutes: jest.fn(async (): Promise<any[]> => [{
+      destinationId: 'crm', destinationName: 'CheekyCheeseIT CRM', state: 'released' as const, includesMedia: true as const,
+    }]),
     listDestinations: jest.fn(async () => [{ id: 'crm', name: 'CheekyCheeseIT CRM' }]),
     mediaGrant: jest.fn(async () => ({
       destinationId: 'crm', connectionVersion: 2, producerId: 'crm-receiver',
@@ -171,6 +186,45 @@ describe('ExternalMediaCoordinator', () => {
       fileId: 'recording-local:tab',
       sealed: true,
     }));
+  });
+
+  it('keeps retryable external-primary transfer states pending and retained', async () => {
+    const ctx = setup();
+    ctx.setEntry(externalPrimaryEntry());
+
+    await ctx.coordinator.handleState(transfer('action-required'));
+
+    expect(ctx.history.setExternalDeliveryState).toHaveBeenCalledWith(
+      'recording-local', 'recording-local:tab', 'crm', 'pending',
+    );
+    expect(ctx.history.recordArtifactLocation).not.toHaveBeenCalled();
+  });
+
+  it('reflects terminal cancellation as failed external-primary delivery', async () => {
+    const ctx = setup();
+    ctx.setEntry(externalPrimaryEntry());
+
+    await ctx.coordinator.handleState(transfer('canceled'));
+
+    expect(ctx.history.setExternalDeliveryState).toHaveBeenCalledWith(
+      'recording-local', 'recording-local:tab', 'crm', 'failed', 'External delivery was canceled',
+    );
+  });
+
+  it('reflects an explicit skipped primary route as failed without enqueueing bytes', async () => {
+    const ctx = setup();
+    ctx.setEntry(externalPrimaryEntry());
+    ctx.integrations.authorizedMediaRoutes.mockResolvedValueOnce([]);
+    ctx.integrations.recordingRoutes.mockResolvedValueOnce([{
+      destinationId: 'crm', destinationName: 'CheekyCheeseIT CRM', state: 'skipped', includesMedia: true,
+    }]);
+
+    await ctx.coordinator.reconcileRecording('recording-local');
+
+    expect(ctx.history.setExternalDeliveryState).toHaveBeenCalledWith(
+      'recording-local', 'recording-local:tab', 'crm', 'failed', 'External delivery was skipped',
+    );
+    expect(ctx.offscreen.rpc).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'OFFSCREEN_MEDIA_ENQUEUE' }));
   });
 
   it('projects only UI-safe progress and reacquires authorization for explicit retry', async () => {

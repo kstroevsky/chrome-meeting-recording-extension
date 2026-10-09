@@ -30,9 +30,12 @@ function deps(historyId?: string) {
     userStatuses: jest.fn(async () => [{ recordingId: 'r1', state: 'uploading' }]),
     retryTransfer: jest.fn(async () => ({ recordingId: 'r1', state: 'queued' })),
   };
+  const history = {
+    replaceExternalPrimaryDestination: jest.fn(async () => true),
+  };
   const L = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
-  return { integrations, destinations, externalMedia,
-    all: { integrations, destinations, externalMedia, session, L } as never };
+  return { integrations, destinations, externalMedia, history,
+    all: { integrations, destinations, externalMedia, history, session, L } as never };
 }
 
 describe('destination and routing messages', () => {
@@ -89,6 +92,9 @@ describe('destination and routing messages', () => {
     }, respond, ctx.all);
 
     expect(ctx.integrations.changeRecordingRoute).toHaveBeenCalledWith(
+      'r1', 'destination_crm', 'destination_journal',
+    );
+    expect(ctx.history.replaceExternalPrimaryDestination).toHaveBeenCalledWith(
       'r1', 'destination_crm', 'destination_journal',
     );
     expect(respond).toHaveBeenCalledWith({
@@ -197,7 +203,7 @@ describe('destination and routing messages', () => {
       removed: { id: 'removed', name: 'Removed', status: 'complete', files: [], deletedAt: 5 },
       awaiting: {
         id: 'awaiting', name: 'Awaiting the dialog', status: 'complete',
-        files: [{ id: 'f1', kind: 'tab', delivery: { status: 'pending' }, locations: [{ kind: 'opfs' }] }],
+        files: [{ id: 'f1', kind: 'tab', delivery: { requested: 'local', status: 'pending' }, locations: [{ kind: 'opfs' }] }],
       },
     };
     const ctx = deps('live');

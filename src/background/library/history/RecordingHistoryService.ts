@@ -2,11 +2,11 @@ import type { DownloadSettledResult } from '../../../platform/chrome/downloads';
 import type {
   RecordingArtifactKind,
   RecordingStream,
-  StorageMode,
   UploadJob,
 } from '../../../shared/recording';
 import type {
   ArtifactLocation,
+  ArtifactDeliveryTarget,
   RecordingHistoryCursor,
   RecordingHistoryEntry,
   RecordingHistoryPage,
@@ -125,9 +125,9 @@ export class RecordingHistoryService {
   async createPending(
     historyId: string,
     files: PendingRecordingFile[],
-    storageMode: StorageMode,
+    requested: ArtifactDeliveryTarget,
   ): Promise<void> {
-    await this.delivery.createPending(historyId, files, storageMode);
+    await this.delivery.createPending(historyId, files, requested);
     this.onChanged?.(historyId);
   }
 
@@ -169,6 +169,31 @@ export class RecordingHistoryService {
   ): Promise<void> {
     await this.localDelivery.recordArtifactLocation(historyId, fileId, location);
     this.onChanged?.(historyId);
+  }
+
+  async setExternalDeliveryState(
+    historyId: string,
+    fileId: string,
+    destinationId: string,
+    status: 'pending' | 'failed',
+    error?: string,
+  ): Promise<void> {
+    const changed = await this.localDelivery.setExternalDeliveryState(
+      historyId, fileId, destinationId, status, error,
+    );
+    if (changed) this.onChanged?.(historyId);
+  }
+
+  async replaceExternalPrimaryDestination(
+    historyId: string,
+    fromDestinationId: string,
+    toDestinationId: string,
+  ): Promise<boolean> {
+    const changed = await this.localDelivery.replaceExternalPrimaryDestination(
+      historyId, fromDestinationId, toDestinationId,
+    );
+    if (changed) this.onChanged?.(historyId);
+    return changed;
   }
 
   async dropArtifactLocation(
