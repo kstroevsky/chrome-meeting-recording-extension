@@ -30,6 +30,8 @@ const CRM_PUBLIC_ORIGIN =
 const R2_UPLOAD_ORIGIN = process.env.R0_R2_UPLOAD_ORIGIN;
 const CRM_ADMIN_EMAIL =
   process.env.R0_CRM_ADMIN_EMAIL ?? "yaremenkomaksym99@gmail.com";
+const RUN_LARGE_TRANSFER = process.env.R0_RUN_LARGE_TRANSFER === "1";
+const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
 
 const METADATA_POLICY: IntegrationDataPolicy = {
   metadata: true,
@@ -251,6 +253,217 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       await proxy?.stop().catch(() => {});
     }
   });
+
+  test("uploads a >=1 GiB retained artifact with exact multipart sizing", async ({}, testInfo) => {
+    test.skip(
+      !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_LARGE_TRANSFER,
+      "Set R0_RUN_LARGE_TRANSFER=1 with the real-R2 pilot variables to run JM2.",
+    );
+    test.setTimeout(1_800_000);
+
+    let proxy: HttpsReverseProxy | null = null;
+    let harness: ExtensionHarness | null = null;
+    try {
+      proxy = await startHttpsReverseProxy(
+        testInfo.outputPath("crm-r0-large-proxy"),
+        CRM_PUBLIC_ORIGIN,
+        CRM_UPSTREAM!,
+      );
+      const extensionPath = await preparePilotExtension(
+        testInfo.outputPath("crm-r0-large-extension"),
+        proxy.origin,
+        R2_UPLOAD_ORIGIN!,
+      );
+      harness = await launchExtensionHarness(
+        testInfo.outputPath.bind(testInfo),
+        {
+          extensionPath,
+          ignoreHTTPSErrors: true,
+        },
+      );
+
+      const admin = harness.context.request;
+      await crmLogin(admin, proxy.origin);
+      const connection = await crmCreateConnection(admin, proxy.origin);
+      const created = await createIntegration(
+        harness.controlPage,
+        `${proxy.origin}${connection.webhookPath}`,
+      );
+      await crmSetSigningSecret(
+        admin,
+        proxy.origin,
+        connection.id,
+        created.signingSecret,
+      );
+      const mediaBearer = await crmReplaceMediaToken(
+        admin,
+        proxy.origin,
+        connection.id,
+      );
+      const discovery = await sendRuntimeMessage<any>(harness.controlPage, {
+        type: "TEST_INTEGRATION",
+        destinationId: created.destination.id,
+      });
+      expect(discovery?.result?.mediaCapability?.upload).toEqual(
+        expect.objectContaining({
+          strategy: "multipart-put-v1",
+          origins: [R2_UPLOAD_ORIGIN],
+        }),
+      );
+      expect(
+        await sendRuntimeMessage<any>(harness.controlPage, {
+          type: "CONFIGURE_INTEGRATION_MEDIA",
+          destinationId: created.destination.id,
+          bearer: mediaBearer,
+        }),
+      ).toEqual({ ok: true });
+
+      const meet = await openMockMeetPage(harness.context);
+      const tabId = await findMockMeetTabId(harness.controlPage);
+      await saveRecordingSettings(harness.controlPage, {
+        recordingMode: "opfs",
+        micMode: "off",
+        recordSelfVideo: false,
+      });
+      const recordingId = await record(
+        harness.controlPage,
+        meet,
+        tabId,
+        created.profile.id,
+      );
+      const before = await historyEntry(harness.controlPage, recordingId);
+      const retained = before.files.find(
+        (file) => !file.kind && file.locations.some((location) => location.kind === "opfs"),
+      );
+      if (!retained) throw new Error("JM2 recording has no retained OPFS media");
+      const opfs = retained.locations.find((location) => location.kind === "opfs");
+      if (!opfs || opfs.kind !== "opfs") throw new Error("JM2 OPFS location is missing");
+      expect(
+        await resizeRetainedOpfsFixture(
+          harness.controlPage,
+          opfs.key,
+          LARGE_FIXTURE_BYTES,
+        ),
+      ).toBe(LARGE_FIXTURE_BYTES);
+
+      const routeBeforeRelease = await recordingRoutes(
+        harness.controlPage,
+        recordingId,
+      );
+      expect(routeBeforeRelease).toEqual([
+        expect.objectContaining({
+          destinationId: created.destination.id,
+          state: "held",
+          includesMedia: true,
+        }),
+      ]);
+      const confirmed = await sendRuntimeMessage<any>(harness.controlPage, {
+        type: "CONFIRM_RECORDING_ROUTES",
+        recordingId,
+        removedDestinationIds: [],
+      });
+      expect(confirmed.ok).toBe(true);
+
+      const transfers = await waitForTransfersAcknowledged(
+        harness.controlPage,
+        recordingId,
+        created.destination.id,
+        1_500_000,
+      );
+      expect(transfers).toHaveLength(1);
+      expect(transfers[0]).toMatchObject({
+        state: "acknowledged",
+        bytesUploaded: LARGE_FIXTURE_BYTES,
+        bytesTotal: LARGE_FIXTURE_BYTES,
+      });
+
+      const journal = await externalMediaJournal(
+        harness.controlPage,
+        recordingId,
+        created.destination.id,
+      );
+      expect(journal).toBeTruthy();
+      expect(journal.request.artifact.bytes).toBe(LARGE_FIXTURE_BYTES);
+      expect(journal.state).toBe("acknowledged");
+      expect(Number.isSafeInteger(journal.partSize) && journal.partSize > 0).toBe(true);
+      const expectedPartCount = Math.ceil(LARGE_FIXTURE_BYTES / journal.partSize);
+      expect(journal.uploadedParts).toHaveLength(expectedPartCount);
+      expect(new Set(journal.uploadedParts.map((part: any) => part.partNumber)).size)
+        .toBe(expectedPartCount);
+      const finalPartBytes =
+        LARGE_FIXTURE_BYTES - (expectedPartCount - 1) * journal.partSize;
+      expect(finalPartBytes).toBeGreaterThan(0);
+      expect(finalPartBytes).toBeLessThanOrEqual(journal.partSize);
+
+      const crmRecording = await waitForCrmRecording(
+        admin,
+        proxy.origin,
+        connection.id,
+      );
+      const crmMedia = await crmGet<any[]>(
+        admin,
+        proxy.origin,
+        `/api/interview-recordings/${crmRecording.id}/media`,
+      );
+      const artifact = crmMedia.find((item) => item.bytes === LARGE_FIXTURE_BYTES);
+      expect(artifact).toBeTruthy();
+      const playback = await crmPost<{ url: string; expiresAt: string }>(
+        admin,
+        proxy.origin,
+        `/api/interview-recordings/${crmRecording.id}/media/${artifact.artifactId}/playback`,
+      );
+      const player = await harness.context.newPage();
+      await player.goto(
+        `chrome-extension://${harness.extensionId}/recordings.html`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const tail = await player.evaluate(
+        async ({ url, start, end }) => {
+          const response = await fetch(url, {
+            headers: { Range: `bytes=${start}-${end}` },
+            credentials: "omit",
+            cache: "no-store",
+          });
+          return {
+            status: response.status,
+            contentRange: response.headers.get("content-range"),
+            bytes: (await response.arrayBuffer()).byteLength,
+          };
+        },
+        {
+          url: playback.url,
+          start: LARGE_FIXTURE_BYTES - 1024,
+          end: LARGE_FIXTURE_BYTES - 1,
+        },
+      );
+      expect(tail).toEqual({
+        status: 206,
+        contentRange: `bytes ${LARGE_FIXTURE_BYTES - 1024}-${LARGE_FIXTURE_BYTES - 1}/${LARGE_FIXTURE_BYTES}`,
+        bytes: 1024,
+      });
+
+      await testInfo.attach("jm2-large-transfer-evidence.json", {
+        body: JSON.stringify(
+          {
+            bytes: LARGE_FIXTURE_BYTES,
+            partSize: journal.partSize,
+            partCount: expectedPartCount,
+            finalPartBytes,
+            transferState: transfers[0].state,
+            crmArtifactBytes: artifact.bytes,
+            tailRangeStatus: tail.status,
+            tailContentRange: tail.contentRange,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      if (harness) await closeHarness(harness).catch(() => {});
+      await proxy?.stop().catch(() => {});
+    }
+  });
 });
 
 async function preparePilotExtension(
@@ -421,6 +634,7 @@ async function waitForTransfersAcknowledged(
   page: Page,
   recordingId: string,
   destinationId: string,
+  timeoutMs = 180_000,
 ): Promise<any[]> {
   let last: any[] = [];
   await expect
@@ -449,10 +663,71 @@ async function waitForTransfersAcknowledged(
           last.every((transfer) => transfer.state === "acknowledged")
         );
       },
-      { timeout: 180_000, intervals: [250, 500, 1_000, 2_000] },
+      { timeout: timeoutMs, intervals: [250, 500, 1_000, 2_000, 5_000] },
     )
     .toBe(true);
   return last;
+}
+
+async function resizeRetainedOpfsFixture(
+  page: Page,
+  key: string,
+  bytes: number,
+): Promise<number> {
+  return page.evaluate(
+    async ({ key, bytes }) => {
+      const segments = key.split("/").filter(Boolean);
+      const filename = segments.pop();
+      if (!filename || bytes <= 0) throw new Error("Invalid JM2 fixture request");
+      let directory = await navigator.storage.getDirectory();
+      for (const segment of segments) {
+        directory = await directory.getDirectoryHandle(segment);
+      }
+      const handle = await directory.getFileHandle(filename);
+      const writable = await handle.createWritable({ keepExistingData: false });
+      try {
+        await writable.truncate(bytes);
+        await writable.seek(bytes - 1);
+        await writable.write(new Uint8Array([0x7f]));
+      } finally {
+        await writable.close();
+      }
+      return (await handle.getFile()).size;
+    },
+    { key, bytes },
+  );
+}
+
+async function externalMediaJournal(
+  page: Page,
+  recordingId: string,
+  destinationId: string,
+): Promise<any> {
+  return page.evaluate(
+    async ({ recordingId, destinationId }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("pending-external-media-transfers");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        const transaction = database.transaction("transfers", "readonly");
+        const rows = await new Promise<any[]>((resolve, reject) => {
+          const request = transaction.objectStore("transfers").getAll();
+          request.onsuccess = () => resolve(request.result as any[]);
+          request.onerror = () => reject(request.error);
+        });
+        return rows.find(
+          (row) =>
+            row?.destinationId === destinationId &&
+            row?.owner?.recordingId === recordingId,
+        );
+      } finally {
+        database.close();
+      }
+    },
+    { recordingId, destinationId },
+  );
 }
 
 async function historyEntry(

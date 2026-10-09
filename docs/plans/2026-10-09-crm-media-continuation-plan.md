@@ -35,12 +35,21 @@ Current verification is green at the unit/integration/local-PostgreSQL layers.
 JM1 is now proven with the real Chrome → CRM → private R2 path: the extension
 uploaded a retained OPFS recording through CRM-issued multipart URLs, CRM
 completed and HEAD-verified the object, and Chromium performed ranged playback
-of the resulting artifact. The proving run used a 77,215-byte playable artifact
-and deliberately retained its local OPFS source. The remaining R0 work is the
-large-transfer/restart/expiry matrix (JM2–JM5), playback-expiry/deep-seek cases
-(JM6–JM7), and the remaining isolation/auth/lifecycle rows in the verification
-table below. Explicit local-source release remains R1 and must not be enabled
-from capability/HEAD success alone.
+of the resulting artifact. The proving run used a small playable artifact and
+deliberately retained its local OPFS source.
+
+JM2 is also proven with a separate byte-range fixture, as required by the gate:
+Chromium uploaded 1,073,754,169 bytes (1 GiB + 12,345) with the receiver's
+32 MiB part size, producing 33 parts and a 12,345-byte final part. CRM accepted
+completion only after its provider-authoritative `ListParts` size check, reported
+the exact artifact byte count, and a browser tail Range request returned 206 with
+the exact total in `Content-Range`. The real-R2 run completed the large test in
+4.1 minutes; the small JM1 plus large JM2 suite passed in 4.3 minutes.
+
+The remaining R0 work is restart/expiry recovery (JM3–JM5), playback-expiry and
+deep-seek cases (JM6–JM7), and the remaining isolation/auth/lifecycle rows in the
+verification table below. Explicit local-source release remains R1 and must not
+be enabled from capability/HEAD success alone.
 
 ## Scope and verdict
 
