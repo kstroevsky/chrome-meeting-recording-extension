@@ -23,7 +23,7 @@ export type RecordingRouteView = {
   /** Null when the destination no longer exists. */
   destinationName: string | null;
   state: RecordingRouteState;
-  /** True only when video/audio was explicitly authorized at recording Start. */
+  /** True only when video/audio was explicitly authorized at Start or by an end-dialog receiver change. */
   includesMedia?: true;
 };
 

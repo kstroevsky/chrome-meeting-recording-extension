@@ -7,15 +7,28 @@
  */
 
 import { sendToBackground } from '../../shared/messages';
-import type { RecordingNameDialogRoute } from '../RecordingNameDialog';
-import type { RecordingRouteDecision, RecordingRouteView } from '../../integrations/RecordingRoutingService';
+import type { RecordingNameDialogRoute, RecordingNameDialogRouteCandidate } from '../RecordingNameDialog';
+import type {
+  RecordingRouteCandidate,
+  RecordingRouteDecision,
+  RecordingRouteView,
+} from '../../integrations/RecordingRoutingService';
 
 export type HeldRecording = { recordingId: string; name: string; routes: RecordingNameDialogRoute[] };
+export type RecordingRouteEditorState = {
+  items: RecordingNameDialogRoute[];
+  candidates: RecordingNameDialogRouteCandidate[];
+};
 
 export type RecordingRouteActions = {
   /** The routes still to decide about: held ones and ones that could not be scheduled. */
-  routes(recordingId: string): Promise<RecordingNameDialogRoute[]>;
+  routes(recordingId: string): Promise<RecordingRouteEditorState>;
   retry(recordingId: string): Promise<RecordingNameDialogRoute[]>;
+  change(
+    recordingId: string,
+    fromDestinationId: string | undefined,
+    toDestinationId: string,
+  ): Promise<RecordingRouteEditorState>;
   /** Applies only decisions for held routes this dialog actually observed. */
   confirm(recordingId: string, decisions: RecordingRouteDecision[]): Promise<void>;
   /** Finished recordings whose routes were never confirmed, because no dialog asked. */
@@ -30,17 +43,31 @@ export function undecidedRoutes(routes: readonly RecordingRouteView[]): Recordin
     : []);
 }
 
+function routeCandidates(candidates: readonly RecordingRouteCandidate[] | undefined): RecordingNameDialogRouteCandidate[] {
+  return (candidates ?? []).map((candidate) => ({ ...candidate }));
+}
+
 export function backgroundRecordingRouteActions(): RecordingRouteActions {
   return {
     async routes(recordingId) {
       const response = await sendToBackground({ type: 'GET_RECORDING_ROUTES', recordingId });
       if (response.ok === false) throw new Error(response.error || 'Could not read where this recording goes');
-      return undecidedRoutes(response.routes);
+      return { items: undecidedRoutes(response.routes), candidates: routeCandidates(response.candidates) };
     },
     async retry(recordingId) {
       const response = await sendToBackground({ type: 'RETRY_RECORDING_ROUTING', recordingId });
       if (response.ok === false) throw new Error(response.error || 'Could not schedule the automation');
       return undecidedRoutes(response.routes);
+    },
+    async change(recordingId, fromDestinationId, toDestinationId) {
+      const response = await sendToBackground({
+        type: 'CHANGE_RECORDING_ROUTE',
+        recordingId,
+        toDestinationId,
+        ...(fromDestinationId ? { fromDestinationId } : {}),
+      });
+      if (response.ok === false) throw new Error(response.error || 'Could not change where this recording goes');
+      return { items: undecidedRoutes(response.routes), candidates: routeCandidates(response.candidates) };
     },
     async confirm(recordingId, decisions) {
       const response = await sendToBackground({ type: 'CONFIRM_RECORDING_ROUTES', recordingId, decisions });

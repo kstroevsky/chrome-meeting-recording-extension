@@ -11,7 +11,12 @@ const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve()
 const CRM = { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM', state: 'held' as const };
 const localOnly = () => ({ uploadJobs: [] } as unknown as RecordingStatusView);
 
-type Answer = { outcome: RecordingNameDialogOutcome; remove?: string[]; name?: string };
+type Answer = {
+  outcome: RecordingNameDialogOutcome;
+  remove?: string[];
+  replace?: { from?: string; to: string };
+  name?: string;
+};
 
 /** Answers each prompt as a person would: × first, then a button (Save runs onSave). */
 function answeringDialog(answers: Answer[]) {
@@ -22,6 +27,7 @@ function answeringDialog(answers: Answer[]) {
       asks.push(options);
       const answer = answers.shift() ?? { outcome: 'dismissed' as const };
       if (answer.remove) options.routes?.onChange(answer.remove);
+      if (answer.replace) await options.routes?.onReplace?.(answer.replace.from, answer.replace.to);
       if (answer.outcome === 'saved') await options.onSave(answer.name ?? options.initialValue, null);
       return answer.outcome;
     }),
@@ -31,8 +37,9 @@ function answeringDialog(answers: Answer[]) {
 
 function routing(over: Partial<RecordingRouteActions> = {}): jest.Mocked<RecordingRouteActions> {
   return {
-    routes: jest.fn(async () => [CRM]),
+    routes: jest.fn(async () => ({ items: [CRM], candidates: [] })),
     retry: jest.fn(async () => [CRM]),
+    change: jest.fn(async () => ({ items: [CRM], candidates: [] })),
     confirm: jest.fn(async () => {}),
     held: jest.fn(async () => []),
     ...over,
@@ -137,6 +144,44 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
       expect(asks[0]!.routes).toBeUndefined();
       expect(route.confirm).not.toHaveBeenCalled();
     });
+
+    it('can explicitly add a receiver, then confirms only that newly held route', async () => {
+      const NOTES = { destinationId: 'destination_notes', destinationName: 'Notes archive', state: 'held' as const };
+      const route = routing({
+        routes: jest.fn(async () => ({
+          items: [],
+          candidates: [{ destinationId: 'destination_notes', destinationName: 'Notes archive' }],
+        })),
+        change: jest.fn(async () => ({ items: [NOTES], candidates: [] })),
+      });
+      const { dialog, asks } = answeringDialog([{ outcome: 'canceled', replace: { to: 'destination_notes' } }]);
+      new CompletedNamingPrompt(dialog, actions({ pendingLocal: jest.fn(() => pending), routing: route })).queue('idle', localOnly());
+      await flush();
+
+      expect(asks[0]!.routes?.items).toEqual([]);
+      expect(asks[0]!.routes?.candidates).toEqual([{ destinationId: 'destination_notes', destinationName: 'Notes archive' }]);
+      expect(route.change).toHaveBeenCalledWith('rec-1', undefined, 'destination_notes');
+      expect(route.confirm).toHaveBeenCalledWith('rec-1', [
+        { destinationId: 'destination_notes', action: 'release' },
+      ]);
+    });
+
+    it('does not turn a newly available settings candidate into authorization without an explicit dialog choice', async () => {
+      const route = routing({
+        routes: jest.fn(async () => ({
+          items: [CRM],
+          candidates: [{ destinationId: 'destination_new', destinationName: 'New integration', includesMedia: true as const }],
+        })),
+      });
+      const { dialog } = answeringDialog([{ outcome: 'canceled' }]);
+      new CompletedNamingPrompt(dialog, actions({ pendingLocal: jest.fn(() => pending), routing: route })).queue('idle', localOnly());
+      await flush();
+
+      expect(route.change).not.toHaveBeenCalled();
+      expect(route.confirm).toHaveBeenCalledWith('rec-1', [
+        { destinationId: 'destination_crm', action: 'release' },
+      ]);
+    });
   });
 
   it('confirms a Drive recording after its naming was skipped', async () => {
@@ -171,6 +216,29 @@ describe('CompletedNamingPrompt — the routes picked at Start (E7)', () => {
         { destinationId: 'destination_crm', action: 'release' },
       ]);
       expect(act.rename).not.toHaveBeenCalled();
+    });
+
+    it('replaces a held receiver explicitly and confirms the refreshed held route', async () => {
+      const NOTES = { destinationId: 'destination_notes', destinationName: 'Notes archive', state: 'held' as const };
+      const route = routing({
+        held: jest.fn(async () => held),
+        routes: jest.fn(async () => ({
+          items: [CRM],
+          candidates: [{ destinationId: 'destination_notes', destinationName: 'Notes archive' }],
+        })),
+        change: jest.fn(async () => ({ items: [NOTES], candidates: [] })),
+      });
+      const { dialog } = answeringDialog([{
+        outcome: 'canceled',
+        replace: { from: 'destination_crm', to: 'destination_notes' },
+      }]);
+      new CompletedNamingPrompt(dialog, actions({ routing: route })).queue('idle', localOnly());
+      await flush();
+
+      expect(route.change).toHaveBeenCalledWith('rec-3', 'destination_crm', 'destination_notes');
+      expect(route.confirm).toHaveBeenCalledWith('rec-3', [
+        { destinationId: 'destination_notes', action: 'release' },
+      ]);
     });
 
     it('renames only when the name changed', async () => {

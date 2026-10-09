@@ -176,7 +176,14 @@ export class CompletedNamingPrompt {
     this.pending = next.recordingId;
     let removed: string[] = [];
     let routeItems = next.routes;
+    let routeCandidates: import('../RecordingNameDialog').RecordingNameDialogRouteCandidate[] = [];
     try {
+      const editor = await routing.routes(next.recordingId).catch(() => ({ items: next.routes, candidates: [] }));
+      routeItems = editor.items;
+      routeCandidates = editor.candidates;
+      // The held list can become stale while it is being rendered. If another
+      // popup already resolved the route, there is no route-only question left.
+      if (!routeItems.length) return;
       const outcome = await this.dialog.ask({
         title: 'Confirm where this recording goes',
         message: 'Its files are saved. Nothing has been sent yet.',
@@ -186,8 +193,16 @@ export class CompletedNamingPrompt {
         duplicateOf: (name) => (name === next.name ? null : suffixedRecordingName(name, this.actions.recordingNames())),
         routes: {
           items: routeItems,
+          candidates: routeCandidates,
           onChange: (ids) => { removed = ids; },
           onRetry: async () => (routeItems = await routing.retry(next.recordingId)),
+          onReplace: async (fromDestinationId, toDestinationId) => {
+            const state = await routing.change(next.recordingId, fromDestinationId, toDestinationId);
+            routeItems = state.items;
+            routeCandidates = state.candidates;
+            removed = retainedRemoved(removed, routeItems);
+            return state;
+          },
         },
         onSave: async (name) => {
           if (name !== next.name) await this.actions.rename(next.recordingId, name);
@@ -214,13 +229,24 @@ export class CompletedNamingPrompt {
   }> {
     const routing = this.actions.routing;
     let removed: string[] = [];
-    let items = routing ? await routing.routes(recordingId).catch(() => []) : [];
-    if (!routing || !items.length) return { decisions: () => [] };
+    if (!routing) return { decisions: () => [] };
+    const initial = await routing.routes(recordingId).catch(() => null);
+    if (!initial || (!initial.items.length && !initial.candidates.length)) return { decisions: () => [] };
+    let items = initial.items;
+    let candidates = initial.candidates;
     return {
       options: {
         items,
+        candidates,
         onChange: (ids) => { removed = ids; },
         onRetry: async () => (items = await routing.retry(recordingId)),
+        onReplace: async (fromDestinationId, toDestinationId) => {
+          const state = await routing.change(recordingId, fromDestinationId, toDestinationId);
+          items = state.items;
+          candidates = state.candidates;
+          removed = retainedRemoved(removed, items);
+          return state;
+        },
       },
       decisions: () => routeDecisions(items, removed),
     };
@@ -294,6 +320,15 @@ function routeDecisions(
   return items.flatMap((route) => route.state === 'held'
     ? [{ destinationId: route.destinationId, action: removed.has(route.destinationId) ? 'skip' as const : 'release' as const }]
     : []);
+}
+
+/** Removes local × decisions for routes that an explicit replacement retired. */
+function retainedRemoved(
+  removedDestinationIds: readonly string[],
+  items: readonly import('../RecordingNameDialog').RecordingNameDialogRoute[],
+): string[] {
+  const current = new Set(items.map((route) => route.destinationId));
+  return removedDestinationIds.filter((destinationId) => current.has(destinationId));
 }
 
 /** A title for the gallery: the Drive prompt with its real copy, and no writes. */

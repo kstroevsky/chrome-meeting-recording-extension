@@ -31,12 +31,31 @@ export type RecordingNameDialogRoute = {
   includesMedia?: true;
 };
 
+export type RecordingNameDialogRouteCandidate = {
+  destinationId: string;
+  destinationName: string;
+  /** Choosing this receiver explicitly authorizes video/audio as well as data. */
+  includesMedia?: true;
+};
+
+export type RecordingNameDialogRouteEditorState = {
+  items: RecordingNameDialogRoute[];
+  candidates: RecordingNameDialogRouteCandidate[];
+};
+
 export type RecordingNameDialogRoutes = {
   items: RecordingNameDialogRoute[];
+  /** Enabled receivers that are not already part of this recording's routing history. */
+  candidates?: RecordingNameDialogRouteCandidate[];
   /** The destinations the user removed so far, on every change. */
   onChange: (removedDestinationIds: string[]) => void;
   /** Schedules the routes that failed at Start again, returning them as they now are. */
   onRetry?: () => Promise<RecordingNameDialogRoute[]>;
+  /** An explicit end-dialog receiver choice; `undefined` adds rather than replaces. */
+  onReplace?: (
+    fromDestinationId: string | undefined,
+    toDestinationId: string,
+  ) => Promise<RecordingNameDialogRouteEditorState>;
 };
 
 export type RecordingNameDialogOptions = {
@@ -97,8 +116,12 @@ export class RecordingNameDialog {
   } | null = null;
   private busy = false;
   private routeItems: RecordingNameDialogRoute[] = [];
+  private routeCandidates: RecordingNameDialogRouteCandidate[] = [];
   private readonly removedRoutes = new Set<string>();
   private retrying = false;
+  /** `undefined` = closed, `null` = add a receiver, string = replace that receiver. */
+  private changingRoute: string | null | undefined;
+  private routeChanging = false;
 
   constructor(private readonly doc: Document = document) {}
 
@@ -117,7 +140,10 @@ export class RecordingNameDialog {
     parts.cancelBtn.textContent = options.cancelLabel ?? 'Skip';
     this.fillDestinations(parts, options.destinations);
     this.routeItems = options.routes?.items.slice() ?? [];
+    this.routeCandidates = options.routes?.candidates?.slice() ?? [];
     this.removedRoutes.clear();
+    this.changingRoute = undefined;
+    this.routeChanging = false;
     this.showError();
     this.setBusy(false);
 
@@ -145,7 +171,7 @@ export class RecordingNameDialog {
   private async submit(): Promise<void> {
     const pending = this.pending;
     const parts = this.parts;
-    if (!pending || !parts || this.busy) return;
+    if (!pending || !parts || this.busy || this.routeChanging) return;
     const typed = parts.input.value.trim();
     const destinationId = pending.options.destinations ? parts.destinationSelect.getValue() || null : null;
     if (!typed) { this.showError(BLANK_NAME); return; }
@@ -179,15 +205,31 @@ export class RecordingNameDialog {
 
   private setBusy(busy: boolean): void {
     this.busy = busy;
+    this.syncInteractionLock();
     if (!this.parts) return;
-    // A save in flight must not be dismissable by Escape or the backdrop.
-    this.parts.shell.setLocked(busy);
-    this.parts.input.disabled = busy;
-    this.parts.destinationSelect.setDisabled(busy);
-    this.parts.saveBtn.disabled = busy;
-    this.parts.cancelBtn.disabled = busy;
-    for (const button of Array.from(this.parts.routes.querySelectorAll('button'))) button.disabled = busy || this.retrying;
     this.parts.saveBtn.textContent = busy ? 'Saving…' : (this.pending?.options.saveLabel ?? this.parts.saveBtn.textContent);
+  }
+
+  /** A route mutation is atomic from the person's point of view, so the dialog cannot close midway through it. */
+  private setRouteChanging(changing: boolean): void {
+    this.routeChanging = changing;
+    this.syncInteractionLock();
+    if (!changing && this.parts && !this.parts.input.value.trim()) this.parts.saveBtn.disabled = true;
+  }
+
+  private syncInteractionLock(): void {
+    if (!this.parts) return;
+    // Saving or changing a receiver must not be dismissable by Escape/backdrop:
+    // otherwise a stale answer could race the explicit authorization change.
+    const locked = this.busy || this.routeChanging;
+    this.parts.shell.setLocked(locked);
+    this.parts.input.disabled = locked;
+    this.parts.destinationSelect.setDisabled(locked);
+    this.parts.saveBtn.disabled = locked;
+    this.parts.cancelBtn.disabled = locked;
+    for (const button of Array.from(this.parts.routes.querySelectorAll('button'))) {
+      button.disabled = locked || this.retrying;
+    }
   }
 
   private showError(message = ''): void {
@@ -201,7 +243,7 @@ export class RecordingNameDialog {
 
   /** An empty field blocks the save as it happens, rather than on the click (7B). */
   private syncBlank(): void {
-    if (!this.parts || this.busy) return;
+    if (!this.parts || this.busy || this.routeChanging) return;
     const blank = !this.parts.input.value.trim();
     this.parts.saveBtn.disabled = blank;
     this.showError(blank ? BLANK_NAME : '');
@@ -356,8 +398,10 @@ export class RecordingNameDialog {
   private renderRoutes(): void {
     const parts = this.parts;
     if (!parts) return;
-    parts.routes.hidden = this.routeItems.length === 0;
-    const rows = this.routeItems.map((route) => {
+    const canChange = Boolean(this.pending?.options.routes?.onReplace && this.routeCandidates.length);
+    parts.routes.hidden = this.routeItems.length === 0 && !canChange;
+    const rows: HTMLElement[] = [];
+    for (const route of this.routeItems) {
       const row = this.doc.createElement('div');
       row.className = 'recording-name-route';
       row.dataset.routeState = route.state;
@@ -370,13 +414,15 @@ export class RecordingNameDialog {
         row.classList.add('recording-name-route--warn');
         if (!name) {
           text.textContent = 'Its integration was deleted · nothing will be sent';
-          return row;
+          rows.push(row);
+          continue;
         }
         text.textContent = `Automation for ${name} could not be scheduled`;
         if (this.pending?.options.routes?.onRetry) {
           row.appendChild(this.routeButton(this.retrying ? 'Retrying\u2026' : 'Retry automation', `Retry automation for ${name}`, () => void this.retryRoutes()));
         }
-        return row;
+        rows.push(row);
+        continue;
       }
       const removed = this.removedRoutes.has(route.destinationId);
       row.classList.toggle('recording-name-route--removed', removed);
@@ -384,11 +430,31 @@ export class RecordingNameDialog {
       text.textContent = removed
         ? `Won't send ${payload} to ${name ?? 'this integration'}`
         : `Will send ${payload} to ${name ?? 'this integration'}`;
+      if (!removed && canChange) {
+        row.appendChild(this.routeButton(
+          'Change',
+          `Change ${name ?? 'this integration'} for this recording`,
+          () => this.toggleRoutePicker(route.destinationId),
+        ));
+      }
       row.appendChild(removed
         ? this.routeButton('Undo', `Send to ${name ?? 'this integration'} after all`, () => this.toggleRoute(route.destinationId))
         : this.routeButton('\u00d7', `Don't send to ${name ?? 'this integration'}`, () => this.toggleRoute(route.destinationId), 'recording-name-route__remove'));
-      return row;
-    });
+      rows.push(row);
+      if (!removed && this.changingRoute === route.destinationId) rows.push(this.routePicker(route.destinationId));
+    }
+    if (canChange) {
+      const add = this.doc.createElement('div');
+      add.className = 'recording-name-route recording-name-route--add';
+      const text = this.doc.createElement('span');
+      text.className = 'recording-name-route__text';
+      text.textContent = this.routeItems.some((route) => route.state === 'held')
+        ? 'Send to another service'
+        : 'Send recording to a service';
+      add.append(text, this.routeButton('Choose', 'Choose another service for this recording', () => this.toggleRoutePicker(null)));
+      rows.push(add);
+      if (this.changingRoute === null) rows.push(this.routePicker(null));
+    }
     parts.routes.replaceChildren(...rows);
   }
 
@@ -398,13 +464,13 @@ export class RecordingNameDialog {
     button.className = `recording-name-route__action ${extraClass}`.trim();
     button.textContent = text;
     button.setAttribute('aria-label', label);
-    button.disabled = this.busy || this.retrying;
+    button.disabled = this.busy || this.retrying || this.routeChanging;
     button.addEventListener('click', onClick);
     return button;
   }
 
   private toggleRoute(destinationId: string): void {
-    if (this.busy) return;
+    if (this.busy || this.routeChanging) return;
     if (!this.removedRoutes.delete(destinationId)) this.removedRoutes.add(destinationId);
     this.pending?.options.routes?.onChange([...this.removedRoutes]);
     this.renderRoutes();
@@ -415,7 +481,7 @@ export class RecordingNameDialog {
 
   private async retryRoutes(): Promise<void> {
     const retry = this.pending?.options.routes?.onRetry;
-    if (!retry || this.retrying || this.busy) return;
+    if (!retry || this.retrying || this.busy || this.routeChanging) return;
     this.retrying = true;
     this.renderRoutes();
     try {
@@ -427,6 +493,69 @@ export class RecordingNameDialog {
     } finally {
       this.retrying = false;
       this.renderRoutes();
+    }
+  }
+
+  private toggleRoutePicker(fromDestinationId: string | null): void {
+    if (this.busy || this.retrying || this.routeChanging) return;
+    this.changingRoute = this.changingRoute === fromDestinationId ? undefined : fromDestinationId;
+    this.renderRoutes();
+    if (this.changingRoute !== undefined) {
+      this.parts?.routes.querySelector<HTMLElement>('.recording-name-route-picker button')?.focus();
+    }
+  }
+
+  private routePicker(fromDestinationId: string | null): HTMLElement {
+    const picker = this.doc.createElement('div');
+    picker.className = 'recording-name-route-picker';
+    picker.setAttribute('role', 'group');
+    picker.setAttribute('aria-label', fromDestinationId ? 'Choose replacement service' : 'Choose service');
+    for (const candidate of this.routeCandidates) {
+      const button = this.doc.createElement('button');
+      button.type = 'button';
+      button.className = 'recording-name-route-candidate';
+      const name = this.doc.createElement('span');
+      name.className = 'recording-name-route-candidate__name';
+      name.textContent = candidate.destinationName;
+      const disclosure = this.doc.createElement('span');
+      disclosure.className = 'recording-name-route-candidate__payload';
+      disclosure.textContent = candidate.includesMedia ? 'VIDEO/AUDIO + DATA' : 'DATA ONLY';
+      button.append(name, disclosure);
+      button.setAttribute(
+        'aria-label',
+        `${candidate.destinationName}: ${candidate.includesMedia ? 'video, audio and data' : 'data only'}`,
+      );
+      button.disabled = this.busy || this.retrying || this.routeChanging;
+      button.addEventListener('click', () => void this.replaceRoute(fromDestinationId ?? undefined, candidate.destinationId));
+      picker.appendChild(button);
+    }
+    return picker;
+  }
+
+  private async replaceRoute(fromDestinationId: string | undefined, toDestinationId: string): Promise<void> {
+    const replace = this.pending?.options.routes?.onReplace;
+    if (!replace || this.busy || this.retrying || this.routeChanging) return;
+    this.setRouteChanging(true);
+    this.renderRoutes();
+    try {
+      const state = await replace(fromDestinationId, toDestinationId);
+      if (this.pending) {
+        this.routeItems = state.items;
+        this.routeCandidates = state.candidates;
+        const current = new Set(state.items.map((route) => route.destinationId));
+        for (const destinationId of this.removedRoutes) {
+          if (!current.has(destinationId)) this.removedRoutes.delete(destinationId);
+        }
+        this.changingRoute = undefined;
+      }
+      this.showError();
+    } catch (error) {
+      this.showError(error instanceof Error ? error.message : 'Could not change where this recording goes');
+    } finally {
+      this.setRouteChanging(false);
+      this.renderRoutes();
+      const rows = Array.from(this.parts?.routes.querySelectorAll<HTMLElement>('[data-destination-id]') ?? []);
+      rows.find((row) => row.dataset.destinationId === toDestinationId)?.querySelector('button')?.focus();
     }
   }
 }
