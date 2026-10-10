@@ -33,6 +33,10 @@ Optional settings are `HOST`, `PORT`, `PUBLIC_ORIGIN`, `STATE_PATH`, `S3_REGION`
 `PLAYBACK_URL_TTL_SECONDS`, `UPLOAD_ATTEMPT_TTL_MS`, `PART_SIZE_BYTES`,
 `MAX_CONCURRENCY`, `MAX_ARTIFACT_BYTES`, and `CLEANUP_ON_EXIT`.
 
+`CONFORMANCE_CAPABILITY_API_BASE` is a test-only fault-injection setting used by
+the browser harness to prove that the extension rejects a cross-origin control
+plane. Leave it unset for a conforming receiver.
+
 For Cloudflare R2, use the account S3 endpoint, region `auto`, and
 `S3_FORCE_PATH_STYLE=false`. The bucket must allow browser `PUT`, `GET`, and
 `HEAD` requests from the extension's execution context and expose the `ETag`
@@ -48,3 +52,5 @@ only from the process environment and are never written to the state file.
 
 The browser conformance suite lives in `tests/e2e/integration-media-reference.spec.ts`.
 It exercises the real extension against this receiver and a real R2/S3 bucket.
+JM0 must be run with `PW_HEADLESS=0` because Chromium does not grant the
+optional-host permission prompt in headless mode.

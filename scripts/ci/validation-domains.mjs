@@ -184,8 +184,12 @@ export const RELEVANCE_RULES = [
     name: 'integration-e2e',
     domains: VERIFY_INTEGRATION,
     match: [
+      prefix('reference-media-receiver/'),
       regex(/^tests\/e2e\/integration-.*\.(ts|tsx|js|mjs|cjs)$/),
-      exact('tests/e2e/helpers/integrationReceiver.ts'),
+      exact(
+        'tests/e2e/helpers/integrationReceiver.ts',
+        'tests/e2e/helpers/referenceMediaReceiver.ts',
+      ),
     ],
   },
   {

@@ -51,6 +51,10 @@ test('classifies representative repository paths conservatively', () => {
       'src/settings/IntegrationSettingsController.ts',
       ['verify', 'integration'],
     ],
+    ['reference-media-receiver/src/server.mjs', ['verify', 'integration']],
+    ['reference-media-receiver/package-lock.json', ['verify', 'integration']],
+    ['tests/e2e/integration-media-reference.spec.ts', ['verify', 'integration']],
+    ['tests/e2e/helpers/referenceMediaReceiver.ts', ['verify', 'integration']],
     [
       'src/platform/chrome/permissions.ts',
       ['verify', 'integration', 'mock-e2e'],

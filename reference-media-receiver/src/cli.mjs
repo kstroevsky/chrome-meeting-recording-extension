@@ -43,6 +43,7 @@ const receiver = await startReferenceMediaReceiver({
   statePath: process.env.STATE_PATH || path.join(root, 'state', 'receiver.json'),
   webhookSecret: required('WEBHOOK_SECRET'),
   mediaBearer: required('MEDIA_BEARER'),
+  capabilityApiBase: process.env.CONFORMANCE_CAPABILITY_API_BASE || undefined,
   partSize: positiveInteger('PART_SIZE_BYTES', 32 * 1024 * 1024),
   maxConcurrency: positiveInteger('MAX_CONCURRENCY', 3),
   maxArtifactBytes: positiveInteger('MAX_ARTIFACT_BYTES', 8 * 1024 * 1024 * 1024),

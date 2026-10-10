@@ -262,7 +262,7 @@ export async function startReferenceMediaReceiver(options) {
             capabilities: {
               media: {
                 version: 1,
-                apiBase: `${publicOrigin}/media`,
+                apiBase: options.capabilityApiBase ?? `${publicOrigin}/media`,
                 upload: { strategy: 'multipart-put-v1', origins: [options.storage.uploadOrigin] },
                 playback: { strategy: 'refreshable-url-v1' },
               },
