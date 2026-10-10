@@ -1,3 +1,4 @@
+import { getRuntimeUrl } from '../../platform/chrome/runtime';
 import { isRecordingNotationMessage } from '../../shared/notations';
 import {
   isPopupToBgMessage,
@@ -12,6 +13,7 @@ import {
 import { toStatusView } from '../../shared/recording';
 import { isRecordingHistoryMessage } from '../../shared/recordingHistory';
 import { handleLibraryMessage } from './libraryMessages';
+import { handleIntegrationMessage } from './integrationMessages';
 import { handlePlaybackMessage } from './playbackMessages';
 import { handleRecordingMessage } from './recordingMessages';
 import { handleShareIdentityTokenMessage } from './sharingMessages';
@@ -24,7 +26,7 @@ import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
 
 const includes = (types: readonly string[], type: string): boolean => types.includes(type);
 
-type PopupRouteOwner = 'drive-token' | 'share-identity-token' | 'library' | 'playback' | 'recording' | 'system';
+type PopupRouteOwner = 'drive-token' | 'share-identity-token' | 'integrations' | 'library' | 'playback' | 'recording' | 'system';
 
 /** Compile-time ownership table: every recognized popup message must have one background route. */
 export const POPUP_ROUTE_OWNERS = {
@@ -76,6 +78,15 @@ export const POPUP_ROUTE_OWNERS = {
   REMOVE_RECORDING_NOTATION: 'library',
   GET_RECORDING_TRANSCRIPT: 'library',
   LIST_RECORDING_TOPIC_SUMMARIES: 'library',
+  PREVIEW_INTEGRATION_PAYLOAD: 'integrations',
+  LIST_INTEGRATION_RECORDINGS: 'integrations',
+  LIST_INTEGRATIONS: 'integrations',
+  CREATE_INTEGRATION: 'integrations',
+  DELETE_INTEGRATION: 'integrations',
+  TEST_INTEGRATION: 'integrations',
+  SEND_RECORDING_TO_INTEGRATION: 'integrations',
+  LIST_INTEGRATION_DELIVERIES: 'integrations',
+  RETRY_INTEGRATION_DELIVERY: 'integrations',
 } satisfies Record<PopupToBg['type'], PopupRouteOwner>;
 
 const SESSION_FAILURE_MESSAGE_TYPES = [
@@ -96,6 +107,17 @@ function isNonSessionResponse(type: string): boolean {
 
 function failsSessionOnError(type: string): boolean {
   return includes(SESSION_FAILURE_MESSAGE_TYPES, type);
+}
+
+/**
+ * Popup-protocol requests hand out Drive tokens, create integrations, publish
+ * shares, and delete files, so they are accepted only from the extension's own
+ * pages. The content script lives in a web page's renderer and speaks only the
+ * ingress messages handled before this point; a compromised page renderer must
+ * not be able to speak for the popup.
+ */
+function isExtensionPageSender(sender: chrome.runtime.MessageSender): boolean {
+  return typeof sender.url === 'string' && sender.url.startsWith(getRuntimeUrl(''));
 }
 
 function validatePopupMessage(msg: PopupToBg): void {
@@ -121,7 +143,9 @@ async function routePopupMessage(
 ): Promise<void> {
   validatePopupMessage(msg);
   const owner = POPUP_ROUTE_OWNERS[msg.type];
-  const handled = owner === 'library'
+  const handled = owner === 'integrations'
+    ? await handleIntegrationMessage(msg, sendResponse, deps)
+    : owner === 'library'
     ? await handleLibraryMessage(msg, sendResponse, deps)
     : owner === 'playback'
       ? await handlePlaybackMessage(msg, sender, sendResponse, deps)
@@ -143,6 +167,11 @@ export function createMessageListener(deps: MessageHandlersDeps) {
     if (ingressResult !== undefined) return ingressResult;
 
     if (!isPopupToBgMessage(msg)) return false;
+    if (!isExtensionPageSender(sender)) {
+      deps.L.warn('Refused a popup request from outside the extension pages:', msg.type, sender.url);
+      sendResponse({ ok: false, error: 'This request is accepted only from the extension' });
+      return false;
+    }
 
     const driveTokenResult = handleDriveTokenMessage(msg, sendResponse, deps);
     if (driveTokenResult !== undefined) return driveTokenResult;

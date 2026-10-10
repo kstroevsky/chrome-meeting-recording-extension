@@ -6,6 +6,7 @@ import { sendToBackground } from './shared/messages';
 import type { RecordingNotation } from './shared/notations';
 import type { PopupListRecordingNotations, PopupRemoveRecordingNotation, PopupUpdateRecordingNotation } from './shared/protocol';
 import { sharingServiceOrigin } from './sharing/config';
+import { trackFocusSource } from './ui/focusSource';
 
 /** One recording's notes, read or rewritten through the background's keyed commands. */
 async function readNotations(
@@ -17,18 +18,18 @@ async function readNotations(
 }
 
 initializeExtensionTheme();
+trackFocusSource();
 
 const get = (id: string) => document.getElementById(id);
 const list = get('recordings-list');
 const empty = get('recordings-empty');
 const error = get('recordings-error');
-const loadMore = get('recordings-load-more');
-if (list && empty && error && loadMore instanceof HTMLButtonElement) {
+if (list && empty && error) {
   let controller: RecordingsController;
   let sharedView: SharedView | undefined;
   const serviceOrigin = sharingServiceOrigin();
   const sharingEnabled = Boolean(serviceOrigin);
-  const view = new RecordingsView(list, empty, error, loadMore, {
+  const view = new RecordingsView(list, empty, error, {
     rename: (id, name) => void controller.rename(id, name),
     note: (id, note) => void controller.setNote(id, note),
     remove: (id, deleteFiles) => void controller.remove(id, deleteFiles),

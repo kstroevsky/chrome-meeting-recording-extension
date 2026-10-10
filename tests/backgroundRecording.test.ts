@@ -2,6 +2,9 @@ import { TIMEOUTS } from '../src/shared/timeouts';
 import { DEFAULT_DRIVE_ROOT_FOLDER_NAME } from '../src/shared/settings';
 import { PERF_DEBUG_SNAPSHOT_STORAGE_KEY } from '../src/shared/perf';
 
+/** The popup, as Chrome identifies it: privileged requests are accepted only from extension pages. */
+const POPUP_SENDER = { url: 'chrome-extension://mock-id/popup.html' } as chrome.runtime.MessageSender;
+
 describe('background runtime messages', () => {
   const activeSession = {
     phase: 'recording',
@@ -51,7 +54,7 @@ describe('background runtime messages', () => {
 
     const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
     const response = await new Promise<any>((resolve) => {
-      listener({ type: 'GET_DRIVE_TOKEN', refresh: true }, {}, resolve);
+      listener({ type: 'GET_DRIVE_TOKEN', refresh: true }, POPUP_SENDER, resolve);
     });
 
     expect(fetchDriveTokenWithFallback).toHaveBeenCalledWith({ refresh: true });
@@ -130,7 +133,7 @@ describe('background runtime messages', () => {
           micMode: 'off',
           recordSelfVideo: false,
         },
-      }, {}, resolve);
+      }, POPUP_SENDER, resolve);
     });
 
     expect(loadRecorderRuntimeSettingsSnapshot).toHaveBeenCalledTimes(1);
@@ -198,7 +201,7 @@ describe('background runtime messages', () => {
           micMode: 'off',
           recordSelfVideo: false,
         },
-      }, {}, resolve);
+      }, POPUP_SENDER, resolve);
     });
 
     // The wire response carries the popup-facing status view, which intentionally
@@ -248,7 +251,7 @@ describe('background runtime messages', () => {
 
     const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
     const phase = async () =>
-      (await new Promise<any>((resolve) => listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve))).session.phase;
+      (await new Promise<any>((resolve) => listener({ type: 'GET_RECORDING_STATUS' }, POPUP_SENDER, resolve))).session.phase;
 
     // Matching the current run's epoch → applied (a same-run idle ends the run).
     offscreenInstance.onStateChanged?.({ type: 'OFFSCREEN_STATE', phase: 'idle', epoch: 1 });
@@ -307,7 +310,7 @@ describe('background runtime messages', () => {
 
       const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
       const status = await new Promise<any>((resolve) => {
-        listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve);
+        listener({ type: 'GET_RECORDING_STATUS' }, POPUP_SENDER, resolve);
       });
       expect(status.session.phase).toBe('failed');
     } finally {
@@ -360,7 +363,7 @@ describe('background runtime messages', () => {
 
       const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
       const status = await new Promise<any>((resolve) => {
-        listener({ type: 'GET_RECORDING_STATUS' }, {}, resolve);
+        listener({ type: 'GET_RECORDING_STATUS' }, POPUP_SENDER, resolve);
       });
       expect(status.session.phase).toBe('failed');
     } finally {

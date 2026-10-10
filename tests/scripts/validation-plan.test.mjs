@@ -15,7 +15,45 @@ function domains(path) {
 test('classifies representative repository paths conservatively', () => {
   const cases = new Map([
     ['docs/sharing-operations.md', []],
+    ['docs/schemas/integration-recording-ready-v1.json', ['verify', 'integration']],
     ['src/sharing/README.md', []],
+    ['src/integrations/IntegrationCoordinator.ts', ['verify', 'integration']],
+    ['src/background/integrations/BackgroundIntegrationRuntime.ts', ['verify', 'integration']],
+    [
+      'src/background/runtime/createBackgroundRuntime.ts',
+      ['verify', 'integration', 'sharing', 'mock-e2e'],
+    ],
+    [
+      'src/background/library/createLibraryRuntime.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/library/RecordingLibraryDatabase.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/messaging/MessageRouter.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/recording/RecordingStartCommands.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    [
+      'src/background/recording/RecordingLifecycleCommands.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
+    ['src/shared/recordingHistory.ts', ['verify', 'integration', 'mock-e2e']],
+    ['src/shared/transcript.ts', ['verify', 'integration', 'mock-e2e']],
+    ['src/shared/notations.ts', ['verify', 'integration', 'mock-e2e']],
+    [
+      'src/settings/IntegrationSettingsController.ts',
+      ['verify', 'integration'],
+    ],
+    [
+      'src/platform/chrome/permissions.ts',
+      ['verify', 'integration', 'mock-e2e'],
+    ],
     ['sharing-worker/src/router.ts', ['sharing']],
     ['sharing-worker/migrations/0005_x.sql', ['sharing']],
     ['src/sharing/ShareMediaSourceResolver.ts', ['verify', 'sharing']],
@@ -85,7 +123,7 @@ test('classifies representative repository paths conservatively', () => {
     ],
     [
       'src/shared/protocol.ts',
-      ['verify', 'sharing', 'mock-e2e'],
+      ['verify', 'integration', 'sharing', 'mock-e2e'],
     ],
     [
       'src/shared/player/PlaybackClock.ts',
@@ -117,6 +155,7 @@ test('unknown paths force every domain and report missing ownership', () => {
   const result = classifyChangedFiles(['src/exporting/foo.py']);
   assert.deepEqual(result.relevant, {
     verify: true,
+    integration: true,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,
@@ -128,6 +167,7 @@ test('unknown assets also fail closed unless explicitly ignored', () => {
   const result = classifyChangedFiles(['assets/new-image.png']);
   assert.deepEqual(result.relevant, {
     verify: true,
+    integration: true,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,
@@ -139,6 +179,7 @@ test('explicit inert docs stay ignored', () => {
   const result = classifyChangedFiles(['docs/new-note.md']);
   assert.deepEqual(result.relevant, {
     verify: false,
+    integration: false,
     'mock-e2e': false,
     sharing: false,
     'production-e2e': false,
@@ -188,6 +229,29 @@ test('fingerprints only move for domain-owned inputs', () => {
     computeDomainFingerprint('sharing', sharingEdited),
     before.sharing,
   );
+});
+
+test('integration fingerprint follows integration inputs but ignores sharing-only inputs', () => {
+  const base = [
+    { path: '.github/workflows/ci.yml', blob: 'ci-1' },
+    { path: 'src/integrations/IntegrationCoordinator.ts', blob: 'integration-1' },
+    { path: 'sharing-worker/src/router.ts', blob: 'sharing-1' },
+  ];
+  const before = computeDomainFingerprint('integration', base);
+
+  const integrationEdited = base.map((entry) => (
+    entry.path === 'src/integrations/IntegrationCoordinator.ts'
+      ? { ...entry, blob: 'integration-2' }
+      : entry
+  ));
+  assert.notEqual(computeDomainFingerprint('integration', integrationEdited), before);
+
+  const sharingEdited = base.map((entry) => (
+    entry.path === 'sharing-worker/src/router.ts'
+      ? { ...entry, blob: 'sharing-2' }
+      : entry
+  ));
+  assert.equal(computeDomainFingerprint('integration', sharingEdited), before);
 });
 
 test('shared extension harness invalidates mock, sharing and production', () => {
@@ -258,6 +322,7 @@ test('PR relevance stays PR-wide while unchanged fingerprints are reusable', () 
 
   assert.deepEqual(plan.relevant, {
     verify: true,
+    integration: false,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,
@@ -284,6 +349,7 @@ test('push validation forces all domains independent of changed-file classificat
   });
   assert.deepEqual(plan.relevant, {
     verify: true,
+    integration: true,
     'mock-e2e': true,
     sharing: true,
     'production-e2e': true,

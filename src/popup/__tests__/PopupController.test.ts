@@ -286,6 +286,41 @@ describe('PopupController', () => {
     view.remove();
   });
 
+  it('opens the recording\'s Drive folder, not whichever file is listed first', async () => {
+    const view = document.createElement('section');
+    view.id = 'view-recording-detail';
+    view.innerHTML = '<header><div id="recording-detail-heading"></div></header><div id="recording-detail-content"></div>';
+    document.body.appendChild(view);
+    const drive = (stream: string, id: string) => ({
+      id: `recording:drive:${stream}`, stream, filename: `${stream}.webm`, destination: 'drive', status: 'available',
+      driveFileId: id, webViewLink: `https://drive.google.com/file/d/${id}/view`,
+    });
+    const entry = {
+      id: 'recording:drive', name: 'Weekly sync', createdAt: 1, storageMode: 'drive', status: 'complete',
+      driveFolderId: 'folder-9', folderWebViewLink: 'https://drive.google.com/drive/folders/folder-9',
+      files: [drive('selfVideo', 'cam-1'), drive('tab', 'tab-1'), drive('mic', 'mic-1')],
+    };
+    const detail = (controller as any).detail;
+    const open = () => document.querySelector<HTMLButtonElement>('.recording-detail-open-drive')!;
+
+    detail.show({ kind: 'recording', entry });
+    open().click();
+    expect(chrome.tabs.create).toHaveBeenLastCalledWith({ url: 'https://drive.google.com/drive/folders/folder-9' });
+
+    // Only the folder id is stored: the link is built from it.
+    const { folderWebViewLink: _link, ...withoutLink } = entry;
+    detail.show({ kind: 'recording', entry: withoutLink });
+    open().click();
+    expect(chrome.tabs.create).toHaveBeenLastCalledWith({ url: 'https://drive.google.com/drive/folders/folder-9' });
+
+    // A recording with no folder at all still opens something rather than nothing.
+    const { driveFolderId: _id, ...legacy } = withoutLink;
+    detail.show({ kind: 'recording', entry: legacy });
+    open().click();
+    expect(chrome.tabs.create).toHaveBeenLastCalledWith({ url: 'https://drive.google.com/file/d/cam-1/view' });
+    view.remove();
+  });
+
   it('defers completed-upload naming during an active recording and opens it once idle', async () => {
     controller.init();
     await flush();

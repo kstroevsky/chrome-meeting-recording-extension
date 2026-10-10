@@ -88,6 +88,55 @@ describe('RecordingsController', () => {
     nativeConfirm.mockRestore();
   });
 
+  it('removes a batch one by one, keeps going past a failure, and drops each row as it lands', async () => {
+    document.body.replaceChildren();
+    const view = makeView();
+    const controller = new RecordingsController(view);
+    respond({
+      LIST_RECORDING_HISTORY: [{ ok: true, entries: [entry('a', 3), entry('b', 2), entry('c', 1)], total: 3 }],
+      REMOVE_RECORDING_HISTORY: [
+        { ok: true, removed: true },
+        { ok: false, error: 'Recording history is unavailable' },
+        { ok: true, removed: true, fileErrors: ['Downloads file c.webm: not saved by this extension; left untouched'] },
+      ],
+    });
+    await controller.init();
+    (view.render as jest.Mock).mockClear();
+
+    await controller.removeMany(['a', 'b', 'c'], true);
+
+    const removals = send.mock.calls.map(([message]) => message as any).filter((m) => m.type === 'REMOVE_RECORDING_HISTORY');
+    expect(removals.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+    // One render per recording as it lands, then the final one.
+    expect((view.render as jest.Mock).mock.calls.map(([entries]) => entries.map((e: RecordingHistoryEntry) => e.id)))
+      .toEqual([['b', 'c'], ['b', 'c'], ['b'], ['b']]);
+    expect(document.querySelector('.removal-card .confirm-card__title')!.textContent).toBe('Removed 2 of 3 recordings');
+    expect(view.showError).toHaveBeenLastCalledWith('1 recording could not be removed; 1 file could not be deleted.');
+  });
+
+  it('stops a batch after the recording in progress when asked', async () => {
+    document.body.replaceChildren();
+    const view = makeView();
+    const controller = new RecordingsController(view);
+    respond({ LIST_RECORDING_HISTORY: [{ ok: true, entries: [entry('a', 3), entry('b', 2), entry('c', 1)], total: 3 }] });
+    await controller.init();
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'REMOVE_RECORDING_HISTORY') {
+        // The user presses Stop while the first recording is being removed.
+        document.querySelector<HTMLButtonElement>('.removal-card .confirm-card__cancel')!.click();
+        return { ok: true, removed: true } as any;
+      }
+      return { ok: true, summaries: {} } as any;
+    });
+
+    await controller.removeMany(['a', 'b', 'c']);
+
+    const removals = send.mock.calls.map(([message]) => message as any).filter((m) => m.type === 'REMOVE_RECORDING_HISTORY');
+    expect(removals.map((m) => m.id)).toEqual(['a']);
+    expect(document.querySelector('.removal-card .confirm-card__title')!.textContent).toBe('Stopped — removed 1 of 3 recordings');
+    expect((view.render as jest.Mock)).toHaveBeenLastCalledWith([entry('b', 2), entry('c', 1)], false, 2);
+  });
+
   it('reads history in bounded pages and only appends an explicitly requested next page', async () => {
     const view = makeView();
     const controller = new RecordingsController(view);

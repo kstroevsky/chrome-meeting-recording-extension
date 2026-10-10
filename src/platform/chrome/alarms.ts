@@ -7,6 +7,14 @@ export async function createAlarm(
   await chrome.alarms.create(name, alarmInfo);
 }
 
+export async function getAlarm(name: string): Promise<chrome.alarms.Alarm | undefined> {
+  return await chrome.alarms.get(name);
+}
+
+export async function clearAlarm(name: string): Promise<boolean> {
+  return await chrome.alarms.clear(name);
+}
+
 export function addAlarmListener(
   listener: Parameters<typeof chrome.alarms.onAlarm.addListener>[0],
 ): void {

@@ -207,6 +207,40 @@ describe('autoplay', () => {
     await controller.open('r1');
     expect(play).not.toHaveBeenCalled();
   });
+
+  it('blooms for Space, but not for its own autoplay', async () => {
+    // Every earlier test's player still listens on the document; their jsdom
+    // media must answer Space without throwing.
+    const safePlay = jest.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(async () => {});
+    const safePause = jest.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const opfs = createFakeOpfs();
+    opfs.seed('library/r1/tab.webm', 128);
+    const controller = new PlayerController({
+      getManifest: async () => manifest([{ kind: 'opfs', key: 'library/r1/tab.webm' }]),
+      resolveTrack: createPlaybackTrackResolver({ resolver: {
+        getRoot: async () => opfs.root,
+        createObjectURL: () => 'blob:x',
+        revokeObjectURL: () => {},
+      } }),
+    });
+    document.body.append(controller.element);
+    const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
+    let paused = true;
+    Object.defineProperty(video, 'paused', { get: () => paused });
+    Object.defineProperty(video, 'play', { value: jest.fn(async () => { paused = false; video.dispatchEvent(new Event('play')); }) });
+    Object.defineProperty(video, 'pause', { value: jest.fn(() => { paused = true; video.dispatchEvent(new Event('pause')); }) });
+    const bloom = () => controller.element.querySelector('.player__flash')!.classList.contains('player__flash--on');
+
+    await controller.open('r1');
+    expect(paused).toBe(false);
+    expect(bloom()).toBe(false);
+
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    expect(paused).toBe(true);
+    expect(bloom()).toBe(true);
+    safePlay.mockRestore();
+    safePause.mockRestore();
+  });
 });
 
 

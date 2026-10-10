@@ -187,6 +187,101 @@
         <p id="storage-usage" class="storage-usage">Checking…</p>
       </section>
 
+      <section class="settings-section integrations-settings" aria-labelledby="integrations-heading">
+        <h2 id="integrations-heading" class="section-eyebrow">INTEGRATIONS</h2>
+        <p class="destinations-intro">
+          Deliver full-state meeting snapshots to external systems with destination-specific IDs and explicit data policies.
+          Webhook host access is requested only for the exact HTTPS origin you add.
+        </p>
+        <div id="integration-list" class="integration-list"></div>
+        <div class="integration-editor">
+          <label><span>Name</span><input id="integration-name" type="text" placeholder="Internal CRM"></label>
+          <label><span>Webhook endpoint</span><input id="integration-endpoint" type="url" placeholder="https://crm.example.com/hooks/recordings"></label>
+          <label><span>Default routing</span>
+            <select id="integration-routing">
+              <option value="manual">Manual</option>
+              <option value="review">Review</option>
+              <option value="auto">Auto</option>
+            </select>
+          </label>
+          <label><span>Request auth</span>
+            <select id="integration-auth-type">
+              <option value="none">None</option>
+              <option value="bearer">Bearer token</option>
+              <option value="api-key">API key header</option>
+            </select>
+          </label>
+          <div class="integration-auth-fields">
+            <input id="integration-auth-header" type="text" placeholder="X-API-Key" hidden>
+            <input id="integration-auth-value" type="password" autocomplete="new-password" placeholder="Credential" hidden>
+          </div>
+          <div class="integration-preview-policy" aria-label="Destination data policy">
+            <label><input type="checkbox" data-integration-create-policy="meetingIdentity"> Meeting identity / URL</label>
+            <label><input type="checkbox" data-integration-create-policy="userNote" checked> User note</label>
+            <label><input type="checkbox" data-integration-create-policy="notations" checked> Notations</label>
+            <label><input type="checkbox" data-integration-create-policy="transcript" checked> Transcript</label>
+            <label><input type="checkbox" data-integration-create-policy="analysis"> Topic analysis</label>
+            <label><input type="checkbox" data-integration-create-policy="artifactMetadata"> Artifact metadata</label>
+            <label><input type="checkbox" data-integration-create-policy="artifactLinks"> Existing artifact links</label>
+          </div>
+          <label><span>Transcript speakers</span>
+            <select id="integration-speakers">
+              <option value="pseudonyms">Speaker 1 / Speaker 2</option>
+              <option value="names">Original names</option>
+              <option value="omit">Remove labels</option>
+            </select>
+          </label>
+          <button id="integration-add" type="button" class="integration-add">+ Add integration</button>
+        </div>
+        <div id="integration-secret-panel" class="integration-secret-panel" hidden>
+          <strong>Signing secret — shown once</strong>
+          <input id="integration-signing-secret" type="text" readonly spellcheck="false">
+          <small>Copy this into the receiver now. If it is lost, rotate it instead of reading stored credentials.</small>
+        </div>
+        <label class="integration-preview-field">
+          <span>Recording for manual send</span>
+          <select id="integration-send-recording" aria-label="Recording for manual integration send"></select>
+        </label>
+        <p id="integration-status" class="destinations-note destinations-note--quiet" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="settings-section integration-preview" aria-labelledby="integration-preview-heading">
+        <h2 id="integration-preview-heading" class="section-eyebrow">INTEGRATIONS · PAYLOAD PREVIEW</h2>
+        <p class="destinations-intro">
+          Build the exact CloudEvent JSON that the integration pipeline would serialize from a local recording.
+          Nothing is sent over the network. Download uses these same bytes as a receiver fixture. Until a saved
+          destination exists, the event and destination identities in this preview are deliberately synthetic.
+        </p>
+        <label class="integration-preview-field">
+          <span>Recording</span>
+          <select id="integration-preview-recording" aria-label="Recording for integration preview"></select>
+        </label>
+        <div class="integration-preview-policy" aria-label="Integration data selection">
+          <label><input type="checkbox" data-integration-policy="meetingIdentity"> Meeting identity / URL</label>
+          <label><input type="checkbox" data-integration-policy="userNote" checked> User note</label>
+          <label><input type="checkbox" data-integration-policy="notations" checked> Notations</label>
+          <label><input type="checkbox" data-integration-policy="transcript" checked> Transcript</label>
+          <label><input type="checkbox" data-integration-policy="analysis"> Topic analysis</label>
+          <label><input type="checkbox" data-integration-policy="artifactMetadata"> Artifact metadata</label>
+          <label><input type="checkbox" data-integration-policy="artifactLinks"> Existing artifact links</label>
+        </div>
+        <label class="integration-preview-field">
+          <span>Transcript speakers</span>
+          <select id="integration-preview-speakers">
+            <option value="pseudonyms">Speaker 1 / Speaker 2</option>
+            <option value="names">Original names</option>
+            <option value="omit">Remove labels</option>
+          </select>
+        </label>
+        <div class="integration-preview-actions">
+          <button id="integration-preview-build" type="button">Preview payload</button>
+          <button id="integration-preview-download" type="button" disabled>Download JSON</button>
+        </div>
+        <p id="integration-preview-meta" class="integration-preview-meta"></p>
+        <textarea id="integration-preview-output" class="integration-preview-output" readonly spellcheck="false" aria-label="Integration payload JSON"></textarea>
+        <p id="integration-preview-status" class="destinations-note destinations-note--quiet" role="status" aria-live="polite"></p>
+      </section>
+
       <section class="settings-section professional-section" aria-labelledby="professional-heading">
         <h2 id="professional-heading" class="section-eyebrow">PROFESSIONAL</h2>
         <button id="professional-toggle" class="professional-toggle" type="button" aria-expanded="true" aria-controls="professional-fields">

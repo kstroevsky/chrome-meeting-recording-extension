@@ -4,12 +4,14 @@ import { isStoppablePhase, type RecordingInterruption } from '../../shared/recor
 import type { TelemetrySnapshot } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
 import type { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
 import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRuntime';
 import type { RecordingSession } from './session/RecordingSession';
 import type { RecordingSidecars } from './RecordingSidecars';
 import { DiscardDerivedDataCleanup } from './DiscardDerivedDataCleanup';
+import { finishRecordingContext } from './RecordingContextFinalizer';
 
 type ResultFactory = {
   ok: () => CommandResult;
@@ -18,13 +20,13 @@ type ResultFactory = {
 
 export class RecordingLifecycleCommands {
   private readonly discardData: DiscardDerivedDataCleanup;
-
   constructor(
     private readonly deps: {
       L: { log: (...a: any[]) => void; warn: (...a: any[]) => void };
       offscreen: OffscreenManager;
       session: RecordingSession;
       telemetry?: TelemetryRuntime;
+      recordingContexts?: Pick<RecordingContextService, 'finish' | 'remove'>;
       notations?: RecordingNotationService;
       transcripts?: RecordingTranscriptService;
       transcriptCapture?: RecordingTranscriptCapture;
@@ -136,6 +138,11 @@ export class RecordingLifecycleCommands {
       .catch((error) => this.deps.L.warn('Could not finish transcript capture:', error));
     await this.deps.notations?.closeOpenSpans(historyId, finalization.durationMs)
       .catch((error) => this.deps.L.warn('Could not close open notations:', error));
+    // Stamped last: the end is what tells integrations the recording is done,
+    // so its last captions and its notes must already be written. Here rather
+    // than at the stop request, a service-worker restart mid-stop stamps it too.
+    const { recordingContexts, session, L } = this.deps;
+    await finishRecordingContext(recordingContexts, historyId, session.getSnapshot(), L.warn);
     this.deps.session.markBackgroundFinalized(historyId);
     await this.deps.session.flush();
   }

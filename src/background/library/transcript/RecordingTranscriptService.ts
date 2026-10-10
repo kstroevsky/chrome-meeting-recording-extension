@@ -24,7 +24,10 @@ import type { RecordingTranscriptRepositoryPort } from './RecordingTranscriptRep
 
 /** Owns every transcript transition for a recording, keyed by its history id. */
 export class RecordingTranscriptService {
-  constructor(private readonly repository: RecordingTranscriptRepositoryPort) {}
+  constructor(
+    private readonly repository: RecordingTranscriptRepositoryPort,
+    private readonly onChanged?: (recordingId: string) => void,
+  ) {}
 
   async get(recordingId: string): Promise<Transcript | undefined> {
     return await this.repository.get(recordingId);
@@ -85,6 +88,7 @@ export class RecordingTranscriptService {
       added = fresh.length;
       return { source, segments: sortTranscriptSegments([...existing, ...fresh]) };
     });
+    if (added > 0) this.onChanged?.(recordingId);
     return added;
   }
 

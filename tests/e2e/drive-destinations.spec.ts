@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import {
   closeHarness,
   findMockMeetTabId,
@@ -17,6 +17,14 @@ import { installDriveSimulator } from './helpers/driveSimulator';
 const names = async (page: import('@playwright/test').Page) =>
   await page.locator('.destination-name').evaluateAll(
     (inputs) => inputs.map((input) => (input as HTMLInputElement).value));
+
+/**
+ * Opens by the name: a filed recording's folder tag sits mid-row, and clicking
+ * the tag narrows the list to its folder instead of opening the recording.
+ */
+async function openFirstRecording(page: Page): Promise<void> {
+  await page.locator('.recording-row').first().locator('.recording-row__name').click();
+}
 
 test.describe('Drive destinations (integration)', () => {
   test('creates, renames, removes and persists destinations', async ({}, testInfo) => {
@@ -97,7 +105,7 @@ test.describe('Drive destinations (integration)', () => {
         return Boolean(res?.entries?.[0]?.driveFolderId);
       }), { timeout: 45_000 }).toBe(true);
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.locator('.recording-row').first().click();
+      await openFirstRecording(page);
 
       // Driven through the listbox the user actually sees, not the native
       // select it keeps as its value holder.
@@ -120,7 +128,7 @@ test.describe('Drive destinations (integration)', () => {
 
       // The choice survives a reload, because it is recorded in history.
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.locator('.recording-row').first().click();
+      await openFirstRecording(page);
       await expect(trigger).toHaveText('Psychotherapy', { timeout: 20_000 });
 
       // And it can be unfiled again — back to the built-in folder.
@@ -130,7 +138,7 @@ test.describe('Drive destinations (integration)', () => {
       await expect(trigger).toHaveText('Rest (unfiled)', { timeout: 20_000 });
 
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.locator('.recording-row').first().click();
+      await openFirstRecording(page);
       await expect(trigger).toHaveText('Rest (unfiled)');
     } finally {
       await closeHarness(harness);

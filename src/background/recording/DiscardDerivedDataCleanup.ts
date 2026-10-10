@@ -1,4 +1,5 @@
 import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
+import type { RecordingContextService } from '../library/context/RecordingContextService';
 import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
 import type { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
 import type { RecordingSession } from './session/RecordingSession';
@@ -9,6 +10,7 @@ export class DiscardDerivedDataCleanup {
     L: { warn: (...a: any[]) => void };
     session: RecordingSession;
     notations?: RecordingNotationService;
+    recordingContexts?: Pick<RecordingContextService, 'remove'>;
     transcripts?: RecordingTranscriptService;
     transcriptCapture?: RecordingTranscriptCapture;
   }) {}
@@ -23,6 +25,11 @@ export class DiscardDerivedDataCleanup {
 
   async cleanup(historyId: string): Promise<boolean> {
     let complete = true;
+    await this.deps.recordingContexts?.remove(historyId)
+      .catch((error) => {
+        complete = false;
+        this.deps.L.warn('Discarding recording context failed:', error);
+      });
     await this.deps.notations?.removeAll(historyId)
       .catch((error) => {
         complete = false;

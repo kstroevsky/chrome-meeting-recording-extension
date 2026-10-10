@@ -4,12 +4,13 @@
 
 This directory exists for one reason: a control that appears on more than one surface should behave identically on all of them, and there was nowhere to put such a thing. `shared/` is the vocabulary the four runtime contexts agree on and deliberately owns no behaviour, so a DOM component does not belong there. `popup/` and `recordings/` each own a page.
 
-Two primitives live here:
+Three primitives live here:
 
 | Module | Owns | Used by |
 | --- | --- | --- |
 | `listboxSelect.ts` | the dropdown: keyboard, outside-click, trigger/native-select sync | popup "Save to" and mic mode, recordings detail modal, naming prompt |
 | `modalShell.ts` | the prompt frame: overlay, focus capture/restore, Escape, backdrop, Tab trap | `ConfirmDialog`, `RecordingNameDialog` |
+| `focusSource.ts` | whether focus last arrived by pointer or keyboard, as `data-focus-source` on the root; each page's stylesheet hides its rings under `pointer` | popup, recordings page (and its player), settings |
 
 ## The split: behaviour here, skin with the page
 

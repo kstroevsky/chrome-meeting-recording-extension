@@ -33,6 +33,8 @@ Sources are preference-ordered by the manifest, and a miss falls through to the 
 - **The camera track is muted by construction.** It carries no audio; unmuting it would double the tab audio.
 - **`el.duration` is `Infinity` on a retained copy.** The WebM duration fix produces a new in-memory Blob that goes to Downloads and Drive; the bytes left in OPFS keep the unfixed header. The player takes its total from the manifest's recorded duration instead — which is the better source anyway, because it is pause-aware ([ADR-0005](../../../docs/adr/0005-notations-are-a-separate-timecoded-aggregate.md)) and a container duration is not.
 - **Bare letters must never fire while a field has focus.** That single rule is what makes the rest of the map safe as unmodified single keys; see `playerKeymap.ts`.
+- **The picture is a play/pause control, and only a requested change blooms.** A click on the video (or Space) arms the centre bloom; the next `play`/`pause` event draws the state playback actually reached. Autoplay and the end of the file pass quietly. A click that closes an open menu only closes it.
+- **Shortcuts must not ring the last-clicked control.** Chrome shows a clicked button's focus ring as soon as any key is pressed; the page's `data-focus-source="pointer"` mark (`ui/focusSource.ts`) keeps rings off until focus moves by keyboard.
 
 ## Topics
 
