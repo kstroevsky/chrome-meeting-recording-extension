@@ -1,7 +1,5 @@
-import { sendTabMessage } from '../../platform/chrome/tabs';
 import type { CommandResult, OffscreenFinalizationCommandResult } from '../../shared/protocol';
 import { isStoppablePhase, type RecordingInterruption } from '../../shared/recording';
-import type { TelemetrySnapshot } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
 import type { RecordingContextService } from '../library/context/RecordingContextService';
@@ -12,6 +10,7 @@ import type { RecordingSession } from './session/RecordingSession';
 import type { RecordingSidecars } from './RecordingSidecars';
 import { DiscardDerivedDataCleanup } from './DiscardDerivedDataCleanup';
 import { finishRecordingContext } from './RecordingContextFinalizer';
+import { captureStopTelemetry } from './RecordingStopTelemetry';
 
 type ResultFactory = {
   ok: () => CommandResult;
@@ -62,17 +61,7 @@ export class RecordingLifecycleCommands {
       return this.deps.result.fail('Stop requested but no recording session is active');
     }
 
-    if (typeof snapshot.targetTabId === 'number') {
-      try {
-        const response = await sendTabMessage<{ snapshot?: TelemetrySnapshot }>(
-          snapshot.targetTabId,
-          { type: 'TELEMETRY_GET_SNAPSHOT' },
-        );
-        if (response?.snapshot) {
-          await this.deps.telemetry?.receive(response.snapshot, true);
-        }
-      } catch {}
-    }
+    await captureStopTelemetry(snapshot.targetTabId, this.deps.telemetry);
 
     const { historyId } = snapshot;
     this.deps.session.markStopping(interruption);

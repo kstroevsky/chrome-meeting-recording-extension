@@ -12,15 +12,17 @@ import type {
   RecordingHistoryPage,
   RetainedMediaReleaseTarget,
 } from '../../../shared/recordingHistory';
-import { verifiedRetainedMediaReleaseTargets } from '../../../shared/recordingHistory';
 import { LocalDeliveryHistory } from './LocalDeliveryHistory';
 import { RecordingDelivery } from './RecordingDelivery';
+import { RecordingHistoryCleanup } from './RecordingHistoryCleanup';
+import { RecordingHistoryMetadata } from './RecordingHistoryMetadata';
 import type { RecordingHistoryRepositoryPort } from './RecordingHistoryRepository';
 import type { PendingRecordingFile } from './RecordingHistoryState';
 import {
   RecordingRename,
   type DriveRecordingRenamer,
 } from './RecordingRename';
+import { VerifiedRetainedMediaRelease } from './VerifiedRetainedMediaRelease';
 
 export type { DriveRecordingRenamer, DriveRenameResult } from './RecordingRename';
 
@@ -29,23 +31,31 @@ export class RecordingHistoryService {
   private readonly delivery: RecordingDelivery;
   private readonly localDelivery: LocalDeliveryHistory;
   private readonly renameCommands: RecordingRename;
+  private readonly cleanup: RecordingHistoryCleanup;
+  private readonly retainedMediaRelease: VerifiedRetainedMediaRelease;
+  private readonly metadata: RecordingHistoryMetadata;
 
   constructor(
     private readonly repository: RecordingHistoryRepositoryPort,
-    private readonly openDownload: (downloadId: number) => Promise<void>,
+    openDownload: (downloadId: number) => Promise<void>,
     private readonly now: () => number = Date.now,
     renameDriveResources?: DriveRecordingRenamer,
-    private readonly onRemoved?: (id: string) => Promise<void>,
-    private readonly deleteRetainedMedia?: (
+    onRemoved?: (id: string) => Promise<void>,
+    deleteRetainedMedia?: (
       keys: string[],
       historyId: string,
     ) => Promise<void | 'deleted' | 'deferred'>,
-    private readonly warnCleanup: (message: string, error: unknown) => void = () => {},
+    warnCleanup: (message: string, error: unknown) => void = () => {},
     private readonly onChanged?: (recordingId: string) => void,
   ) {
     this.delivery = new RecordingDelivery(repository, now);
-    this.localDelivery = new LocalDeliveryHistory(repository);
+    this.localDelivery = new LocalDeliveryHistory(repository, openDownload);
     this.renameCommands = new RecordingRename(repository, renameDriveResources);
+    this.cleanup = new RecordingHistoryCleanup(repository, onRemoved, deleteRetainedMedia, warnCleanup);
+    this.metadata = new RecordingHistoryMetadata(repository, onChanged);
+    this.retainedMediaRelease = new VerifiedRetainedMediaRelease(
+      repository, now, deleteRetainedMedia, warnCleanup, onChanged,
+    );
   }
 
   async listPage(cursor?: RecordingHistoryCursor): Promise<RecordingHistoryPage> {
@@ -71,30 +81,14 @@ export class RecordingHistoryService {
     id: string,
     durationMs: number | undefined,
   ): Promise<RecordingHistoryEntry | undefined> {
-    if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
-      return undefined;
-    }
-    const updated = await this.repository.update(id, (current) => {
-      if (!current || current.deletedAt) return current;
-      return { ...current, durationMs };
-    });
-    if (updated && !updated.deletedAt) this.onChanged?.(id);
-    return updated?.deletedAt ? undefined : updated;
+    return this.metadata.setDuration(id, durationMs);
   }
 
   async setNote(
     id: string,
     note: string,
   ): Promise<RecordingHistoryEntry | undefined> {
-    const normalized = note.trim();
-    const updated = await this.repository.update(id, (current) => {
-      if (!current || current.deletedAt) return current;
-      return normalized
-        ? { ...current, note: normalized }
-        : { ...current, note: undefined };
-    });
-    if (updated && !updated.deletedAt) this.onChanged?.(id);
-    return updated?.deletedAt ? undefined : updated;
+    return this.metadata.setNote(id, note);
   }
 
   async remove(id: string): Promise<boolean> {
@@ -105,7 +99,7 @@ export class RecordingHistoryService {
       return { ...current, deletedAt: this.now(), cleanupPending: true };
     });
 
-    if (removed) await this.cleanupDeletedEntry(id).catch(() => {});
+    if (removed) await this.cleanup.cleanupDeletedEntry(id).catch(() => {});
     return removed;
   }
 
@@ -114,7 +108,7 @@ export class RecordingHistoryService {
     let allSucceeded = true;
     for (const entry of pending) {
       try {
-        await this.cleanupDeletedEntry(entry.id, entry);
+        await this.cleanup.cleanupDeletedEntry(entry.id, entry);
       } catch {
         allSucceeded = false;
       }
@@ -220,36 +214,22 @@ export class RecordingHistoryService {
   }
 
   async setDriveDestination(historyId: string, presetId: string | null): Promise<void> {
-    await this.repository.update(historyId, (current) => {
-      if (!current || current.deletedAt) return current;
-      const { driveFolderPresetId: _dropped, ...rest } = current;
-      return presetId ? { ...rest, driveFolderPresetId: presetId } : rest;
-    });
+    await this.metadata.setDriveDestination(historyId, presetId);
   }
 
   async setLocalFolder(
     historyId: string,
     folderName: string | undefined,
   ): Promise<void> {
-    await this.repository.update(historyId, (current) => {
-      if (!current || current.deletedAt) return current;
-      const { localFolderName: _dropped, ...rest } = current;
-      return folderName ? { ...rest, localFolderName: folderName } : rest;
-    });
+    await this.metadata.setLocalFolder(historyId, folderName);
   }
 
   async openLocalFile(recordingId: string, fileId: string): Promise<void> {
-    const entry = await this.repository.get(recordingId);
-    const file = entry && !entry.deletedAt
-      ? entry.files.find((candidate) => candidate.id === fileId)
-      : undefined;
-    if (!file?.downloadId) throw new Error('This local file is no longer available');
-    await this.openDownload(file.downloadId);
+    await this.localDelivery.openLocalFile(recordingId, fileId);
   }
 
   async planVerifiedRetainedMediaRelease(historyId: string): Promise<RetainedMediaReleaseTarget[]> {
-    const entry = await this.get(historyId);
-    return entry ? verifiedRetainedMediaReleaseTargets(entry) : [];
+    return this.retainedMediaRelease.plan(historyId);
   }
 
   /** Atomically records release intent and removes the corresponding OPFS replicas from history. */
@@ -257,82 +237,13 @@ export class RecordingHistoryService {
     historyId: string,
     expected: readonly RetainedMediaReleaseTarget[],
   ): Promise<{ entry?: RecordingHistoryEntry; released: RetainedMediaReleaseTarget[] }> {
-    const expectedKeys = new Set(expected.map((target) => `${target.fileId}\u0000${target.key}`));
-    const released: RetainedMediaReleaseTarget[] = [];
-    const updated = await this.repository.update(historyId, (current) => {
-      if (!current || current.deletedAt) return current;
-      const files = current.files.map((file) => {
-        if (file.kind || !file.locations.some((location) =>
-          location.kind === 'external' && location.playbackVerifiedAt != null)) return file;
-        const releasedKeys = file.locations
-          .filter((location): location is Extract<ArtifactLocation, { kind: 'opfs' }> =>
-            location.kind === 'opfs' && expectedKeys.has(`${file.id}\u0000${location.key}`));
-        if (!releasedKeys.length) return file;
-        const releasedAt = this.now();
-        const markerByKey = new Map((file.releasedRetainedMedia ?? []).map((marker) => [marker.key, marker]));
-        for (const location of releasedKeys) {
-          markerByKey.set(location.key, { key: location.key, releasedAt });
-          released.push({ fileId: file.id, key: location.key, ...(file.bytes != null ? { bytes: file.bytes } : {}) });
-        }
-        return {
-          ...file,
-          locations: file.locations.filter((location) =>
-            location.kind !== 'opfs' || !releasedKeys.some((releasedLocation) => releasedLocation.key === location.key)),
-          releasedRetainedMedia: [...markerByKey.values()],
-        };
-      });
-      return released.length ? { ...current, files } : current;
-    });
-    if (released.length) this.onChanged?.(historyId);
-    return { ...(updated && !updated.deletedAt ? { entry: updated } : {}), released };
+    return this.retainedMediaRelease.markReleased(historyId, expected);
   }
 
   async deleteReleasedRetainedMedia(
     historyId: string,
     targets: readonly RetainedMediaReleaseTarget[],
   ): Promise<'deleted' | 'deferred' | 'pending'> {
-    if (!targets.length) return 'deleted';
-    if (!this.deleteRetainedMedia) return 'pending';
-    try {
-      const disposition = await this.deleteRetainedMedia(targets.map((target) => target.key), historyId);
-      return disposition === 'deferred' ? 'deferred' : 'deleted';
-    } catch (error) {
-      this.warnCleanup(`Could not free retained media for recording ${historyId}:`, error);
-      return 'pending';
-    }
-  }
-
-  private async cleanupDeletedEntry(
-    id: string,
-    knownEntry?: RecordingHistoryEntry,
-  ): Promise<void> {
-    const entry = knownEntry ?? await this.repository.get(id);
-    if (!entry?.deletedAt || !entry.cleanupPending) return;
-    const retainedKeys = entry.files.flatMap((file) => file.locations
-      .filter((location) => location.kind === 'opfs')
-      .map((location) => location.key));
-    const work: Array<{ label: string; run: () => Promise<void> }> = [];
-    if (this.onRemoved) work.push({ label: 'dependent data', run: () => this.onRemoved!(id) });
-    if (retainedKeys.length && this.deleteRetainedMedia) {
-      work.push({
-        label: 'retained media',
-        run: async () => { await this.deleteRetainedMedia!(retainedKeys, id); },
-      });
-    }
-
-    const results = await Promise.allSettled(work.map(({ run }) => run()));
-    const failures = results.flatMap((result, index) => {
-      if (result.status === 'fulfilled') return [];
-      const label = work[index]?.label ?? 'cleanup';
-      this.warnCleanup(`Could not clean up recording ${id} ${label}:`, result.reason);
-      return [result.reason];
-    });
-    if (failures.length) throw failures[0];
-
-    await this.repository.update(id, (current) => {
-      if (!current?.deletedAt || !current.cleanupPending) return current;
-      const { cleanupPending: _completed, ...rest } = current;
-      return rest;
-    });
+    return this.retainedMediaRelease.deleteReleased(historyId, targets);
   }
 }

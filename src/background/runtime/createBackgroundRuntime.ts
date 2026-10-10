@@ -25,7 +25,8 @@ import { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 import { createIntegrationRuntime } from '../integrations/createIntegrationRuntime';
 import { createExternalMediaRuntime } from '../integrations/createExternalMediaRuntime';
 import { createPlaybackSupportRuntime } from './createPlaybackSupportRuntime';
-import { recordingHistoryFileId } from '../../shared/recordingHistory';
+import { wireRetainedPrimaryHistory } from './wireRetainedPrimaryHistory';
+import { createSessionHydrationHandler } from './createSessionHydrationHandler';
 
 /** Builds the synchronous background object graph; Chrome listener registration stays in background.ts. */
 export function createBackgroundRuntime() {
@@ -67,30 +68,7 @@ export function createBackgroundRuntime() {
     logger,
   });
   notifyIntegrationChanged = externalMediaRuntime.notifyIntegrationChanged;
-  offscreen.onRetainedPrimary = (retained) => {
-    const durationMs = session.runDurationMs(retained.historyId);
-    void (async () => {
-      const fileId = recordingHistoryFileId(retained.historyId, retained.stream);
-      await library.history.createPending(
-        retained.historyId,
-        [{
-          id: fileId,
-          stream: retained.stream,
-          filename: retained.filename,
-          bytes: retained.bytes,
-          ...(retained.startOffsetMs != null ? { captureStartOffsetMs: retained.startOffsetMs } : {}),
-        }],
-        { kind: 'external', destinationId: retained.destinationId },
-      );
-      await library.history.setDuration(retained.historyId, durationMs);
-      await library.history.recordArtifactLocation(retained.historyId, fileId, {
-        kind: 'opfs',
-        key: retained.retainedKey,
-        retainedAt: retained.retainedAt,
-      });
-      offscreen.acknowledgeRetainedPrimary(retained.historyId, retained.stream);
-    })().catch((error) => logger.warn('External primary retention handoff deferred:', error));
-  };
+  wireRetainedPrimaryHistory({ offscreen, session, history: library.history, warn: logger.warn });
   wireAnalysisRuntime({
     offscreen,
     analysisCoordinator: library.analysisCoordinator,
@@ -191,24 +169,13 @@ export function createBackgroundRuntime() {
     waitUntilReady: () => readiness.wait(),
   });
 
-  const markSessionHydrated = () => {
-    sessionHydrated = true;
-    const snapshot = session.getSnapshot();
-    if (snapshot.phase !== 'idle') {
-      const finalization = snapshot.finalization;
-      const targetTabId = finalization?.targetTabId ?? snapshot.targetTabId;
-      const epoch = finalization?.epoch ?? snapshot.epoch;
-      if (targetTabId != null && epoch != null) {
-        void transcriptCapture.restore(
-          targetTabId,
-          epoch,
-          finalization?.disposition ?? 'kept',
-        );
-      }
-    }
-    offscreen.releaseBufferedIngress();
-    readiness.markReady();
-  };
+  const markSessionHydrated = createSessionHydrationHandler({
+    session,
+    transcriptCapture,
+    offscreen,
+    readiness,
+    markHydrated: () => { sessionHydrated = true; },
+  });
   const bootstrap = async () => {
     try {
       await bootstrapBackground({

@@ -1,5 +1,4 @@
 import type { IntegrationDestination } from '../../integrations/persistence';
-import { normalizeWebhookEndpoint } from '../../integrations/webhook/WebhookEndpoint';
 import {
   BUILTIN_DRIVE_PROFILE_ID,
   BUILTIN_LOCAL_PROFILE_ID,
@@ -7,55 +6,32 @@ import {
   isBuiltinRecordingDestinationId,
   normalizeRecordingDestinationProfiles,
   resolveRecordingDestination,
-  storageModeOfProfile,
-  type RecordingDestinationMediaTarget,
   type RecordingDestinationProfile,
-  type RecordingDestinationRoute,
   type RecordingRoutingRoute,
 } from '../../shared/recordingDestinations';
 import type { StorageMode } from '../../shared/recordingTypes';
 import type { ExtensionSettings } from '../../shared/settings';
 import type { RecordingContext } from '../../shared/recordingContext';
+import {
+  describeRecordingDestination,
+  filesLabelOf,
+  type RecordingDestinationOption,
+} from './RecordingDestinationPresentation';
+import {
+  normalizeSaveInput,
+  type SaveRecordingDestinationInput,
+} from './RecordingDestinationInput';
 
-export type RecordingDestinationUnavailableReason =
-  | 'destination-missing'
-  | 'destination-disabled'
-  | 'media-unavailable'
-  | 'permission-missing';
+export type {
+  RecordingDestinationOption,
+  RecordingDestinationUnavailableReason,
+} from './RecordingDestinationPresentation';
 
-/** One "Save to" entry as the popup and settings page show it. */
-export type RecordingDestinationOption = {
-  id: string;
-  name: string;
-  kind: 'builtin' | 'custom';
-  storageMode: StorageMode;
-  /** Where the files go, e.g. `Local downloads / Interviews`. */
-  filesLabel: string;
-  dataRoutes: Array<{ destinationId: string; destinationName: string | null }>;
-  available: boolean;
-  unavailableReason?: RecordingDestinationUnavailableReason;
-};
-
-type SaveRecordingDestinationBaseInput = {
-  id?: string;
-  name?: string;
-};
-
-/** Kept so existing callers and stored V1 setup flows continue to work. */
-export type LegacySaveRecordingDestinationInput = SaveRecordingDestinationBaseInput & {
-  destinationId: string;
-  localFolderPresetId?: string;
-};
-
-/** M3/M5 profile editor payload. */
-export type GeneralSaveRecordingDestinationInput = SaveRecordingDestinationBaseInput & {
-  mediaTarget: RecordingDestinationMediaTarget;
-  dataRoutes: RecordingDestinationRoute[];
-};
-
-export type SaveRecordingDestinationInput =
-  | LegacySaveRecordingDestinationInput
-  | GeneralSaveRecordingDestinationInput;
+export type {
+  GeneralSaveRecordingDestinationInput,
+  LegacySaveRecordingDestinationInput,
+  SaveRecordingDestinationInput,
+} from './RecordingDestinationInput';
 
 type Deps = {
   loadSettings(): Promise<ExtensionSettings>;
@@ -91,7 +67,12 @@ export class RecordingDestinationsRuntime {
     ]);
     const destinations = await Promise.all(
       [...builtinRecordingDestinations(), ...settings.storage.recordingDestinations]
-        .map((profile) => this.describe(profile, settings, integrations)),
+        .map((profile) => describeRecordingDestination(
+          profile,
+          settings,
+          integrations,
+          this.deps.containsHostPermission,
+        )),
     );
     const remembered = destinations.find((option) => option.id === pick && option.available);
     return { destinations, ...(remembered ? { rememberedId: remembered.id } : {}) };
@@ -114,7 +95,12 @@ export class RecordingDestinationsRuntime {
     const settings = await this.deps.loadSettings();
     const requested = resolveRecordingDestination(profileId, settings.storage.recordingDestinations);
     if (!requested) return { profile: fallback, available: false };
-    const option = await this.describe(requested, settings, await this.deps.listIntegrationDestinations());
+    const option = await describeRecordingDestination(
+      requested,
+      settings,
+      await this.deps.listIntegrationDestinations(),
+      this.deps.containsHostPermission,
+    );
     return { profile: requested, requested, available: option.available };
   }
 
@@ -231,102 +217,4 @@ export class RecordingDestinationsRuntime {
   remember(profileId: string): Promise<void> {
     return this.deps.rememberPick(profileId);
   }
-
-  private async describe(
-    profile: RecordingDestinationProfile,
-    settings: ExtensionSettings,
-    integrations: IntegrationDestination[],
-  ): Promise<RecordingDestinationOption> {
-    const storageMode = storageModeOfProfile(profile);
-    const option: RecordingDestinationOption = {
-      id: profile.id,
-      name: profile.name,
-      kind: isBuiltinRecordingDestinationId(profile.id) ? 'builtin' : 'custom',
-      storageMode,
-      filesLabel: filesLabelOf(profile, settings, integrations),
-      dataRoutes: profile.dataRoutes.map((route) => ({
-        destinationId: route.destinationId,
-        destinationName: integrations.find((destination) => destination.id === route.destinationId)?.name ?? null,
-      })),
-      available: true,
-    };
-    if (profile.mediaTarget.kind === 'external') {
-      const destinationId = profile.mediaTarget.destinationId;
-      const destination = integrations.find((candidate) => candidate.id === destinationId);
-      const reason: RecordingDestinationUnavailableReason | undefined = !destination
-        ? 'destination-missing'
-        : !destination.enabled
-          ? 'destination-disabled'
-          : !destination.media
-            ? 'media-unavailable'
-            : await this.hasMediaPermission(destination) ? undefined : 'permission-missing';
-      if (reason) return { ...option, available: false, unavailableReason: reason };
-    }
-    for (const route of profile.dataRoutes) {
-      const destination = integrations.find((candidate) => candidate.id === route.destinationId);
-      const reason: RecordingDestinationUnavailableReason | undefined = !destination
-        ? 'destination-missing'
-        : !destination.enabled
-          ? 'destination-disabled'
-          : await this.hasPermission(destination) ? undefined : 'permission-missing';
-      if (reason) return { ...option, available: false, unavailableReason: reason };
-    }
-    return option;
-  }
-
-  private async hasPermission(destination: IntegrationDestination): Promise<boolean> {
-    try {
-      return await this.deps.containsHostPermission(normalizeWebhookEndpoint(destination.endpoint).hostPermission);
-    } catch {
-      return false;
-    }
-  }
-
-  private async hasMediaPermission(destination: IntegrationDestination): Promise<boolean> {
-    try {
-      if (!destination.media || !await this.hasPermission(destination)) return false;
-      for (const origin of destination.media.capability.upload.origins) {
-        if (!await this.deps.containsHostPermission(`${origin}/*`)) return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
-function normalizeSaveInput(input: SaveRecordingDestinationInput): {
-  mediaTarget: RecordingDestinationMediaTarget;
-  dataRoutes: RecordingDestinationRoute[];
-} {
-  if ('mediaTarget' in input) {
-    return {
-      mediaTarget: { ...input.mediaTarget },
-      dataRoutes: input.dataRoutes.map((route) => ({ destinationId: route.destinationId, mode: route.mode })),
-    };
-  }
-  return {
-    mediaTarget: {
-      kind: 'local',
-      ...(input.localFolderPresetId ? { folderPresetId: input.localFolderPresetId } : {}),
-    },
-    dataRoutes: [{ destinationId: input.destinationId, mode: 'auto' }],
-  };
-}
-
-function filesLabelOf(
-  profile: RecordingDestinationProfile,
-  settings: ExtensionSettings,
-  integrations: readonly IntegrationDestination[] = [],
-): string {
-  const target = profile.mediaTarget;
-  if (target.kind === 'external') {
-    return integrations.find((destination) => destination.id === target.destinationId)?.name ?? 'External service';
-  }
-  const base = target.kind === 'drive' ? 'Google Drive' : 'Local downloads';
-  const presets = target.kind === 'drive' ? settings.storage.driveFolderPresets : settings.storage.localFolderPresets;
-  const folder = target.folderPresetId
-    ? presets.find((preset) => preset.id === target.folderPresetId)?.name
-    : undefined;
-  return folder ? `${base} / ${folder}` : base;
 }

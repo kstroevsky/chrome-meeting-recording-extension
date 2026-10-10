@@ -11,11 +11,18 @@ import {
   hasExternalReplica,
   isUploadableMedia,
   listExternalMediaStatuses,
+  mediaSnapshot,
   matchesOwner,
   recordingFileLabel,
   retryExternalMediaTransfer,
+  transferNeedsRetainedSource,
 } from './externalMediaStatus';
-import { sendExternalMediaCancel, type ExternalMediaCancelFilter } from './externalMediaCancellation';
+import {
+  cancelExternalMediaBestEffort,
+  sendExternalMediaCancel,
+  type ExternalMediaCancelFilter,
+} from './externalMediaCancellation';
+import { ExternalMediaHistoryCommitter } from './ExternalMediaHistoryCommitter';
 
 type Logger = { warn: (...args: any[]) => void };
 
@@ -36,8 +43,11 @@ export class ExternalMediaCoordinator {
   private readonly readyRuns = new Map<string, Promise<void>>();
   private reconcileRun: Promise<void> | null = null;
   private readonly sourceReleaseLocks = new Set<string>();
+  private readonly historyCommitter: ExternalMediaHistoryCommitter;
 
-  constructor(private readonly deps: Deps) {}
+  constructor(private readonly deps: Deps) {
+    this.historyCommitter = new ExternalMediaHistoryCommitter(deps, (filter) => this.cancel(filter));
+  }
 
   reconcile(): Promise<void> {
     if (this.reconcileRun) return this.reconcileRun;
@@ -50,7 +60,7 @@ export class ExternalMediaCoordinator {
 
   private async reconcileAll(): Promise<void> {
     await this.deps.offscreen.ensureReady();
-    const snapshot = await this.snapshot();
+    const snapshot = await mediaSnapshot(this.deps.offscreen);
     await this.deps.retryScheduler.sync(snapshot);
     for (const transfer of snapshot) await this.reconcileTransfer(transfer);
     for (const entry of await this.deps.listHistory()) {
@@ -83,7 +93,7 @@ export class ExternalMediaCoordinator {
     try {
       await this.deps.offscreen.ensureReady();
       const keys = new Set(sourceKeys);
-      const busy = (await this.snapshot()).some((transfer) =>
+      const busy = (await mediaSnapshot(this.deps.offscreen)).some((transfer) =>
         keys.has(transfer.source.key) && transferNeedsRetainedSource(transfer));
       if (busy) return { busy: true };
       return { busy: false, value: await release() };
@@ -116,34 +126,26 @@ export class ExternalMediaCoordinator {
 
   async handleState(transfer: ExternalMediaTransferView): Promise<void> {
     await this.deps.retryScheduler.observe(transfer);
-    await this.syncPrimaryDelivery(transfer);
+    await this.historyCommitter.syncPrimaryDelivery(transfer);
     if (transfer.state !== 'ready-unacknowledged') return;
     const key = `${transfer.destinationId}\u0000${transfer.request.clientTransferId}`;
     const running = this.readyRuns.get(key);
     if (running) return running;
-    const run = this.commitReady(transfer).finally(() => {
+    const run = this.historyCommitter.commitReady(transfer).finally(() => {
       if (this.readyRuns.get(key) === run) this.readyRuns.delete(key);
     });
     this.readyRuns.set(key, run);
     return run;
   }
 
-  async cancelRecording(recordingId: string): Promise<void> {
-    await this.cancel({ recordingId });
-  }
+  async cancelRecording(recordingId: string): Promise<void> { await this.cancel({ recordingId }); }
 
-  async cancelDestination(destinationId: string): Promise<void> {
-    await this.cancel({ destinationId });
-  }
+  async cancelDestination(destinationId: string): Promise<void> { await this.cancel({ destinationId }); }
 
   /** Disconnect must prove local transfer work stopped before credentials vanish. */
-  async cancelDestinationStrict(destinationId: string): Promise<void> {
-    await sendExternalMediaCancel(this.deps.offscreen, { destinationId });
-  }
+  async cancelDestinationStrict(destinationId: string): Promise<void> { await sendExternalMediaCancel(this.deps.offscreen, { destinationId }); }
 
-  async userStatuses(recordingId?: string): Promise<ExternalMediaTransferStatus[]> {
-    return listExternalMediaStatuses(this.deps, recordingId);
-  }
+  async userStatuses(recordingId?: string): Promise<ExternalMediaTransferStatus[]> { return listExternalMediaStatuses(this.deps, recordingId); }
 
   async retryTransfer(destinationId: string, clientTransferId: string): Promise<ExternalMediaTransferStatus> {
     return retryExternalMediaTransfer(
@@ -181,7 +183,7 @@ export class ExternalMediaCoordinator {
       }
     }
     const routeIds = new Set(routes.map((route) => route.destinationId));
-    for (const transfer of await this.snapshot()) {
+    for (const transfer of await mediaSnapshot(this.deps.offscreen)) {
       if (transfer.owner?.recordingId === recordingId && !routeIds.has(transfer.destinationId)) {
         await this.cancel({ recordingId, destinationId: transfer.destinationId });
       }
@@ -241,97 +243,7 @@ export class ExternalMediaCoordinator {
     if (transfer.state === 'ready-unacknowledged') await this.handleState(transfer);
   }
 
-  private async commitReady(transfer: ExternalMediaTransferView): Promise<void> {
-    const owner = transfer.owner;
-    if (!owner || !transfer.artifactId) return;
-    const entry = await this.deps.historyRepository.get(owner.recordingId);
-    const file = entry?.files.find((candidate) => candidate.id === owner.fileId);
-    if (!entry || entry.deletedAt || !file || !isUploadableMedia(file)) {
-      await this.cancel({ recordingId: owner.recordingId, destinationId: transfer.destinationId });
-      return;
-    }
-    const routes = await this.deps.integrations.authorizedMediaRoutes(owner.recordingId);
-    if (!routes.some((route) => matchesOwner(route, transfer))) {
-      await this.cancel({ recordingId: owner.recordingId, destinationId: transfer.destinationId });
-      return;
-    }
-    const existing = file.locations.find((location) =>
-      location.kind === 'external' && location.destinationId === transfer.destinationId);
-    if (existing?.kind === 'external' && existing.artifactId !== transfer.artifactId) {
-      this.deps.logger.warn('External media artifact conflicts with canonical history; keeping existing replica',
-        recordingFileLabel(owner.recordingId, owner.fileId));
-      await this.cancel({
-        destinationId: transfer.destinationId,
-        clientTransferId: transfer.request.clientTransferId,
-      });
-      return;
-    }
-    if (!existing) {
-      await this.deps.history.recordArtifactLocation(owner.recordingId, owner.fileId, {
-        kind: 'external',
-        destinationId: transfer.destinationId,
-        artifactId: transfer.artifactId,
-      });
-    }
-    const durable = await this.deps.historyRepository.get(owner.recordingId);
-    const persisted = durable && !durable.deletedAt
-      ? durable.files.find((candidate) => candidate.id === owner.fileId)?.locations.some((location) =>
-          location.kind === 'external' && location.destinationId === transfer.destinationId &&
-          location.artifactId === transfer.artifactId)
-      : false;
-    if (!persisted) {
-      await this.cancel({ recordingId: owner.recordingId, destinationId: transfer.destinationId });
-      return;
-    }
-    const response = await this.deps.offscreen.rpc<{ ok: boolean; error?: string }>({
-      type: 'OFFSCREEN_MEDIA_ACK',
-      destinationId: transfer.destinationId,
-      clientTransferId: transfer.request.clientTransferId,
-    });
-    if (!response?.ok) throw new Error(response?.error || 'External media acknowledgement failed');
-  }
-
-  private async syncPrimaryDelivery(transfer: ExternalMediaTransferView): Promise<void> {
-    const owner = transfer.owner;
-    if (!owner) return;
-    if (transfer.state === 'retry-wait' || transfer.state === 'action-required') {
-      await this.deps.history.setExternalDeliveryState(
-        owner.recordingId, owner.fileId, transfer.destinationId, 'pending',
-      );
-      return;
-    }
-    if (transfer.state === 'canceled') {
-      await this.deps.history.setExternalDeliveryState(
-        owner.recordingId, owner.fileId, transfer.destinationId, 'failed', 'External delivery was canceled',
-      );
-    }
-  }
-
-  private async snapshot(): Promise<ExternalMediaTransferView[]> {
-    const response = await this.deps.offscreen.rpc<{
-      ok: boolean;
-      transfers?: ExternalMediaTransferView[];
-      error?: string;
-    }>({ type: 'OFFSCREEN_MEDIA_SNAPSHOT' });
-    if (!response?.ok || !Array.isArray(response.transfers)) {
-      throw new Error(response?.error || 'External media snapshot failed');
-    }
-    return response.transfers;
-  }
-
   private async cancel(filter: ExternalMediaCancelFilter): Promise<void> {
-    try {
-      await sendExternalMediaCancel(this.deps.offscreen, filter);
-    } catch (error) {
-      this.deps.logger.warn('External media cancellation deferred:', filter, error);
-    }
+    await cancelExternalMediaBestEffort(this.deps.offscreen, this.deps.logger.warn, filter);
   }
-}
-
-export function transferNeedsRetainedSource(transfer: ExternalMediaTransferView): boolean {
-  if (transfer.state === 'verifying-capability' || transfer.state === 'ready-unacknowledged'
-      || transfer.state === 'acknowledged' || transfer.state === 'canceled') return false;
-  if ((transfer.state === 'retry-wait' || transfer.state === 'action-required')
-      && transfer.resumeFrom === 'verifying-capability') return false;
-  return true;
 }

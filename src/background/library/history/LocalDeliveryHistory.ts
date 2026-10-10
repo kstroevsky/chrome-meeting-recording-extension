@@ -14,7 +14,19 @@ import { summarizeHistoryFiles } from './RecordingHistoryState';
 
 /** Owns history mutations caused by local-download delivery outcomes. */
 export class LocalDeliveryHistory {
-  constructor(private readonly repository: RecordingHistoryRepositoryPort) {}
+  constructor(
+    private readonly repository: RecordingHistoryRepositoryPort,
+    private readonly openDownload?: (downloadId: number) => Promise<void>,
+  ) {}
+
+  async openLocalFile(recordingId: string, fileId: string): Promise<void> {
+    const entry = await this.repository.get(recordingId);
+    const file = entry && !entry.deletedAt
+      ? entry.files.find((candidate) => candidate.id === fileId)
+      : undefined;
+    if (!file?.downloadId || !this.openDownload) throw new Error('This local file is no longer available');
+    await this.openDownload(file.downloadId);
+  }
 
   async localSaveSettled(
     historyId: string,

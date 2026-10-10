@@ -28,6 +28,14 @@ export function recordingFileLabel(recordingId: string, fileId: string): string 
   return `${recordingId}/${fileId}`;
 }
 
+export function transferNeedsRetainedSource(transfer: ExternalMediaTransferView): boolean {
+  if (transfer.state === 'verifying-capability' || transfer.state === 'ready-unacknowledged'
+      || transfer.state === 'acknowledged' || transfer.state === 'canceled') return false;
+  if ((transfer.state === 'retry-wait' || transfer.state === 'action-required')
+      && transfer.resumeFrom === 'verifying-capability') return false;
+  return true;
+}
+
 export function toExternalMediaStatus(
   transfer: ExternalMediaTransferView,
   destinationName?: string,
@@ -115,7 +123,7 @@ export async function retryExternalMediaTransfer(
   return status;
 }
 
-async function mediaSnapshot(offscreen: OffscreenManager): Promise<ExternalMediaTransferView[]> {
+export async function mediaSnapshot(offscreen: OffscreenManager): Promise<ExternalMediaTransferView[]> {
   await offscreen.ensureReady();
   const response = await offscreen.rpc<{
     ok: boolean;

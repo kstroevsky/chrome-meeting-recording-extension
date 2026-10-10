@@ -1,9 +1,5 @@
 import { containsHostPermission, removeHostPermission } from '../../platform/chrome/permissions';
 import { clearAlarm, createAlarm, getAlarm } from '../../platform/chrome/alarms';
-import type { RecordingNotation } from '../../shared/notations';
-import type { RecordingContext } from '../../shared/recordingContext';
-import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
-import type { Transcript } from '../../shared/transcript';
 import { integrationEventTypePrefix } from '../../integrations/config';
 import { IntegrationCoordinator } from '../../integrations/IntegrationCoordinator';
 import { IntegrationDispatcher } from '../../integrations/IntegrationDispatcher';
@@ -23,17 +19,16 @@ import type { CreateIntegrationDestinationInput } from '../../integrations/manag
 import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../../integrations/contracts';
 import { WebhookTransport } from '../../integrations/webhook/WebhookTransport';
 import { IntegrationPreviewService } from './IntegrationPreviewService';
-import type { AnalysisExportState } from '../library/analysis/RecordingAnalysisService';
-import { integrationDisconnectImpact, listIntegrationRecordings } from './integrationRuntimeQueries';
-
-type CanonicalRecordingReaders = {
-  listHistory(): Promise<RecordingHistoryEntry[]>;
-  getHistory(recordingId: string): Promise<RecordingHistoryEntry | undefined>;
-  getContext(recordingId: string): Promise<RecordingContext | undefined>;
-  listNotations(recordingId: string): Promise<RecordingNotation[]>;
-  getTranscript(recordingId: string): Promise<Transcript | undefined>;
-  getAnalysisState(recordingId: string): Promise<AnalysisExportState>;
-};
+import {
+  changeRecordingRouteIfFinalized,
+  integrationDisconnectImpact,
+  listIntegrationRecordings,
+  loadRecordingRouteCandidates,
+} from './integrationRuntimeQueries';
+import {
+  considerRecordingDestinations,
+  type CanonicalRecordingReaders,
+} from './integrationRuntimeSupport';
 
 /** Background composition boundary for all external-integration operations. */
 export class BackgroundIntegrationRuntime {
@@ -165,17 +160,11 @@ export class BackgroundIntegrationRuntime {
     return result;
   }
 
-  sendRecording(destinationId: string, recordingId: string) {
-    return this.coordinator.sendRecording(destinationId, recordingId);
-  }
+  sendRecording(destinationId: string, recordingId: string) { return this.coordinator.sendRecording(destinationId, recordingId); }
 
-  listDeliveries() {
-    return this.coordinator.listDeliveries();
-  }
+  listDeliveries() { return this.coordinator.listDeliveries(); }
 
-  retryDelivery(deliveryId: string) {
-    return this.dispatcher.retry(deliveryId);
-  }
+  retryDelivery(deliveryId: string) { return this.dispatcher.retry(deliveryId); }
 
   /** Holds the routes of a "Save to" destination for a recording that is starting. */
   beginRecordingRouting(recordingId: string, routes: readonly RecordingRoutingRoute[]) {
@@ -202,19 +191,15 @@ export class BackgroundIntegrationRuntime {
 
   /** Explicit end-dialog receiver replacement; the replacement remains held. */
   async changeRecordingRoute(recordingId: string, fromDestinationId: string | undefined, toDestinationId: string) {
-    const context = await this.readers.getContext(recordingId);
-    if (!context?.endedAt) return 'stale' as const;
-    return this.recordingRouting.change(recordingId, fromDestinationId, toDestinationId);
+    return changeRecordingRouteIfFinalized(
+      (id) => this.readers.getContext(id), this.recordingRouting, recordingId, fromDestinationId, toDestinationId,
+    );
   }
 
   /** A discarded run or a removed recording: nothing about it leaves the browser any more. */
-  forgetRecordingRouting(recordingId: string): Promise<void> {
-    return this.recordingRouting.forget(recordingId);
-  }
+  forgetRecordingRouting(recordingId: string): Promise<void> { return this.recordingRouting.forget(recordingId); }
 
-  heldRecordings(): Promise<string[]> {
-    return this.recordingRouting.held();
-  }
+  heldRecordings(): Promise<string[]> { return this.recordingRouting.held(); }
 
   recordingRoutes(recordingId: string, expected: readonly RecordingRoutingRoute[] = []) {
     return this.recordingRouting.routes(recordingId, expected);
@@ -224,18 +209,9 @@ export class BackgroundIntegrationRuntime {
     recordingId: string,
     expected: readonly RecordingRoutingRoute[] = [],
   ): Promise<import('../../integrations/RecordingRoutingService').RecordingRouteCandidate[]> {
-    const [destinations, routes] = await Promise.all([
-      this.listDestinations(),
-      this.recordingRoutes(recordingId, expected),
-    ]);
-    const existing = new Set(routes.map((route) => route.destinationId));
-    return destinations.flatMap((destination) => destination.enabled && !existing.has(destination.id)
-      ? [{
-          destinationId: destination.id,
-          destinationName: destination.name,
-          ...(destination.media ? { includesMedia: true as const } : {}),
-        }]
-      : []);
+    return loadRecordingRouteCandidates(
+      () => this.listDestinations(), () => this.recordingRoutes(recordingId, expected),
+    );
   }
 
   consider(recordingId: string): Promise<void> {
@@ -245,12 +221,10 @@ export class BackgroundIntegrationRuntime {
   private async considerRecording(recordingId: string): Promise<void> {
     const intent = await this.routing.get(recordingId);
     if (!intent) return;
-    const results = await Promise.allSettled(
-      intent.destinations.map(({ destinationId }) => this.considerStream(destinationId, recordingId)),
+    await considerRecordingDestinations(
+      intent.destinations,
+      (destinationId) => this.considerStream(destinationId, recordingId),
     );
-    for (const result of results) {
-      if (result.status === 'rejected') console.warn('[integrations] recording consideration failed:', result.reason);
-    }
   }
 
   async reconcile(): Promise<void> {
