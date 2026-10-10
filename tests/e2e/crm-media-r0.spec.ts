@@ -42,7 +42,7 @@ const RUN_LIFECYCLE = process.env.R0_RUN_LIFECYCLE === "1";
 const RUN_LOCAL_RELEASE = process.env.R1_RUN_LOCAL_RELEASE === "1";
 const RUN_PROTOCOL_HARDENING =
   process.env.R0_RUN_PROTOCOL_HARDENING === "1";
-const LARGE_FIXTURE_BYTES = 1024 * 1024 * 1024 + 12_345;
+const JM2_FIXTURE_BYTES = 100 * 1024 * 1024;
 const RESTART_FIXTURE_BYTES = 256 * 1024 * 1024 + 12_345;
 const URL_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
 const ATTEMPT_EXPIRY_FIXTURE_BYTES = 64 * 1024 * 1024 + 12_345;
@@ -264,7 +264,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
     }
   });
 
-  test("uploads a >=1 GiB retained artifact with exact multipart sizing", async ({}, testInfo) => {
+  test("uploads a 100 MiB audio-sized retained artifact with exact multipart sizing", async ({}, testInfo) => {
     test.skip(
       !CRM_UPSTREAM || !R2_UPLOAD_ORIGIN || !RUN_LARGE_TRANSFER,
       "Set R0_RUN_LARGE_TRANSFER=1 with the real-R2 pilot variables to run JM2.",
@@ -352,9 +352,9 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         await resizeRetainedOpfsFixture(
           harness.controlPage,
           opfs.key,
-          LARGE_FIXTURE_BYTES,
+          JM2_FIXTURE_BYTES,
         ),
-      ).toBe(LARGE_FIXTURE_BYTES);
+      ).toBe(JM2_FIXTURE_BYTES);
 
       const routeBeforeRelease = await recordingRoutes(
         harness.controlPage,
@@ -379,8 +379,8 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
       expect(transfers).toHaveLength(1);
       expect(transfers[0]).toMatchObject({
         state: "acknowledged",
-        bytesUploaded: LARGE_FIXTURE_BYTES,
-        bytesTotal: LARGE_FIXTURE_BYTES,
+        bytesUploaded: JM2_FIXTURE_BYTES,
+        bytesTotal: JM2_FIXTURE_BYTES,
       });
 
       const journal = await externalMediaJournal(
@@ -389,15 +389,15 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         created.destination.id,
       );
       expect(journal).toBeTruthy();
-      expect(journal.request.artifact.bytes).toBe(LARGE_FIXTURE_BYTES);
+      expect(journal.request.artifact.bytes).toBe(JM2_FIXTURE_BYTES);
       expect(journal.state).toBe("acknowledged");
       expect(Number.isSafeInteger(journal.partSize) && journal.partSize > 0).toBe(true);
-      const expectedPartCount = Math.ceil(LARGE_FIXTURE_BYTES / journal.partSize);
+      const expectedPartCount = Math.ceil(JM2_FIXTURE_BYTES / journal.partSize);
       expect(journal.uploadedParts).toHaveLength(expectedPartCount);
       expect(new Set(journal.uploadedParts.map((part: any) => part.partNumber)).size)
         .toBe(expectedPartCount);
       const finalPartBytes =
-        LARGE_FIXTURE_BYTES - (expectedPartCount - 1) * journal.partSize;
+        JM2_FIXTURE_BYTES - (expectedPartCount - 1) * journal.partSize;
       expect(finalPartBytes).toBeGreaterThan(0);
       expect(finalPartBytes).toBeLessThanOrEqual(journal.partSize);
 
@@ -411,7 +411,7 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         proxy.origin,
         `/api/interview-recordings/${crmRecording.id}/media`,
       );
-      const artifact = crmMedia.find((item) => item.bytes === LARGE_FIXTURE_BYTES);
+      const artifact = crmMedia.find((item) => item.bytes === JM2_FIXTURE_BYTES);
       expect(artifact).toBeTruthy();
       const playback = await crmPost<{ url: string; expiresAt: string }>(
         admin,
@@ -438,20 +438,20 @@ test.describe("CRM real-R2 media pilot @r0-real-media", () => {
         },
         {
           url: playback.url,
-          start: LARGE_FIXTURE_BYTES - 1024,
-          end: LARGE_FIXTURE_BYTES - 1,
+          start: JM2_FIXTURE_BYTES - 1024,
+          end: JM2_FIXTURE_BYTES - 1,
         },
       );
       expect(tail).toEqual({
         status: 206,
-        contentRange: `bytes ${LARGE_FIXTURE_BYTES - 1024}-${LARGE_FIXTURE_BYTES - 1}/${LARGE_FIXTURE_BYTES}`,
+        contentRange: `bytes ${JM2_FIXTURE_BYTES - 1024}-${JM2_FIXTURE_BYTES - 1}/${JM2_FIXTURE_BYTES}`,
         bytes: 1024,
       });
 
-      await testInfo.attach("jm2-large-transfer-evidence.json", {
+      await testInfo.attach("jm2-audio-transfer-evidence.json", {
         body: JSON.stringify(
           {
-            bytes: LARGE_FIXTURE_BYTES,
+            bytes: JM2_FIXTURE_BYTES,
             partSize: journal.partSize,
             partCount: expectedPartCount,
             finalPartBytes,

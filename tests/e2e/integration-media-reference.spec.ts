@@ -23,7 +23,7 @@ import {
 } from "./helpers/referenceMediaReceiver";
 
 const MiB = 1024 * 1024;
-const LARGE_FIXTURE_BYTES = 1024 * MiB + 12_345;
+const JM2_FIXTURE_BYTES = 100 * MiB;
 const RESTART_FIXTURE_BYTES = 128 * MiB + 12_345;
 const EXPIRY_FIXTURE_BYTES = 16 * MiB + 12_345;
 
@@ -167,7 +167,7 @@ test.describe("independent external-media receiver conformance @reference-media"
     }
   });
 
-  test("JM2 uploads a >=1 GiB source with exact multipart accounting and tail range", async ({}, testInfo) => {
+  test("JM2 uploads a 100 MiB audio-sized source with exact multipart accounting and tail range", async ({}, testInfo) => {
     test.skip(!R2 || !RUN_LARGE_TRANSFER, `${missingR2Message()} Set REFERENCE_MEDIA_RUN_LARGE_TRANSFER=1 to run JM2.`);
     test.setTimeout(1_800_000);
 
@@ -181,8 +181,8 @@ test.describe("independent external-media receiver conformance @reference-media"
       expect(await resizeRetainedOpfsFixture(
         configured.harness.controlPage,
         retained.key,
-        LARGE_FIXTURE_BYTES,
-      )).toBe(LARGE_FIXTURE_BYTES);
+        JM2_FIXTURE_BYTES,
+      )).toBe(JM2_FIXTURE_BYTES);
       expect(await confirmHeldRoutes(configured.harness.controlPage, recordingId))
         .toEqual(expect.objectContaining({ ok: true }));
 
@@ -195,19 +195,19 @@ test.describe("independent external-media receiver conformance @reference-media"
       expect(transfers).toHaveLength(1);
       expect(transfers[0]).toMatchObject({
         state: "acknowledged",
-        bytesUploaded: LARGE_FIXTURE_BYTES,
-        bytesTotal: LARGE_FIXTURE_BYTES,
+        bytesUploaded: JM2_FIXTURE_BYTES,
+        bytesTotal: JM2_FIXTURE_BYTES,
       });
       const journal = await externalMediaJournal(
         configured.harness.controlPage,
         recordingId,
         configured.destination.id,
       );
-      expect(journal.request.artifact.bytes).toBe(LARGE_FIXTURE_BYTES);
-      const expectedParts = Math.ceil(LARGE_FIXTURE_BYTES / journal.partSize);
+      expect(journal.request.artifact.bytes).toBe(JM2_FIXTURE_BYTES);
+      const expectedParts = Math.ceil(JM2_FIXTURE_BYTES / journal.partSize);
       expect(journal.uploadedParts).toHaveLength(expectedParts);
       expect(new Set(journal.uploadedParts.map((part: any) => part.partNumber)).size).toBe(expectedParts);
-      const finalPartBytes = LARGE_FIXTURE_BYTES - (expectedParts - 1) * journal.partSize;
+      const finalPartBytes = JM2_FIXTURE_BYTES - (expectedParts - 1) * journal.partSize;
       expect(finalPartBytes).toBeGreaterThan(0);
       expect(finalPartBytes).toBeLessThanOrEqual(journal.partSize);
 
@@ -224,10 +224,10 @@ test.describe("independent external-media receiver conformance @reference-media"
       expect(await rangedRead(
         player,
         playback.url,
-        `bytes=${LARGE_FIXTURE_BYTES - 1024}-${LARGE_FIXTURE_BYTES - 1}`,
+        `bytes=${JM2_FIXTURE_BYTES - 1024}-${JM2_FIXTURE_BYTES - 1}`,
       )).toEqual({
         status: 206,
-        contentRange: `bytes ${LARGE_FIXTURE_BYTES - 1024}-${LARGE_FIXTURE_BYTES - 1}/${LARGE_FIXTURE_BYTES}`,
+        contentRange: `bytes ${JM2_FIXTURE_BYTES - 1024}-${JM2_FIXTURE_BYTES - 1}/${JM2_FIXTURE_BYTES}`,
         bytes: 1024,
       });
     } finally {

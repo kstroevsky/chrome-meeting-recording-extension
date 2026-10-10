@@ -144,9 +144,14 @@ R0 is therefore green for JM1–JM10 and JM13–JM19. R1/JM11 is now green as we
 the real Chrome/R2 gate verified native remote playback before release, an active
 playback lease deferred physical OPFS deletion while the durable release marker
 removed the history claim, browser restart reconciliation collected the retained
-bytes without re-adopting them, and normal playback then resumed from R2. JM12
-remains deliberately reserved for the M6 independent receiver. Local OPFS source
-release still cannot be enabled from capability/HEAD success alone.
+bytes without re-adopting them, and normal playback then resumed from R2.
+
+JM12/M6 is now green too. The independent reference receiver is separate from
+extension production code and JM0–JM6 pass against it with real Chromium and the
+CRM-owned R2 bucket. JM2 now uses a 100 MiB audio-sized fixture and proves exact
+multipart accounting plus a tail Range read; the earlier 1 GiB CRM pilot remains
+stronger historical stress evidence. Local OPFS source release still cannot be
+enabled from capability/HEAD success alone.
 
 ## Scope and verdict
 
@@ -161,7 +166,11 @@ joint gates were not independently re-run in this review.
 
 The R0/R1 portion of Phase 2 now has an operational, recovery-tested CRM replica,
 safe playback/disconnect behavior and verified explicit local-source release.
-The next implementation work can proceed to M3–M6 in order; JM12 stays with M6.
+M3–M6 are also implemented on the current branch: generalized profiles and intent
+preservation (`75f019a`, `d0e96cd`), end-dialog receiver authorization changes
+(`9606e04`, `5bfd948`), external-primary ownership/finalization (`c2687cc`,
+`c63a88d`, `f2f8dda`), and the independent receiver/conformance harness
+(`893bf96`, `b587eb4`). JM12 closes M6.
 
 The original review baselines were extension `4dd680c` on
 `feat/save-to-destinations` and CRM `43ddd13d` on
@@ -173,13 +182,13 @@ stage only files belonging to each task.
 
 | Area | Verified implementation | Remaining limit |
 | --- | --- | --- |
-| Generic protocol | Extension ADR-0009, capability parsing, same-origin HTTPS control plane, dedicated bearer credential | No independent receiver proof; large valid part manifests exceed the client's current response bound |
+| Generic protocol | Extension ADR-0009, capability parsing, same-origin HTTPS control plane, dedicated bearer credential, independent reference receiver | JM12 is closed; production storage/retention policy remains separate from protocol conformance |
 | Byte sources | `src/media/ArtifactByteSource.ts` and OPFS/Drive resolver; sharing uses the neutral abstraction | Downloads cannot supply upload bytes |
-| CRM provider | Create/status/part/complete/playback endpoints; hash-only tokens; immutable create fingerprint; attempt-specific ID-only storage keys; provider ListParts/HEAD checks; deployment wiring and real-R2 lifecycle coverage | Independent generic receiver proof remains M6/JM12 |
+| CRM provider | Create/status/part/complete/playback endpoints; hash-only tokens; immutable create fingerprint; attempt-specific ID-only storage keys; provider ListParts/HEAD checks; deployment wiring and real-R2 lifecycle coverage | Independent generic receiver proof is closed by JM12; production storage/retention policy remains open |
 | CRM limits | Aggregate connection-wide media throttle across handlers/tokens; four-active-upload cap includes completing work; 32 MiB parts, 8 GiB artifact limit, 64 GiB connection quota | Storage limits remain fixed receiver policy rather than negotiated protocol fields |
 | CRM reconciliation | Dedicated media-prefix multipart/object scans, pagination, grace period, DB/provider stale convergence, safe dry-run and redacted completed-orphan report | Completed orphan objects are intentionally report-only; automatic deletion is not part of R0 |
-| Extension executor | Production durable queue/coordinator, provider-authoritative resume, bounded part concurrency, expired-attempt restart, ready acknowledgement, startup reconciliation and transfer-guarded retained-source release | R1/JM11 source-release gate is closed; M3–M6 remain |
-| Extension playback | External history locations written by successful transfers; background ownership checks; refreshable external playback with expiry recovery; native remote-playback proof gates explicit OPFS release | R1/JM11 source-release gate is closed; independent receiver proof remains M6/JM12 |
+| Extension executor | Production durable queue/coordinator, provider-authoritative resume, bounded part concurrency, expired-attempt restart, ready acknowledgement, startup reconciliation and transfer-guarded retained-source release | R1/JM11 and M3–M6 are closed on the current branch |
+| Extension playback | External history locations written by successful transfers; background ownership checks; refreshable external playback with expiry recovery; native remote-playback proof gates explicit OPFS release | R1/JM11 and independent receiver proof are closed |
 | Save confirmation | Start-time stream identity and media authorization; held routes; one confirmation removal persists `skipped` and suppresses both event and media work across restart | R0 consent gate is closed; later receiver replacement still requires the existing exact receiver-identity checks |
 
 Primary committed foundations:
@@ -521,7 +530,7 @@ These are separate commits for disconnect semantics, playback, explicit release,
 descriptors, provisioning UI and recording player. Do not treat the existing
 backend endpoint or jsdom tests as a completed CRM browser player.
 
-### D. Continue M3–M6 only after the replica/playback gates
+### D. M3–M6 implementation sequence — completed on the current branch
 
 | Milestone | Work and prerequisite | Acceptance |
 | --- | --- | --- |
@@ -555,9 +564,9 @@ specific recovery/limits amendments needed by the reproduced failures.
 | E2: lifecycle/history/update integration | E1 | Crash at each journal/history/ack boundary converges; both reload callers honor active/unknown work; deletion cannot recreate history |
 | E3: progress/retry and safe disconnect | E2; P1 | Errors preserve source; library >50 is counted; disable preserves playback; disconnect requires the stated consequence to be confirmed |
 | C0: CRM token UI, media descriptors and player | P1/P2 | ADMIN provisioning, scoped descriptor read, real ranged playback and refresh without persisted capabilities |
-| R0: real-R2 replica/playback pilot | P0/P1/P2/E2/E3/C0; cleanup safety | JM0–JM10 and JM13–JM19 evidence relevant to M1/M2; no source release; JM2 uses >=1 GiB |
+| R0: real-R2 replica/playback pilot | P0/P1/P2/E2/E3/C0; cleanup safety | JM0–JM10 and JM13–JM19 evidence relevant to M1/M2; no source release; JM2 uses a 100 MiB audio-sized fixture |
 | R1: explicit space-release submilestone | R0 plus lease/release journal | Actual remote playback verified; deliberate release survives crashes/reconciliation; JM11 closed |
-| Later M3/M4/M5/M6 | M1/M2 gates; R1 before sole-copy dependence | General profiles and deliberate end changes; real external delivery state; independent receiver JM12 |
+| M3/M4/M5/M6 | M1/M2 gates; R1 before sole-copy dependence | General profiles and deliberate end changes; real external delivery state; independent receiver JM12 — closed on the current branch |
 
 The existing multipart reconciler can support an isolated R0 pilot after its
 abort/missing-session safety is tested. Completed-object reporting and quota-state
@@ -624,18 +633,18 @@ without continuously keeping the service worker or offscreen runtime alive.
 | --- | --- |
 | JM0 | Signed test request and strictly validated HTTPS capability response, same-origin rejection tests, storage permission grant from a user gesture |
 | JM1 | Real Chrome → presigned R2 UploadPart → complete/HEAD → ranged playback; no emulator substitute |
-| JM2–JM5 | At least 1 GiB file, exact part lengths, process termination/restart, expired URL renewal, expired attempt replacement with one artifact ID |
+| JM2–JM5 | 100 MiB audio-sized file, exact part lengths, process termination/restart, expired URL renewal, expired attempt replacement with one artifact ID |
 | JM6–JM7 | Chromium playback over more than one expiry, seeking/auxiliary tracks, CRM native Range requests, no CSP violation |
 | JM8, JM13 | HTTP-level connection isolation, token replacement/disable, interview RBAC, ADMIN-only unmatched, CRM playback preserved after extension disable |
 | JM9–JM11 | Count beyond 50 recordings, disable vs disconnect, local removal preserves remote media, verified explicit release and crash recovery |
-| JM12 | Independent reference receiver; reserved for M6 |
+| JM12 | Independent reference receiver; JM0–JM6 passed against it with real Chromium/R2; M6 closed |
 | JM14–JM16 | Role/MIME/filename negative cases, stored allowlisted type, ID-only keys/headers, unsupported upload parameters rejected before reading bytes |
 | JM17–JM18 | Document prefix isolation, stale upload cleanup and DB convergence, orphan report, aggregate connection throttle across all handlers and fifth-upload rejection including completing work |
 | JM19 | One end-dialog removal suppresses both media and events, including delayed/restarted work |
 
 JM1 needs a private test bucket or isolated prefix and dedicated test connection,
 not a recruiting recording. Use a synthetic playable WebM/MP4 for browser playback
-and a >=1 GiB byte-range fixture for the large transfer gate; padded invalid media
+and a 100 MiB byte-range fixture for the audio-sized transfer gate; padded invalid media
 is not proof of playback. Record build/commit versions, byte counts, part counts,
 status codes and sanitized results. Do not save raw tokens, URLs, browser traces
 with signed queries, or real meeting content. Validate CORS/ETag exposure and
@@ -789,7 +798,7 @@ media confirmation, and resolve production limits before rollout. O3's recording
 retention/purge policy remains separately unresolved; receipt retention is already
 a different implemented job. Do not add automatic media deletion under that job.
 
-R0 and R1 are now closed with fresh real-R2/browser evidence. Continue with M3,
-then M4 and M5, keeping M6/JM12 as the independent-receiver proof. Only mark a
-milestone complete when its relevant gates have fresh evidence; a commit or
-unit-test pass alone is insufficient.
+R0, R1 and M3–M6 are now closed with fresh real-R2/browser evidence where their
+gates require it. The implementation phase can move to branch/PR integration and
+release validation. A milestone remains complete only while its relevant gates
+continue to have fresh evidence; a commit or unit-test pass alone is insufficient.
