@@ -1,7 +1,5 @@
-import { sendTabMessage } from '../../platform/chrome/tabs';
 import type { CommandResult, OffscreenFinalizationCommandResult } from '../../shared/protocol';
 import { isStoppablePhase, type RecordingInterruption } from '../../shared/recording';
-import type { TelemetrySnapshot } from '../../shared/telemetry';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
 import type { RecordingNotationService } from '../library/notations/RecordingNotationService';
 import type { RecordingContextService } from '../library/context/RecordingContextService';
@@ -12,6 +10,7 @@ import type { RecordingSession } from './session/RecordingSession';
 import type { RecordingSidecars } from './RecordingSidecars';
 import { DiscardDerivedDataCleanup } from './DiscardDerivedDataCleanup';
 import { finishRecordingContext } from './RecordingContextFinalizer';
+import { captureStopTelemetry } from './RecordingStopTelemetry';
 
 type ResultFactory = {
   ok: () => CommandResult;
@@ -30,6 +29,8 @@ export class RecordingLifecycleCommands {
       notations?: RecordingNotationService;
       transcripts?: RecordingTranscriptService;
       transcriptCapture?: RecordingTranscriptCapture;
+      destinations?: Pick<import('./recordingRoutingPorts').RecordingDestinationPort, 'driveFolderNameFor'>;
+      routing?: Pick<import('./recordingRoutingPorts').RecordingRoutingPort, 'forget'>;
       sidecars: RecordingSidecars;
       result: ResultFactory;
     },
@@ -60,17 +61,7 @@ export class RecordingLifecycleCommands {
       return this.deps.result.fail('Stop requested but no recording session is active');
     }
 
-    if (typeof snapshot.targetTabId === 'number') {
-      try {
-        const response = await sendTabMessage<{ snapshot?: TelemetrySnapshot }>(
-          snapshot.targetTabId,
-          { type: 'TELEMETRY_GET_SNAPSHOT' },
-        );
-        if (response?.snapshot) {
-          await this.deps.telemetry?.receive(response.snapshot, true);
-        }
-      } catch {}
-    }
+    await captureStopTelemetry(snapshot.targetTabId, this.deps.telemetry);
 
     const { historyId } = snapshot;
     this.deps.session.markStopping(interruption);
@@ -154,10 +145,17 @@ export class RecordingLifecycleCommands {
   ): Promise<CommandResult> {
     if (historyId) await this.finalizeKeptBackground(historyId);
 
-    const [notesSidecar, transcriptSidecar, driveRootFolderName] = await Promise.all([
+    const [notesSidecar, transcriptSidecar, driveRootFolderName, driveDestinationFolderName] = await Promise.all([
       this.deps.sidecars.notes(historyId),
       this.deps.sidecars.transcript(historyId),
       this.deps.sidecars.driveRootFolderName(),
+      historyId
+        ? this.deps.destinations?.driveFolderNameFor?.(historyId)
+          .catch((error) => {
+            this.deps.L.warn('Could not resolve the Drive destination for this recording:', error);
+            return undefined;
+          })
+        : undefined,
     ]);
 
     try {
@@ -169,6 +167,7 @@ export class RecordingLifecycleCommands {
         ...(notesSidecar ? { notesSidecar } : {}),
         ...(transcriptSidecar ? { transcriptSidecar } : {}),
         ...(driveRootFolderName ? { driveRootFolderName } : {}),
+        ...(driveDestinationFolderName ? { driveDestinationFolderName } : {}),
       });
       if (!response?.ok) {
         const message = response?.error || 'Stop failed in offscreen';

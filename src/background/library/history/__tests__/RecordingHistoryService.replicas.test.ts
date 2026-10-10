@@ -14,6 +14,32 @@ describe('RecordingHistoryService artifact replicas', () => {
     ...overrides,
   });
   const tabFile = async (repo: MemoryRepository) => (await repo.get('r1'))!.files[0];
+  const seedRetainedExternal = (repo: MemoryRepository, playbackVerifiedAt?: number) => {
+    repo.entries.set('r1', {
+      id: 'r1',
+      name: 'Demo',
+      createdAt: 1,
+      storageMode: 'local',
+      status: 'complete',
+      files: [{
+        id: 'r1:tab',
+        stream: 'tab',
+        filename: 'demo-recording.webm',
+        mimeType: 'video/webm',
+        bytes: 123,
+        locations: [
+          { kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 5 },
+          {
+            kind: 'external', destinationId: 'crm', artifactId: 'media-1',
+            ...(playbackVerifiedAt != null ? { playbackVerifiedAt } : {}),
+          },
+        ],
+        delivery: { requested: 'local', status: 'downloaded' },
+        destination: 'local',
+        status: 'available',
+      }],
+    });
+  };
 
   it('starts a pending row with no replicas and the requested delivery recorded', async () => {
     const repo = new MemoryRepository();
@@ -24,6 +50,113 @@ describe('RecordingHistoryService artifact replicas', () => {
       mimeType: 'video/webm',
       locations: [],
       delivery: { requested: 'drive', status: 'pending' },
+    });
+  });
+
+  it('models external primary ownership independently from retained OPFS recovery', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    const requested = { kind: 'external' as const, destinationId: 'crm' };
+    await service.createPending(
+      'r1',
+      [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }],
+      requested,
+    );
+
+    expect(await repo.get('r1')).toMatchObject({
+      storageMode: 'local',
+      status: 'saving',
+      files: [{
+        destination: 'local',
+        status: 'pending',
+        delivery: { requested, status: 'pending' },
+      }],
+    });
+
+    await service.recordArtifactLocation('r1', 'r1:tab', {
+      kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 11,
+    });
+    expect(await repo.get('r1')).toMatchObject({
+      status: 'complete',
+      files: [{
+        status: 'available',
+        locations: [{ kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 11 }],
+        delivery: { requested, status: 'pending' },
+      }],
+    });
+  });
+
+  it('satisfies external primary delivery only with a replica from the requested destination', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending(
+      'r1',
+      [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }],
+      { kind: 'external', destinationId: 'crm' },
+    );
+    await service.recordArtifactLocation('r1', 'r1:tab', {
+      kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 11,
+    });
+
+    await service.recordArtifactLocation('r1', 'r1:tab', {
+      kind: 'external', destinationId: 'archive', artifactId: 'archive-1',
+    });
+    expect((await tabFile(repo)).delivery).toEqual({
+      requested: { kind: 'external', destinationId: 'crm' }, status: 'pending',
+    });
+
+    await service.recordArtifactLocation('r1', 'r1:tab', {
+      kind: 'external', destinationId: 'crm', artifactId: 'crm-1',
+    });
+    expect((await tabFile(repo)).delivery).toEqual({
+      requested: { kind: 'external', destinationId: 'crm' }, status: 'uploaded',
+    });
+  });
+
+  it('keeps external recovery bytes locally playable through pending and failed remote delivery', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending(
+      'r1',
+      [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }],
+      { kind: 'external', destinationId: 'crm' },
+    );
+    await service.recordArtifactLocation('r1', 'r1:tab', {
+      kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 11,
+    });
+
+    await service.setExternalDeliveryState('r1', 'r1:tab', 'crm', 'failed', 'Canceled');
+    expect(await tabFile(repo)).toMatchObject({
+      status: 'available',
+      locations: [{ kind: 'opfs', key: 'library/r1/tab.webm' }],
+      delivery: {
+        requested: { kind: 'external', destinationId: 'crm' }, status: 'failed', error: 'Canceled',
+      },
+    });
+    await service.setExternalDeliveryState('r1', 'r1:tab', 'crm', 'pending');
+    expect((await tabFile(repo)).delivery).toEqual({
+      requested: { kind: 'external', destinationId: 'crm' }, status: 'pending',
+    });
+  });
+
+  it('retargets external primary ownership only through an exact requested-destination replacement', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    await service.createPending(
+      'r1',
+      [{ id: 'r1:tab', stream: 'tab', filename: 'demo-recording.webm' }],
+      { kind: 'external', destinationId: 'crm' },
+    );
+    await service.recordArtifactLocation('r1', 'r1:tab', {
+      kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 11,
+    });
+
+    await expect(service.replaceExternalPrimaryDestination('r1', 'other', 'journal')).resolves.toBe(false);
+    expect((await tabFile(repo)).delivery.requested).toEqual({ kind: 'external', destinationId: 'crm' });
+
+    await expect(service.replaceExternalPrimaryDestination('r1', 'crm', 'journal')).resolves.toBe(true);
+    expect((await tabFile(repo)).delivery).toEqual({
+      requested: { kind: 'external', destinationId: 'journal' }, status: 'pending',
     });
   });
 
@@ -274,6 +407,53 @@ describe('RecordingHistoryService artifact replicas', () => {
     const entry = (await repo.get('r1'))!;
     expect(entry.deletedAt).toBe(10);
     expect(entry.files[0].locations).toEqual([]);
+  });
+
+  it('does not offer retained-media release until the exact external artifact has played', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    seedRetainedExternal(repo);
+
+    await expect(service.planVerifiedRetainedMediaRelease('r1')).resolves.toEqual([]);
+    await expect(service.markExternalPlaybackVerified('r1', 'r1:tab', 'crm', 'media-1')).resolves.toBe(true);
+    await expect(service.planVerifiedRetainedMediaRelease('r1')).resolves.toEqual([
+      { fileId: 'r1:tab', key: 'library/r1/tab.webm', bytes: 123 },
+    ]);
+  });
+
+  it('records release intent and removes the OPFS claim in one idempotent history mutation', async () => {
+    const repo = new MemoryRepository();
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10);
+    seedRetainedExternal(repo, 9);
+    const update = jest.spyOn(repo, 'update');
+    const planned = await service.planVerifiedRetainedMediaRelease('r1');
+
+    await expect(service.markVerifiedRetainedMediaReleased('r1', planned)).resolves.toMatchObject({ released: planned });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(await tabFile(repo)).toMatchObject({
+      locations: [{ kind: 'external', destinationId: 'crm', artifactId: 'media-1', playbackVerifiedAt: 9 }],
+      releasedRetainedMedia: [{ key: 'library/r1/tab.webm', releasedAt: 10 }],
+    });
+
+    await expect(service.markVerifiedRetainedMediaReleased('r1', planned)).resolves.toMatchObject({ released: [] });
+    expect((await tabFile(repo)).releasedRetainedMedia).toEqual([
+      { key: 'library/r1/tab.webm', releasedAt: 10 },
+    ]);
+  });
+
+  it('reports lease-deferred physical cleanup without undoing the durable release marker', async () => {
+    const repo = new MemoryRepository();
+    const deleteRetained = jest.fn().mockResolvedValue('deferred');
+    const service = new RecordingHistoryService(repo, jest.fn(), () => 10, undefined, undefined, deleteRetained);
+    seedRetainedExternal(repo, 9);
+    const planned = await service.planVerifiedRetainedMediaRelease('r1');
+    const marked = await service.markVerifiedRetainedMediaReleased('r1', planned);
+
+    await expect(service.deleteReleasedRetainedMedia('r1', marked.released)).resolves.toBe('deferred');
+    expect(deleteRetained).toHaveBeenCalledWith(['library/r1/tab.webm'], 'r1');
+    expect((await tabFile(repo)).releasedRetainedMedia).toEqual([
+      { key: 'library/r1/tab.webm', releasedAt: 10 },
+    ]);
   });
 
   /** ADR-0006 §24: removing a recording deletes only what the extension owns. */

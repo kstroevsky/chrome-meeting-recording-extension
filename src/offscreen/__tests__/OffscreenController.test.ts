@@ -174,6 +174,25 @@ describe('OffscreenController', () => {
       expect(controller.currentPhase()).toBe('idle');
     });
 
+    it('freezes the selected Drive destination in the detached upload handoff', async () => {
+      const { controller } = makeController();
+      const stop = jest.fn().mockResolvedValue([artifact('tab')]);
+      const enqueueUpload = jest.fn();
+      controller.attachServices({ stop } as any, { finalize: jest.fn() } as any, enqueueUpload);
+      controller.onStartRequested({ storageMode: 'drive', micMode: 'off', recordSelfVideo: false }, 'drive', 9, 'history-drive');
+
+      await controller.onStopRequested(undefined, 'Meeting recordings', 'Recruiting');
+
+      expect(enqueueUpload).toHaveBeenCalledWith(
+        [expect.objectContaining({ stream: 'tab' })],
+        expect.objectContaining({
+          historyId: 'history-drive',
+          driveRootFolderName: 'Meeting recordings',
+          driveDestinationFolderName: 'Recruiting',
+        }),
+      );
+    });
+
     it('still finalizes local runs inline even when an upload manager is wired', async () => {
       const { controller } = makeController();
       const stop = jest.fn().mockResolvedValue([artifact('tab')]);
@@ -186,6 +205,28 @@ describe('OffscreenController', () => {
 
       expect(enqueueUpload).not.toHaveBeenCalled();
       expect(finalize).toHaveBeenCalledWith({ artifacts: [expect.objectContaining({ stream: 'tab' })], storageMode: 'local', historyId: 'history-local-with-uploads' });
+    });
+
+    it('passes the frozen external primary destination into local capture finalization', async () => {
+      const { controller } = makeController();
+      const { finalize } = attach(controller, { artifacts: [artifact('tab')] });
+      controller.onStartRequested(
+        { storageMode: 'local', micMode: 'off', recordSelfVideo: false },
+        'local',
+        10,
+        'history-external',
+        'telemetry-1',
+        'destination_crm',
+      );
+
+      await controller.finalize();
+
+      expect(finalize).toHaveBeenCalledWith({
+        artifacts: [expect.objectContaining({ stream: 'tab' })],
+        storageMode: 'local',
+        historyId: 'history-external',
+        externalPrimaryDestinationId: 'destination_crm',
+      });
     });
 
     it('shares one in-flight run across concurrent finalize calls', async () => {

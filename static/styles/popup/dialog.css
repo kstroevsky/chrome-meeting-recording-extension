@@ -115,3 +115,26 @@ body:has(.modal-overlay:not([hidden])) #view-recording .controls { margin-top: a
 .confirm-card .modal-actions .btn-secondary { height: 40px; }
 .modal-detail--muted .modal-detail-at,
 .modal-detail--muted .modal-detail-text { color: var(--ink-4); }
+
+/* Where the data goes (E7): one quiet row per route under the fields. The ×
+   removes the route for this recording only; a removed row keeps its place,
+   struck through, so Undo is where the × was. */
+.recording-name-routes { display: flex; flex-direction: column; gap: 6px; margin-top: 13px; }
+.recording-name-route { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 4px 0 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--field-bg); }
+.recording-name-route__text { overflow: hidden; flex: 1 1 auto; min-width: 0; color: var(--ink); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+.recording-name-route--removed .recording-name-route__text { color: var(--ink-3); text-decoration: line-through; }
+.recording-name-route--warn { border-color: color-mix(in srgb, var(--warn-label) 45%, var(--border)); }
+.recording-name-route--warn .recording-name-route__text { color: var(--warn-label); white-space: normal; }
+.recording-name-route--add { border-style: dashed; background: transparent; }
+.recording-name-route__action { flex: 0 0 auto; height: 26px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ink-2); font: 600 12px 'Space Grotesk', system-ui, sans-serif; cursor: pointer; }
+.recording-name-route__remove { width: 26px; padding: 0; font-size: 16px; line-height: 1; }
+.recording-name-route__action:hover:not(:disabled) { background: var(--tile); color: var(--ink); }
+.recording-name-route__action:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.recording-name-route__action:disabled { opacity: .5; cursor: default; }
+.recording-name-route-picker { display: grid; gap: 5px; padding: 0 2px 3px; }
+.recording-name-route-candidate { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--field-bg); color: var(--ink); font-family: 'Space Grotesk', system-ui, sans-serif; text-align: left; cursor: pointer; }
+.recording-name-route-candidate:hover:not(:disabled) { border-color: var(--ink-3); background: var(--tile); }
+.recording-name-route-candidate:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.recording-name-route-candidate:disabled { opacity: .5; cursor: default; }
+.recording-name-route-candidate__name { overflow: hidden; min-width: 0; font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+.recording-name-route-candidate__payload { flex: 0 0 auto; color: var(--ink-4); font: 9px 'IBM Plex Mono', monospace; letter-spacing: .06em; white-space: nowrap; }

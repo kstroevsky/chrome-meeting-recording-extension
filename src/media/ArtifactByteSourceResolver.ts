@@ -1,8 +1,8 @@
 /**
- * @file sharing/ShareMediaSourceResolver.ts
+ * @file media/ArtifactByteSourceResolver.ts
  *
- * Resolves an owner-private playback track into a random-access source for Drive
- * origin preparation. OPFS is preferred because the bytes are already local.
+ * Resolves an owner-private playback track into a random-access source for
+ * sharing and external destination transfers. OPFS is preferred because the bytes are already local.
  * Drive falls back to authenticated Range GETs only when a caller actually needs
  * the bytes; Drive-backed publication itself reuses the existing file directly.
  * Downloads entries cannot be read by extensions.
@@ -11,19 +11,19 @@
 import type { PlaybackTrack } from '../shared/playback';
 import { readFileByKey, type DirectoryHandleLike } from '../offscreen/storage/opfsLayout';
 import { createCachedTokenProvider, driveFetch, fetchWithAuthRetry, type TokenProvider } from '../offscreen/drive/request';
-import type { ShareMediaSource, ShareMediaSourceResolver } from './ShareMediaSource';
+import type { ArtifactByteSource, ArtifactByteSourceResolver } from './ArtifactByteSource';
 
 const DRIVE_MEDIA_ORIGIN = 'https://www.googleapis.com';
 
-export type ShareMediaSourceResolverDeps = {
+export type ArtifactByteSourceResolverDeps = {
   getRoot?: () => Promise<DirectoryHandleLike>;
   getDriveToken?: TokenProvider;
   fetch?: typeof fetch;
 };
 
-export function createShareMediaSourceResolver(
-  deps: ShareMediaSourceResolverDeps = {},
-): ShareMediaSourceResolver {
+export function createArtifactByteSourceResolver(
+  deps: ArtifactByteSourceResolverDeps = {},
+): ArtifactByteSourceResolver {
   const getRoot = deps.getRoot ?? (() => navigator.storage.getDirectory() as unknown as Promise<DirectoryHandleLike>);
   const getDriveToken = deps.getDriveToken ? createCachedTokenProvider(deps.getDriveToken) : undefined;
 
@@ -47,7 +47,7 @@ function resolveFetcher(injected?: typeof fetch): typeof fetch {
   return driveFetch;
 }
 
-function blobSource(blob: Blob): ShareMediaSource {
+function blobSource(blob: Blob): ArtifactByteSource {
   return {
     size: blob.size,
     async read(start, end) {
@@ -62,7 +62,7 @@ async function driveSource(
   knownBytes: number | undefined,
   getToken: TokenProvider,
   fetcher: typeof fetch,
-): Promise<ShareMediaSource> {
+): Promise<ArtifactByteSource> {
   const url = `${DRIVE_MEDIA_ORIGIN}/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
   const size = knownBytes ?? await probeDriveSize(url, getToken, fetcher);
   return {

@@ -6,7 +6,8 @@ import { openRemovalProgress } from './RemovalProgressDialog';
 import { PlayerController } from './player/PlayerController';
 import { createPlaybackTrackResolver } from './player/playbackSource';
 import type { PlayerStatus } from './player/PlayerView';
-import type { PlaybackTrack } from '../shared/playback';
+import type { PlaybackManifest, PlaybackTrack } from '../shared/playback';
+import type { ExternalMediaTransferStatus } from '../shared/protocol';
 import type { RecordingHistoryCursor, RecordingHistoryEntry } from '../shared/recordingHistory';
 import type { PublishRecordingOptions, PublishedRecordingInput } from '../sharing/PublishedManifestBuilder';
 import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
@@ -24,13 +25,32 @@ export class RecordingsController {
   /** The whole library's size; `entries` is only what has been paged in. */
   private total: number | undefined;
   private loadingMore = false;
+  private externalMediaTransfers: ExternalMediaTransferStatus[] = [];
+  private externalMediaPoll: ReturnType<typeof setTimeout> | null = null;
   constructor(
     private readonly view: RecordingsView,
     private readonly sharing?: RecordingsSharing,
   ) {}
 
   async init() {
-    await Promise.all([this.refresh(), this.loadDestinations()]);
+    await Promise.all([this.refresh(), this.loadDestinations(), this.refreshExternalMediaTransfers()]);
+  }
+
+  async retryExternalMedia(destinationId: string, clientTransferId: string): Promise<void> {
+    try {
+      const response = await sendToBackground({
+        type: 'RETRY_EXTERNAL_MEDIA_TRANSFER',
+        destinationId,
+        clientTransferId,
+      });
+      if (!response.ok) throw new Error(response.error);
+      this.upsertExternalMediaTransfer(response.transfer);
+      this.view.setExternalMediaTransfers(this.externalMediaTransfers);
+    } catch (error) {
+      this.view.showError(error instanceof Error ? error.message : String(error));
+    } finally {
+      await this.refreshExternalMediaTransfers();
+    }
   }
 
   async share(
@@ -101,6 +121,22 @@ export class RecordingsController {
     } catch (error) { this.view.showError(error instanceof Error ? error.message : String(error)); }
   }
 
+  async freeSpace(id: string): Promise<void> {
+    try {
+      const response = await sendToBackground({ type: 'FREE_RECORDING_SPACE', id });
+      if (!response.ok) throw new Error(response.error);
+      if (response.entry) {
+        this.entries = this.entries.map((entry) => entry.id === id ? response.entry! : entry);
+      }
+      this.render();
+      if (response.cleanup === 'deferred') {
+        this.view.showError('The local copy is marked for release and will be cleaned up automatically.');
+      }
+    } catch (error) {
+      this.view.showError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   /** Called once the page's dialog (and, for files, the native check) said yes. */
   async remove(id: string, deleteFiles = false) {
     try {
@@ -169,6 +205,12 @@ export class RecordingsController {
         : { type: 'PREPARE_RECORDING_PLAYBACK_SOURCE', recordingId: id, fileId, source: 'drive' });
       return response.ok ? response.url : undefined;
     },
+    prepareExternalSource: async (recordingId: string, fileId: string, destinationId: string, artifactId: string, _refresh?: boolean) => {
+      const response = await sendToBackground({
+        type: 'PREPARE_EXTERNAL_PLAYBACK_SOURCE', recordingId, fileId, destinationId, artifactId,
+      });
+      return response.ok ? response.url : undefined;
+    },
     warn: (...args: unknown[]) => console.warn('[recordings]', ...args),
   };
 
@@ -198,11 +240,33 @@ export class RecordingsController {
    * background scope a Drive authorization to `sender.tab.id`.
    */
   async play(recordingId: string) {
+    await this.openPlayer(recordingId, false);
+  }
+
+  /** Plays only receiver-backed sources so native media playback can prove the remote replica. */
+  async playRemote(recordingId: string) {
+    await this.openPlayer(recordingId, true);
+  }
+
+  private async openPlayer(recordingId: string, externalOnly: boolean) {
     try {
       this.player?.close();
       const player = new PlayerController({
-        getManifest: this.playback.getManifest,
+        getManifest: externalOnly
+          ? async (id) => externalOnlyPlaybackManifest(await this.playback.getManifest(id))
+          : this.playback.getManifest,
         resolveTrack: createPlaybackTrackResolver(this.playback),
+        externalPlaybackStarted: async (recordingId, fileId, destinationId, artifactId) => {
+          const response = await sendToBackground({
+            type: 'REPORT_EXTERNAL_PLAYBACK_STARTED',
+            recordingId,
+            fileId,
+            destinationId,
+            artifactId,
+          });
+          if (!response.ok) throw new Error(response.error);
+          await this.refresh();
+        },
         unavailableStatus: (track) => this.unavailablePlaybackStatus(track),
         warn: this.playback.warn,
         getTranscript: (id) => this.transcript(id),
@@ -253,6 +317,34 @@ export class RecordingsController {
     } catch {
       // A settings read failure just means no destinations to offer.
     }
+  }
+
+  private async refreshExternalMediaTransfers(): Promise<void> {
+    if (this.externalMediaPoll) {
+      clearTimeout(this.externalMediaPoll);
+      this.externalMediaPoll = null;
+    }
+    try {
+      const response = await sendToBackground({ type: 'LIST_EXTERNAL_MEDIA_TRANSFERS' });
+      if (!response.ok) return;
+      this.externalMediaTransfers = response.transfers;
+      this.view.setExternalMediaTransfers(response.transfers);
+    } catch {
+      // Recording history stays usable when the offscreen media journal is unavailable.
+    }
+    if (this.externalMediaTransfers.some(pollsExternalMedia)) {
+      this.externalMediaPoll = setTimeout(() => {
+        this.externalMediaPoll = null;
+        void this.refreshExternalMediaTransfers();
+      }, 2_000);
+    }
+  }
+
+  private upsertExternalMediaTransfer(next: ExternalMediaTransferStatus): void {
+    const index = this.externalMediaTransfers.findIndex((transfer) =>
+      transfer.destinationId === next.destinationId && transfer.clientTransferId === next.clientTransferId);
+    if (index < 0) this.externalMediaTransfers.push(next);
+    else this.externalMediaTransfers[index] = next;
   }
 
   private async refresh() {
@@ -355,4 +447,23 @@ export class RecordingsController {
       // Same as notes: a missing digest costs search reach, not the list.
     }
   }
+}
+
+export function externalOnlyPlaybackManifest(
+  manifest: PlaybackManifest | undefined,
+): PlaybackManifest | undefined {
+  if (!manifest) return undefined;
+  return {
+    ...manifest,
+    tracks: manifest.tracks.map((track) => ({
+      ...track,
+      sources: track.sources.filter((source) => source.kind === 'external'),
+    })),
+  };
+}
+
+function pollsExternalMedia(transfer: ExternalMediaTransferStatus): boolean {
+  return transfer.state === 'pending' || transfer.state === 'queued' || transfer.state === 'uploading' ||
+    transfer.state === 'verifying-capability' || transfer.state === 'retry-wait' ||
+    transfer.state === 'ready-unacknowledged';
 }

@@ -21,6 +21,8 @@ describe('background runtime system messages', () => {
       closeForUpdate: jest.fn().mockResolvedValue(true),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       releaseBufferedIngress: jest.fn(),
     };
@@ -33,6 +35,9 @@ describe('background runtime system messages', () => {
     }));
     await import('../src/background');
     await new Promise(process.nextTick);
+    // Startup reconciliation may probe the durable external-media journal.
+    // Message assertions below concern only the command sent by the test.
+    offscreenInstance.rpc.mockClear();
     return (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
   }
   it('dispatches DISCARD_RECORDING through the real background message listener', async () => {

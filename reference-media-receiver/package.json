@@ -1,0 +1,19 @@
+{
+  "name": "meeting-recorder-reference-media-receiver",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent reference receiver for External Media Storage Protocol V1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/cli.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1149.0",
+    "@aws-sdk/s3-request-presigner": "^3.1149.0",
+    "standardwebhooks": "^1.1.1"
+  }
+}

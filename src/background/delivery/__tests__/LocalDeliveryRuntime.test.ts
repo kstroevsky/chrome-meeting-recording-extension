@@ -134,6 +134,24 @@ describe('registerSaveHandler', () => {
     expect(downloadFile).not.toHaveBeenCalled();
   });
 
+  it('writes a recording nobody is asked about into its Save to destination\'s folder', async () => {
+    const history = {
+      createPending: jest.fn().mockResolvedValue(undefined),
+      localSaveSettled: jest.fn().mockResolvedValue(undefined),
+      setDuration: jest.fn().mockResolvedValue(undefined),
+      recordArtifactLocation: jest.fn().mockResolvedValue(undefined),
+      setLocalFolder: jest.fn().mockResolvedValue(undefined),
+    };
+    registerSaveHandler(offscreen, L, history, undefined, async () => 0, () => {}, async () => 'Interviews');
+
+    offscreen.onSaveRequested({ historyId: 'recording:1', stream: 'tab', filename: 'tab.webm', blobUrl: 'blob:1' });
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(downloadFile).toHaveBeenCalledWith({ url: 'blob:1', filename: 'Interviews/tab.webm', saveAs: false });
+    expect(history.setLocalFolder).toHaveBeenCalledWith('recording:1', 'Interviews');
+  });
+
   it('creates the history row before starting a download that can settle immediately', async () => {
     let releaseHistory!: () => void;
     const history = {

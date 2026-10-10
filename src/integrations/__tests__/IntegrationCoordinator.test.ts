@@ -78,7 +78,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
   const removeHostPermission = jest.fn(async () => true);
   let now = 1_000;
   const clock = () => ++now;
-  const containsHostPermission = jest.fn(async () => options.permission ?? true);
+  const containsHostPermission = jest.fn(async (_pattern: string) => options.permission ?? true);
   const dispatcher = new IntegrationDispatcher({
     destinations,
     secrets,
@@ -117,6 +117,7 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
   });
   return {
     coordinator,
+    unitOfWork,
     destinations,
     secrets,
     streams,
@@ -126,7 +127,10 @@ function runtime(options: { permission?: boolean; status?: number; payloadBytes?
     transportCalls,
     bodies,
     removeHostPermission,
+    containsHostPermission,
     dispatcher,
+    planner,
+    routing,
   };
 }
 
@@ -336,6 +340,179 @@ describe('IntegrationCoordinator', () => {
     await expect(ctx.destinations.get(destination.id)).resolves.toBeUndefined();
     await expect(ctx.secrets.get(signingSecretId)).resolves.toBeUndefined();
     await expect(ctx.secrets.get(requestSecretId)).resolves.toBeUndefined();
+  });
+
+  it('atomically rotates media credentials and deletes the live token even with a stale destination snapshot', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+    const capability = {
+      version: 1 as const,
+      apiBase: 'https://crm.example.test/api/media',
+      upload: { strategy: 'multipart-put-v1' as const, origins: ['https://bucket.r2.cloudflarestorage.com'] },
+      playback: { strategy: 'refreshable-url-v1' as const },
+    };
+    ctx.transport.send.mockImplementation(async () => ({ ok: true, status: 200, mediaCapability: capability }));
+
+    await ctx.coordinator.configureMedia(destination.id, 'first-media-token');
+    const first = (await ctx.destinations.get(destination.id))!.media!.secretId;
+    await ctx.coordinator.configureMedia(destination.id, 'second-media-token');
+    const second = (await ctx.destinations.get(destination.id))!.media!.secretId;
+    expect(second).not.toBe(first);
+    await expect(ctx.secrets.get(first)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(second)).resolves.toMatchObject({ kind: 'media-auth', value: 'second-media-token' });
+
+    // The snapshot predates both rotations; the delete must still revoke the current token.
+    await ctx.unitOfWork.deleteDestination(destination, Date.now());
+    await expect(ctx.destinations.get(destination.id)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(second)).resolves.toBeUndefined();
+    await expect(ctx.secrets.get(destination.signingSecretId)).resolves.toBeUndefined();
+  });
+
+  it('disables automation without discarding playback credentials or resurrecting old work', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+    const capability = {
+      version: 1 as const,
+      apiBase: 'https://crm.example.test/api/media',
+      upload: { strategy: 'multipart-put-v1' as const, origins: ['https://bucket.r2.cloudflarestorage.com'] },
+      playback: { strategy: 'refreshable-url-v1' as const },
+    };
+    ctx.transport.send.mockImplementation(async () => ({ ok: true, status: 200, mediaCapability: capability }));
+    await ctx.coordinator.configureMedia(destination.id, 'media-bearer');
+    const live = (await ctx.destinations.get(destination.id))!;
+    const mediaSecretId = live.media!.secretId;
+
+    await ctx.unitOfWork.beginRecordingRouting('recording:held', [{
+      destinationId: live.id,
+      mode: 'auto',
+      state: 'selected',
+      allowedPolicy: POLICY,
+      connectionVersion: live.connectionVersion,
+      mediaAuthorization: {
+        producerId: live.producerId,
+        endpoint: live.endpoint,
+        apiBase: capability.apiBase,
+        uploadOrigins: [...capability.upload.origins],
+      },
+      releaseAfter: 'save-confirmed',
+    }], [{
+      destinationId: live.id,
+      recordingId: 'recording:held',
+      externalRecordingId: 'recording_external_held',
+      nextRevision: 1,
+      readyCreated: false,
+      everAttempted: false,
+    }]);
+    const planned = await ctx.planner.planManual(live, 'recording:pending');
+    expect(planned.kind).toBe('planned');
+
+    await ctx.coordinator.setDestinationEnabled(live.id, false);
+
+    await expect(ctx.destinations.get(live.id)).resolves.toMatchObject({ enabled: false });
+    await expect(ctx.secrets.get(mediaSecretId)).resolves.toMatchObject({
+      kind: 'media-auth',
+      value: 'media-bearer',
+    });
+    await expect(ctx.routing.get('recording:held')).resolves.toBeUndefined();
+    if (planned.kind === 'planned') {
+      await expect(ctx.deliveries.get(planned.delivery.id)).resolves.toMatchObject({
+        state: 'canceled',
+        lastErrorCode: 'destination-disabled',
+      });
+    }
+    await expect(ctx.coordinator.mediaClient(live.id, async () => true))
+      .rejects.toThrow('Media connection is unavailable');
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn() as unknown as typeof fetch;
+    try {
+      await expect(ctx.coordinator.playbackMediaClient(live.id, async () => true))
+        .resolves.toBeDefined();
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+    await expect(ctx.coordinator.mediaGrant({
+      destinationId: live.id,
+      externalRecordingId: 'recording_external_held',
+      connectionVersion: live.connectionVersion,
+      receiver: {
+        producerId: live.producerId,
+        endpoint: live.endpoint,
+        apiBase: capability.apiBase,
+        uploadOrigins: [...capability.upload.origins],
+      },
+    })).rejects.toThrow('no longer matches recording authorization');
+
+    // Credential maintenance stays possible while automation is off.
+    await ctx.coordinator.configureMedia(live.id, 'replacement-media-bearer');
+    const replaced = (await ctx.destinations.get(live.id))!;
+    await expect(ctx.secrets.get(replaced.media!.secretId)).resolves.toMatchObject({
+      value: 'replacement-media-bearer',
+    });
+    expect(replaced.enabled).toBe(false);
+
+    await ctx.coordinator.setDestinationEnabled(live.id, true);
+    await expect(ctx.destinations.get(live.id)).resolves.toMatchObject({ enabled: true });
+    // Re-enabling is prospective: the route removed by disable is not recreated.
+    await expect(ctx.routing.get('recording:held')).resolves.toBeUndefined();
+  });
+
+  it('issues media grants only for the exact Start-time receiver generation and current upload permissions', async () => {
+    const ctx = runtime();
+    const { destination } = await ctx.coordinator.createDestination({
+      name: 'CRM',
+      endpoint: 'https://crm.example.test/events',
+      routingDefault: 'manual',
+      dataPolicy: POLICY,
+      requestAuth: { type: 'none' },
+    });
+    const capability = {
+      version: 1 as const,
+      apiBase: 'https://crm.example.test/api/media',
+      upload: { strategy: 'multipart-put-v1' as const, origins: ['https://bucket.r2.cloudflarestorage.com'] },
+      playback: { strategy: 'refreshable-url-v1' as const },
+    };
+    ctx.transport.send.mockImplementation(async () => ({ ok: true, status: 200, mediaCapability: capability }));
+    await ctx.coordinator.configureMedia(destination.id, 'media-bearer');
+    const current = (await ctx.destinations.get(destination.id))!;
+    const route = {
+      destinationId: current.id,
+      externalRecordingId: 'recording_external',
+      connectionVersion: current.connectionVersion,
+      receiver: {
+        producerId: current.producerId,
+        endpoint: current.endpoint,
+        apiBase: capability.apiBase,
+        uploadOrigins: [...capability.upload.origins],
+      },
+    };
+
+    await expect(ctx.coordinator.mediaGrant(route)).resolves.toEqual(expect.objectContaining({
+      destinationId: current.id,
+      connectionVersion: current.connectionVersion,
+      bearer: 'media-bearer',
+      capability,
+    }));
+    expect(ctx.containsHostPermission).toHaveBeenCalledWith('https://bucket.r2.cloudflarestorage.com/*');
+    await expect(ctx.coordinator.mediaGrant({ ...route, connectionVersion: current.connectionVersion - 1 }))
+      .rejects.toThrow('no longer matches');
+
+    ctx.containsHostPermission.mockImplementation(async (pattern: string) =>
+      pattern !== 'https://bucket.r2.cloudflarestorage.com/*');
+    await expect(ctx.coordinator.mediaGrant(route)).rejects.toThrow(
+      'Host permission is required for https://bucket.r2.cloudflarestorage.com/*',
+    );
   });
 
   it('keeps an in-flight delivery canceled when its transport rejects after destination deletion', async () => {

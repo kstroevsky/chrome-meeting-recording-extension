@@ -17,6 +17,10 @@ import { createStandardWebhookSecret } from './webhook/StandardWebhookSigner';
 import { normalizeWebhookEndpoint } from './webhook/WebhookEndpoint';
 import { normalizeWebhookApiKeyHeader, type ResolvedWebhookRequestAuth } from './webhook/WebhookAuth';
 import type { WebhookTransportResult } from './webhook/WebhookTransport';
+import { ExternalMediaClient } from './media/ExternalMediaClient';
+import type { ExternalMediaGrant } from './media/ExternalMediaClient';
+import type { MediaCapability } from './media/MediaCapability';
+import type { AuthorizedMediaRoute } from './RecordingRoutingService';
 
 type CoordinatorDeps = {
   destinations: {
@@ -31,6 +35,8 @@ type CoordinatorDeps = {
   };
   unitOfWork: {
     createDestination(destination: IntegrationDestination, secrets: IntegrationSecret[]): Promise<void>;
+    configureMedia(destinationId: string, secret: IntegrationSecret, capability: MediaCapability, updatedAt: number): Promise<void>;
+    setDestinationEnabled(destinationId: string, enabled: boolean, updatedAt: number): Promise<void>;
     deleteDestination(destination: IntegrationDestination, updatedAt: number): Promise<void>;
   };
   planner: {
@@ -46,6 +52,7 @@ type CoordinatorDeps = {
       body: string;
       signingSecret: string;
       requestAuth: ResolvedWebhookRequestAuth;
+      discoverCapabilities?: boolean;
     }): Promise<WebhookTransportResult>;
   };
   containsHostPermission(pattern: string): Promise<boolean>;
@@ -119,8 +126,97 @@ export class IntegrationCoordinator {
       body,
       signingSecret: await this.requireSecretValue(destination.signingSecretId),
       requestAuth: await this.resolveRequestAuth(destination.requestAuth),
+      discoverCapabilities: true,
     });
     return { ...result, eventId };
+  }
+
+  /** The receiver issues this token separately from the webhook signing secret. */
+  async configureMedia(destinationId: string, bearer: string): Promise<void> {
+    if (typeof bearer !== 'string' || !bearer.trim() || bearer.length > 4096 || /[\r\n]/.test(bearer)) {
+      throw new Error('Invalid media bearer token');
+    }
+    await this.requireDestination(destinationId);
+    const test = await this.testDestination(destinationId);
+    if (!test.ok || !test.mediaCapability) throw new Error('Receiver did not advertise a valid media capability');
+    const now = this.now();
+    await this.deps.unitOfWork.configureMedia(destinationId, {
+      id: createIntegrationId('secret'), kind: 'media-auth', value: bearer,
+      createdAt: now, updatedAt: now,
+    }, test.mediaCapability, now);
+  }
+
+  async setDestinationEnabled(destinationId: string, enabled: boolean): Promise<IntegrationDestination> {
+    await this.requireDestination(destinationId);
+    await this.deps.unitOfWork.setDestinationEnabled(destinationId, enabled, this.now());
+    return await this.requireDestination(destinationId);
+  }
+
+  async mediaClient(destinationId: string, hasUploadHostPermission: (origin: string) => Promise<boolean>): Promise<ExternalMediaClient> {
+    const destination = await this.requireDestination(destinationId);
+    if (!destination.enabled || !destination.media) throw new Error('Media connection is unavailable');
+    await this.assertDestinationPermission(destination);
+    const secret = await this.deps.secrets.get(destination.media.secretId);
+    if (!secret || secret.kind !== 'media-auth') throw new Error('Media credential is missing');
+    return new ExternalMediaClient(
+      destination.media.capability, destination.endpoint,
+      async () => secret.value, undefined, hasUploadHostPermission,
+    );
+  }
+
+  /**
+   * Existing replicas remain playable while automation is disabled. The
+   * credential and host permission are still required; disconnect removes both
+   * the destination and its credential, so this path then fails closed.
+   */
+  async playbackMediaClient(
+    destinationId: string,
+    hasUploadHostPermission: (origin: string) => Promise<boolean>,
+  ): Promise<ExternalMediaClient> {
+    const destination = await this.requireDestination(destinationId);
+    if (!destination.media) throw new Error('Media connection is unavailable');
+    await this.assertDestinationPermission(destination);
+    const secret = await this.deps.secrets.get(destination.media.secretId);
+    if (!secret || secret.kind !== 'media-auth') throw new Error('Media credential is missing');
+    return new ExternalMediaClient(
+      destination.media.capability, destination.endpoint,
+      async () => secret.value, undefined, hasUploadHostPermission,
+    );
+  }
+
+  /**
+   * Issues an ephemeral grant only for the exact receiver identity captured at
+   * recording Start. Permission checks stay in background; the offscreen page
+   * receives no generic secret lookup capability.
+   */
+  async mediaGrant(route: AuthorizedMediaRoute): Promise<ExternalMediaGrant> {
+    const destination = await this.requireDestination(route.destinationId);
+    if (!destination.enabled || !destination.media ||
+        destination.connectionVersion !== route.connectionVersion ||
+        destination.producerId !== route.receiver.producerId ||
+        destination.endpoint !== route.receiver.endpoint ||
+        destination.media.capability.apiBase !== route.receiver.apiBase ||
+        destination.media.capability.upload.origins.length !== route.receiver.uploadOrigins.length ||
+        !destination.media.capability.upload.origins.every((origin, index) =>
+          origin === route.receiver.uploadOrigins[index])) {
+      throw new Error('Media connection no longer matches recording authorization');
+    }
+    await this.assertDestinationPermission(destination);
+    for (const origin of destination.media.capability.upload.origins) {
+      if (!await this.deps.containsHostPermission(`${origin}/*`)) {
+        throw new Error(`Host permission is required for ${origin}/*`);
+      }
+    }
+    const secret = await this.deps.secrets.get(destination.media.secretId);
+    if (!secret || secret.kind !== 'media-auth') throw new Error('Media credential is missing');
+    return {
+      destinationId: destination.id,
+      connectionVersion: destination.connectionVersion,
+      producerId: destination.producerId,
+      endpoint: destination.endpoint,
+      capability: destination.media.capability,
+      bearer: secret.value,
+    };
   }
 
   async deleteDestination(destinationId: string): Promise<{

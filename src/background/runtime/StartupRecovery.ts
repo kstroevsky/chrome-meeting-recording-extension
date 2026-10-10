@@ -3,18 +3,18 @@ import { getSessionStorageValues, setSessionStorageValues } from '../../platform
 import { queryTabs } from '../../platform/chrome/tabs';
 import { reconcileRetainedMedia } from '../retention/RetainedMediaReconciler';
 import { ensurePersistentStorage } from '../retention/storageDurability';
+import { RETAINED_MEDIA_RECONCILED_KEY } from '../retention/retainedMediaRecoveryState';
 import type { DrivePlaybackAuthLeaseManager } from '../playback/DrivePlaybackAuthLeaseManager';
 import type { PlaybackLeaseManager } from '../playback/PlaybackLeaseManager';
 import type { LocalDeliveryOrchestrator } from '../delivery/LocalDeliveryOrchestrator';
 import type { RecordingHistoryRepository } from '../library/history/RecordingHistoryRepository';
 import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
+import type { ExternalMediaCoordinator } from '../integrations/ExternalMediaCoordinator';
 
 type Logger = {
   log: (...args: any[]) => void;
   warn: (...args: any[]) => void;
 };
-
-const RECONCILED_KEY = 'retainedMediaReconciled';
 
 /** Best-effort crash/startup reconciliation that runs once per browser session. */
 export class StartupRecovery {
@@ -25,12 +25,13 @@ export class StartupRecovery {
     private readonly driveAuthLease: DrivePlaybackAuthLeaseManager,
     private readonly playbackLeases: PlaybackLeaseManager,
     private readonly logger: Logger,
+    private readonly externalMedia?: ExternalMediaCoordinator,
   ) {}
 
   async run(): Promise<void> {
-    const already = await getSessionStorageValues(RECONCILED_KEY)
+    const already = await getSessionStorageValues(RETAINED_MEDIA_RECONCILED_KEY)
       .catch(() => ({} as Record<string, unknown>));
-    if (already[RECONCILED_KEY]) return;
+    if (already[RETAINED_MEDIA_RECONCILED_KEY]) return;
 
     const retainedOk = await this.reconcileRetained();
     await ensurePersistentStorage(this.logger.log, this.logger.warn);
@@ -38,7 +39,7 @@ export class StartupRecovery {
     const deliveryOk = await this.reconcileDeferredDelivery();
     const leasesOk = await this.reconcilePlaybackLeases();
     if (retainedOk && cleanupOk && deliveryOk && leasesOk) {
-      await setSessionStorageValues({ [RECONCILED_KEY]: true }).catch((error) => {
+      await setSessionStorageValues({ [RETAINED_MEDIA_RECONCILED_KEY]: true }).catch((error) => {
         this.logger.warn('Could not persist startup reconciliation marker:', error);
       });
     }
@@ -53,6 +54,12 @@ export class StartupRecovery {
         listLiveEntries: () => this.listAllLiveEntries(),
         exists: async (key) => existsByKey(await navigator.storage.getDirectory(), key),
         removeRetained: async (key) => removeByKey(await navigator.storage.getDirectory(), key),
+        releaseRetained: async (historyId, _fileId, key) => {
+          const release = () => this.playbackLeases.deleteOrDefer(historyId, [key]);
+          if (!this.externalMedia) return release();
+          const result = await this.externalMedia.withRetainedSourceRelease(historyId, [key], release);
+          return result.busy ? 'deferred' : result.value;
+        },
         recordLocation: (historyId, fileId, key, retainedAt) =>
           this.history.recordArtifactLocation(historyId, fileId, { kind: 'opfs', key, retainedAt }),
         dropLocation: (historyId, fileId, key) => this.history.dropArtifactLocation(historyId, fileId, key),

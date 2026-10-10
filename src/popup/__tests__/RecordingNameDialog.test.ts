@@ -89,7 +89,7 @@ describe('RecordingNameDialog', () => {
     expect(overlay().hidden).toBe(true);
   });
 
-  it('cancels on Escape and restores the previously focused element', async () => {
+  it('dismisses on Escape, apart from the skip button, and restores the previously focused element', async () => {
     const prior = document.createElement('button');
     document.body.appendChild(prior);
     prior.focus();
@@ -97,7 +97,7 @@ describe('RecordingNameDialog', () => {
     const outcome = dialog.ask({ title: 'Name recording', message: 'Choose a name', initialValue: 'Default', onSave: async () => {} });
     overlay().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 
-    await expect(outcome).resolves.toBe('canceled');
+    await expect(outcome).resolves.toBe('dismissed');
     expect(document.activeElement).toBe(prior);
   });
 
@@ -241,5 +241,202 @@ describe('RecordingNameDialog when that name is taken', () => {
     void dialog.ask({ title: 'Name', message: '', initialValue: 'Team sync', onSave: jest.fn() });
     expect(line()!.hidden).toBe(true);
   });
-});
 
+  describe('where the data goes (E7)', () => {
+    const routeRows = () => Array.from(document.querySelectorAll<HTMLElement>('.recording-name-route'));
+    const rowText = () => routeRows().map((row) => row.querySelector('.recording-name-route__text')?.textContent);
+    const routeCandidates = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.recording-name-route-candidate'));
+    const held = { destinationId: 'destination_crm', destinationName: 'CheekyCheeseIT CRM', state: 'held' as const };
+
+    it('shows no route rows for a recording that goes nowhere', () => {
+      void new RecordingNameDialog().ask({ title: 'Name', message: '', initialValue: 'Team sync', onSave: jest.fn() });
+      expect(document.querySelector<HTMLElement>('.recording-name-routes')!.hidden).toBe(true);
+    });
+
+    it('removes a route for this recording with ×, and Undo takes it back', () => {
+      const onChange = jest.fn();
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [held], onChange },
+      });
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith(['destination_crm']);
+      expect(rowText()).toEqual(["Won't send recording data to CheekyCheeseIT CRM"]);
+      expect(document.activeElement?.textContent).toBe('Undo');
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith([]);
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
+    });
+
+    it('discloses video/audio alongside data and removes both together', async () => {
+      const onChange = jest.fn();
+      const onSave = jest.fn(async () => {});
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave,
+        routes: { items: [{ ...held, includesMedia: true }], onChange },
+      });
+      expect(rowText()).toEqual(['Will send recording video/audio and data to CheekyCheeseIT CRM']);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith(['destination_crm']);
+      expect(rowText()).toEqual(["Won't send recording video/audio and data to CheekyCheeseIT CRM"]);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(onChange).toHaveBeenLastCalledWith([]);
+      expect(rowText()).toEqual(['Will send recording video/audio and data to CheekyCheeseIT CRM']);
+
+      save().click();
+      await flush();
+      expect(onSave).toHaveBeenCalledWith('Acme interview', null);
+    });
+
+    it('offers explicit receiver changes and discloses data-only versus media export', () => {
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: {
+          items: [held],
+          candidates: [
+            { destinationId: 'destination_notes', destinationName: 'Notes archive' },
+            { destinationId: 'destination_media', destinationName: 'Media vault', includesMedia: true },
+          ],
+          onChange: jest.fn(),
+          onReplace: jest.fn(),
+        },
+      });
+
+      expect(routeRows()[0]!.querySelector<HTMLButtonElement>('button')!.textContent).toBe('Change');
+      routeRows()[0]!.querySelector<HTMLButtonElement>('button')!.click();
+      expect(routeCandidates().map((button) => button.textContent)).toEqual([
+        'Notes archiveDATA ONLY',
+        'Media vaultVIDEO/AUDIO + DATA',
+      ]);
+      expect(document.activeElement).toBe(routeCandidates()[0]);
+    });
+
+    it('replaces the observed route and refreshes rows and candidates from the backend result', async () => {
+      const replacement = { destinationId: 'destination_notes', destinationName: 'Notes archive', state: 'held' as const };
+      const onReplace = jest.fn().mockResolvedValue({
+        items: [replacement],
+        candidates: [{ destinationId: 'destination_media', destinationName: 'Media vault', includesMedia: true }],
+      });
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: {
+          items: [held],
+          candidates: [{ destinationId: 'destination_notes', destinationName: 'Notes archive' }],
+          onChange: jest.fn(),
+          onReplace,
+        },
+      });
+
+      routeRows()[0]!.querySelector<HTMLButtonElement>('button')!.click();
+      routeCandidates()[0]!.click();
+      expect(save().disabled).toBe(true);
+      expect(cancel().disabled).toBe(true);
+      await flush();
+
+      expect(onReplace).toHaveBeenCalledWith('destination_crm', 'destination_notes');
+      expect(rowText()).toContain('Will send recording data to Notes archive');
+      expect(document.activeElement?.textContent).toBe('Change');
+      routeRows().find((row) => row.dataset.destinationId === 'destination_notes')!
+        .querySelector<HTMLButtonElement>('button')!.click();
+      expect(routeCandidates().map((button) => button.textContent)).toEqual(['Media vaultVIDEO/AUDIO + DATA']);
+    });
+
+    it('can explicitly add a receiver when the recording started without one', async () => {
+      const added = { ...held, destinationId: 'destination_notes', destinationName: 'Notes archive' };
+      const onReplace = jest.fn().mockResolvedValue({ items: [added], candidates: [] });
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: {
+          items: [],
+          candidates: [{ destinationId: 'destination_notes', destinationName: 'Notes archive' }],
+          onChange: jest.fn(),
+          onReplace,
+        },
+      });
+
+      expect(rowText()).toEqual(['Send recording to a service']);
+      routeRows()[0]!.querySelector<HTMLButtonElement>('button')!.click();
+      routeCandidates()[0]!.click();
+      await flush();
+      expect(onReplace).toHaveBeenCalledWith(undefined, 'destination_notes');
+      expect(rowText()).toEqual(['Will send recording data to Notes archive']);
+    });
+
+    it('keeps the picker open and shows the error when changing receiver fails', async () => {
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: {
+          items: [held],
+          candidates: [{ destinationId: 'destination_notes', destinationName: 'Notes archive' }],
+          onChange: jest.fn(),
+          onReplace: jest.fn().mockRejectedValue(new Error('That integration is no longer available')),
+        },
+      });
+
+      routeRows()[0]!.querySelector<HTMLButtonElement>('button')!.click();
+      routeCandidates()[0]!.click();
+      await flush();
+      expect(document.querySelector('.recording-name-error')?.textContent).toBe('That integration is no longer available');
+      expect(routeCandidates()).toHaveLength(1);
+      expect(save().disabled).toBe(false);
+      expect(cancel().disabled).toBe(false);
+    });
+
+    it('says when automation could not be scheduled, and retries it in place', async () => {
+      const onRetry = jest.fn().mockResolvedValue([held]);
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [{ ...held, state: 'not-scheduled' }], onChange: jest.fn(), onRetry },
+      });
+      expect(rowText()).toEqual(['Automation for CheekyCheeseIT CRM could not be scheduled']);
+
+      routeRows()[0]!.querySelector('button')!.click();
+      expect(routeRows()[0]!.querySelector('button')!.disabled).toBe(true);
+      await flush();
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
+    });
+
+    it('keeps the row and shows the error when the retry fails', async () => {
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: {
+          items: [{ ...held, state: 'not-scheduled' }],
+          onChange: jest.fn(),
+          onRetry: jest.fn().mockRejectedValue(new Error('IndexedDB unavailable')),
+        },
+      });
+      routeRows()[0]!.querySelector('button')!.click();
+      await flush();
+      expect(document.querySelector('.recording-name-error')?.textContent).toBe('IndexedDB unavailable');
+      expect(routeRows()[0]!.dataset.routeState).toBe('not-scheduled');
+    });
+
+    it('says plainly that nothing is sent when the integration was deleted', () => {
+      void new RecordingNameDialog().ask({
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [{ destinationId: 'gone', destinationName: null, state: 'not-scheduled' }], onChange: jest.fn(), onRetry: jest.fn() },
+      });
+      expect(rowText()).toEqual(['Its integration was deleted · nothing will be sent']);
+      expect(routeRows()[0]!.querySelector('button')).toBeNull();
+    });
+
+    it('starts each ask with nothing removed', () => {
+      const dialog = new RecordingNameDialog();
+      const options = {
+        title: 'Save recording', message: '', initialValue: 'Acme interview', onSave: jest.fn(),
+        routes: { items: [held], onChange: jest.fn() },
+      };
+      void dialog.ask(options);
+      routeRows()[0]!.querySelector('button')!.click();
+      dialog.dismiss();
+      void dialog.ask(options);
+      expect(rowText()).toEqual(['Will send recording data to CheekyCheeseIT CRM']);
+    });
+  });
+});

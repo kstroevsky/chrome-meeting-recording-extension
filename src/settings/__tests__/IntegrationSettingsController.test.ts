@@ -3,6 +3,7 @@ import {
   containsHostPermission,
   removeHostPermission,
   requestHostPermission,
+  requestHostPermissions,
 } from '../../platform/chrome/permissions';
 import { sendToBackground } from '../../shared/messages';
 
@@ -10,6 +11,7 @@ jest.mock('../../platform/chrome/permissions', () => ({
   containsHostPermission: jest.fn(),
   removeHostPermission: jest.fn(),
   requestHostPermission: jest.fn(),
+  requestHostPermissions: jest.fn(),
 }));
 
 jest.mock('../../shared/messages', () => ({
@@ -17,15 +19,15 @@ jest.mock('../../shared/messages', () => ({
 }));
 
 const permission = requestHostPermission as jest.MockedFunction<typeof requestHostPermission>;
+const mediaPermission = requestHostPermissions as jest.MockedFunction<typeof requestHostPermissions>;
 const containsPermission = containsHostPermission as jest.MockedFunction<typeof containsHostPermission>;
 const removePermission = removeHostPermission as jest.MockedFunction<typeof removeHostPermission>;
 const send = sendToBackground as jest.MockedFunction<typeof sendToBackground>;
 
-function mount(): IntegrationSettingsController {
+function mount(onDestinationsChanged?: () => void): IntegrationSettingsController {
   document.body.innerHTML = `
     <input id="integration-name">
     <input id="integration-endpoint">
-    <select id="integration-routing"><option value="manual">Manual</option></select>
     <select id="integration-auth-type">
       <option value="none">None</option>
       <option value="api-key">API key</option>
@@ -40,8 +42,10 @@ function mount(): IntegrationSettingsController {
     <p id="integration-status"></p>
     <div id="integration-secret-panel" hidden></div>
     <input id="integration-signing-secret">
+    <button id="integration-secret-copy" type="button">Copy</button>
+    <button id="integration-secret-test" type="button">Test connection</button>
   `;
-  return IntegrationSettingsController.fromDocument(document);
+  return IntegrationSettingsController.fromDocument(document, onDestinationsChanged);
 }
 
 function destination() {
@@ -74,9 +78,11 @@ function destination() {
 
 describe('IntegrationSettingsController', () => {
   beforeEach(() => {
+    window.confirm = jest.fn(() => true);
     containsPermission.mockReset().mockResolvedValue(false);
     removePermission.mockReset().mockResolvedValue(true);
     permission.mockReset().mockResolvedValue(true);
+    mediaPermission.mockReset().mockResolvedValue(true);
     send.mockReset().mockImplementation(async (message: any) => {
       switch (message.type) {
         case 'LIST_INTEGRATION_RECORDINGS':
@@ -100,6 +106,127 @@ describe('IntegrationSettingsController', () => {
       .toBe(false);
   });
 
+  it('shows media access separately and only requests R2 hosts after a user click', async () => {
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200,
+        mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api/integrations/meeting-recorder/media',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test', 'https://second.example.test:8443'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    const test = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Test')!;
+    test.click();
+    for (let i = 0; i < 15; i += 1) await Promise.resolve();
+    expect(mediaPermission).not.toHaveBeenCalled();
+    expect(document.getElementById('integration-status')?.textContent).toContain('Grant storage access');
+    const grant = Array.from(document.querySelectorAll<HTMLButtonElement>('#integration-status button'))
+      .find((button) => button.textContent === 'Grant storage access')!;
+    grant.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(mediaPermission).toHaveBeenCalledWith([
+      'https://storage.example.test/*', 'https://second.example.test/*',
+    ]);
+    expect(document.getElementById('integration-status')?.textContent).toContain('storage access granted');
+  });
+
+  it('provisions a separate media bearer after successful discovery and granted storage access', async () => {
+    containsPermission.mockResolvedValue(true);
+    const sends: Array<{ type: string; bearer?: string }> = [];
+    send.mockImplementation(async (message: any) => {
+      sends.push(message);
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200, mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'CONFIGURE_INTEGRATION_MEDIA') return { ok: true } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    const row = document.querySelector('.integration-destination')!;
+    const media = row.querySelector<HTMLElement>('.integration-media')!;
+    expect(media.hidden).toBe(true);
+    Array.from(row.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Test')!.click();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(media.hidden).toBe(false);
+    const token = media.querySelector<HTMLInputElement>('input')!;
+    token.value = 'mrmt_secret';
+    media.querySelector('button')!.click();
+    expect(token.value).toBe('');
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+    expect(sends.filter((msg) => msg.type === 'CONFIGURE_INTEGRATION_MEDIA')).toEqual([{
+      type: 'CONFIGURE_INTEGRATION_MEDIA', destinationId: 'destination_1', bearer: 'mrmt_secret',
+    }]);
+    expect(mediaPermission).not.toHaveBeenCalled();
+    expect(document.getElementById('integration-status')?.textContent).toContain('credential saved');
+    expect(document.body.textContent).not.toContain('mrmt_secret');
+  });
+
+  it('does not persist a media credential without storage access', async () => {
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200, mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [{
+        ...destination(), media: { secretId: 'secret_media', capability: { version: 1 } },
+      }] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    const media = document.querySelector<HTMLElement>('.integration-media')!;
+    media.querySelector<HTMLInputElement>('input')!.value = 'mrmt_secret';
+    media.querySelector<HTMLButtonElement>('button')!.click();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(media.querySelector<HTMLInputElement>('input')!.value).toBe('');
+    expect(document.getElementById('integration-status')?.textContent).toContain('Grant storage access');
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CONFIGURE_INTEGRATION_MEDIA' }));
+  });
+
+  it('keeps uploads disabled when storage permission is declined', async () => {
+    mediaPermission.mockResolvedValue(false);
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'TEST_INTEGRATION') return { ok: true, result: {
+        ok: true, status: 200, mediaCapability: {
+          version: 1, apiBase: 'https://crm.example.test/api',
+          upload: { strategy: 'multipart-put-v1', origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' },
+        },
+      } } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Test')!.click();
+    for (let i = 0; i < 15; i += 1) await Promise.resolve();
+    document.querySelector<HTMLButtonElement>('#integration-status button')!.click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(document.getElementById('integration-status')?.textContent).toContain('declined');
+  });
+
   it('rejects reserved API-key headers before requesting host permission', async () => {
     const controller = mount();
     await controller.init();
@@ -117,13 +244,18 @@ describe('IntegrationSettingsController', () => {
   });
 
   it('requests only the endpoint origin and exposes the generated signing secret once', async () => {
-    const controller = mount();
+    const onDestinationsChanged = jest.fn();
+    const controller = mount(onDestinationsChanged);
     await controller.init();
     (document.getElementById('integration-name') as HTMLInputElement).value = 'CRM';
     (document.getElementById('integration-endpoint') as HTMLInputElement).value = 'https://crm.example.test/hooks/recordings';
     send.mockImplementation(async (message: any) => {
       if (message.type === 'CREATE_INTEGRATION') {
-        return { ok: true, created: { destination: destination(), signingSecret: 'whsec_generated' } } as any;
+        return {
+          ok: true,
+          created: { destination: destination(), signingSecret: 'whsec_generated' },
+          profile: { id: 'profile-crm', name: 'CRM', mediaTarget: { kind: 'local' }, dataRoutes: [] },
+        } as any;
       }
       if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
       if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
@@ -139,10 +271,55 @@ describe('IntegrationSettingsController', () => {
     expect(permission).toHaveBeenCalledWith('https://crm.example.test/*');
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       type: 'CREATE_INTEGRATION',
-      input: expect.objectContaining({ endpoint: 'https://crm.example.test/hooks/recordings' }),
+      // Sending automatically is a per-recording pick under Save to (E8), never the integration's default.
+      input: expect.objectContaining({ endpoint: 'https://crm.example.test/hooks/recordings', routingDefault: 'manual' }),
     }));
     expect((document.getElementById('integration-signing-secret') as HTMLInputElement).value).toBe('whsec_generated');
     expect((document.getElementById('integration-secret-panel') as HTMLElement).hidden).toBe(false);
+    expect(document.getElementById('integration-status')?.textContent).toContain('It is now under Save to as CRM.');
+    expect(onDestinationsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('walks the setup to the end: copy the secret, then test the new connection (E4)', async () => {
+    const controller = mount();
+    await controller.init();
+    (document.getElementById('integration-name') as HTMLInputElement).value = 'CRM';
+    (document.getElementById('integration-endpoint') as HTMLInputElement).value = 'https://crm.example.test/hooks/recordings';
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    send.mockImplementation(async (message: any) => {
+      switch (message.type) {
+        case 'CREATE_INTEGRATION':
+          return { ok: true, created: { destination: destination(), signingSecret: 'whsec_generated' } } as any;
+        case 'TEST_INTEGRATION': return { ok: true, result: { ok: true, status: 204 } } as any;
+        case 'LIST_INTEGRATIONS': return { ok: true, destinations: [destination()] } as any;
+        case 'LIST_INTEGRATION_DELIVERIES': return { ok: true, deliveries: [] } as any;
+        default: throw new Error(`Unexpected message ${message.type}`);
+      }
+    });
+    (document.getElementById('integration-add') as HTMLButtonElement).click();
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+
+    (document.getElementById('integration-secret-copy') as HTMLButtonElement).click();
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    expect(writeText).toHaveBeenCalledWith('whsec_generated');
+
+    (document.getElementById('integration-secret-test') as HTMLButtonElement).click();
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(send).toHaveBeenCalledWith({ type: 'TEST_INTEGRATION', destinationId: 'destination_1' });
+    expect(document.getElementById('integration-status')?.textContent).toBe('\u2713 CRM connected');
+  });
+
+  it('selects the secret for a manual copy when the clipboard is refused', async () => {
+    const controller = mount();
+    await controller.init();
+    const secret = document.getElementById('integration-signing-secret') as HTMLInputElement;
+    secret.value = 'whsec_generated';
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: jest.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
+    (document.getElementById('integration-secret-copy') as HTMLButtonElement).click();
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    expect(document.activeElement).toBe(secret);
+    expect(document.getElementById('integration-status')?.textContent).toContain('Copy the selected signing secret');
   });
 
   it('rolls back a newly granted host permission when destination creation fails', async () => {
@@ -195,6 +372,93 @@ describe('IntegrationSettingsController', () => {
     expect(sendButton.disabled).toBe(true);
   });
 
+  it('separates automation disable from disconnect and keeps configured media visible', async () => {
+    let current = {
+      ...destination(),
+      media: {
+        secretId: 'secret_media',
+        capability: {
+          version: 1 as const,
+          apiBase: 'https://crm.example.test/api/media',
+          upload: { strategy: 'multipart-put-v1' as const, origins: ['https://storage.example.test'] },
+          playback: { strategy: 'refreshable-url-v1' as const },
+        },
+      },
+    };
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') {
+        return { ok: true, recordings: [{ id: 'recording_1', name: 'Weekly sync', available: true }] } as any;
+      }
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [current] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'SET_INTEGRATION_ENABLED') {
+        current = { ...current, enabled: message.enabled };
+        return { ok: true, destination: current } as any;
+      }
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+
+    const changed = jest.fn();
+    await mount(changed).init();
+    expect(document.querySelector<HTMLElement>('.integration-media')!.hidden).toBe(false);
+    const disable = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Disable automation')!;
+    disable.click();
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+
+    expect(send).toHaveBeenCalledWith({
+      type: 'SET_INTEGRATION_ENABLED',
+      destinationId: 'destination_1',
+      enabled: false,
+    });
+    expect(changed).toHaveBeenCalled();
+    expect(document.getElementById('integration-status')?.textContent).toContain('New and pending exports are stopped');
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'));
+    expect(buttons.find((button) => button.textContent === 'Enable automation')).toBeDefined();
+    expect(buttons.find((button) => button.textContent === 'Send recording')?.disabled).toBe(true);
+    expect(document.querySelector<HTMLElement>('.integration-media')!.hidden).toBe(false);
+  });
+
+  it('requires the disconnect playback consequence to be confirmed before deleting credentials', async () => {
+    const confirm = window.confirm as jest.MockedFunction<typeof window.confirm>;
+    confirm.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    send.mockImplementation(async (message: any) => {
+      if (message.type === 'LIST_INTEGRATION_RECORDINGS') return { ok: true, recordings: [] } as any;
+      if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
+      if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'GET_INTEGRATION_DISCONNECT_IMPACT') {
+        return { ok: true, affectedRecordings: 63 } as any;
+      }
+      if (message.type === 'DELETE_INTEGRATION') {
+        return {
+          ok: true,
+          removed: true,
+          hostPermissionRemoved: true,
+          hostPermissionCleanup: 'removed',
+        } as any;
+      }
+      throw new Error(`Unexpected message ${message.type}`);
+    });
+    await mount().init();
+
+    const disconnect = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Disconnect')!;
+    disconnect().click();
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'DELETE_INTEGRATION' }));
+    expect(confirm.mock.calls[0]?.[0]).toContain('63 recordings');
+    expect(confirm.mock.calls[0]?.[0]).toContain('will no longer play in the extension');
+    expect(confirm.mock.calls[0]?.[0]).toContain('are not deleted');
+
+    disconnect().click();
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+    expect(send).toHaveBeenCalledWith({
+      type: 'DELETE_INTEGRATION',
+      destinationId: 'destination_1',
+    });
+    expect(document.getElementById('integration-status')?.textContent).toContain('Receiver data/media were not deleted');
+  });
+
   it('reports a cleanup warning without calling a committed destination deletion failed', async () => {
     const controller = mount();
     send.mockImplementation(async (message: any) => {
@@ -203,6 +467,7 @@ describe('IntegrationSettingsController', () => {
       }
       if (message.type === 'LIST_INTEGRATIONS') return { ok: true, destinations: [destination()] } as any;
       if (message.type === 'LIST_INTEGRATION_DELIVERIES') return { ok: true, deliveries: [] } as any;
+      if (message.type === 'GET_INTEGRATION_DISCONNECT_IMPACT') return { ok: true, affectedRecordings: 2 } as any;
       if (message.type === 'DELETE_INTEGRATION') {
         return {
           ok: true,
@@ -215,15 +480,15 @@ describe('IntegrationSettingsController', () => {
     });
     await controller.init();
 
-    const deleteButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
-      .find((button) => button.textContent === 'Delete')!;
-    deleteButton.click();
+    const disconnectButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.integration-destination__actions button'))
+      .find((button) => button.textContent === 'Disconnect')!;
+    disconnectButton.click();
     for (let i = 0; i < 8; i += 1) await Promise.resolve();
 
     const status = document.getElementById('integration-status')?.textContent ?? '';
-    expect(status).toContain('Deleted CRM');
+    expect(status).toContain('Disconnected CRM');
     expect(status).toContain('permission');
-    expect(status).not.toContain('Delete failed');
+    expect(status).not.toContain('Disconnect failed');
   });
 
   it('offers manual retry for the latest failed delivery and reuses its durable identity path', async () => {

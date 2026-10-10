@@ -2,6 +2,10 @@ import type {
   RecordingContext,
   RecordingSourceContext,
 } from '../../../shared/recordingContext';
+import type {
+  RecordingDestinationMediaTarget,
+  RecordingRoutingRoute,
+} from '../../../shared/recordingDestinations';
 import type { RecordingContextRepositoryPort } from './RecordingContextRepository';
 
 export class RecordingContextService {
@@ -18,8 +22,18 @@ export class RecordingContextService {
     recordingId: string,
     startedAt: number,
     source: RecordingSourceContext,
+    destinationProfileId?: string,
+    destinationMediaTarget?: RecordingDestinationMediaTarget,
+    destinationRoutes?: readonly RecordingRoutingRoute[],
   ): Promise<void> {
-    await this.repository.put({ recordingId, startedAt, source });
+    await this.repository.put({
+      recordingId,
+      startedAt,
+      source,
+      ...(destinationProfileId ? { destinationProfileId } : {}),
+      ...(destinationMediaTarget ? { destinationMediaTarget: { ...destinationMediaTarget } } : {}),
+      ...(destinationRoutes ? { destinationRoutes: destinationRoutes.map((route) => ({ ...route })) } : {}),
+    });
   }
 
   async finish(recordingId: string, endedAt: number): Promise<RecordingContext | undefined> {

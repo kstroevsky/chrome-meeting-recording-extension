@@ -3,7 +3,24 @@ import { normalizeDriveSyncChoice } from '../../shared/driveSync';
 import { toStatusView } from '../../shared/recording';
 import { createRecordingFileDeletionPorts } from '../drive/recordingFileDeletionPorts';
 import { deleteRecordingFiles } from '../library/history/RecordingFileDeletion';
+import { requireRetainedMediaRecovery } from '../retention/retainedMediaRecoveryState';
 import type { MessageHandlersDeps, RuntimeSendResponse } from './types';
+
+/**
+ * A removed recording stops being routed: held or unsent work is canceled.
+ * Copies a receiver already has are not recalled (that needs a deletion event).
+ * Best effort: the removal itself already happened and must still be reported.
+ */
+async function forgetRouting(recordingId: string, deps: MessageHandlersDeps): Promise<void> {
+  await Promise.allSettled([
+    deps.integrations?.forgetRecordingRouting(recordingId),
+    deps.externalMedia?.cancelRecording(recordingId),
+  ]).then((results) => {
+    for (const result of results) {
+      if (result.status === 'rejected') console.warn('[library] could not finish recording route cleanup:', result.reason);
+    }
+  });
+}
 
 export async function handleLibraryMessage(
   msg: PopupToBg,
@@ -48,7 +65,9 @@ export async function handleLibraryMessage(
   if (msg.type === 'REMOVE_RECORDING_HISTORY') {
     if (!history) throw new Error('Recording history is unavailable');
     if (!msg.deleteFiles) {
-      sendResponse({ ok: true, removed: await history.remove(msg.id) });
+      const removed = await history.remove(msg.id);
+      if (removed) await forgetRouting(msg.id, deps);
+      sendResponse({ ok: true, removed });
       return true;
     }
     const entry = await history.get(msg.id);
@@ -56,10 +75,41 @@ export async function handleLibraryMessage(
     // ended, nothing is removed or deleted.
     const sharesEnded = entry && deps.sharing ? await deps.sharing.revokeSharesOf(msg.id) : 0;
     const removed = await history.remove(msg.id);
+    if (removed) await forgetRouting(msg.id, deps);
     const files = removed && entry
       ? await deleteRecordingFiles(entry, createRecordingFileDeletionPorts())
       : { deleted: 0, errors: [] };
     sendResponse({ ok: true, removed, filesDeleted: files.deleted, fileErrors: files.errors, sharesEnded });
+    return true;
+  }
+  if (msg.type === 'FREE_RECORDING_SPACE') {
+    if (!history) throw new Error('Recording history is unavailable');
+    if (!deps.externalMedia) throw new Error('External media is unavailable');
+    const planned = await history.planVerifiedRetainedMediaRelease(msg.id);
+    if (!planned.length) {
+      sendResponse({ ok: true, entry: await history.get(msg.id), releasedFiles: 0, cleanup: 'deleted' });
+      return true;
+    }
+    const guarded = await deps.externalMedia.withRetainedSourceRelease(
+      msg.id,
+      planned.map((target) => target.key),
+      async () => {
+        await requireRetainedMediaRecovery();
+        const marked = await history.markVerifiedRetainedMediaReleased(msg.id, planned);
+        const cleanup = await history.deleteReleasedRetainedMedia(msg.id, marked.released);
+        return { marked, cleanup };
+      },
+    );
+    if (guarded.busy) {
+      sendResponse({ ok: false, error: 'This recording is still being transferred. Try again when the transfer finishes.' });
+      return true;
+    }
+    sendResponse({
+      ok: true,
+      entry: guarded.value.marked.entry,
+      releasedFiles: guarded.value.marked.released.length,
+      cleanup: guarded.value.cleanup,
+    });
     return true;
   }
   if (msg.type === 'SYNC_DRIVE_PLAN' || msg.type === 'SYNC_DRIVE_APPLY') {

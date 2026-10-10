@@ -34,11 +34,15 @@ if (list && empty && error) {
     note: (id, note) => void controller.setNote(id, note),
     remove: (id, deleteFiles) => void controller.remove(id, deleteFiles),
     removeMany: (ids, deleteFiles) => void controller.removeMany(ids, deleteFiles),
+    freeSpace: (id) => void controller.freeSpace(id),
     syncDrive: () => void controller.syncDrive(),
     openLocal: (recordingId, fileId) => void controller.openLocal(recordingId, fileId),
     play: (recordingId) => void controller.play(recordingId),
+    playRemote: (recordingId) => void controller.playRemote(recordingId),
     fileTo: (recordingId, presetId) => void controller.fileTo(recordingId, presetId),
     loadMore: () => void controller.loadMore(),
+    retryExternalMedia: (destinationId, clientTransferId) =>
+      void controller.retryExternalMedia(destinationId, clientTransferId),
     ...(sharingEnabled ? {
       share: (recordingIds, options, report) => controller.share(recordingIds, options, report),
       shareSnapshot: () => controller.shareSnapshot(),
@@ -63,6 +67,8 @@ if (list && empty && error) {
       playback: {
         getManifest: (recordingId) => controller.playback.getManifest(recordingId),
         prepareDriveSource: (recordingId, fileId, refresh) => controller.playback.prepareDriveSource(recordingId, fileId, refresh),
+        prepareExternalSource: (recordingId, fileId, destinationId, artifactId, refresh) =>
+          controller.playback.prepareExternalSource(recordingId, fileId, destinationId, artifactId, refresh),
         warn: (...args) => controller.playback.warn(...args),
       },
       notesChanged: () => controller.notesChanged(),

@@ -20,6 +20,7 @@ import {
 import { RecordingDeviceCommands } from './RecordingDeviceCommands';
 import { RecordingNotationCommands } from './RecordingNotationCommands';
 import { RecordingSidecars } from './RecordingSidecars';
+import type { RecordingDestinationPort, RecordingRoutingPort } from './recordingRoutingPorts';
 
 export type { StartRecordingMessage } from './RecordingStartCommands';
 
@@ -36,6 +37,10 @@ export type RecordingControllerDeps = {
   notations?: RecordingNotationService;
   transcripts?: RecordingTranscriptService;
   transcriptCapture?: RecordingTranscriptCapture;
+  /** "Save to" destinations (plan E1); absent in tests that predate them. */
+  destinations?: RecordingDestinationPort;
+  /** Per-recording integration routing (plan E5). */
+  routing?: RecordingRoutingPort;
 };
 
 export class RecordingController {
@@ -62,6 +67,8 @@ export class RecordingController {
       session: deps.session,
       recordingContexts: deps.recordingContexts,
       telemetry: deps.telemetry,
+      destinations: deps.destinations,
+      routing: deps.routing,
       result,
     });
     this.lifecycle = new RecordingLifecycleCommands({

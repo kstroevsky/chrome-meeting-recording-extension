@@ -7,21 +7,49 @@ import { contentTypeForRecordingFile, normalizeRecordingFileContentType } from '
  * Where a logical artifact physically exists. A recording artifact is immutable
  * logical media; OPFS, Downloads and Drive are *replicas* of it (ADR-0006), so
  * one file can hold several at once — a Drive upload that fell back locally has
- * both. At most one replica per `kind`.
+ * both. At most one replica per `kind`, except external, which is keyed by
+ * destinationId: separate receivers may retain independent copies.
  */
 export type ArtifactLocation =
   | { kind: 'opfs'; key: string; retainedAt: number }
   | { kind: 'download'; downloadId: number }
-  | { kind: 'drive'; fileId: string; webViewLink?: string };
+  | { kind: 'drive'; fileId: string; webViewLink?: string }
+  | {
+      kind: 'external';
+      destinationId: string;
+      artifactId: string;
+      /** Native browser playback reached `playing` for this exact artifact. */
+      playbackVerifiedAt?: number;
+    };
 
 export type ArtifactDeliveryStatus = 'pending' | 'downloaded' | 'uploaded' | 'local-fallback' | 'failed';
 
+/**
+ * What must own this artifact for its requested delivery to count as complete.
+ * `storageMode` remains a legacy local/Drive capture switch; an external
+ * primary is recorded here so retained OPFS recovery cannot be mistaken for a
+ * pending Downloads delivery.
+ */
+export type ArtifactDeliveryTarget = StorageMode | { kind: 'external'; destinationId: string };
+
 /** Did the delivery the user asked for succeed? Not the same as where bytes are. */
 export type ArtifactDelivery = {
-  /** What the user requested at recording time. `StorageMode` is 'local' | 'drive'. */
-  requested: StorageMode;
+  /** What the user requested at recording time. */
+  requested: ArtifactDeliveryTarget;
   status: ArtifactDeliveryStatus;
   error?: string;
+};
+
+export type RetainedMediaReleaseMarker = {
+  /** Exact OPFS key that must never be re-adopted by startup reconciliation. */
+  key: string;
+  releasedAt: number;
+};
+
+export type RetainedMediaReleaseTarget = {
+  fileId: string;
+  key: string;
+  bytes?: number;
 };
 
 export type RecordingHistoryFile = {
@@ -48,6 +76,8 @@ export type RecordingHistoryFile = {
   captureStartOffsetMs?: number;
   /** Every physical replica of these bytes. Empty means the extension owns none. */
   locations: ArtifactLocation[];
+  /** Permanent local-release intent. It survives physical deletion and restarts. */
+  releasedRetainedMedia?: RetainedMediaReleaseMarker[];
   delivery: ArtifactDelivery;
 
   // Legacy single-destination fields, retained for one migration period
@@ -113,6 +143,7 @@ export type RecordingHistoryMessage =
   | { type: 'RENAME_RECORDING_HISTORY'; id: string; name: string }
   | { type: 'SET_RECORDING_HISTORY_NOTE'; id: string; note: string }
   | { type: 'REMOVE_RECORDING_HISTORY'; id: string; deleteFiles?: boolean }
+  | { type: 'FREE_RECORDING_SPACE'; id: string }
   | { type: 'OPEN_RECORDING_HISTORY_FILE'; recordingId: string; fileId: string };
 
 /**
@@ -211,11 +242,16 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
   const locations = Array.isArray(candidate.locations)
     ? candidate.locations.map(normalizeArtifactLocation).filter((location): location is ArtifactLocation => location != null)
     : locationsFromLegacyFields(legacy);
+  const releasedRetainedMedia = Array.isArray(candidate.releasedRetainedMedia)
+    ? normalizeRetainedMediaReleaseMarkers(candidate.releasedRetainedMedia)
+    : [];
   // Signed: a negative offset is valid data, so this cannot reuse the `>= 0`
   // guard the byte counts use.
   const captureStartOffsetMs = typeof candidate.captureStartOffsetMs === 'number' && Number.isFinite(candidate.captureStartOffsetMs)
     ? candidate.captureStartOffsetMs
     : undefined;
+  const delivery = normalizeArtifactDelivery(candidate.delivery, legacy, requested);
+  if (!delivery) return undefined;
   return {
     id,
     stream,
@@ -224,7 +260,8 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     mimeType: normalizeRecordingFileContentType(optionalString('mimeType'), filename, stream),
     ...(captureStartOffsetMs != null ? { captureStartOffsetMs } : {}),
     locations,
-    delivery: normalizeArtifactDelivery(candidate.delivery, legacy, requested),
+    ...(releasedRetainedMedia.length ? { releasedRetainedMedia } : {}),
+    delivery,
     destination,
     status,
     ...(bytes != null ? { bytes } : {}),
@@ -233,6 +270,21 @@ function normalizeRecordingHistoryFile(value: unknown, requested: StorageMode): 
     ...(webViewLink ? { webViewLink } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+function normalizeRetainedMediaReleaseMarkers(values: unknown[]): RetainedMediaReleaseMarker[] {
+  const byKey = new Map<string, RetainedMediaReleaseMarker>();
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const candidate = value as Record<string, unknown>;
+    const key = typeof candidate.key === 'string' ? candidate.key.trim() : '';
+    const releasedAt = typeof candidate.releasedAt === 'number' && Number.isFinite(candidate.releasedAt)
+      && candidate.releasedAt >= 0 ? candidate.releasedAt : undefined;
+    if (!key || key.length > 4096 || /[\x00-\x1f\x7f]/.test(key) || releasedAt == null) continue;
+    const current = byKey.get(key);
+    if (!current || current.releasedAt < releasedAt) byKey.set(key, { key, releasedAt });
+  }
+  return [...byKey.values()];
 }
 
 function normalizeArtifactLocation(value: unknown): ArtifactLocation | undefined {
@@ -257,6 +309,22 @@ function normalizeArtifactLocation(value: unknown): ArtifactLocation | undefined
       : undefined;
     return fileId ? { kind: 'drive', fileId, ...(webViewLink ? { webViewLink } : {}) } : undefined;
   }
+  if (candidate.kind === 'external') {
+    const destinationId = typeof candidate.destinationId === 'string' ? candidate.destinationId.trim() : '';
+    const artifactId = typeof candidate.artifactId === 'string' ? candidate.artifactId.trim() : '';
+    const playbackVerifiedAt = typeof candidate.playbackVerifiedAt === 'number'
+      && Number.isFinite(candidate.playbackVerifiedAt) && candidate.playbackVerifiedAt >= 0
+      ? candidate.playbackVerifiedAt
+      : undefined;
+    // Stored identifiers are opaque; reject control characters and excessively
+    // large/corrupted values without assuming the identifier scheme of a receiver.
+    if (!destinationId || !artifactId || destinationId.length > 200 || artifactId.length > 200 ||
+        /[\x00-\x1f\x7f]/.test(destinationId) || /[\x00-\x1f\x7f]/.test(artifactId)) return undefined;
+    return {
+      kind: 'external', destinationId, artifactId,
+      ...(playbackVerifiedAt != null ? { playbackVerifiedAt } : {}),
+    };
+  }
   return undefined;
 }
 
@@ -268,14 +336,17 @@ const ARTIFACT_DELIVERY_STATUSES: readonly ArtifactDeliveryStatus[] = [
   'failed',
 ];
 
-function normalizeArtifactDelivery(value: unknown, legacy: LegacyDeliveryFields, requested: StorageMode): ArtifactDelivery {
+function normalizeArtifactDelivery(
+  value: unknown,
+  legacy: LegacyDeliveryFields,
+  requested: StorageMode,
+): ArtifactDelivery | undefined {
   if (value && typeof value === 'object') {
     const candidate = value as Record<string, unknown>;
     const stored = ARTIFACT_DELIVERY_STATUSES.find((entry) => entry === candidate.status);
     if (stored) {
-      const storedRequested = candidate.requested === 'drive' ? 'drive'
-        : candidate.requested === 'local' ? 'local'
-        : requested;
+      const storedRequested = normalizeArtifactDeliveryTarget(candidate.requested, requested);
+      if (!storedRequested) return undefined;
       const error = typeof candidate.error === 'string' && candidate.error.trim() ? candidate.error.trim() : undefined;
       return { requested: storedRequested, status: stored, ...(error ? { error } : {}) };
     }
@@ -318,15 +389,74 @@ export function deliveryFromLegacyFields(file: LegacyDeliveryFields, requested: 
   return { requested, status, ...(file.error ? { error: file.error } : {}) };
 }
 
-/** Adds or replaces the replica of `next.kind`, leaving the other kinds in place. */
+function normalizeArtifactDeliveryTarget(
+  value: unknown,
+  legacyRequested: StorageMode,
+): ArtifactDeliveryTarget | undefined {
+  if (value === undefined) return legacyRequested;
+  if (value === 'local' || value === 'drive') return value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== 'external') return undefined;
+  const destinationId = typeof candidate.destinationId === 'string' ? candidate.destinationId.trim() : '';
+  if (!destinationId || destinationId.length > 200 || /[\x00-\x1f\x7f]/.test(destinationId)) return undefined;
+  return { kind: 'external', destinationId };
+}
+
+/** Legacy capture/delivery APIs still require local|drive. External keeps local capture mechanics. */
+export function storageModeForArtifactDelivery(target: ArtifactDeliveryTarget): StorageMode {
+  return typeof target === 'string' ? target : 'local';
+}
+
+/** Adds or replaces a replica, scoped by receiver for external destinations. */
 export function upsertArtifactLocation(locations: ArtifactLocation[], next: ArtifactLocation): ArtifactLocation[] {
+  if (next.kind === 'external') {
+    const current = locations.find((location) => location.kind === 'external'
+      && location.destinationId === next.destinationId);
+    const merged = current?.kind === 'external' && current.artifactId === next.artifactId
+      && current.playbackVerifiedAt != null && next.playbackVerifiedAt == null
+      ? { ...next, playbackVerifiedAt: current.playbackVerifiedAt }
+      : next;
+    return [...locations.filter((location) => location.kind !== 'external'
+      || location.destinationId !== next.destinationId), merged];
+  }
   return [...locations.filter((location) => location.kind !== next.kind), next];
+}
+
+/** Media OPFS replicas that may be deliberately released under R1/JM11. */
+export function verifiedRetainedMediaReleaseTargets(
+  entry: RecordingHistoryEntry,
+): RetainedMediaReleaseTarget[] {
+  if (entry.deletedAt || entry.status !== 'complete') return [];
+  return entry.files.flatMap((file) => {
+    if (file.kind || !file.locations.some((location) =>
+      location.kind === 'external' && location.playbackVerifiedAt != null)) return [];
+    return file.locations
+      .filter((location): location is Extract<ArtifactLocation, { kind: 'opfs' }> => location.kind === 'opfs')
+      .map((location) => ({
+        fileId: file.id,
+        key: location.key,
+        ...(file.bytes != null ? { bytes: file.bytes } : {}),
+      }));
+  });
+}
+
+/** Retained media that has an external replica but still needs native playback proof. */
+export function hasRetainedMediaAwaitingExternalPlayback(entry: RecordingHistoryEntry): boolean {
+  if (entry.deletedAt || entry.status !== 'complete') return false;
+  return entry.files.some((file) => {
+    if (file.kind || !file.locations.some((location) => location.kind === 'opfs')) return false;
+    const external = file.locations.filter(
+      (location): location is Extract<ArtifactLocation, { kind: 'external' }> => location.kind === 'external',
+    );
+    return external.length > 0 && external.every((location) => location.playbackVerifiedAt == null);
+  });
 }
 
 /** ADR-0006 fields for a freshly created row that has no replicas yet. */
 export function pendingArtifactFields(
   filename: string,
-  requested: StorageMode,
+  requested: ArtifactDeliveryTarget,
   stream?: RecordingStream,
 ): Pick<RecordingHistoryFile, 'mimeType' | 'locations' | 'delivery'> {
   return {
@@ -395,6 +525,9 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
     return typeof message.id === 'string' && message.id.length > 0
       && (message.deleteFiles === undefined || typeof message.deleteFiles === 'boolean');
   }
+  if (message.type === 'FREE_RECORDING_SPACE') {
+    return typeof message.id === 'string' && message.id.length > 0;
+  }
   return message.type === 'OPEN_RECORDING_HISTORY_FILE'
     && typeof message.recordingId === 'string' && message.recordingId.length > 0
     && typeof message.fileId === 'string' && message.fileId.length > 0;
@@ -411,10 +544,22 @@ export function isRecordingHistoryMessage(value: unknown): value is RecordingHis
  */
 export function awaitsLocalDelivery(file: RecordingHistoryFile): boolean {
   if (file.kind === 'notes') return false;
+  if (file.delivery.requested !== 'local') return false;
   if (file.delivery.status !== 'pending') return false;
   if (file.locations.some((location) => location.kind === 'download')) return false;
   return file.locations.some((location) => location.kind === 'opfs');
 }
+
+/** A recording whose files still wait for the end dialog to say where they go. */
+export type PendingLocalDelivery = {
+  id: string;
+  name: string;
+  /**
+   * The local folder its *Save to* destination files into, when that folder
+   * still exists: the dialog's starting choice, and where an unanswered one lands.
+   */
+  folderId?: string;
+};
 
 /** The media files of an entry that are still owed to the download directory. */
 export function pendingLocalDeliveries(entry: RecordingHistoryEntry): RecordingHistoryFile[] {

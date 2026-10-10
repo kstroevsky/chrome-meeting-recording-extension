@@ -1,6 +1,8 @@
 import type { ArtifactDeliveryStatus } from '../shared/recordingHistory';
 import type { TranscriptSource } from '../shared/transcript';
 
+export const INTEGRATION_INDEXED_IDENTIFIER_MAX_CHARS = 512;
+
 export type TranscriptSpeakerPolicy = 'names' | 'pseudonyms' | 'omit';
 
 export type IntegrationRecordingOption = {

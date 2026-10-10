@@ -1,7 +1,7 @@
 import { sendToBackground } from '../../shared/messages';
 import { historyFile } from '../../../tests/helpers/recordingHistoryFixtures';
 import type { RecordingHistoryEntry } from '../../shared/recordingHistory';
-import { RecordingsController } from '../RecordingsController';
+import { externalOnlyPlaybackManifest, RecordingsController } from '../RecordingsController';
 import type { RecordingsView } from '../RecordingsView';
 import type { PlaybackManifest } from '../../shared/playback';
 
@@ -26,6 +26,7 @@ function makeView() {
     showError: jest.fn(),
     setNoteSummaries: jest.fn(),
     setTopicSummaries: jest.fn(),
+    setExternalMediaTransfers: jest.fn(),
   } as unknown as RecordingsView;
 }
 
@@ -45,12 +46,32 @@ function respond(handlers: Record<string, unknown[]>) {
     if (queue?.length) return queue.shift() as any;
     if (message.type === 'LIST_RECORDING_NOTATION_SUMMARIES') return { ok: true, summaries: {} } as any;
     if (message.type === 'LIST_RECORDING_TOPIC_SUMMARIES') return { ok: true, summaries: {} } as any;
+    if (message.type === 'LIST_EXTERNAL_MEDIA_TRANSFERS') return { ok: true, transfers: [] } as any;
     throw new Error(`unexpected message: ${message.type}`);
   });
 }
 
 describe('RecordingsController', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it('builds remote verification playback from external sources only', () => {
+    const manifest: PlaybackManifest = {
+      recordingId: 'one', title: 'One', createdAt: 1, transcriptStatus: 'none', notations: [], topics: [],
+      tracks: [{
+        fileId: 'one:tab', stream: 'tab', filename: 'one.webm', mimeType: 'video/webm', captureStartOffsetMs: 0,
+        sources: [
+          { kind: 'opfs', key: 'library/one/tab.webm' },
+          { kind: 'drive', fileId: 'drive-1' },
+          { kind: 'external', destinationId: 'crm', artifactId: 'media-1' },
+        ],
+      }],
+    };
+
+    expect(externalOnlyPlaybackManifest(manifest)?.tracks[0].sources).toEqual([
+      { kind: 'external', destinationId: 'crm', artifactId: 'media-1' },
+    ]);
+    expect(manifest.tracks[0].sources).toHaveLength(3);
+  });
 
   it('sends a confirmed file deletion straight through: the dialog already asked', async () => {
     const nativeConfirm = jest.spyOn(window, 'confirm');
@@ -243,6 +264,43 @@ describe('RecordingsController', () => {
 
     expect(view.setTopicSummaries).not.toHaveBeenCalled();
     expect(view.render).toHaveBeenCalledWith([entry('one')], false, undefined);
+  });
+
+  it('shows external media progress and refreshes it after an explicit retry', async () => {
+    const view = makeView();
+    const controller = new RecordingsController(view);
+    const waiting = {
+      recordingId: 'one',
+      fileId: 'one:tab',
+      destinationId: 'crm',
+      destinationName: 'CRM',
+      clientTransferId: 'transfer-1',
+      state: 'action-required' as const,
+      bytesUploaded: 10,
+      bytesTotal: 100,
+      attempts: 5,
+      errorCategory: 'network' as const,
+    };
+    const queued = { ...waiting, state: 'queued' as const, attempts: 5, errorCategory: undefined };
+    respond({
+      LIST_RECORDING_HISTORY: [{ ok: true, entries: [entry('one')] }],
+      LIST_EXTERNAL_MEDIA_TRANSFERS: [
+        { ok: true, transfers: [waiting] },
+        { ok: true, transfers: [queued] },
+      ],
+      RETRY_EXTERNAL_MEDIA_TRANSFER: [{ ok: true, transfer: queued }],
+    });
+
+    await controller.init();
+    expect(view.setExternalMediaTransfers).toHaveBeenCalledWith([waiting]);
+    await controller.retryExternalMedia('crm', 'transfer-1');
+
+    expect(send).toHaveBeenCalledWith({
+      type: 'RETRY_EXTERNAL_MEDIA_TRANSFER',
+      destinationId: 'crm',
+      clientTransferId: 'transfer-1',
+    });
+    expect(view.setExternalMediaTransfers).toHaveBeenLastCalledWith([queued]);
   });
 
   it('builds a selected share from playback manifests and requested transcripts', async () => {

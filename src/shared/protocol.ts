@@ -30,7 +30,11 @@ import {
   POPUP_TO_CONTENT_MESSAGE_TYPES,
 } from './protocolMessageTypes';
 import { getMessageType, hasKnownMessageType, isRecord } from './typeGuards';
-import type { RecordingHistoryCursor, RecordingHistoryEntry } from './recordingHistory';
+import type {
+  RecordingHistoryCursor,
+  RecordingHistoryEntry,
+  RecordingHistoryMessage,
+} from './recordingHistory';
 import type { IntegrationDataPolicy, IntegrationRecordingOption } from '../integrations/contracts';
 import type { IntegrationPayloadPreview } from '../integrations/preview';
 import {
@@ -46,6 +50,20 @@ export type RpcId = string;
 
 export type RpcRequest<T extends { type: string }> = T & { __id?: RpcId };
 export type RpcResponse<T = unknown> = { __respFor: RpcId; payload: T };
+export type ExternalMediaTransferView = import('../offscreen/media/ExternalMediaTransferStore').ExternalMediaTransfer;
+export type ExternalMediaTransferStatus = {
+  recordingId: string;
+  fileId: string;
+  destinationId: string;
+  destinationName?: string;
+  clientTransferId: string;
+  state: ExternalMediaTransferView['state'];
+  bytesUploaded: number;
+  bytesTotal: number;
+  attempts: number;
+  errorCategory?: ExternalMediaTransferView['errorCategory'];
+  nextAttemptAt?: number;
+};
 
 export type OffscreenFinalizationCommandResult = {
   ok: boolean;
@@ -198,6 +216,22 @@ export type PopupRefreshPlaybackSource = {
   recordingId: string;
   fileId: string;
 };
+/** An exact artifact association is checked again against the live manifest in background. */
+export type PopupPrepareExternalPlaybackSource = {
+  type: 'PREPARE_EXTERNAL_PLAYBACK_SOURCE';
+  recordingId: string;
+  fileId: string;
+  destinationId: string;
+  artifactId: string;
+};
+/** Sent only after the native media element emits `playing` for the exact external source. */
+export type PopupReportExternalPlaybackStarted = {
+  type: 'REPORT_EXTERNAL_PLAYBACK_STARTED';
+  recordingId: string;
+  fileId: string;
+  destinationId: string;
+  artifactId: string;
+};
 /** Adds a notation to a finished recording at an explicit media offset. */
 export type PopupAddRecordingNotation = {
   type: 'ADD_RECORDING_NOTATION';
@@ -226,8 +260,18 @@ export type PopupPreviewIntegrationPayload = {
 export type PopupListIntegrationRecordings = { type: 'LIST_INTEGRATION_RECORDINGS' };
 export type PopupListIntegrations = { type: 'LIST_INTEGRATIONS' };
 export type PopupCreateIntegration = { type: 'CREATE_INTEGRATION'; input: CreateIntegrationDestinationInput };
+export type PopupSetIntegrationEnabled = {
+  type: 'SET_INTEGRATION_ENABLED';
+  destinationId: string;
+  enabled: boolean;
+};
+export type PopupGetIntegrationDisconnectImpact = {
+  type: 'GET_INTEGRATION_DISCONNECT_IMPACT';
+  destinationId: string;
+};
 export type PopupDeleteIntegration = { type: 'DELETE_INTEGRATION'; destinationId: string };
 export type PopupTestIntegration = { type: 'TEST_INTEGRATION'; destinationId: string };
+export type PopupConfigureIntegrationMedia = { type: 'CONFIGURE_INTEGRATION_MEDIA'; destinationId: string; bearer: string };
 export type PopupSendRecordingToIntegration = {
   type: 'SEND_RECORDING_TO_INTEGRATION';
   destinationId: string;
@@ -238,6 +282,45 @@ export type PopupRetryIntegrationDelivery = {
   type: 'RETRY_INTEGRATION_DELIVERY';
   deliveryId: string;
 };
+/** UI-safe external replica status. Receiver URLs, OPFS keys, ETags and credentials are omitted. */
+export type PopupListExternalMediaTransfers = {
+  type: 'LIST_EXTERNAL_MEDIA_TRANSFERS';
+  recordingId?: string;
+};
+export type PopupRetryExternalMediaTransfer = {
+  type: 'RETRY_EXTERNAL_MEDIA_TRANSFER';
+  destinationId: string;
+  clientTransferId: string;
+};
+/** The "Save to" list: built-ins plus integration profiles, with availability. */
+export type PopupListRecordingDestinations = { type: 'LIST_RECORDING_DESTINATIONS' };
+export type PopupSaveRecordingDestination = {
+  type: 'SAVE_RECORDING_DESTINATION';
+  input: import('../background/destinations/RecordingDestinationsRuntime').SaveRecordingDestinationInput;
+};
+export type PopupRemoveRecordingDestination = { type: 'REMOVE_RECORDING_DESTINATION'; profileId: string };
+/** Routes of one recording; without `recordingId`, of the run in progress. */
+export type PopupGetRecordingRoutes = { type: 'GET_RECORDING_ROUTES'; recordingId?: string };
+/** The end dialog's answer for exactly the held routes that dialog observed. */
+export type PopupConfirmRecordingRoutes = {
+  type: 'CONFIRM_RECORDING_ROUTES';
+  recordingId: string;
+  decisions: import('../integrations/RecordingRoutingService').RecordingRouteDecision[];
+};
+/** Explicitly replaces/adds a receiver from the end dialog; the new route remains held. */
+export type PopupChangeRecordingRoute = {
+  type: 'CHANGE_RECORDING_ROUTE';
+  recordingId: string;
+  fromDestinationId?: string;
+  toDestinationId: string;
+};
+/**
+ * Finished recordings whose routes still wait for a confirmation, because the
+ * end dialog never appeared (the files were saved without asking) or was dismissed.
+ */
+export type PopupListHeldRecordingRoutes = { type: 'LIST_HELD_RECORDING_ROUTES' };
+/** Writes again the routing that failed at Start; without `recordingId`, for the run in progress. */
+export type PopupRetryRecordingRouting = { type: 'RETRY_RECORDING_ROUTING'; recordingId?: string };
 
 export type PopupToBg =
   | PopupStartRecording
@@ -263,6 +346,7 @@ export type PopupToBg =
   | PopupRenameRecordingHistory
   | PopupSetRecordingHistoryNote
   | PopupRemoveRecordingHistory
+  | Extract<RecordingHistoryMessage, { type: 'FREE_RECORDING_SPACE' }>
   | PopupOpenRecordingHistoryFile
   | PopupMarkNotation
   | PopupEndNotation
@@ -282,6 +366,8 @@ export type PopupToBg =
   | PopupDeliverLocalRecording
   | PopupPreparePlaybackSource
   | PopupRefreshPlaybackSource
+  | PopupPrepareExternalPlaybackSource
+  | PopupReportExternalPlaybackStarted
   | PopupListRecordingNotationSummaries
   | PopupListRecordingTopicSummaries
   | PopupAddRecordingNotation
@@ -292,11 +378,24 @@ export type PopupToBg =
   | PopupListIntegrationRecordings
   | PopupListIntegrations
   | PopupCreateIntegration
+  | PopupSetIntegrationEnabled
+  | PopupGetIntegrationDisconnectImpact
   | PopupDeleteIntegration
   | PopupTestIntegration
+  | PopupConfigureIntegrationMedia
   | PopupSendRecordingToIntegration
   | PopupListIntegrationDeliveries
-  | PopupRetryIntegrationDelivery;
+  | PopupRetryIntegrationDelivery
+  | PopupListExternalMediaTransfers
+  | PopupRetryExternalMediaTransfer
+  | PopupListRecordingDestinations
+  | PopupSaveRecordingDestination
+  | PopupRemoveRecordingDestination
+  | PopupGetRecordingRoutes
+  | PopupConfirmRecordingRoutes
+  | PopupChangeRecordingRoute
+  | PopupRetryRecordingRouting
+  | PopupListHeldRecordingRoutes;
 
 export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupStartRecording ? CommandResult :
@@ -324,6 +423,12 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupDismissInterruption ? { session: RecordingStatusView } :
   T extends PopupSetRecordingHistoryNote ? { ok: true; entry?: RecordingHistoryEntry } | { ok: false; error: string } :
   T extends PopupRemoveRecordingHistory ? { ok: true; removed: boolean; filesDeleted?: number; fileErrors?: string[]; sharesEnded?: number } | { ok: false; error: string } :
+  T extends Extract<RecordingHistoryMessage, { type: 'FREE_RECORDING_SPACE' }> ? {
+    ok: true;
+    entry?: RecordingHistoryEntry;
+    releasedFiles: number;
+    cleanup: 'deleted' | 'deferred';
+  } | { ok: false; error: string } :
   T extends PopupOpenRecordingHistoryFile ? { ok: true } | { ok: false; error: string } :
   T extends PopupMarkNotation ? NotationResult :
   T extends PopupEndNotation ? NotationResult :
@@ -340,7 +445,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
       | { ok: false; error: string } :
   T extends PopupResolveUnsavedRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupListPendingLocalDeliveries
-    ? { ok: true; recordings: { id: string; name: string }[] } | { ok: false; error: string } :
+    ? { ok: true; recordings: import('./recordingHistory').PendingLocalDelivery[] } | { ok: false; error: string } :
   T extends PopupDeliverLocalRecording ? { ok: true } | { ok: false; error: string } :
   T extends PopupFileRecordingToDestination ? { ok: true } | { ok: false; error: string } :
   T extends PopupSyncDrivePlan ? { ok: true; plan: DriveSyncPlan } | { ok: false; error: string } :
@@ -349,6 +454,8 @@ export type PopupToBgResponse<T extends PopupToBg> =
     { ok: true; manifest: import('./playback').PlaybackManifest } | { ok: false; error: string } :
   T extends PopupPreparePlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
   T extends PopupRefreshPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
+  T extends PopupPrepareExternalPlaybackSource ? { ok: true; url: string } | { ok: false; error: string } :
+  T extends PopupReportExternalPlaybackStarted ? { ok: true } | { ok: false; error: string } :
   T extends PopupListRecordingNotationSummaries ?
     { ok: true; summaries: Record<string, RecordingNotationSummary> } | { ok: false; error: string } :
   T extends PopupListRecordingTopicSummaries ?
@@ -365,7 +472,16 @@ export type PopupToBgResponse<T extends PopupToBg> =
   T extends PopupListIntegrations
     ? { ok: true; destinations: IntegrationDestination[] } | { ok: false; error: string } :
   T extends PopupCreateIntegration
-    ? { ok: true; created: CreatedIntegrationDestination } | { ok: false; error: string } :
+    ? {
+        ok: true;
+        created: CreatedIntegrationDestination;
+        /** The "Save to" destination made for it; absent when that could not be saved. */
+        profile?: import('./recordingDestinations').RecordingDestinationProfile;
+      } | { ok: false; error: string } :
+  T extends PopupSetIntegrationEnabled
+    ? { ok: true; destination: IntegrationDestination } | { ok: false; error: string } :
+  T extends PopupGetIntegrationDisconnectImpact
+    ? { ok: true; affectedRecordings: number } | { ok: false; error: string } :
   T extends PopupDeleteIntegration
     ? {
         ok: true;
@@ -375,6 +491,7 @@ export type PopupToBgResponse<T extends PopupToBg> =
       } | { ok: false; error: string } :
   T extends PopupTestIntegration
     ? { ok: true; result: IntegrationConnectionTestResult } | { ok: false; error: string } :
+  T extends PopupConfigureIntegrationMedia ? { ok: true } | { ok: false; error: string } :
   T extends PopupSendRecordingToIntegration
     ? { ok: true; delivery: IntegrationDelivery }
       | {
@@ -386,6 +503,37 @@ export type PopupToBgResponse<T extends PopupToBg> =
     ? { ok: true; deliveries: IntegrationDelivery[] } | { ok: false; error: string } :
   T extends PopupRetryIntegrationDelivery
     ? { ok: true; delivery: IntegrationDelivery } | { ok: false; error: string } :
+  T extends PopupListExternalMediaTransfers
+    ? { ok: true; transfers: ExternalMediaTransferStatus[] } | { ok: false; error: string } :
+  T extends PopupRetryExternalMediaTransfer
+    ? { ok: true; transfer: ExternalMediaTransferStatus } | { ok: false; error: string } :
+  T extends PopupListRecordingDestinations
+    ? {
+        ok: true;
+        destinations: import('../background/destinations/RecordingDestinationsRuntime').RecordingDestinationOption[];
+        rememberedId?: string;
+      } | { ok: false; error: string } :
+  T extends PopupSaveRecordingDestination
+    ? { ok: true; profile: import('./recordingDestinations').RecordingDestinationProfile } | { ok: false; error: string } :
+  T extends PopupRemoveRecordingDestination
+    ? { ok: true; removed: boolean } | { ok: false; error: string } :
+  T extends PopupListHeldRecordingRoutes
+    ? {
+        ok: true;
+        recordings: Array<{
+          recordingId: string;
+          name: string;
+          routes: import('../integrations/RecordingRoutingService').RecordingRouteView[];
+        }>;
+      } | { ok: false; error: string } :
+  T extends PopupGetRecordingRoutes | PopupConfirmRecordingRoutes | PopupChangeRecordingRoute | PopupRetryRecordingRouting
+    ? {
+        ok: true;
+        recordingId?: string;
+        routes: import('../integrations/RecordingRoutingService').RecordingRouteView[];
+        candidates?: import('../integrations/RecordingRoutingService').RecordingRouteCandidate[];
+      }
+      | { ok: false; error: string } :
   never;
 
 export type PopupGetTranscript = { type: 'GET_TRANSCRIPT' };
@@ -509,6 +657,8 @@ export type BgToOffscreenRpc =
       historyId: string;
       /** Random telemetry-only identity, never derived from history, meeting, or upload identifiers. */
       telemetryRunId: string;
+      /** Frozen external primary-media owner selected at Start; absent for local/Drive media. */
+      externalPrimaryDestinationId?: string;
       /** Monotonic run epoch the offscreen must echo in OFFSCREEN_STATE; see ADR-0003. */
       epoch: number;
     }>
@@ -534,6 +684,8 @@ export type BgToOffscreenRpc =
        * carries it; absent falls back to the name the constant used to hold.
        */
       driveRootFolderName?: string;
+      /** Frozen custom Drive destination chosen by the recording profile. */
+      driveDestinationFolderName?: string;
     }>
   | RpcRequest<{
       type: 'OFFSCREEN_DISCARD';
@@ -597,6 +749,33 @@ export type BgToOffscreenRpc =
     }>
   | RpcRequest<{ type: 'OFFSCREEN_CANCEL_ANALYSIS'; jobId: string }>
   | RpcRequest<{
+      type: 'OFFSCREEN_MEDIA_ENQUEUE';
+      recording: Pick<RecordingHistoryEntry, 'id' | 'status' | 'files' | 'deletedAt'>;
+      route: import('../integrations/RecordingRoutingService').AuthorizedMediaRoute;
+      fileId: string;
+      sealed: true;
+      /** Memory-only; the offscreen journal must never persist this grant. */
+      grant: import('../integrations/media/ExternalMediaClient').ExternalMediaGrant;
+    }>
+  | RpcRequest<{ type: 'OFFSCREEN_MEDIA_SNAPSHOT' }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_MEDIA_ACK';
+      destinationId: string;
+      clientTransferId: string;
+    }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_MEDIA_CANCEL';
+      recordingId?: string;
+      destinationId?: string;
+      clientTransferId?: string;
+    }>
+  | RpcRequest<{
+      type: 'OFFSCREEN_MEDIA_RETRY';
+      destinationId: string;
+      clientTransferId: string;
+      grant: import('../integrations/media/ExternalMediaClient').ExternalMediaGrant;
+    }>
+  | RpcRequest<{
       type: 'OFFSCREEN_SHARE_PUBLISH';
       recordings: import('../sharing/PublishedManifestBuilder').PublishedRecordingInput[];
       options: import('../sharing/PublishedManifestBuilder').PublishRecordingOptions;
@@ -616,6 +795,8 @@ export type BgToOffscreenOneWay =
   | { type: 'REVOKE_BLOB_URL'; blobUrl: string; opfsFilename?: string }
   /** Background persisted a terminal upload outcome and history state. */
   | { type: 'OFFSCREEN_ACK_UPLOAD_STATE'; jobId: string }
+  /** Background durably recorded an external-primary OPFS handoff. */
+  | { type: 'OFFSCREEN_ACK_RETAINED_PRIMARY'; historyId: string; stream: import('./recording').RecordingStream }
   /** Background persisted a completed analysis; the data plane may release it. */
   | { type: 'OFFSCREEN_ACK_ANALYSIS_STATE'; jobId: string };
 
@@ -627,7 +808,9 @@ export type OffscreenToBg =
   | ({ type: 'OFFSCREEN_STATE' } & OffscreenPhaseUpdate)
   | { type: 'OFFSCREEN_UPLOAD_STATE'; job: UploadJob; telemetryRunId?: string; telemetrySnapshot?: import('./telemetry').TelemetrySnapshot }
   | { type: 'OFFSCREEN_SAVE'; historyId: string; stream: import('./recording').RecordingStream; kind?: import('./recordingTypes').RecordingArtifactKind; filename: string; startOffsetMs?: number; blobUrl: string; opfsFilename?: string; retainedKey?: string; deferDelivery?: boolean }
+  | { type: 'OFFSCREEN_RETAINED_PRIMARY'; historyId: string; destinationId: string; stream: import('./recording').RecordingStream; filename: string; bytes: number; startOffsetMs?: number; retainedKey: string; retainedAt: number }
   | { type: 'OFFSCREEN_ANALYSIS_STATE'; job: import('./analysis/job').AnalysisJob }
+  | { type: 'OFFSCREEN_MEDIA_STATE'; transfer: ExternalMediaTransferView }
   /**
    * A completed analysis, on its way to the `analyses` store. Separate from the
    * state message because the state is small enough to replay freely and this
@@ -686,16 +869,83 @@ function isIntegrationPopupMessage(value: unknown): boolean {
       return true;
     case 'CREATE_INTEGRATION':
       return normalizeCreateIntegrationDestinationInput(value.input) != null;
+    case 'GET_INTEGRATION_DISCONNECT_IMPACT':
     case 'DELETE_INTEGRATION':
     case 'TEST_INTEGRATION':
       return nonEmptyText(value.destinationId);
+    case 'SET_INTEGRATION_ENABLED':
+      return nonEmptyText(value.destinationId) && typeof value.enabled === 'boolean';
+    case 'CONFIGURE_INTEGRATION_MEDIA':
+      return nonEmptyText(value.destinationId) && typeof value.bearer === 'string'
+        && value.bearer.length > 0 && value.bearer.length <= 4096 && !/[\r\n]/.test(value.bearer);
     case 'SEND_RECORDING_TO_INTEGRATION':
       return nonEmptyText(value.destinationId) && nonEmptyText(value.recordingId);
     case 'RETRY_INTEGRATION_DELIVERY':
       return nonEmptyText(value.deliveryId);
+    case 'LIST_EXTERNAL_MEDIA_TRANSFERS':
+      return value.recordingId === undefined || nonEmptyText(value.recordingId);
+    case 'RETRY_EXTERNAL_MEDIA_TRANSFER':
+      return nonEmptyText(value.destinationId) && nonEmptyText(value.clientTransferId);
+    case 'LIST_RECORDING_DESTINATIONS':
+    case 'LIST_HELD_RECORDING_ROUTES':
+      return true;
+    case 'SAVE_RECORDING_DESTINATION':
+      return isSaveRecordingDestinationInput(value.input);
+    case 'REMOVE_RECORDING_DESTINATION':
+      return nonEmptyText(value.profileId);
+    case 'GET_RECORDING_ROUTES':
+    case 'RETRY_RECORDING_ROUTING':
+      return value.recordingId === undefined || nonEmptyText(value.recordingId);
+    case 'CONFIRM_RECORDING_ROUTES':
+      return nonEmptyText(value.recordingId)
+        && isRecordingRouteDecisions(value.decisions);
+    case 'CHANGE_RECORDING_ROUTE':
+      return nonEmptyText(value.recordingId)
+        && nonEmptyText(value.toDestinationId)
+        && (value.fromDestinationId === undefined || nonEmptyText(value.fromDestinationId))
+        && value.fromDestinationId !== value.toDestinationId;
     default:
       return false;
   }
+}
+
+function isRecordingRouteDecisions(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > 20) return false;
+  const seen = new Set<string>();
+  for (const decision of value) {
+    if (!isRecord(decision) || Array.isArray(decision) || !nonEmptyText(decision.destinationId)) return false;
+    if (decision.action !== 'release' && decision.action !== 'skip') return false;
+    if (seen.has(decision.destinationId)) return false;
+    seen.add(decision.destinationId);
+  }
+  return true;
+}
+
+function isSaveRecordingDestinationInput(value: unknown): boolean {
+  if (!isRecord(value) || Array.isArray(value)) return false;
+  const optionalText = (field: unknown) => field === undefined || nonEmptyText(field);
+  if (!optionalText(value.id) || (value.name !== undefined && typeof value.name !== 'string')) return false;
+
+  if (value.mediaTarget !== undefined || value.dataRoutes !== undefined) {
+    if (value.destinationId !== undefined || value.localFolderPresetId !== undefined) return false;
+    if (!isRecord(value.mediaTarget) || Array.isArray(value.mediaTarget)) return false;
+    if (value.mediaTarget.kind === 'external') {
+      if (!nonEmptyText(value.mediaTarget.destinationId) || value.mediaTarget.folderPresetId !== undefined) return false;
+    } else {
+      if (value.mediaTarget.kind !== 'local' && value.mediaTarget.kind !== 'drive') return false;
+      if (!optionalText(value.mediaTarget.folderPresetId) || value.mediaTarget.destinationId !== undefined) return false;
+    }
+    if (!Array.isArray(value.dataRoutes)) return false;
+    return value.dataRoutes.every((route) => isRecord(route)
+      && !Array.isArray(route)
+      && nonEmptyText(route.destinationId)
+      && route.mode === 'auto');
+  }
+
+  return value.mediaTarget === undefined
+    && value.dataRoutes === undefined
+    && nonEmptyText(value.destinationId)
+    && optionalText(value.localFolderPresetId);
 }
 
 function nonEmptyText(value: unknown): value is string {
@@ -739,6 +989,20 @@ export function isTranscriptCaptureStateRequest(
 
 /** Checks whether a port/runtime message belongs to the offscreen -> background set. */
 export function isOffscreenToBgMessage(value: unknown): value is OffscreenToBg {
+  if (getMessageType(value) === 'OFFSCREEN_RETAINED_PRIMARY') {
+    if (!isRecord(value) || Array.isArray(value)) return false;
+    const stream = value.stream;
+    const startOffsetMs = value.startOffsetMs;
+    return nonEmptyText(value.historyId)
+      && nonEmptyText(value.destinationId)
+      && (stream === 'tab' || stream === 'mic' || stream === 'self-video')
+      && nonEmptyText(value.filename)
+      && typeof value.bytes === 'number' && Number.isFinite(value.bytes) && value.bytes >= 0
+      && (startOffsetMs === undefined
+        || (typeof startOffsetMs === 'number' && Number.isFinite(startOffsetMs) && startOffsetMs >= 0))
+      && nonEmptyText(value.retainedKey)
+      && typeof value.retainedAt === 'number' && Number.isFinite(value.retainedAt) && value.retainedAt >= 0;
+  }
   return hasKnownMessageType(value, OFFSCREEN_TO_BG_MESSAGE_TYPES);
 }
 

@@ -7,6 +7,11 @@ export async function requestHostPermission(originPattern: string): Promise<bool
   return await chrome.permissions.request({ origins: [originPattern] });
 }
 
+/** Request all required storage hosts in one explicit click, preserving user activation. */
+export async function requestHostPermissions(originPatterns: string[]): Promise<boolean> {
+  return await chrome.permissions.request({ origins: originPatterns });
+}
+
 export async function removeHostPermission(originPattern: string): Promise<boolean> {
   return await chrome.permissions.remove({ origins: [originPattern] });
 }

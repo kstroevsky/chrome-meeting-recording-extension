@@ -17,7 +17,7 @@ import {
   type TokenProvider,
 } from '../offscreen/drive/request';
 import type { PublishedRecordingPlan, PublishedTrackPlan } from './PublishedManifestBuilder';
-import type { ShareMediaSourceResolver } from './ShareMediaSource';
+import type { ArtifactByteSourceResolver } from '../media/ArtifactByteSource';
 import type { ReusableDriveOrigin, ShareDriveOriginRegistry } from './ShareDriveOriginRegistry';
 import { ShareUploadStore, type ShareUploadJob } from './ShareUploadStore';
 
@@ -74,7 +74,7 @@ export interface DriveOriginApi {
 
 export type DriveOriginPreparerDeps = {
   store: ShareUploadStore;
-  source: ShareMediaSourceResolver;
+  source: ArtifactByteSourceResolver;
   api: DriveOriginApi;
   registry?: Pick<ShareDriveOriginRegistry, 'get' | 'put' | 'remove'>;
   getDriveToken: TokenProvider;

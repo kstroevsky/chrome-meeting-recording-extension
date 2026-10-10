@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["id", "title", "startedAt", "source"],
   "properties": {
-    "id": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
     "title": { "type": "string" },
     "startedAt": { "type": "string", "format": "date-time" },
     "endedAt": { "type": "string", "format": "date-time" },
@@ -18,8 +18,8 @@
       "properties": {
         "kind": { "enum": ["meeting", "tab"] },
         "provider": { "type": "string" },
-        "meetingId": { "type": "string" },
-        "meetingUrl": { "type": "string", "format": "uri" }
+        "meetingId": { "type": "string", "maxLength": 512 },
+        "meetingUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
       }
     },
     "note": { "type": "string" },

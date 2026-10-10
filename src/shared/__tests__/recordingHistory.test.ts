@@ -1,4 +1,4 @@
-import { isRecordingHistoryMessage, normalizeRecordingHistoryEntry } from '../recordingHistory';
+import { awaitsLocalDelivery, isRecordingHistoryMessage, normalizeRecordingHistoryEntry } from '../recordingHistory';
 
 describe('recording history durable-data boundaries', () => {
   it('preserves the durable cleanup marker on a tombstoned row', () => {
@@ -166,6 +166,35 @@ describe('artifact locations and delivery', () => {
       expect(file({ captureStartOffsetMs: 0 })?.captureStartOffsetMs).toBe(0);
       expect(file({ captureStartOffsetMs: Number.NaN })?.captureStartOffsetMs).toBeUndefined();
       expect(file({})?.captureStartOffsetMs).toBeUndefined();
+    });
+
+    it('preserves external primary delivery without treating retained bytes as a local download wait', () => {
+      const external = file({
+        status: 'available',
+        locations: [{ kind: 'opfs', key: 'library/r1/tab.webm', retainedAt: 99 }],
+        delivery: { requested: { kind: 'external', destinationId: 'crm' }, status: 'pending' },
+      });
+      expect(external?.delivery).toEqual({
+        requested: { kind: 'external', destinationId: 'crm' },
+        status: 'pending',
+      });
+      expect(awaitsLocalDelivery(external!)).toBe(false);
+
+      const local = file({
+        status: 'available',
+        locations: [{ kind: 'opfs', key: 'library/r1/local.webm', retainedAt: 99 }],
+        delivery: { requested: 'local', status: 'pending' },
+      });
+      expect(awaitsLocalDelivery(local!)).toBe(true);
+    });
+
+    it('fails closed on a malformed stored external primary target', () => {
+      expect(file({
+        delivery: { requested: { kind: 'external', destinationId: '   ' }, status: 'pending' },
+      })).toBeUndefined();
+      expect(file({
+        delivery: { requested: { kind: 'external' }, status: 'pending' },
+      })).toBeUndefined();
     });
   });
 });

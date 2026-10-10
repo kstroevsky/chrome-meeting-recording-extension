@@ -187,6 +187,29 @@
         <p id="storage-usage" class="storage-usage">Checking…</p>
       </section>
 
+      <!-- The popup's "+ Add destination…" opens this page at #destinations (plan E4). -->
+      <section id="destinations" class="settings-section save-to-settings" aria-labelledby="save-to-heading">
+        <h2 id="save-to-heading" class="section-eyebrow">DESTINATIONS</h2>
+        <p class="destinations-intro">
+          What you can pick under <strong>Save to</strong> before you record. Google Drive and Local
+          downloads are always there. Add a custom destination to choose local, Drive, or a
+          media-capable integration for the recording files and, independently, choose which
+          connected integrations receive recording data after you confirm it.
+        </p>
+        <div id="save-to-list" class="save-to-list"></div>
+        <div id="save-to-add-row" class="save-to-add">
+          <input id="save-to-name" type="text" maxlength="60" placeholder="Destination name (optional)" aria-label="Destination name">
+          <select id="save-to-media" aria-label="Where recording files are saved">
+            <option value="local">Files: Local downloads</option>
+            <option value="drive">Files: Google Drive</option>
+          </select>
+          <select id="save-to-folder" aria-label="Folder for the files"></select>
+          <select id="save-to-integration" multiple size="3" aria-label="Integrations that receive the data"></select>
+          <button id="save-to-add" class="destination-add" type="button">Add destination</button>
+        </div>
+        <p id="save-to-status" class="destinations-note destinations-note--quiet" role="status" aria-live="polite"></p>
+      </section>
+
       <section class="settings-section integrations-settings" aria-labelledby="integrations-heading">
         <h2 id="integrations-heading" class="section-eyebrow">INTEGRATIONS</h2>
         <p class="destinations-intro">
@@ -197,46 +220,47 @@
         <div class="integration-editor">
           <label><span>Name</span><input id="integration-name" type="text" placeholder="Internal CRM"></label>
           <label><span>Webhook endpoint</span><input id="integration-endpoint" type="url" placeholder="https://crm.example.com/hooks/recordings"></label>
-          <label><span>Default routing</span>
-            <select id="integration-routing">
-              <option value="manual">Manual</option>
-              <option value="review">Review</option>
-              <option value="auto">Auto</option>
-            </select>
-          </label>
-          <label><span>Request auth</span>
-            <select id="integration-auth-type">
-              <option value="none">None</option>
-              <option value="bearer">Bearer token</option>
-              <option value="api-key">API key header</option>
-            </select>
-          </label>
-          <div class="integration-auth-fields">
-            <input id="integration-auth-header" type="text" placeholder="X-API-Key" hidden>
-            <input id="integration-auth-value" type="password" autocomplete="new-password" placeholder="Credential" hidden>
-          </div>
-          <div class="integration-preview-policy" aria-label="Destination data policy">
-            <label><input type="checkbox" data-integration-create-policy="meetingIdentity"> Meeting identity / URL</label>
-            <label><input type="checkbox" data-integration-create-policy="userNote" checked> User note</label>
-            <label><input type="checkbox" data-integration-create-policy="notations" checked> Notations</label>
-            <label><input type="checkbox" data-integration-create-policy="transcript" checked> Transcript</label>
-            <label><input type="checkbox" data-integration-create-policy="analysis"> Topic analysis</label>
-            <label><input type="checkbox" data-integration-create-policy="artifactMetadata"> Artifact metadata</label>
-            <label><input type="checkbox" data-integration-create-policy="artifactLinks"> Existing artifact links</label>
-          </div>
-          <label><span>Transcript speakers</span>
-            <select id="integration-speakers">
-              <option value="pseudonyms">Speaker 1 / Speaker 2</option>
-              <option value="names">Original names</option>
-              <option value="omit">Remove labels</option>
-            </select>
-          </label>
-          <button id="integration-add" type="button" class="integration-add">+ Add integration</button>
+          <!-- E4: the normal setup is a name and a URL; the rest stays available, folded. -->
+          <details class="integration-advanced">
+            <summary>Advanced settings</summary>
+            <label><span>Request auth</span>
+              <select id="integration-auth-type">
+                <option value="none">None</option>
+                <option value="bearer">Bearer token</option>
+                <option value="api-key">API key header</option>
+              </select>
+            </label>
+            <div class="integration-auth-fields">
+              <input id="integration-auth-header" type="text" placeholder="X-API-Key" hidden>
+              <input id="integration-auth-value" type="password" autocomplete="new-password" placeholder="Credential" hidden>
+            </div>
+            <div class="integration-preview-policy" aria-label="Destination data policy">
+              <label><input type="checkbox" data-integration-create-policy="meetingIdentity"> Meeting identity / URL</label>
+              <label><input type="checkbox" data-integration-create-policy="userNote" checked> User note</label>
+              <label><input type="checkbox" data-integration-create-policy="notations" checked> Notations</label>
+              <label><input type="checkbox" data-integration-create-policy="transcript" checked> Transcript</label>
+              <label><input type="checkbox" data-integration-create-policy="analysis"> Topic analysis</label>
+              <label><input type="checkbox" data-integration-create-policy="artifactMetadata"> Artifact metadata</label>
+              <label><input type="checkbox" data-integration-create-policy="artifactLinks"> Existing artifact links</label>
+            </div>
+            <label><span>Transcript speakers</span>
+              <select id="integration-speakers">
+                <option value="pseudonyms">Speaker 1 / Speaker 2</option>
+                <option value="names">Original names</option>
+                <option value="omit">Remove labels</option>
+              </select>
+            </label>
+          </details>
+          <button id="integration-add" type="button" class="integration-add">Connect</button>
         </div>
         <div id="integration-secret-panel" class="integration-secret-panel" hidden>
-          <strong>Signing secret — shown once</strong>
-          <input id="integration-signing-secret" type="text" readonly spellcheck="false">
-          <small>Copy this into the receiver now. If it is lost, rotate it instead of reading stored credentials.</small>
+          <strong id="integration-secret-heading">Connected locally. Copy this signing secret into the receiver:</strong>
+          <div class="integration-secret-row">
+            <input id="integration-signing-secret" type="text" readonly spellcheck="false" aria-labelledby="integration-secret-heading">
+            <button id="integration-secret-copy" type="button">Copy</button>
+          </div>
+          <small>It is shown once. If it is lost, rotate it instead of reading stored credentials.</small>
+          <button id="integration-secret-test" type="button" class="integration-add">Test connection</button>
         </div>
         <label class="integration-preview-field">
           <span>Recording for manual send</span>

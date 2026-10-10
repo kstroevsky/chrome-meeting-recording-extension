@@ -24,6 +24,8 @@ import {
   OffscreenEventRouter,
   type OffscreenAnalysisListener,
   type OffscreenAnalysisResultListener,
+  type OffscreenExternalMediaListener,
+  type OffscreenRetainedPrimaryListener,
   type OffscreenSaveListener,
   type OffscreenStateListener,
   type OffscreenUploadListener,
@@ -36,6 +38,8 @@ const L = makeLogger('background');
 export type {
   OffscreenAnalysisListener,
   OffscreenAnalysisResultListener,
+  OffscreenExternalMediaListener,
+  OffscreenRetainedPrimaryListener,
   OffscreenSaveListener,
   OffscreenStateListener,
   OffscreenUploadListener,
@@ -50,45 +54,20 @@ export class OffscreenManager {
     return this.connection.currentPort;
   }
 
-  get onStateChanged(): OffscreenStateListener | undefined {
-    return this.events.onStateChanged;
-  }
-
-  set onStateChanged(listener: OffscreenStateListener | undefined) {
-    this.events.onStateChanged = listener;
-  }
-
-  get onSaveRequested(): OffscreenSaveListener | undefined {
-    return this.events.onSaveRequested;
-  }
-
-  set onSaveRequested(listener: OffscreenSaveListener | undefined) {
-    this.events.onSaveRequested = listener;
-  }
-
-  get onUploadJobChanged(): OffscreenUploadListener | undefined {
-    return this.events.onUploadJobChanged;
-  }
-
-  set onUploadJobChanged(listener: OffscreenUploadListener | undefined) {
-    this.events.onUploadJobChanged = listener;
-  }
-
-  get onAnalysisJobChanged(): OffscreenAnalysisListener | undefined {
-    return this.events.onAnalysisJobChanged;
-  }
-
-  set onAnalysisJobChanged(listener: OffscreenAnalysisListener | undefined) {
-    this.events.onAnalysisJobChanged = listener;
-  }
-
-  get onAnalysisResult(): OffscreenAnalysisResultListener | undefined {
-    return this.events.onAnalysisResult;
-  }
-
-  set onAnalysisResult(listener: OffscreenAnalysisResultListener | undefined) {
-    this.events.onAnalysisResult = listener;
-  }
+  get onStateChanged(): OffscreenStateListener | undefined { return this.events.onStateChanged; }
+  set onStateChanged(listener: OffscreenStateListener | undefined) { this.events.onStateChanged = listener; }
+  get onSaveRequested(): OffscreenSaveListener | undefined { return this.events.onSaveRequested; }
+  set onSaveRequested(listener: OffscreenSaveListener | undefined) { this.events.onSaveRequested = listener; }
+  get onRetainedPrimary(): OffscreenRetainedPrimaryListener | undefined { return this.events.onRetainedPrimary; }
+  set onRetainedPrimary(listener: OffscreenRetainedPrimaryListener | undefined) { this.events.onRetainedPrimary = listener; }
+  get onUploadJobChanged(): OffscreenUploadListener | undefined { return this.events.onUploadJobChanged; }
+  set onUploadJobChanged(listener: OffscreenUploadListener | undefined) { this.events.onUploadJobChanged = listener; }
+  get onAnalysisJobChanged(): OffscreenAnalysisListener | undefined { return this.events.onAnalysisJobChanged; }
+  set onAnalysisJobChanged(listener: OffscreenAnalysisListener | undefined) { this.events.onAnalysisJobChanged = listener; }
+  get onAnalysisResult(): OffscreenAnalysisResultListener | undefined { return this.events.onAnalysisResult; }
+  set onAnalysisResult(listener: OffscreenAnalysisResultListener | undefined) { this.events.onAnalysisResult = listener; }
+  get onExternalMediaStateChanged(): OffscreenExternalMediaListener | undefined { return this.events.onExternalMediaStateChanged; }
+  set onExternalMediaStateChanged(listener: OffscreenExternalMediaListener | undefined) { this.events.onExternalMediaStateChanged = listener; }
 
   /** Adopts the offscreen runtime's Port, refusing any peer that is not it. */
   attachPort(port: chrome.runtime.Port): boolean {
@@ -137,6 +116,14 @@ export class OffscreenManager {
   }
 
   async closeForUpdate(): Promise<boolean> {
+    if (!isBusyPhase(this.events.phase) &&
+        (!this.events.hasBackgroundWork || this.events.hasActiveExternalMediaTransfers)) {
+      try {
+        await this.refreshExternalMediaWork();
+      } catch {
+        return false;
+      }
+    }
     const busy = isBusyPhase(this.events.phase) || this.events.hasBackgroundWork;
     return this.host.closeForUpdate(busy);
   }
@@ -168,6 +155,13 @@ export class OffscreenManager {
 
   acknowledgeUploadState(jobId: string): void {
     this.connection.post({ type: 'OFFSCREEN_ACK_UPLOAD_STATE', jobId });
+  }
+
+  acknowledgeRetainedPrimary(
+    historyId: string,
+    stream: import('../../shared/recording').RecordingStream,
+  ): void {
+    this.connection.post({ type: 'OFFSCREEN_ACK_RETAINED_PRIMARY', historyId, stream });
   }
 
   hydrateAnalysisJobs(jobs: AnalysisJob[] | undefined): void {
@@ -216,6 +210,27 @@ export class OffscreenManager {
   acknowledgeAnalysisState(jobId: string): void {
     this.events.acknowledgeAnalysis(jobId);
     this.connection.post({ type: 'OFFSCREEN_ACK_ANALYSIS_STATE', jobId });
+  }
+
+  hasActiveExternalMediaTransfers(): boolean {
+    return this.events.hasActiveExternalMediaTransfers;
+  }
+
+  async refreshExternalMediaWork(): Promise<boolean> {
+    if (!this.host.hasRecorderTab() && !(await this.hasOffscreenContext())) {
+      this.events.replaceExternalMediaTransfers([]);
+      return false;
+    }
+    await this.ensureReady();
+    const response = await this.rpc<{
+      ok: boolean;
+      transfers?: import('../../shared/protocol').ExternalMediaTransferView[];
+    }>({ type: 'OFFSCREEN_MEDIA_SNAPSHOT' });
+    if (!response?.ok || !Array.isArray(response.transfers)) {
+      throw new Error('The offscreen document did not report its external media work');
+    }
+    this.events.replaceExternalMediaTransfers(response.transfers);
+    return this.events.hasActiveExternalMediaTransfers;
   }
 
   private async hasOffscreenContext(): Promise<boolean> {

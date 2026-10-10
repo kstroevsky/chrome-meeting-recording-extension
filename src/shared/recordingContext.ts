@@ -1,3 +1,9 @@
+import {
+  normalizeRecordingRoutingRoutes,
+  type RecordingDestinationMediaTarget,
+  type RecordingRoutingRoute,
+} from './recordingDestinations';
+
 export type RecordingSourceContext = {
   kind: 'meeting' | 'tab';
   provider?: string;
@@ -10,6 +16,15 @@ export type RecordingContext = {
   startedAt: number;
   endedAt?: number;
   source: RecordingSourceContext;
+  /**
+   * The "Save to" destination picked at Start. Kept so the end dialog can tell
+   * a recording that was never routed from one whose routing failed to write.
+   */
+  destinationProfileId?: string;
+  /** Immutable media choice resolved from the profile when Start was accepted. */
+  destinationMediaTarget?: RecordingDestinationMediaTarget;
+  /** Immutable expected routes, including a synthesized media-only external owner. */
+  destinationRoutes?: RecordingRoutingRoute[];
 };
 
 const MAX_PROVIDER_LENGTH = 128;
@@ -25,11 +40,39 @@ export function normalizeRecordingContext(value: unknown): RecordingContext | un
   if (!recordingId || startedAt == null || !source) return undefined;
 
   const endedAt = normalizeTimestamp(candidate.endedAt);
+  const destinationProfileId = normalizeString(candidate.destinationProfileId, 128);
+  const destinationMediaTarget = normalizeDestinationMediaTarget(candidate.destinationMediaTarget);
+  const destinationRoutes = candidate.destinationRoutes === undefined
+    ? undefined
+    : normalizeRecordingRoutingRoutes(candidate.destinationRoutes);
   return {
     recordingId,
     startedAt,
     ...(endedAt != null && endedAt >= startedAt ? { endedAt } : {}),
     source,
+    ...(destinationProfileId ? { destinationProfileId } : {}),
+    ...(destinationMediaTarget ? { destinationMediaTarget } : {}),
+    ...(destinationRoutes ? { destinationRoutes } : {}),
+  };
+}
+
+function normalizeDestinationMediaTarget(
+  value: unknown,
+): RecordingContext['destinationMediaTarget'] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind === 'external') {
+    const destinationId = normalizeString(candidate.destinationId, 128);
+    return destinationId ? { kind: 'external', destinationId } : undefined;
+  }
+  if (candidate.kind !== 'local' && candidate.kind !== 'drive') return undefined;
+  const folderPresetId = candidate.folderPresetId === undefined
+    ? undefined
+    : normalizeString(candidate.folderPresetId, 128);
+  if (candidate.folderPresetId !== undefined && !folderPresetId) return undefined;
+  return {
+    kind: candidate.kind,
+    ...(folderPresetId ? { folderPresetId } : {}),
   };
 }
 
@@ -64,7 +107,7 @@ export function normalizeMeetingUrl(
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+    if (url.protocol !== 'https:') return undefined;
     if (provider === 'google-meet' && url.hostname === 'meet.google.com') {
       url.search = '';
       url.hash = '';

@@ -73,6 +73,27 @@ export const RELEVANCE_RULES = [
     ],
   },
   {
+    // "Save to" destinations decide what a recording routes at Start (plan E1–E8),
+    // so a change to them reruns the integration pipeline and its mock E2E.
+    name: 'integration-save-to-destinations',
+    domains: VERIFY_INTEGRATION_MOCK,
+    match: [
+      prefix('src/background/destinations/'),
+      exact(
+        'src/shared/recordingDestinations.ts',
+        'src/shared/recordingDestinationPick.ts',
+        'src/shared/recordingDestinationLabels.ts',
+        'src/background/recording/RecordingStartDestination.ts',
+        'src/background/recording/recordingRoutingPorts.ts',
+        'src/settings/DestinationSettingsController.ts',
+        'src/popup/SaveToDestinations.ts',
+        'src/popup/history/CompletedNamingPrompt.ts',
+        'src/popup/history/recordingRouteActions.ts',
+        'src/popup/recording/RecordingRouteChip.ts',
+      ),
+    ],
+  },
+  {
     name: 'integration-runtime-composition-dependency',
     domains: VERIFY_INTEGRATION_SHARING_MOCK,
     match: [exact('src/background/runtime/createBackgroundRuntime.ts')],
@@ -163,14 +184,21 @@ export const RELEVANCE_RULES = [
     name: 'integration-e2e',
     domains: VERIFY_INTEGRATION,
     match: [
+      prefix('reference-media-receiver/'),
       regex(/^tests\/e2e\/integration-.*\.(ts|tsx|js|mjs|cjs)$/),
-      exact('tests/e2e/helpers/integrationReceiver.ts'),
+      exact(
+        'tests/e2e/helpers/integrationReceiver.ts',
+        'tests/e2e/helpers/referenceMediaReceiver.ts',
+      ),
     ],
   },
   {
     name: 'integration-contract-schemas',
     domains: VERIFY_INTEGRATION,
-    match: [regex(/^docs\/schemas\/integration-.*\.json$/)],
+    match: [
+      prefix('fixtures/integration-v1/'),
+      regex(/^docs\/schemas\/integration-.*\.json$/),
+    ],
   },
   {
     name: 'sharing-worker',
@@ -195,6 +223,12 @@ export const RELEVANCE_RULES = [
         'src/recordings/SharedView.ts',
       ),
     ],
+  },
+  {
+    name: 'shared-artifact-byte-source',
+    // Both sharing and integration media uploads use this boundary.
+    domains: ['verify', 'integration', 'sharing', 'mock-e2e'],
+    match: [prefix('src/media/')],
   },
   {
     name: 'shared-offscreen-entrypoint',

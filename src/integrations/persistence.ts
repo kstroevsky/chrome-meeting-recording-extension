@@ -1,5 +1,6 @@
 import type { IntegrationDataPolicy, IntegrationEventKind, IntegrationReadiness } from './contracts';
 import { normalizeIntegrationDataPolicy } from './policy';
+import { normalizeStoredMediaCapability, type MediaCapability } from './media/MediaCapability';
 
 export type IntegrationRoutingDefault = 'manual' | 'auto' | 'review';
 export type IntegrationRequestAuth =
@@ -18,6 +19,8 @@ export type IntegrationDestination = {
   dataPolicy: IntegrationDataPolicy;
   requestAuth: IntegrationRequestAuth;
   signingSecretId: string;
+  /** Dedicated media credential; never reuse a webhook signing/request credential. */
+  media?: { secretId: string; capability: MediaCapability };
   connectionVersion: number;
   createdAt: number;
   updatedAt: number;
@@ -26,7 +29,7 @@ export type IntegrationDestination = {
 /** Plaintext is intentionally accessible only through the secret repository. */
 export type IntegrationSecret = {
   id: string;
-  kind: 'signing' | 'request-auth';
+  kind: 'signing' | 'request-auth' | 'media-auth';
   value: string;
   createdAt: number;
   updatedAt: number;
@@ -38,7 +41,29 @@ export type RecordingIntegrationIntentDestination = {
   state: 'selected' | 'skipped' | 'needs-review' | 'approved';
   allowedPolicy: IntegrationDataPolicy;
   connectionVersion: number;
+  /**
+   * This intent grants media ownership only. It must never be consumed by the
+   * event planner. Absent on legacy/data routes so older rows keep their exact
+   * behavior.
+   */
+  mediaOnly?: true;
+  /** Explicit permission captured at recording Start. Absent on older intents: no video export. */
+  mediaAuthorization?: {
+    producerId: string;
+    endpoint: string;
+    apiBase: string;
+    /** Exact storage origins advertised by the receiver when Start consent was captured. */
+    uploadOrigins: string[];
+  };
   approvedPolicyHash?: string;
+  /** Present only when this receiver was explicitly authorized after capture. */
+  selectionSource?: 'end-dialog';
+  /**
+   * Holds an entry written when the recording started until the user confirms
+   * the save at the end. A held entry is inactive: nothing is planned for it,
+   * and no readiness deadline starts.
+   */
+  releaseAfter?: 'save-confirmed';
 };
 
 export type RecordingIntegrationIntent = {
@@ -115,8 +140,13 @@ export function normalizeIntegrationDestination(value: unknown): IntegrationDest
   const connectionVersion = positiveInteger(value.connectionVersion);
   const createdAt = timestamp(value.createdAt);
   const updatedAt = timestamp(value.updatedAt);
+  const media = value.media == null ? undefined : isRecord(value.media) ? {
+    secretId: text(value.media.secretId),
+    capability: normalizeStoredMediaCapability(value.media.capability, endpoint ?? ''),
+  } : undefined;
   if (!id || !producerId || !name || !endpoint || !signingSecretId || !dataPolicy || !requestAuth) return undefined;
   if (value.type !== 'webhook' || typeof value.enabled !== 'boolean') return undefined;
+  if (value.media != null && (!media?.secretId || !media.capability)) return undefined;
   if (!isRoutingDefault(value.routingDefault) || connectionVersion == null || createdAt == null || updatedAt == null) {
     return undefined;
   }
@@ -131,6 +161,7 @@ export function normalizeIntegrationDestination(value: unknown): IntegrationDest
     dataPolicy,
     requestAuth,
     signingSecretId,
+    ...(media?.secretId && media.capability ? { media: { secretId: media.secretId, capability: media.capability } } : {}),
     connectionVersion,
     createdAt,
     updatedAt,
@@ -144,7 +175,7 @@ export function normalizeIntegrationSecret(value: unknown): IntegrationSecret | 
   const createdAt = timestamp(value.createdAt);
   const updatedAt = timestamp(value.updatedAt);
   if (!id || !secretValue || createdAt == null || updatedAt == null) return undefined;
-  if (value.kind !== 'signing' && value.kind !== 'request-auth') return undefined;
+  if (value.kind !== 'signing' && value.kind !== 'request-auth' && value.kind !== 'media-auth') return undefined;
   return { id, kind: value.kind, value: secretValue, createdAt, updatedAt };
 }
 
@@ -283,16 +314,51 @@ function normalizeIntentDestination(value: unknown): RecordingIntegrationIntentD
   const allowedPolicy = normalizeIntegrationDataPolicy(value.allowedPolicy);
   const connectionVersion = positiveInteger(value.connectionVersion);
   const approvedPolicyHash = optionalText(value.approvedPolicyHash);
+  const mediaAuthorization = normalizeMediaAuthorization(value.mediaAuthorization);
   if (!destinationId || !allowedPolicy || connectionVersion == null) return undefined;
   if ((value.mode !== 'auto' && value.mode !== 'review') || !isIntentState(value.state)) return undefined;
+  if (value.releaseAfter != null && value.releaseAfter !== 'save-confirmed') return undefined;
+  if (value.selectionSource != null && value.selectionSource !== 'end-dialog') return undefined;
+  if (value.mediaOnly != null && value.mediaOnly !== true) return undefined;
   return {
     destinationId,
     mode: value.mode,
     state: value.state,
     allowedPolicy,
     connectionVersion,
+    ...(value.mediaOnly === true ? { mediaOnly: true as const } : {}),
+    ...(mediaAuthorization ? { mediaAuthorization } : {}),
     ...(approvedPolicyHash ? { approvedPolicyHash } : {}),
+    ...(value.selectionSource === 'end-dialog' ? { selectionSource: 'end-dialog' as const } : {}),
+    ...(value.releaseAfter === 'save-confirmed' ? { releaseAfter: 'save-confirmed' as const } : {}),
   };
+}
+
+/** An invalid or legacy consent snapshot cannot grant permission to export media. */
+function normalizeMediaAuthorization(value: unknown): RecordingIntegrationIntentDestination['mediaAuthorization'] {
+  if (!isRecord(value)) return undefined;
+  const producerId = text(value.producerId);
+  const endpoint = text(value.endpoint);
+  const apiBase = text(value.apiBase);
+  if (!producerId || !endpoint || !apiBase || !Array.isArray(value.uploadOrigins) ||
+      value.uploadOrigins.length < 1 || value.uploadOrigins.length > 8) return undefined;
+  const uploadOrigins: string[] = [];
+  try {
+    const control = new URL(endpoint);
+    const base = new URL(apiBase);
+    if (control.protocol !== 'https:' || base.protocol !== 'https:' ||
+        control.origin !== base.origin || control.username || control.password ||
+        base.username || base.password || base.search || base.hash) return undefined;
+    for (const raw of value.uploadOrigins) {
+      if (typeof raw !== 'string') return undefined;
+      const origin = new URL(raw);
+      if (raw !== origin.origin || origin.protocol !== 'https:' || origin.username || origin.password ||
+          origin.hostname.includes('*') || origin.pathname !== '/' || origin.search || origin.hash ||
+          uploadOrigins.includes(raw)) return undefined;
+      uploadOrigins.push(raw);
+    }
+  } catch { return undefined; }
+  return { producerId, endpoint, apiBase, uploadOrigins };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

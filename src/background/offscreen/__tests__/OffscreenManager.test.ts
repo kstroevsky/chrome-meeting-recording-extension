@@ -223,6 +223,14 @@ describe('OffscreenManager', () => {
     await switchPromise;
 
     manager.hydratePhase('idle');
+    recorderTabPort.postMessage.mockImplementation((message: any) => {
+      if (message.type === 'OFFSCREEN_MEDIA_SNAPSHOT') {
+        queueMicrotask(() => {
+          const response = { __respFor: message.__id, payload: { ok: true, transfers: [] } };
+          for (const [listener] of recorderTabPort.onMessage.addListener.mock.calls) listener(response);
+        });
+      }
+    });
     await expect(manager.closeForUpdate()).resolves.toBe(true);
     expect(chrome.tabs.remove).toHaveBeenCalledWith(99);
   });
@@ -240,6 +248,29 @@ describe('OffscreenManager', () => {
     expect(manager.onStateChanged).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'OFFSCREEN_STATE', phase: 'recording' })
     );
+  });
+
+  it('routes only well-formed external-primary retention handoffs', () => {
+    manager.attachPort(mockPort);
+    manager.onRetainedPrimary = jest.fn();
+    const onMessageListener = mockPort.onMessage.addListener.mock.calls[0][0];
+    const valid = {
+      type: 'OFFSCREEN_RETAINED_PRIMARY',
+      historyId: 'recording:1',
+      destinationId: 'destination_crm',
+      stream: 'tab',
+      filename: 'tab.webm',
+      bytes: 1024,
+      retainedKey: 'library/recording%3A1/recording%3A1%3Atab/tab.webm',
+      retainedAt: 100,
+    };
+
+    onMessageListener(valid);
+    onMessageListener({ ...valid, bytes: -1 });
+    onMessageListener({ ...valid, stream: 'notes' });
+
+    expect(manager.onRetainedPrimary).toHaveBeenCalledTimes(1);
+    expect(manager.onRetainedPrimary).toHaveBeenCalledWith(valid);
   });
 
   it('buffers state replay until canonical session hydration releases ingress', () => {
@@ -394,6 +425,72 @@ describe('OffscreenManager', () => {
       listener({ type: 'OFFSCREEN_UPLOAD_STATE', job: job('j1', 'completed') });
       await expect(manager.closeForUpdate()).resolves.toBe(true);
       expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('external media transfers', () => {
+    const transfer = (state: string) => ({
+      destinationId: 'crm',
+      request: { clientTransferId: 'transfer-1' },
+      state,
+    });
+
+    function connect() {
+      manager.attachPort(mockPort);
+      return mockPort.onMessage.addListener.mock.calls[0][0] as (m: unknown) => void;
+    }
+
+    it('keeps update/offscreen closure blocked through the ready handoff, then frees on acknowledgement', async () => {
+      const closeDocumentSpy = jest.spyOn(chrome.offscreen, 'closeDocument').mockImplementation(async () => {});
+      jest.spyOn(manager, 'refreshExternalMediaWork')
+        .mockImplementation(async () => manager.hasActiveExternalMediaTransfers());
+      manager.hydratePhase('idle');
+      const listener = connect();
+
+      listener({ type: 'OFFSCREEN_MEDIA_STATE', transfer: transfer('queued') });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(true);
+      await expect(manager.closeForUpdate()).resolves.toBe(false);
+      expect(closeDocumentSpy).not.toHaveBeenCalled();
+
+      listener({ type: 'OFFSCREEN_MEDIA_STATE', transfer: transfer('uploading') });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(true);
+      await expect(manager.closeForUpdate()).resolves.toBe(false);
+      expect(closeDocumentSpy).not.toHaveBeenCalled();
+
+      listener({ type: 'OFFSCREEN_MEDIA_STATE', transfer: transfer('ready-unacknowledged') });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(true);
+      listener({ type: 'OFFSCREEN_MEDIA_STATE', transfer: transfer('acknowledged') });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(false);
+      await expect(manager.closeForUpdate()).resolves.toBe(true);
+    });
+
+    it('refreshes stale external-media liveness before blocking an update forever', async () => {
+      const closeDocumentSpy = jest.spyOn(chrome.offscreen, 'closeDocument').mockImplementation(async () => {});
+      manager.hydratePhase('idle');
+      const listener = connect();
+      listener({ type: 'OFFSCREEN_MEDIA_STATE', transfer: transfer('ready-unacknowledged') });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(true);
+
+      const internals = manager as any;
+      jest.spyOn(internals, 'hasOffscreenContext').mockResolvedValue(true);
+      jest.spyOn(manager, 'ensureReady').mockResolvedValue(undefined);
+      const rpc = jest.spyOn(manager, 'rpc').mockResolvedValue({
+        ok: true,
+        transfers: [transfer('acknowledged')],
+      });
+
+      await expect(manager.closeForUpdate()).resolves.toBe(true);
+      expect(rpc).toHaveBeenCalledWith({ type: 'OFFSCREEN_MEDIA_SNAPSHOT' });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(false);
+      expect(closeDocumentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not keep the runtime alive for durable retry/action-required rows', () => {
+      const listener = connect();
+      listener({ type: 'OFFSCREEN_MEDIA_STATE', transfer: transfer('retry-wait') });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(false);
+      listener({ type: 'OFFSCREEN_MEDIA_STATE', transfer: transfer('action-required') });
+      expect(manager.hasActiveExternalMediaTransfers()).toBe(false);
     });
   });
 

@@ -24,6 +24,7 @@ import {
 import { sendToBackground } from '../../shared/messages';
 import { formatUploadFallbackMessage } from '../popupStatus';
 import type { PopupElements } from '../popupView';
+import { renderSaveToDestinations } from '../SaveToDestinations';
 
 export type PopupStateCallbacks = {
   onPhaseChange: (phase: RecordingPhase, session: RecordingStatusView) => void;
@@ -60,6 +61,7 @@ export class PopupStateController {
       this.selfVideoProfile = getSelfVideoProfileSettings();
     }
 
+    await this.loadDestinations();
     this.setActiveRunConfig({ ...this.idleDefaultRunConfig });
 
     try {
@@ -93,6 +95,32 @@ export class PopupStateController {
   applyPreviewSession(snapshot: RecordingStatusView): void {
     this.setActiveRunConfig(snapshot.runConfig ? { ...snapshot.runConfig } : createDefaultRunConfig());
     this.callbacks.onPhaseChange(snapshot.phase, snapshot);
+  }
+
+  /**
+   * Adds the user's integration destinations to "Save to" and, when the last
+   * pick is still available, makes it the idle default (remember + confirm).
+   * Failure leaves the two built-ins, which is the pre-destinations popup.
+   */
+  private async loadDestinations(): Promise<void> {
+    const select = this.el.storageModeSelect;
+    const list = select?.ownerDocument.getElementById('storage-mode-options');
+    if (!select || !list) return;
+    try {
+      const res = await sendToBackground({ type: 'LIST_RECORDING_DESTINATIONS' });
+      if (!res || res.ok === false) return;
+      renderSaveToDestinations(select, list, res.destinations);
+      const remembered = res.destinations.find((option) => option.id === res.rememberedId);
+      if (remembered) {
+        this.idleDefaultRunConfig = {
+          ...this.idleDefaultRunConfig,
+          storageMode: remembered.storageMode,
+          destinationProfileId: remembered.id,
+        };
+      }
+    } catch {
+      // Background unreachable or older: the built-ins still work.
+    }
   }
 
   /** Reads the run configuration from the popup form. */

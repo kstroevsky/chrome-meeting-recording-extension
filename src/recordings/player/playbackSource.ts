@@ -33,6 +33,8 @@ export type SourceResolverDeps = {
 /** What turning a track into a playable URL needs from the page. */
 export type PlaybackUrlDeps = {
   prepareDriveSource?: (recordingId: string, fileId: string, refresh?: boolean) => Promise<string | undefined>;
+  /** Mint a short-lived media URL using the receiver's connection credential. */
+  prepareExternalSource?: (recordingId: string, fileId: string, destinationId: string, artifactId: string, refresh?: boolean) => Promise<string | undefined>;
   resolver?: SourceResolverDeps;
   warn?: (...args: unknown[]) => void;
 };
@@ -43,19 +45,16 @@ export type PlaybackUrlDeps = {
  */
 export function createPlaybackTrackResolver(deps: PlaybackUrlDeps): TrackUrlResolver {
   return async (recordingId, track) => {
-    const resolved = await playbackUrl(recordingId, track, deps);
-    if (!resolved) return undefined;
-
-    const canRefresh = track.sources.some((source) => source.kind === 'drive');
-    return {
-      ...resolved,
-      ...(canRefresh ? {
-        refresh: async (): Promise<ResolvedTrackUrl | undefined> => {
-          const fresh = await playbackUrl(recordingId, track, deps, true);
-          return fresh ? { ...fresh } : undefined;
-        },
-      } : {}),
+    const canRefresh = track.sources.some((source) => source.kind === 'drive' || source.kind === 'external');
+    const resolve = async (refresh: boolean): Promise<ResolvedTrackUrl | undefined> => {
+      const resolved = await playbackUrl(recordingId, track, deps, refresh);
+      if (!resolved) return undefined;
+      return {
+        ...resolved,
+        ...(canRefresh ? { refresh: () => resolve(true) } : {}),
+      };
     };
+    return resolve(false);
   };
 }
 
@@ -70,7 +69,7 @@ export async function playbackUrl(
   track: PlaybackTrack,
   deps: PlaybackUrlDeps,
   refresh = false,
-): Promise<{ url: string; revoke?: () => void } | undefined> {
+): Promise<{ url: string; revoke?: () => void; external?: { destinationId: string; artifactId: string } } | undefined> {
   if (!refresh) {
     const remote = track.sources.find((source) => source.kind === 'remote');
     if (remote) return { url: remote.url };
@@ -83,6 +82,17 @@ export async function playbackUrl(
     const url = await deps.prepareDriveSource(recordingId, track.fileId, refresh)
       .catch((error) => { deps.warn?.('Drive playback preparation failed', error); return undefined; });
     if (url) return { url };
+  }
+  if (deps.prepareExternalSource) {
+    for (const source of track.sources) {
+      if (source.kind !== 'external') continue;
+      const url = await deps.prepareExternalSource(recordingId, track.fileId, source.destinationId, source.artifactId, refresh)
+        .catch((error) => { deps.warn?.('External playback preparation failed', error); return undefined; });
+      if (url) return {
+        url,
+        external: { destinationId: source.destinationId, artifactId: source.artifactId },
+      };
+    }
   }
   return undefined;
 }
@@ -119,5 +129,6 @@ async function tryOne(
   }
   if (source.kind === 'drive') return { kind: 'unsupported', reason: 'drive-not-wired' };
   if (source.kind === 'remote') return { kind: 'remote', url: source.url };
+  if (source.kind === 'external') return undefined; // Needs a fresh authenticated playback capability.
   return { kind: 'external', downloadId: source.downloadId };
 }

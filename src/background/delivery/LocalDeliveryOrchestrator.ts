@@ -1,6 +1,11 @@
 import { createAlarm } from '../../platform/chrome/alarms';
 import { loadExtensionSettingsFromStorage } from '../../shared/settings';
-import { pendingLocalDeliveries, type RecordingHistoryCursor } from '../../shared/recordingHistory';
+import {
+  pendingLocalDeliveries,
+  type PendingLocalDelivery,
+  type RecordingHistoryCursor,
+} from '../../shared/recordingHistory';
+import type { FolderPreset } from '../../shared/settings';
 import type { RecordingHistoryRepository } from '../library/history/RecordingHistoryRepository';
 import type { RecordingHistoryService } from '../library/history/RecordingHistoryService';
 import type { OffscreenManager } from '../offscreen/OffscreenManager';
@@ -23,6 +28,8 @@ export class LocalDeliveryOrchestrator {
     private readonly historyRepository: RecordingHistoryRepository,
     getRunDurationMs: (historyId: string) => number | undefined,
     private readonly logger: Logger,
+    /** The local folder preset a recording's *Save to* destination files into, if any. */
+    private readonly destinationFolderId: (recordingId: string) => Promise<string | undefined> = async () => undefined,
   ) {
     const registered = registerSaveHandler(
       offscreen,
@@ -37,6 +44,7 @@ export class LocalDeliveryOrchestrator {
         }
       },
       () => { void this.scheduleAbandonedSweep(); },
+      async (historyId) => (await this.destinationFolder(historyId, await this.localFolders()))?.name,
     );
     this.deliverDeferred = registered.deliverDeferred;
   }
@@ -45,8 +53,9 @@ export class LocalDeliveryOrchestrator {
     if (alarm.name === ABANDONED_DELIVERY_ALARM) void this.reconcileAbandoned();
   }
 
-  async listPending(): Promise<{ id: string; name: string }[]> {
-    const pending: { id: string; name: string }[] = [];
+  async listPending(): Promise<PendingLocalDelivery[]> {
+    const pending: PendingLocalDelivery[] = [];
+    const presets = await this.localFolders();
     let cursor: RecordingHistoryCursor | undefined;
     for (let page = 0; page < 200; page += 1) {
       const result = await this.historyRepository.listPage({
@@ -55,7 +64,8 @@ export class LocalDeliveryOrchestrator {
       });
       for (const entry of result.entries) {
         if (pendingLocalDeliveries(entry).length > 0) {
-          pending.push({ id: entry.id, name: entry.name });
+          const folder = await this.destinationFolder(entry.id, presets);
+          pending.push({ id: entry.id, name: entry.name, ...(folder ? { folderId: folder.id } : {}) });
         }
       }
       if (!result.nextCursor) break;
@@ -89,17 +99,41 @@ export class LocalDeliveryOrchestrator {
     throw new Error(`Local delivery did not fully complete (${summary})`);
   }
 
+  /**
+   * Writes recordings nobody was asked about. One started with a *Save to*
+   * destination lands in that destination's folder, as the user picked at Start;
+   * the rest go to the download directory, as before destinations existed.
+   */
   async reconcileAbandoned(): Promise<boolean> {
     try {
+      const presets = await this.localFolders();
       for (const pending of await this.listPending()) {
         const entry = await this.historyRepository.get(pending.id);
-        if (entry) await this.deliverDeferred(entry);
+        if (!entry) continue;
+        const folder = presets.find((preset) => preset.id === pending.folderId)?.name;
+        const outcomes = await this.deliverDeferred(entry, folder);
+        if (folder && outcomes.length && outcomes.every((outcome) => outcome.status === 'complete')) {
+          await this.history.setLocalFolder(entry.id, folder);
+        }
       }
       return (await this.listPending()).length === 0;
     } catch (error) {
       this.logger.warn('Reconciling deferred local deliveries failed:', error);
       return false;
     }
+  }
+
+  private async localFolders(): Promise<FolderPreset[]> {
+    try {
+      return (await loadExtensionSettingsFromStorage()).storage.localFolderPresets;
+    } catch {
+      return [];
+    }
+  }
+
+  private async destinationFolder(recordingId: string, presets: FolderPreset[]): Promise<FolderPreset | undefined> {
+    const id = await this.destinationFolderId(recordingId).catch(() => undefined);
+    return id ? presets.find((preset) => preset.id === id) : undefined;
   }
 
   private async scheduleAbandonedSweep(): Promise<void> {

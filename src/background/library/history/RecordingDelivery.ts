@@ -1,9 +1,11 @@
-import type { StorageMode, UploadJob } from '../../../shared/recording';
+import type { UploadJob } from '../../../shared/recording';
 import { isArtifactKind } from '../../../shared/recordingTypes';
 import {
   pendingArtifactFields,
   recordingHistoryFileId,
+  storageModeForArtifactDelivery,
   upsertArtifactLocation,
+  type ArtifactDeliveryTarget,
 } from '../../../shared/recordingHistory';
 import type { RecordingHistoryRepositoryPort } from './RecordingHistoryRepository';
 import {
@@ -22,19 +24,20 @@ export class RecordingDelivery {
   async createPending(
     historyId: string,
     files: PendingRecordingFile[],
-    storageMode: StorageMode,
+    requested: ArtifactDeliveryTarget,
   ): Promise<void> {
+    const storageMode = storageModeForArtifactDelivery(requested);
     await this.repository.update(historyId, (current) => {
       if (current?.deletedAt) return current;
       if (!current) {
-        return createPendingHistoryEntry(historyId, files, storageMode, this.now());
+        return createPendingHistoryEntry(historyId, files, requested, this.now());
       }
       const known = new Set(current.files.map((file) => file.id));
       const additions = files
         .filter((file) => !known.has(file.id))
         .map((file) => ({
           ...file,
-          ...pendingArtifactFields(file.filename, storageMode, file.stream),
+          ...pendingArtifactFields(file.filename, requested, file.stream),
           destination: storageMode,
           status: 'pending' as const,
         }));

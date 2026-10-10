@@ -19,6 +19,8 @@ import type { TelemetryRuntime } from '../observability/telemetry/TelemetryRunti
 import { markCaptureStarted } from './unsavedCaptureFlag';
 import type { RecordingSession } from './session/RecordingSession';
 import { resolveRecordingTarget } from './RecordingTargetResolver';
+import type { RecordingDestinationPort, RecordingRoutingPort } from './recordingRoutingPorts';
+import { applyStartDestination, beginStartRouting, rememberStartPick } from './RecordingStartDestination';
 
 export type StartRecordingMessage = {
   type: 'START_RECORDING';
@@ -43,6 +45,8 @@ export class RecordingStartCommands {
       session: RecordingSession;
       recordingContexts?: Pick<RecordingContextService, 'begin' | 'remove'>;
       telemetry?: TelemetryRuntime;
+      destinations?: RecordingDestinationPort;
+      routing?: RecordingRoutingPort;
       result: ResultFactory;
     },
   ) {}
@@ -64,6 +68,8 @@ export class RecordingStartCommands {
         `This tab already has an active tab capture (${conflict.status}). Stop the existing capture and try again.`,
       );
     }
+
+    const destination = await applyStartDestination(runConfig, this.deps);
 
     const telemetryRunId = this.deps.telemetry?.start(runConfig) ?? createTelemetryId();
     let recorderSettings: RecorderRuntimeSettingsSnapshot;
@@ -96,8 +102,13 @@ export class RecordingStartCommands {
         started.historyId,
         started.runningSince ?? started.updatedAt,
         target.source,
+        runConfig.destinationProfileId,
+        destination.mediaTarget,
+        destination.expectedRoutes,
       ).catch((error) => this.deps.L.warn('Could not persist recording context:', error));
+      await beginStartRouting(started.historyId, destination.scheduledRoutes, this.deps);
     }
+    rememberStartPick(runConfig, this.deps);
     this.deps.telemetry?.configureRun(
       telemetryRunId,
       runConfig,
@@ -154,6 +165,9 @@ export class RecordingStartCommands {
         perfSettings: getPerfSettingsSnapshot(),
         historyId: started.historyId ?? '',
         telemetryRunId,
+        ...(destination.mediaTarget?.kind === 'external'
+          ? { externalPrimaryDestinationId: destination.mediaTarget.destinationId }
+          : {}),
         epoch: started.epoch ?? 0,
       });
       await this.restoreTargetTab(msg.tabId, recorderRuntimeTabId);
@@ -185,6 +199,8 @@ export class RecordingStartCommands {
     if (historyId) {
       await this.deps.recordingContexts?.remove(historyId)
         .catch((cause) => this.deps.L.warn('Could not remove failed recording context:', cause));
+      await this.deps.routing?.forget(historyId)
+        .catch((cause) => this.deps.L.warn('Could not forget failed recording routing:', cause));
     }
     this.deps.session.fail(message);
     return this.deps.result.fail(message);

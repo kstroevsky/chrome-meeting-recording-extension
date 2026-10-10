@@ -14,6 +14,8 @@ type CriticalWorkDeps = {
   getSnapshot: () => RecordingSessionSnapshot;
   hasActiveAnalysisJobs: () => boolean;
   refreshAnalysisWork: () => Promise<unknown>;
+  hasActiveExternalMediaTransfers: () => boolean;
+  refreshExternalMediaWork: () => Promise<unknown>;
   reload: () => void;
   logger: Logger;
 };
@@ -28,7 +30,9 @@ const ANALYSIS_WORK_RETRY_MS = 30_000;
 export class CriticalWorkCoordinator {
   private pendingReload = false;
   private analysisWorkUnknown = false;
+  private externalMediaWorkUnknown = false;
   private analysisWorkRetry: ReturnType<typeof setTimeout> | null = null;
+  private externalMediaWorkRetry: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: CriticalWorkDeps) {}
 
@@ -36,7 +40,9 @@ export class CriticalWorkCoordinator {
     return isBusyPhase(snapshot.phase)
       || hasUploadsInFlight(snapshot.uploadJobs)
       || this.deps.hasActiveAnalysisJobs()
-      || this.analysisWorkUnknown;
+      || this.analysisWorkUnknown
+      || this.deps.hasActiveExternalMediaTransfers()
+      || this.externalMediaWorkUnknown;
   }
 
   async confirmAnalysisWork(): Promise<void> {
@@ -67,6 +73,34 @@ export class CriticalWorkCoordinator {
     }
   }
 
+  async confirmExternalMediaWork(): Promise<void> {
+    try {
+      await this.deps.refreshExternalMediaWork();
+      this.markExternalMediaWorkKnown();
+    } catch (error) {
+      this.externalMediaWorkUnknown = true;
+      this.deps.logger.warn(
+        'Could not confirm external media work; treating it as busy',
+        error,
+      );
+      if (!this.externalMediaWorkRetry) {
+        this.externalMediaWorkRetry = setTimeout(() => {
+          this.externalMediaWorkRetry = null;
+          void this.confirmExternalMediaWork().then(() => this.sync());
+        }, ANALYSIS_WORK_RETRY_MS);
+      }
+    }
+  }
+
+  markExternalMediaWorkKnown(): void {
+    if (!this.externalMediaWorkUnknown) return;
+    this.externalMediaWorkUnknown = false;
+    if (this.externalMediaWorkRetry) {
+      clearTimeout(this.externalMediaWorkRetry);
+      this.externalMediaWorkRetry = null;
+    }
+  }
+
   sync(snapshot = this.deps.getSnapshot()): void {
     if (this.hasWork(snapshot)) {
       startKeepAlive();
@@ -92,9 +126,12 @@ export class CriticalWorkCoordinator {
       return;
     }
 
-    await this.confirmAnalysisWork();
+    await Promise.all([
+      this.confirmAnalysisWork(),
+      this.confirmExternalMediaWork(),
+    ]);
     if (this.hasWork()) {
-      this.deps.logger.log('Update available; deferring reload until the running analysis finishes');
+      this.deps.logger.log('Update available; deferring reload until data-plane work finishes');
       this.pendingReload = true;
       this.sync();
       return;

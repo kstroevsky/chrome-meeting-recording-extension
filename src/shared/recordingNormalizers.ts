@@ -76,6 +76,7 @@ export function normalizeTabContentType(value: unknown): TabContentType {
 export function parseRunConfig(value: unknown): RecordingRunConfig | null {
   if (!isRecord(value)) return null;
   const candidate = value as Partial<RecordingRunConfig>;
+  const destinationProfileId = normalizeDestinationProfileId(candidate.destinationProfileId);
 
   return {
     storageMode: normalizeStorageMode(candidate.storageMode),
@@ -85,7 +86,15 @@ export function parseRunConfig(value: unknown): RecordingRunConfig | null {
         ? candidate.recordSelfVideo
         : DEFAULT_RECORDING_RUN_CONFIG.recordSelfVideo,
     tabContentType: normalizeTabContentType(candidate.tabContentType),
+    ...(destinationProfileId ? { destinationProfileId } : {}),
   };
+}
+
+/** A bounded opaque ID; anything else means "no destination profile". */
+function normalizeDestinationProfileId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= 128 ? trimmed : undefined;
 }
 
 /** Normalizes one upload summary entry; returns null for malformed or empty rows. */

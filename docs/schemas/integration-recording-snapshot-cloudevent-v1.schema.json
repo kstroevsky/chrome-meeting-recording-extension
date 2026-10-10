@@ -16,7 +16,7 @@
   ],
   "properties": {
     "specversion": { "const": "1.0" },
-    "id": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
     "source": {
       "type": "string",
       "pattern": "^urn:meeting-recorder:destination:"

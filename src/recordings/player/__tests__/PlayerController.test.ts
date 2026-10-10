@@ -5,6 +5,7 @@
 import { PlayerController, type PlayerControllerDeps } from '../PlayerController';
 import { createPlaybackTrackResolver, type PlaybackUrlDeps } from '../playbackSource';
 import type { PlayerStatus } from '../PlayerView';
+import type { ResolvedTrackUrl } from '../trackResolver';
 import { createFakeOpfs } from '../../../../tests/helpers/fakeOpfs';
 import type { PlaybackManifest, PlaybackSource, PlaybackTrack } from '../../../shared/playback';
 
@@ -148,6 +149,32 @@ describe('playing what can be reached', () => {
     await controller.open('r1');
     expect(controller.element.querySelector('.player__status')).toHaveProperty('hidden', true);
   });
+
+  it('reports an external replica only after native playback reaches playing', async () => {
+    const externalPlaybackStarted = jest.fn().mockResolvedValue(undefined);
+    const controller = new PlayerController({
+      getManifest: async () => manifest([{ kind: 'external', destinationId: 'crm', artifactId: 'media-1' }]),
+      resolveTrack: async () => ({
+        url: 'https://storage.example/signed',
+        external: { destinationId: 'crm', artifactId: 'media-1' },
+      }),
+      externalPlaybackStarted,
+    });
+    document.body.append(controller.element);
+    const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
+    Object.defineProperty(video, 'play', { configurable: true, value: jest.fn(async () => {}) });
+
+    await controller.open('r1');
+    expect(externalPlaybackStarted).not.toHaveBeenCalled();
+
+    video.dispatchEvent(new Event('playing'));
+    await Promise.resolve();
+    expect(externalPlaybackStarted).toHaveBeenCalledWith('r1', 'r1:tab', 'crm', 'media-1');
+
+    video.dispatchEvent(new Event('playing'));
+    await Promise.resolve();
+    expect(externalPlaybackStarted).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('closing', () => {
@@ -240,6 +267,175 @@ describe('autoplay', () => {
     expect(bloom()).toBe(true);
     safePlay.mockRestore();
     safePause.mockRestore();
+  });
+});
+
+describe('expiring playback sources', () => {
+  const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+
+  function mediaHarness(controller: PlayerController) {
+    const prototypePlay = jest.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(async () => {});
+    const prototypePause = jest.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const prototypeLoad = jest.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    const video = controller.element.querySelector('.player__video') as HTMLVideoElement;
+    let paused = true;
+    const play = jest.fn(async () => { paused = false; video.dispatchEvent(new Event('play')); });
+    const pause = jest.fn(() => { paused = true; video.dispatchEvent(new Event('pause')); });
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => paused });
+    Object.defineProperty(video, 'play', { configurable: true, value: play });
+    Object.defineProperty(video, 'pause', { configurable: true, value: pause });
+    return {
+      video, play, pause, isPaused: () => paused,
+      restore: () => { prototypePlay.mockRestore(); prototypePause.mockRestore(); prototypeLoad.mockRestore(); },
+    };
+  }
+
+  function refreshingResolver(generations: Map<string, number>) {
+    return jest.fn(async (_recordingId: string, track: PlaybackTrack): Promise<ResolvedTrackUrl> => {
+      const build = (generation: number): ResolvedTrackUrl => ({
+        url: `https://storage.example/${track.fileId}/${generation}`,
+        refresh: async () => {
+          const next = (generations.get(track.fileId) ?? generation) + 1;
+          generations.set(track.fileId, next);
+          return build(next);
+        },
+      });
+      generations.set(track.fileId, 0);
+      return build(0);
+    });
+  }
+
+  it('crosses repeated master URL expiries and restores position plus play/pause state after metadata', async () => {
+    const generations = new Map<string, number>();
+    const controller = new PlayerController({
+      getManifest: async () => manifest([{ kind: 'external', destinationId: 'crm', artifactId: 'tab-media' }]),
+      resolveTrack: refreshingResolver(generations),
+    });
+    document.body.append(controller.element);
+    const media = mediaHarness(controller);
+
+    await controller.open('r1');
+    expect(media.isPaused()).toBe(false);
+    media.video.currentTime = 42;
+    media.video.dispatchEvent(new Event('error'));
+    await flush();
+    expect(media.video.getAttribute('src')).toBe('https://storage.example/r1:tab/1');
+    media.video.currentTime = 0;
+    media.video.dispatchEvent(new Event('loadedmetadata'));
+    await flush();
+    expect(media.video.currentTime).toBe(42);
+    expect(media.isPaused()).toBe(false);
+
+    controller.element.querySelector<HTMLButtonElement>('.player__play')!.click();
+    await flush();
+    expect(media.isPaused()).toBe(true);
+    const playsBeforePausedRefresh = media.play.mock.calls.length;
+    media.video.currentTime = 73;
+    media.video.dispatchEvent(new Event('error'));
+    await flush();
+    expect(media.video.getAttribute('src')).toBe('https://storage.example/r1:tab/2');
+    media.video.currentTime = 0;
+    media.video.dispatchEvent(new Event('loadedmetadata'));
+    await flush();
+    expect(media.video.currentTime).toBe(73);
+    expect(media.isPaused()).toBe(true);
+    expect(media.play).toHaveBeenCalledTimes(playsBeforePausedRefresh);
+
+    controller.close();
+    media.restore();
+  });
+
+  it('refreshes an auxiliary repeatedly and re-aligns it to the master timeline', async () => {
+    const generations = new Map<string, number>();
+    const tracks: PlaybackTrack[] = [
+      {
+        fileId: 'r1:tab', stream: 'tab', filename: 'tab.webm', mimeType: 'video/webm', captureStartOffsetMs: 0,
+        sources: [{ kind: 'external', destinationId: 'crm', artifactId: 'tab-media' }],
+      },
+      {
+        fileId: 'r1:mic', stream: 'mic', filename: 'mic.webm', mimeType: 'audio/webm', captureStartOffsetMs: 5_000,
+        sources: [{ kind: 'external', destinationId: 'crm', artifactId: 'mic-media' }],
+      },
+    ];
+    const controller = new PlayerController({
+      getManifest: async () => manifest([], { tracks }),
+      resolveTrack: refreshingResolver(generations),
+    });
+    document.body.append(controller.element);
+    const media = mediaHarness(controller);
+
+    await controller.open('r1');
+    const microphone = controller.element.querySelector('audio') as HTMLAudioElement;
+    media.video.currentTime = 30;
+    microphone.dispatchEvent(new Event('error'));
+    await flush();
+    expect(microphone.getAttribute('src')).toBe('https://storage.example/r1:mic/1');
+    microphone.currentTime = 0;
+    microphone.dispatchEvent(new Event('loadedmetadata'));
+    await flush();
+    expect(microphone.currentTime).toBe(25);
+
+    media.video.currentTime = 50;
+    microphone.dispatchEvent(new Event('error'));
+    await flush();
+    expect(microphone.getAttribute('src')).toBe('https://storage.example/r1:mic/2');
+    microphone.currentTime = 0;
+    microphone.dispatchEvent(new Event('loadedmetadata'));
+    await flush();
+    expect(microphone.currentTime).toBe(45);
+    expect(media.video.getAttribute('src')).toBe('https://storage.example/r1:tab/0');
+
+    controller.close();
+    media.restore();
+  });
+
+  it('bounds consecutive refreshes when a replacement never reaches metadata', async () => {
+    const generations = new Map<string, number>();
+    const controller = new PlayerController({
+      getManifest: async () => manifest([{ kind: 'external', destinationId: 'crm', artifactId: 'tab-media' }]),
+      resolveTrack: refreshingResolver(generations),
+    });
+    document.body.append(controller.element);
+    const media = mediaHarness(controller);
+
+    await controller.open('r1');
+    media.video.dispatchEvent(new Event('error'));
+    await flush();
+    media.video.dispatchEvent(new Event('error'));
+    await flush();
+    media.video.dispatchEvent(new Event('error'));
+    await flush();
+
+    expect(generations.get('r1:tab')).toBe(2);
+    expect(statusText(controller)).toMatch(/could not be played/i);
+    controller.close();
+    media.restore();
+  });
+
+  it('discards a late refresh result after the player closes', async () => {
+    let finishRefresh!: (value: ResolvedTrackUrl) => void;
+    const refreshed = new Promise<ResolvedTrackUrl>((resolve) => { finishRefresh = resolve; });
+    const revoke = jest.fn();
+    const controller = new PlayerController({
+      getManifest: async () => manifest([{ kind: 'external', destinationId: 'crm', artifactId: 'tab-media' }]),
+      resolveTrack: async () => ({
+        url: 'https://storage.example/r1:tab/0',
+        refresh: async () => refreshed,
+      }),
+    });
+    document.body.append(controller.element);
+    const media = mediaHarness(controller);
+
+    await controller.open('r1');
+    media.video.dispatchEvent(new Event('error'));
+    await flush();
+    controller.close();
+    finishRefresh({ url: 'blob:late', revoke });
+    await flush();
+
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(media.video.getAttribute('src')).toBeNull();
+    media.restore();
   });
 });
 

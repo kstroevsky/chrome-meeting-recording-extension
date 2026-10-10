@@ -1,6 +1,7 @@
 import { setActionBadgeText } from '../../platform/chrome/action';
 import {
   isOffscreenToBgMessage,
+  type ExternalMediaTransferView,
   type OffscreenToBg,
 } from '../../shared/protocol';
 import {
@@ -19,6 +20,9 @@ export type OffscreenStateListener = (
 export type OffscreenSaveListener = (
   msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_SAVE' }>,
 ) => void;
+export type OffscreenRetainedPrimaryListener = (
+  msg: Extract<OffscreenToBg, { type: 'OFFSCREEN_RETAINED_PRIMARY' }>,
+) => void;
 export type OffscreenUploadListener = (
   job: UploadJob,
   telemetryRunId?: string,
@@ -30,19 +34,23 @@ export type OffscreenAnalysisResultListener = (
   analysis: WireAnalysis,
   provenance?: AnalysisProvenance,
 ) => void;
+export type OffscreenExternalMediaListener = (transfer: ExternalMediaTransferView) => void;
 
 export class OffscreenEventRouter {
   private lastKnownPhase: RecordingPhase = 'idle';
   private readonly activeUploadJobs = new Set<string>();
   private readonly activeAnalysisJobs = new Set<string>();
+  private readonly activeExternalMediaTransfers = new Set<string>();
   private ingressReleased = false;
   private bufferedIngress: OffscreenToBg[] = [];
 
   onStateChanged?: OffscreenStateListener;
   onSaveRequested?: OffscreenSaveListener;
+  onRetainedPrimary?: OffscreenRetainedPrimaryListener;
   onUploadJobChanged?: OffscreenUploadListener;
   onAnalysisJobChanged?: OffscreenAnalysisListener;
   onAnalysisResult?: OffscreenAnalysisResultListener;
+  onExternalMediaStateChanged?: OffscreenExternalMediaListener;
 
   constructor(private readonly host: OffscreenHost) {
     this.setBadge('idle');
@@ -121,7 +129,21 @@ export class OffscreenEventRouter {
       return;
     }
 
-    if (msg.type === 'OFFSCREEN_SAVE') this.onSaveRequested?.(msg);
+    if (msg.type === 'OFFSCREEN_MEDIA_STATE') {
+      const key = externalMediaKey(msg.transfer);
+      if (holdsExternalMediaWork(msg.transfer)) this.activeExternalMediaTransfers.add(key);
+      else this.activeExternalMediaTransfers.delete(key);
+      if (this.activeExternalMediaTransfers.size > 0) this.host.cancelRecorderTabCleanup();
+      this.setBadge(this.lastKnownPhase);
+      this.onExternalMediaStateChanged?.(msg.transfer);
+      return;
+    }
+
+    if (msg.type === 'OFFSCREEN_SAVE') {
+      this.onSaveRequested?.(msg);
+      return;
+    }
+    if (msg.type === 'OFFSCREEN_RETAINED_PRIMARY') this.onRetainedPrimary?.(msg);
   }
 
   hydratePhase(phase: RecordingPhase): void {
@@ -153,6 +175,14 @@ export class OffscreenEventRouter {
     this.activeAnalysisJobs.delete(jobId);
   }
 
+  replaceExternalMediaTransfers(transfers: ExternalMediaTransferView[]): void {
+    this.activeExternalMediaTransfers.clear();
+    for (const transfer of transfers) {
+      if (holdsExternalMediaWork(transfer)) this.activeExternalMediaTransfers.add(externalMediaKey(transfer));
+    }
+    this.setBadge(this.lastKnownPhase);
+  }
+
   get phase(): RecordingPhase {
     return this.lastKnownPhase;
   }
@@ -161,8 +191,14 @@ export class OffscreenEventRouter {
     return this.activeAnalysisJobs.size > 0;
   }
 
+  get hasActiveExternalMediaTransfers(): boolean {
+    return this.activeExternalMediaTransfers.size > 0;
+  }
+
   get hasBackgroundWork(): boolean {
-    return this.activeUploadJobs.size > 0 || this.activeAnalysisJobs.size > 0;
+    return this.activeUploadJobs.size > 0
+      || this.activeAnalysisJobs.size > 0
+      || this.activeExternalMediaTransfers.size > 0;
   }
 
   showIdleBadge(): void {
@@ -172,14 +208,15 @@ export class OffscreenEventRouter {
   private canCloseRecorderTab(): boolean {
     return this.lastKnownPhase === 'idle'
       && this.activeUploadJobs.size === 0
-      && this.activeAnalysisJobs.size === 0;
+      && this.activeAnalysisJobs.size === 0
+      && this.activeExternalMediaTransfers.size === 0;
   }
 
   private setBadge(phase: RecordingPhase): void {
     const text = phase === 'failed'
       ? 'ERR'
       : phase === 'idle'
-        ? this.activeUploadJobs.size > 0 ? 'UP' : ''
+        ? (this.activeUploadJobs.size > 0 || this.activeExternalMediaTransfers.size > 0) ? 'UP' : ''
         : 'REC';
     void setActionBadgeText(text);
   }
@@ -189,4 +226,16 @@ function holdsAnalysisWork(job: AnalysisJob): boolean {
   return job.status === 'analyzing'
     || job.status === 'completed'
     || (job.status === 'failed' && job.lostResult === true);
+}
+
+function externalMediaKey(transfer: ExternalMediaTransferView): string {
+  return `${transfer.destinationId}\u0000${transfer.request.clientTransferId}`;
+}
+
+function holdsExternalMediaWork(transfer: ExternalMediaTransferView): boolean {
+  return transfer.state === 'pending'
+    || transfer.state === 'queued'
+    || transfer.state === 'uploading'
+    || transfer.state === 'verifying-capability'
+    || transfer.state === 'ready-unacknowledged';
 }

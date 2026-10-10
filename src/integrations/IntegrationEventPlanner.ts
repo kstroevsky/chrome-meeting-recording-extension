@@ -274,6 +274,11 @@ function activeAutomaticIntent(
 ): RecordingIntegrationIntentDestination | undefined {
   const intent = routing.destinations.find((candidate) => candidate.destinationId === destinationId);
   if (!intent) return undefined;
+  // A primary external-media target can share the routing journal without
+  // granting snapshot/event export to that receiver.
+  if (intent.mediaOnly) return undefined;
+  // Held until the end dialog confirms the save (ADR-0008 amendment, plan E5).
+  if (intent.releaseAfter) return undefined;
   if (intent.mode === 'auto') return intent.state === 'selected' ? intent : undefined;
   // REVIEW approval may release its first snapshot. Later revision approval is Phase 8.
   if (intent.mode === 'review' && intent.state === 'approved' && !stream?.readyCreated) return intent;

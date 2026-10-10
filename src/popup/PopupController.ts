@@ -21,12 +21,15 @@ import { RecordingControlsView } from './recording/RecordingControlsView';
 import { PopupStatusView } from './recording/PopupStatusView';
 import { PopupNotations } from './notes/PopupNotations';
 import { CompletedNamingPrompt, previewDriveNaming } from './history/CompletedNamingPrompt';
+import { backgroundRecordingRouteActions } from './history/recordingRouteActions';
+import { findRecordingRouteChip, RecordingRouteChip } from './recording/RecordingRouteChip';
 import { UnsavedRecordingPrompt } from './history/UnsavedRecordingPrompt';
 import { suffixedRecordingName } from '../shared/recordingNames';
 import { RecordingCommands } from './recording/RecordingCommands';
 import { wireTranscriptDownload } from './transcriptDownload';
 import { RecordingNameDialog } from './RecordingNameDialog';
 import type { DriveFolderPreset } from '../shared/settings';
+import type { PendingLocalDelivery } from '../shared/recordingHistory';
 import {
   DEFAULT_DRIVE_ROOT_FOLDER_NAME,
   loadExtensionSettingsFromStorage,
@@ -97,6 +100,7 @@ export class PopupController {
   private readonly devicePicker: DevicePickerView;
   private readonly commands: RecordingCommands;
   private readonly naming: CompletedNamingPrompt;
+  private readonly routeChip = new RecordingRouteChip(findRecordingRouteChip(document));
   /** Offers back a recording a crash left behind (8D). */
   private readonly unsaved: UnsavedRecordingPrompt;
   private readonly notations: PopupNotations;
@@ -127,7 +131,7 @@ export class PopupController {
   /** Download sub-folders offered when naming a local recording. */
   private localFolders: DriveFolderPreset[] = [];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
-  private pendingLocal: { id: string; name: string }[] = [];
+  private pendingLocal: PendingLocalDelivery[] = [];
 
   constructor(el: PopupElements) {
     this.el = el;
@@ -161,6 +165,7 @@ export class PopupController {
       reveal: (jobId) => this.sessionTabs.select(jobId),
       latest: () => ({ phase: this.lastPhase, session: this.lastSession }),
       suspended: () => this.previewing || this.destroyed,
+      routing: backgroundRecordingRouteActions(),
     });
     this.notations = new PopupNotations({
       notify: (message) => this.toast(message),
@@ -251,6 +256,7 @@ export class PopupController {
     this.controls.wire();
     this.devicePicker.wire();
     this.wireSettingsLink();
+    this.wireAddDestination();
     this.wireRecordingsLink();
     this.wireUploadNavigation();
     this.detail.wire();
@@ -378,6 +384,7 @@ export class PopupController {
     this.lastPhase = phase;
     this.lastSession = session;
     this.devicePicker.sync(session);
+    this.routeChip.sync(phase, session);
     this.naming.queue(phase, session);
     writeCachedPhase(phase);
     this.status.syncUploadNavigation(session);
@@ -503,6 +510,16 @@ export class PopupController {
     });
   }
 
+  /**
+   * "+ Add destination…" opens the integrations setup in a full tab, not in the
+   * popup: Chrome closes a popup when the host-permission prompt takes focus,
+   * and the signing secret has to be copied from a page that stays open (E4).
+   */
+  private wireAddDestination() {
+    document.querySelector<HTMLButtonElement>('#storage-mode-options .select-add')
+      ?.addEventListener('click', () => void createRuntimeTab('settings.html#destinations'));
+  }
+
   private wireRecordingsLink() {
     if (!this.el.openRecordingsBtn) return;
     this.el.openRecordingsBtn.addEventListener('click', () => void this.showRecordingsView());
@@ -603,7 +620,7 @@ export class PopupController {
     this.pendingLocal = this.pendingLocal.filter((pending) => pending.id !== recordingId);
   }
 
-  private async fileRecordingToDestination(recordingId: string, presetId: string): Promise<void> {
+  private async fileRecordingToDestination(recordingId: string, presetId: string | null): Promise<void> {
     const response = await sendToBackground({
       type: 'FILE_RECORDING_TO_DESTINATION', recordingId, presetId,
     });

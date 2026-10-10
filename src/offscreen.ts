@@ -14,6 +14,7 @@
  */
 
 import { RetainedMediaStore } from './offscreen/storage/RetainedMediaStore';
+import { createRetainedPrimaryOutbox } from './offscreen/storage/RetainedPrimaryOutbox';
 import { connectRuntimePort, trySendRuntimeMessage } from './platform/chrome/runtime';
 import { addStorageChangedListener } from './platform/chrome/storage';
 import { getBuildId, isE2EMockAnalysisBuild } from './shared/build';
@@ -52,6 +53,8 @@ import { loadExtensionSettingsFromStorage, normalizeExtensionSettings } from './
 import { TelemetryAccumulator, type TelemetrySink } from './shared/telemetry';
 import { sharingServiceOrigin } from './sharing/config';
 import { createShareRuntime } from './sharing/ShareRuntime';
+import { createExternalMediaTransferStore } from './offscreen/media/ExternalMediaTransferStore';
+import { ExternalMediaTransferRuntime } from './offscreen/media/ExternalMediaTransferRuntime';
 
 // The recording runtime only ever runs as the offscreen document or the top
 // frame of the recorder tab. Framed inside anything else it would take over the
@@ -217,6 +220,18 @@ const retainedMediaStore = new RetainedMediaStore({
   getRoot: () => navigator.storage.getDirectory(),
   warn: L.warn,
 });
+const retainedPrimaryOutbox = createRetainedPrimaryOutbox();
+const externalMediaTransferRuntime = new ExternalMediaTransferRuntime({
+  store: createExternalMediaTransferStore(),
+  getRoot: () => navigator.storage.getDirectory(),
+  onState: (transfer) => {
+    try {
+      getPort().postMessage({ type: 'OFFSCREEN_MEDIA_STATE', transfer });
+    } catch (error) {
+      L.warn('Could not send external media state to background', describeRuntimeError(error));
+    }
+  },
+});
 
 // ─── Port lifecycle ──────────────────────────────────────────────────────────
 
@@ -232,12 +247,19 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     isFinalizing: controller.isFinalizing,
     currentFinalization: controller.currentFinalization,
     clearWarnings: controller.clearWarnings,
-    onStartRequested: (runConfig, storageMode, epoch, historyId, telemetryRunId) => {
+    onStartRequested: (runConfig, storageMode, epoch, historyId, telemetryRunId, externalPrimaryDestinationId) => {
       if (telemetryRunId) {
         if (storageMode === 'drive') telemetryDriveRuns.add(telemetryRunId);
         beginTelemetryRun(telemetryRunId);
       }
-      controller.onStartRequested(runConfig, storageMode, epoch, historyId, telemetryRunId);
+      controller.onStartRequested(
+        runConfig,
+        storageMode,
+        epoch,
+        historyId,
+        telemetryRunId,
+        externalPrimaryDestinationId,
+      );
     },
     onStopRequested: controller.onStopRequested,
     onDiscardRequested: controller.onDiscardRequested,
@@ -249,6 +271,7 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     resolveUnsaved: (key, action, name, storageMode) => resolveUnsavedRecording(key, action, name, storageMode),
     cancelUpload: (jobId) => uploadManager.cancel(jobId),
     acknowledgeUploadState: (jobId) => uploadJobStateOutbox.remove(jobId),
+    acknowledgeRetainedPrimary: (historyId, stream) => retainedPrimaryOutbox.remove(historyId, stream),
     analyzeTranscript: (historyId, transcript, config, provenance) =>
       analysisManager.enqueue(historyId, transcript, config, provenance),
     cancelAnalysis: (jobId) => analysisManager.cancel(jobId),
@@ -258,6 +281,19 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
     // deliberately never sealed, in which case there is no row to remove and
     // holding the result would defeat the degraded path's whole purpose.
     acknowledgeAnalysisState: (jobId) => analysisSeals.acknowledge(jobId).then(() => {}),
+    enqueueExternalMedia: (msg) => externalMediaTransferRuntime.enqueue({
+      recording: msg.recording,
+      route: msg.route,
+      fileId: msg.fileId,
+      sealed: msg.sealed,
+      grant: msg.grant,
+    }),
+    listExternalMedia: () => externalMediaTransferRuntime.snapshot(),
+    acknowledgeExternalMedia: (destinationId, clientTransferId) =>
+      externalMediaTransferRuntime.acknowledge(destinationId, clientTransferId),
+    cancelExternalMedia: (filter) => externalMediaTransferRuntime.cancel(filter),
+    retryExternalMedia: (destinationId, clientTransferId, grant) =>
+      externalMediaTransferRuntime.retry(destinationId, clientTransferId, grant),
     renameDriveResources: (resources) => renameDriveResources(getDriveToken, resources),
     publishShare: sharingRuntime ? async (recordings, options) => {
       const queued = await sharingRuntime.publisher.queue(recordings, options);
@@ -295,7 +331,9 @@ function connectPort(retryDelay = 1_000): chrome.runtime.Port {
   });
   L.log('READY signaled via Port');
   void replayUploadStates(port);
+  void replayRetainedPrimaryStates(port);
   void replayAnalysisStates(port);
+  void externalMediaTransferRuntime.replay();
   return port;
 }
 
@@ -307,6 +345,15 @@ function getPort(): chrome.runtime.Port {
 
 function requestSave({ historyId, stream, kind, retainedKey, filename, startOffsetMs, deferDelivery, blobUrl, opfsFilename }: import('./offscreen/RecordingFinalizer').LocalSaveRequest) {
   getPort().postMessage({ type: 'OFFSCREEN_SAVE', historyId: historyId ?? '', stream, ...(kind ? { kind } : {}), ...(retainedKey ? { retainedKey } : {}), filename, ...(startOffsetMs != null ? { startOffsetMs } : {}), ...(deferDelivery ? { deferDelivery: true } : {}), blobUrl, opfsFilename });
+}
+
+async function recordRetainedPrimary(request: import('./offscreen/RecordingFinalizer').RetainedPrimaryRequest) {
+  await retainedPrimaryOutbox.put(request);
+  try {
+    getPort().postMessage({ type: 'OFFSCREEN_RETAINED_PRIMARY', ...request });
+  } catch (error) {
+    L.warn('Could not send retained primary media handoff; it will replay on reconnect', describeRuntimeError(error));
+  }
 }
 
 async function getDriveToken(options?: { refresh?: boolean }): Promise<string> {
@@ -379,10 +426,28 @@ async function replayUploadStates(port: chrome.runtime.Port): Promise<void> {
   }
 }
 
+async function replayRetainedPrimaryStates(port: chrome.runtime.Port): Promise<void> {
+  let requests: import('./offscreen/RecordingFinalizer').RetainedPrimaryRequest[] = [];
+  try {
+    requests = await retainedPrimaryOutbox.list();
+  } catch (error) {
+    L.warn('Could not load retained primary media handoff outbox', describeRuntimeError(error));
+    return;
+  }
+  for (const request of requests) {
+    try {
+      port.postMessage({ type: 'OFFSCREEN_RETAINED_PRIMARY', ...request });
+    } catch {
+      return;
+    }
+  }
+}
+
 const finalizer = new RecordingFinalizer({
   log: L.log,
   warn: L.warn,
   requestSave,
+  recordRetainedPrimary,
   getDriveToken,
   reportWarning: controller.reportWarning,
   pendingUploads: pendingUploadStore,
@@ -535,7 +600,13 @@ const engine = new RecorderEngine({
 });
 
 controller.attachServices(engine, finalizer, (artifacts, context) =>
-  uploadManager.enqueue(artifacts, context.historyId, context.telemetryRunId, context.driveRootFolderName));
+  uploadManager.enqueue(
+    artifacts,
+    context.historyId,
+    context.telemetryRunId,
+    context.driveRootFolderName,
+    context.driveDestinationFolderName,
+  ));
 
 // Captured during synchronous module load — before any OFFSCREEN_START RPC can
 // create this session's recording files — so orphan recovery can tell a stale

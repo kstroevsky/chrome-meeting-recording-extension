@@ -40,6 +40,12 @@ export type RetainedMediaReconcilerDeps = {
   /** True when the key still exists in OPFS. */
   exists: (key: OpfsKey) => Promise<boolean>;
   removeRetained: (key: OpfsKey) => Promise<void>;
+  /** Lease-aware cleanup for a key carrying a durable explicit-release marker. */
+  releaseRetained?: (
+    historyId: string,
+    fileId: string,
+    key: OpfsKey,
+  ) => Promise<'deleted' | 'deferred'>;
   recordLocation: (historyId: string, fileId: string, key: OpfsKey, retainedAt: number) => Promise<void>;
   dropLocation: (historyId: string, fileId: string, key: OpfsKey) => Promise<void>;
   now?: () => number;
@@ -90,6 +96,15 @@ export async function reconcileRetainedMedia(deps: RetainedMediaReconcilerDeps):
       const file = history.files.find((candidate) => candidate.id === owner.fileId);
       if (!file) {
         await collectIfExpired(deps, entry, now(), graceMs, report);
+        continue;
+      }
+      if (file.releasedRetainedMedia?.some((marker) => marker.key === entry.key)) {
+        const disposition = deps.releaseRetained
+          ? await deps.releaseRetained(owner.historyId, owner.fileId, entry.key)
+          : (await deps.removeRetained(entry.key), 'deleted' as const);
+        if (disposition === 'deferred') report.deferred += 1;
+        else report.collected += 1;
+        deps.log?.('Honored explicit retained-media release', entry.key, disposition);
         continue;
       }
       if (file.locations.some((location) => location.kind === 'opfs' && location.key === entry.key)) {

@@ -115,6 +115,42 @@ describe('CompletedNamingPrompt destinations', () => {
     expect(actions.fileTo).not.toHaveBeenCalled();
   });
 
+  it('starts on the Drive destination frozen at recording time and does not move it again', async () => {
+    const { dialog, asked } = stubDialog();
+    const actions = makeActions({
+      destinations: jest.fn(() => [
+        { id: 'dest-a', name: 'Psychotherapy' },
+        { id: 'drive-folder-1', name: 'Recruiting' },
+      ]),
+    });
+    const selected = job();
+    selected.driveFolderPresetId = 'drive-folder-1';
+    new CompletedNamingPrompt(dialog, actions).queue('idle', {
+      uploadJobs: [selected],
+    } as RecordingStatusView);
+    await flush();
+
+    expect(asked().destinations?.initialId).toBe('drive-folder-1');
+    await asked().onSave('Session 12', 'drive-folder-1');
+    expect(actions.fileTo).not.toHaveBeenCalled();
+  });
+
+  it('can move a recording from its frozen Drive destination back to the default folder', async () => {
+    const { dialog, asked } = stubDialog();
+    const actions = makeActions({
+      destinations: jest.fn(() => [{ id: 'drive-folder-1', name: 'Recruiting' }]),
+    });
+    const selected = job();
+    selected.driveFolderPresetId = 'drive-folder-1';
+    new CompletedNamingPrompt(dialog, actions).queue('idle', {
+      uploadJobs: [selected],
+    } as RecordingStatusView);
+    await flush();
+
+    await asked().onSave('Session 12', null);
+    expect(actions.fileTo).toHaveBeenCalledWith('rec-1', null);
+  });
+
   it('keeps the name when filing fails, and surfaces the failure', async () => {
     const { dialog, asked } = stubDialog();
     const actions = makeActions({

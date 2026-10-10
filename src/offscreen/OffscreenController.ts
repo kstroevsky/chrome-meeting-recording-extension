@@ -35,7 +35,10 @@ export type Sidecars = { notes?: NotesSidecar; transcript?: NotesSidecar };
  * is frozen per job so a change made while an upload is in flight cannot
  * re-aim it.
  */
-export type UploadHandoffContext = RecordingArtifactContext & { driveRootFolderName?: string };
+export type UploadHandoffContext = RecordingArtifactContext & {
+  driveRootFolderName?: string;
+  driveDestinationFolderName?: string;
+};
 
 /**
  * Wraps the rendered VTT as an artifact the finalizer can deliver like any
@@ -77,6 +80,7 @@ export interface ArtifactFinalizer {
     artifacts: CompletedRecordingArtifact[];
     storageMode: StorageMode;
     historyId?: string;
+    externalPrimaryDestinationId?: string;
   }): Promise<UploadSummary | undefined>;
 }
 
@@ -104,6 +108,7 @@ export class OffscreenController {
   private storageMode: StorageMode = DEFAULT_RECORDING_RUN_CONFIG.storageMode;
   private historyId: string | undefined;
   private telemetryRunId: string | undefined;
+  private externalPrimaryDestinationId: string | undefined;
   /** Device labels from the tracks opened for the active run. */
   private capturedDevices: RecordingCaptureDevices | undefined;
   /** Run epoch from the latest OFFSCREEN_START; echoed in every OFFSCREEN_STATE (ADR-0003). */
@@ -143,11 +148,19 @@ export class OffscreenController {
   );
   clearWarnings = (): void => { this.warnings = []; };
 
-  onStartRequested = (_runConfig: RecordingRunConfig, storageMode: StorageMode, epoch: number, historyId: string, telemetryRunId?: string): void => {
+  onStartRequested = (
+    _runConfig: RecordingRunConfig,
+    storageMode: StorageMode,
+    epoch: number,
+    historyId: string,
+    telemetryRunId?: string,
+    externalPrimaryDestinationId?: string,
+  ): void => {
     this.storageMode = storageMode;
     this.epoch = epoch;
     this.historyId = historyId || undefined;
     this.telemetryRunId = telemetryRunId || undefined;
+    this.externalPrimaryDestinationId = externalPrimaryDestinationId?.trim() || undefined;
     this.capturedDevices = undefined;
     this.finalization = null;
   };
@@ -158,8 +171,12 @@ export class OffscreenController {
     if (this.phase !== 'idle') this.pushState(this.phase);
   };
 
-  onStopRequested = (sidecars?: Sidecars, driveRootFolderName?: string): Promise<void> => (
-    this.finalize(sidecars, driveRootFolderName)
+  onStopRequested = (
+    sidecars?: Sidecars,
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ): Promise<void> => (
+    this.finalize(sidecars, driveRootFolderName, driveDestinationFolderName)
   );
   onDiscardRequested = (): Promise<void> => this.discard();
 
@@ -196,7 +213,11 @@ export class OffscreenController {
    * Stops capture, uploads or saves the sealed artifacts, and returns the
    * session to idle. Concurrent calls share one in-flight run.
    */
-  finalize(sidecars: Sidecars = {}, driveRootFolderName?: string): Promise<void> {
+  finalize(
+    sidecars: Sidecars = {},
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ): Promise<void> {
     const existing = this.finalization;
     if (existing?.epoch === this.epoch) {
       if (existing.disposition !== 'kept') {
@@ -234,10 +255,22 @@ export class OffscreenController {
           // ADR-0004: capture is sealed — hand it to the background upload manager
           // and return to idle at once so a new recording can start while it uploads.
           if (!this.enqueueUpload) throw new Error('Drive finalize requires an upload manager');
-          this.enqueueUpload(artifacts, { historyId: this.historyId, telemetryRunId: this.telemetryRunId, driveRootFolderName });
+          this.enqueueUpload(artifacts, {
+            historyId: this.historyId,
+            telemetryRunId: this.telemetryRunId,
+            driveRootFolderName,
+            driveDestinationFolderName,
+          });
         } else {
           // Local saves are instant; finalize inline.
-          await finalizer.finalize({ artifacts, storageMode: 'local', historyId: this.historyId });
+          await finalizer.finalize({
+            artifacts,
+            storageMode: 'local',
+            historyId: this.historyId,
+            ...(this.externalPrimaryDestinationId
+              ? { externalPrimaryDestinationId: this.externalPrimaryDestinationId }
+              : {}),
+          });
         }
       }
       this.finalization = { epoch: this.epoch, disposition: 'kept', status: 'completed' };

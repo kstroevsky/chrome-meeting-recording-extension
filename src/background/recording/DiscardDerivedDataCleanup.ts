@@ -3,6 +3,7 @@ import type { RecordingContextService } from '../library/context/RecordingContex
 import type { RecordingTranscriptCapture } from '../library/transcript/RecordingTranscriptCapture';
 import type { RecordingTranscriptService } from '../library/transcript/RecordingTranscriptService';
 import type { RecordingSession } from './session/RecordingSession';
+import type { RecordingRoutingPort } from './recordingRoutingPorts';
 
 /** Fences live transcript ingress, then removes derived data after discard acceptance. */
 export class DiscardDerivedDataCleanup {
@@ -13,6 +14,7 @@ export class DiscardDerivedDataCleanup {
     recordingContexts?: Pick<RecordingContextService, 'remove'>;
     transcripts?: RecordingTranscriptService;
     transcriptCapture?: RecordingTranscriptCapture;
+    routing?: Pick<RecordingRoutingPort, 'forget'>;
   }) {}
 
   async fence(epoch: number | undefined): Promise<void> {
@@ -39,6 +41,13 @@ export class DiscardDerivedDataCleanup {
       .catch((error) => {
         complete = false;
         this.deps.L.warn('Discarding recording transcript failed:', error);
+      });
+    // A discarded run never confirmed its save, so its routes were still held:
+    // forgetting them means nothing about it ever leaves the browser.
+    await this.deps.routing?.forget(historyId)
+      .catch((error) => {
+        complete = false;
+        this.deps.L.warn('Discarding recording routing failed:', error);
       });
 
     if (complete) {

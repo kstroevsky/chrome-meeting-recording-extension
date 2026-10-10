@@ -15,6 +15,7 @@ import type { RecordingController } from '../recording/RecordingController';
 import type { RecordingSession } from '../recording/session/RecordingSession';
 import type { BackgroundSharingRuntime } from '../sharing/BackgroundSharingRuntime';
 import type { BackgroundIntegrationRuntime } from '../integrations/BackgroundIntegrationRuntime';
+import type { ExternalMediaCoordinator } from '../integrations/ExternalMediaCoordinator';
 
 export type MessageHandlersDeps = {
   L: {
@@ -52,12 +53,15 @@ export type MessageHandlersDeps = {
     name?: string,
   ) => Promise<void>;
   storageUsage?: () => Promise<import('../../shared/playback').StorageUsage>;
-  listPendingLocal?: () => Promise<{ id: string; name: string }[]>;
+  listPendingLocal?: () => Promise<import('../../shared/recordingHistory').PendingLocalDelivery[]>;
   deliverLocal?: (recordingId: string, folderId: string | null) => Promise<void>;
   driveAuthLease?: DrivePlaybackAuthLeaseManager;
   telemetry?: TelemetryRuntime;
   sharing?: BackgroundSharingRuntime;
   integrations?: BackgroundIntegrationRuntime;
+  externalMedia?: ExternalMediaCoordinator;
+  /** "Save to" destination profiles (plan E1). */
+  destinations?: import('../destinations/RecordingDestinationsRuntime').RecordingDestinationsRuntime;
   /** E2E-only probe for real offscreen analysis work; never routed in production builds. */
   e2eAnalysisWork?: () => Promise<boolean>;
   waitUntilReady?: () => Promise<void>;

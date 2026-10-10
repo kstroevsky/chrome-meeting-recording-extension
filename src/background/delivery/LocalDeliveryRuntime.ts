@@ -29,13 +29,16 @@ export type DeliveryOutcome =
 export function registerSaveHandler(
   offscreen: OffscreenManager,
   L: { log: (...a: any[]) => void; warn: (...a: any[]) => void },
-  history?: Pick<RecordingHistoryService, 'createPending' | 'localSaveSettled' | 'setDuration' | 'recordArtifactLocation'>,
+  history?: Pick<RecordingHistoryService, 'createPending' | 'localSaveSettled' | 'setDuration' | 'recordArtifactLocation'>
+    & Partial<Pick<RecordingHistoryService, 'setLocalFolder'>>,
   /** Recorded duration of the run that produced this artifact, for the history row. */
   runDurationMs?: (historyId: string) => number | undefined,
   /** How many download sub-folders the user has defined; zero means never ask. */
   localFolderCount: () => Promise<number> = async () => 0,
   /** Called when a delivery starts waiting on a folder prompt. */
   onDeliveryDeferred: () => void = () => {},
+  /** The download sub-folder (by name) the recording's *Save to* destination files into. */
+  destinationFolder?: (historyId: string) => Promise<string | undefined>,
 ) {
   /**
    * Writes one artifact to the download directory and reconciles history with
@@ -177,7 +180,13 @@ export function registerSaveHandler(
         }
       }
 
-      await deliver({ historyId, stream, kind, filename: resolvedFilename, blobUrl, retainedKey, opfsFilename });
+      // Nobody is asked: the file goes where the Save to destination files it,
+      // as the user picked at Start, or to the download directory.
+      const folder = historyId && destinationFolder ? await destinationFolder(historyId).catch(() => undefined) : undefined;
+      const outcome = await deliver({ historyId, stream, kind, filename: resolvedFilename, blobUrl, retainedKey, opfsFilename, ...(folder ? { folder } : {}) });
+      if (folder && outcome.status === 'complete') {
+        await history?.setLocalFolder?.(historyId, folder).catch((error) => L.warn('Recording history update failed:', error));
+      }
     })();
   };
 

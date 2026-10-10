@@ -3,6 +3,7 @@ import type { IntegrationDestination, IntegrationRoutingDefault } from './persis
 import { normalizeIntegrationDataPolicy } from './policy';
 import { normalizeWebhookApiKeyHeader } from './webhook/WebhookAuth';
 import { normalizeWebhookEndpoint } from './webhook/WebhookEndpoint';
+import type { MediaCapability } from './media/MediaCapability';
 
 export type IntegrationRequestAuthDraft =
   | { type: 'none' }
@@ -27,6 +28,8 @@ export type IntegrationConnectionTestResult = {
   ok: boolean;
   status: number;
   eventId: string;
+  mediaCapability?: MediaCapability;
+  capabilityError?: 'invalid-response';
 };
 
 /** Normalizes the untrusted CREATE_INTEGRATION payload before any credential write. */

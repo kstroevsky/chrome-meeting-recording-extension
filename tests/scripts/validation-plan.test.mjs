@@ -16,6 +16,7 @@ test('classifies representative repository paths conservatively', () => {
   const cases = new Map([
     ['docs/sharing-operations.md', []],
     ['docs/schemas/integration-recording-ready-v1.json', ['verify', 'integration']],
+    ['fixtures/integration-v1/recording-ready-v1.json', ['verify', 'integration']],
     ['src/sharing/README.md', []],
     ['src/integrations/IntegrationCoordinator.ts', ['verify', 'integration']],
     ['src/background/integrations/BackgroundIntegrationRuntime.ts', ['verify', 'integration']],
@@ -50,13 +51,17 @@ test('classifies representative repository paths conservatively', () => {
       'src/settings/IntegrationSettingsController.ts',
       ['verify', 'integration'],
     ],
+    ['reference-media-receiver/src/server.mjs', ['verify', 'integration']],
+    ['reference-media-receiver/package-lock.json', ['verify', 'integration']],
+    ['tests/e2e/integration-media-reference.spec.ts', ['verify', 'integration']],
+    ['tests/e2e/helpers/referenceMediaReceiver.ts', ['verify', 'integration']],
     [
       'src/platform/chrome/permissions.ts',
       ['verify', 'integration', 'mock-e2e'],
     ],
     ['sharing-worker/src/router.ts', ['sharing']],
     ['sharing-worker/migrations/0005_x.sql', ['sharing']],
-    ['src/sharing/ShareMediaSourceResolver.ts', ['verify', 'sharing']],
+    ['src/media/ArtifactByteSourceResolver.ts', ['verify', 'integration', 'sharing', 'mock-e2e']],
     [
       'src/background/sharing/BackgroundSharingRuntime.ts',
       ['verify', 'sharing'],

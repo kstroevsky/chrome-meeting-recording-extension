@@ -33,6 +33,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
@@ -95,6 +97,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
@@ -146,6 +150,8 @@ describe('background runtime messages', () => {
         micMode: 'off',
         recordSelfVideo: false,
         tabContentType: 'screen',
+        // A start without a pick records the built-in matching its storage mode.
+        destinationProfileId: 'builtin:local',
       },
       recorderSettings,
       perfSettings: expect.objectContaining({
@@ -165,6 +171,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockImplementation(async () => {
@@ -210,7 +218,9 @@ describe('background runtime messages', () => {
       ok: true,
       session: expect.objectContaining({
         phase: 'starting',
-        runConfig: { storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen' },
+        runConfig: {
+          storageMode: 'local', micMode: 'off', recordSelfVideo: false, tabContentType: 'screen', destinationProfileId: 'builtin:local',
+        },
       }),
     }));
   });
@@ -232,6 +242,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
@@ -289,9 +301,11 @@ describe('background runtime messages', () => {
         revokeBlobUrl: jest.fn(),
         releaseBufferedIngress: jest.fn(),
         closeForUpdate: jest.fn().mockResolvedValue(true),
-      hasActiveAnalysisJobs: jest.fn(() => false),
-      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
-      acknowledgeAnalysisState: jest.fn(),
+        hasActiveAnalysisJobs: jest.fn(() => false),
+        refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+        hasActiveExternalMediaTransfers: jest.fn(() => false),
+        refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
+        acknowledgeAnalysisState: jest.fn(),
       };
 
       jest.doMock('../src/background/drive/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
@@ -344,9 +358,11 @@ describe('background runtime messages', () => {
         revokeBlobUrl: jest.fn(),
         releaseBufferedIngress: jest.fn(),
         closeForUpdate: jest.fn().mockResolvedValue(true),
-      hasActiveAnalysisJobs: jest.fn(() => false),
-      refreshAnalysisWork: jest.fn().mockResolvedValue(false),
-      acknowledgeAnalysisState: jest.fn(),
+        hasActiveAnalysisJobs: jest.fn(() => false),
+        refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+        hasActiveExternalMediaTransfers: jest.fn(() => false),
+        refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
+        acknowledgeAnalysisState: jest.fn(),
       };
 
       jest.doMock('../src/background/drive/driveAuth', () => ({ fetchDriveTokenWithFallback: jest.fn() }));
@@ -379,6 +395,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn(),
@@ -425,6 +443,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
@@ -443,6 +463,7 @@ describe('background runtime messages', () => {
 
     await import('../src/background');
     await new Promise(process.nextTick);
+    offscreenInstance.rpc.mockClear();
 
     const removedListener = (chrome.tabs.onRemoved.addListener as jest.Mock).mock.calls[0][0];
     removedListener(42, { windowId: 1, isWindowClosing: false });
@@ -478,6 +499,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
@@ -496,6 +519,7 @@ describe('background runtime messages', () => {
 
     await import('../src/background');
     await new Promise(process.nextTick);
+    offscreenInstance.rpc.mockClear();
 
     const updatedListeners = (chrome.tabs.onUpdated.addListener as jest.Mock).mock.calls
       .map(([listener]) => listener as (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void);
@@ -535,6 +559,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),
@@ -553,6 +579,7 @@ describe('background runtime messages', () => {
 
     await import('../src/background');
     await new Promise(process.nextTick);
+    offscreenInstance.rpc.mockClear();
 
     const listener = (chrome.runtime.onMessage.addListener as jest.Mock).mock.calls[0][0];
     const response = await new Promise<any>((resolve) => {
@@ -580,6 +607,8 @@ describe('background runtime messages', () => {
       hydratePhase: jest.fn(),
       hasActiveAnalysisJobs: jest.fn(() => false),
       refreshAnalysisWork: jest.fn().mockResolvedValue(false),
+      hasActiveExternalMediaTransfers: jest.fn(() => false),
+      refreshExternalMediaWork: jest.fn().mockResolvedValue(false),
       acknowledgeAnalysisState: jest.fn(),
       attachPort: jest.fn(),
       ensureReady: jest.fn().mockResolvedValue(undefined),

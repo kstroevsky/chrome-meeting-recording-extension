@@ -15,15 +15,28 @@
  * The same prompt offers the Drive destination, because naming is the one
  * moment the user is already thinking about what the recording was. Skipping
  * leaves it in the built-in folder rather than guessing a destination.
+ *
+ * It is also where the routes picked at Start are confirmed (plan E7): either
+ * button releases them once the files are settled, × removes one for this
+ * recording, and Escape decides nothing. A recording whose files were saved
+ * without a prompt (no folders to choose from, or the popup was closed) is
+ * asked about afterwards, only for its routes.
  */
 
 import { formatBytes } from '../../shared/format';
-import type { RecordingNameDialog, RecordingNameDialogOptions } from '../RecordingNameDialog';
+import type {
+  RecordingNameDialog,
+  RecordingNameDialogOptions,
+  RecordingNameDialogOutcome,
+  RecordingNameDialogRoutes,
+} from '../RecordingNameDialog';
+import type { RecordingRouteActions } from './recordingRouteActions';
 import { sendToBackground } from '../../shared/messages';
 import type { DriveFolderPreset } from '../../shared/settings';
 import { DEFAULT_DRIVE_ROOT_FOLDER_NAME, DRIVE_DEFAULT_DESTINATION_NAME } from '../../shared/settings';
 import { suffixedRecordingName } from '../../shared/recordingNames';
 import type { RecordingPhase, RecordingStatusView, UploadJob } from '../../shared/recording';
+import type { PendingLocalDelivery } from '../../shared/recordingHistory';
 
 export type CompletedNamingActions = {
   notify: (message: string) => void;
@@ -38,11 +51,11 @@ export type CompletedNamingActions = {
   /** Names already in the library, so the prompt can say a name is taken (7C). */
   recordingNames: () => readonly string[];
   /** Files the recording's Drive folder into the chosen destination. */
-  fileTo: (historyId: string, presetId: string) => Promise<unknown>;
+  fileTo: (historyId: string, presetId: string | null) => Promise<unknown>;
   /** Local folders offered to a recording that has not been written yet. */
   localFolders: () => DriveFolderPreset[];
   /** Local recordings whose bytes are retained but not yet written to Downloads. */
-  pendingLocal: () => { id: string; name: string }[];
+  pendingLocal: () => PendingLocalDelivery[];
   /** Writes one of those into the chosen folder; null means the download directory. */
   deliverLocal: (historyId: string, folderId: string | null) => Promise<unknown>;
   applySession: (session: RecordingStatusView) => void;
@@ -52,13 +65,22 @@ export type CompletedNamingActions = {
   latest: () => { phase: RecordingPhase; session?: RecordingStatusView };
   /** True while the popup is a static preview or torn down — never prompt then. */
   suspended: () => boolean;
+  /** The routes picked at Start; absent where nothing is routed (previews). */
+  routing?: RecordingRouteActions;
 };
+
+/** How long a list of recordings waiting for confirmation is trusted before it is asked for again. */
+const HELD_REFRESH_MS = 15_000;
 
 export class CompletedNamingPrompt {
   /** The job currently being asked about; blocks a second prompt. */
   private pending: string | null = null;
   /** Local recordings already offered, so a failed delivery is not re-offered forever. */
   private readonly attemptedLocal = new Set<string>();
+  /** Recordings asked about only for their routes in this popup, answered or not. */
+  private readonly attemptedHeld = new Set<string>();
+  private held: { at: number; recordings: Awaited<ReturnType<RecordingRouteActions['held']>> } | null = null;
+  private lastPhase: RecordingPhase | null = null;
 
   constructor(
     private readonly dialog: RecordingNameDialog,
@@ -68,6 +90,9 @@ export class CompletedNamingPrompt {
   /** Schedules after the current render, avoiding recursive tab selection. */
   queue(phase: RecordingPhase, session?: RecordingStatusView): void {
     if (this.actions.suspended()) return;
+    // A run that just ended may have saved files without asking: look again.
+    if (phase === 'idle' && this.lastPhase !== null && this.lastPhase !== 'idle') this.held = null;
+    this.lastPhase = phase;
     queueMicrotask(() => void this.openNext(phase, session));
   }
 
@@ -79,7 +104,10 @@ export class CompletedNamingPrompt {
    */
   private async openNextLocal(): Promise<void> {
     const next = this.actions.pendingLocal().find((entry) => !this.attemptedLocal.has(entry.id));
-    if (!next) return;
+    if (!next) {
+      await this.openNextHeld();
+      return;
+    }
     // Remembered before the attempt, not after: a delivery that fails leaves the
     // recording pending, and re-offering it immediately would spin the prompt.
     this.attemptedLocal.add(next.id);
@@ -87,6 +115,7 @@ export class CompletedNamingPrompt {
     this.pending = next.id;
     const presets = this.actions.localFolders();
     try {
+      const routes = await this.routesFor(next.id);
       // The local prompt really is the save (9L): the name becomes the file.
       const outcome = await this.dialog.ask({
         duplicateOf: (name) => suffixedRecordingName(name, this.actions.recordingNames()),
@@ -96,8 +125,10 @@ export class CompletedNamingPrompt {
         saveLabel: 'Save recording',
         cancelLabel: 'Keep the default name',
         destinations: presets.length
-          ? { presets, unfiledLabel: 'Downloads', initialId: null }
+          // The folder the Save to destination files into starts selected.
+          ? { presets, unfiledLabel: 'Downloads', initialId: presets.some((preset) => preset.id === next.folderId) ? next.folderId! : null }
           : undefined,
+        ...(routes.options ? { routes: routes.options } : {}),
         onSave: async (name, folderId) => {
           // Rename first: the name is the filename, so it has to be settled
           // before the bytes are written.
@@ -107,7 +138,10 @@ export class CompletedNamingPrompt {
       });
       // Skipping still writes the file — to the download directory, as before
       // destinations existed. Leaving it unwritten would be losing it.
-      if (outcome === 'canceled') await this.actions.deliverLocal(next.id, null);
+      if (outcome !== 'saved') await this.actions.deliverLocal(next.id, null);
+      // Only once the files are written: data is not released for a recording
+      // whose files were not saved.
+      if (routes.options) await this.confirmRoutes(next.id, outcome, routes.decisions());
     } catch (error) {
       this.actions.notify(error instanceof Error ? error.message : 'Could not save this recording');
     } finally {
@@ -118,13 +152,126 @@ export class CompletedNamingPrompt {
     }
   }
 
+  /**
+   * A finished recording whose files were saved without a prompt, asked about
+   * only for where its data goes. Once per popup: a dismissed one waits for the
+   * next time the popup opens rather than reopening at once.
+   */
+  private async openNextHeld(): Promise<void> {
+    const routing = this.actions.routing;
+    if (!routing) return;
+    if (!this.held || Date.now() - this.held.at > HELD_REFRESH_MS) {
+      try {
+        this.held = { at: Date.now(), recordings: await routing.held() };
+      } catch {
+        this.held = { at: Date.now(), recordings: [] };
+      }
+    }
+    // The list was fetched asynchronously; something else may have opened meanwhile.
+    if (this.actions.suspended() || this.pending || this.dialog.isOpen()) return;
+    const next = this.held.recordings.find((recording) => recording.routes.length && !this.attemptedHeld.has(recording.recordingId));
+    if (!next) return;
+    this.attemptedHeld.add(next.recordingId);
+
+    this.pending = next.recordingId;
+    let removed: string[] = [];
+    let routeItems = next.routes;
+    let routeCandidates: import('../RecordingNameDialog').RecordingNameDialogRouteCandidate[] = [];
+    try {
+      const editor = await routing.routes(next.recordingId).catch(() => ({ items: next.routes, candidates: [] }));
+      routeItems = editor.items;
+      routeCandidates = editor.candidates;
+      // The held list can become stale while it is being rendered. If another
+      // popup already resolved the route, there is no route-only question left.
+      if (!routeItems.length) return;
+      const outcome = await this.dialog.ask({
+        title: 'Confirm where this recording goes',
+        message: 'Its files are saved. Nothing has been sent yet.',
+        initialValue: next.name,
+        saveLabel: 'Save',
+        cancelLabel: 'Keep this name',
+        duplicateOf: (name) => (name === next.name ? null : suffixedRecordingName(name, this.actions.recordingNames())),
+        routes: {
+          items: routeItems,
+          candidates: routeCandidates,
+          onChange: (ids) => { removed = ids; },
+          onRetry: async () => (routeItems = await routing.retry(next.recordingId)),
+          onReplace: async (fromDestinationId, toDestinationId) => {
+            const state = await routing.change(next.recordingId, fromDestinationId, toDestinationId);
+            routeItems = state.items;
+            routeCandidates = state.candidates;
+            removed = retainedRemoved(removed, routeItems);
+            return state;
+          },
+        },
+        onSave: async (name) => {
+          if (name !== next.name) await this.actions.rename(next.recordingId, name);
+        },
+      });
+      await this.confirmRoutes(next.recordingId, outcome, routeDecisions(routeItems, removed));
+    } catch (error) {
+      this.actions.notify(error instanceof Error ? error.message : 'Could not confirm where this recording goes');
+    } finally {
+      this.pending = null;
+      const { phase, session } = this.actions.latest();
+      this.queue(phase, session);
+    }
+  }
+
+  /**
+   * The route rows for a recording's dialog, and what the user removed there.
+   * A failed read shows no rows: the routes stay held, and the recording is
+   * asked about again afterwards rather than blocking its name or its files.
+   */
+  private async routesFor(recordingId: string): Promise<{
+    options?: RecordingNameDialogRoutes;
+    decisions: () => import('../../integrations/RecordingRoutingService').RecordingRouteDecision[];
+  }> {
+    const routing = this.actions.routing;
+    let removed: string[] = [];
+    if (!routing) return { decisions: () => [] };
+    const initial = await routing.routes(recordingId).catch(() => null);
+    if (!initial || (!initial.items.length && !initial.candidates.length)) return { decisions: () => [] };
+    let items = initial.items;
+    let candidates = initial.candidates;
+    return {
+      options: {
+        items,
+        candidates,
+        onChange: (ids) => { removed = ids; },
+        onRetry: async () => (items = await routing.retry(recordingId)),
+        onReplace: async (fromDestinationId, toDestinationId) => {
+          const state = await routing.change(recordingId, fromDestinationId, toDestinationId);
+          items = state.items;
+          candidates = state.candidates;
+          removed = retainedRemoved(removed, items);
+          return state;
+        },
+      },
+      decisions: () => routeDecisions(items, removed),
+    };
+  }
+
+  /** Either button is an answer about the data; Escape is not. */
+  private async confirmRoutes(
+    recordingId: string,
+    outcome: RecordingNameDialogOutcome,
+    decisions: import('../../integrations/RecordingRoutingService').RecordingRouteDecision[],
+  ): Promise<void> {
+    const routing = this.actions.routing;
+    if (!routing || outcome === 'dismissed') return;
+    await routing.confirm(recordingId, decisions);
+  }
+
   private driveOptions(job: UploadJob, presets: DriveFolderPreset[]): RecordingNameDialogOptions {
     return driveNamingOptions(job, presets, this.actions.driveRootFolder(), (name) => this.actions.createDestination(name), async (name, destinationId) => {
       // Rename first: filing moves the folder this rename just retitled,
       // and a failed move must not cost the user the name they typed.
       await this.actions.rename(job.historyId!, name);
-      if (destinationId) await this.actions.fileTo(job.historyId!, destinationId);
-    });
+      if (destinationId !== (job.driveFolderPresetId ?? null)) {
+        await this.actions.fileTo(job.historyId!, destinationId);
+      }
+    }, job.driveFolderPresetId ?? null);
   }
 
   private async openNext(phase: RecordingPhase, session?: RecordingStatusView): Promise<void> {
@@ -141,16 +288,19 @@ export class CompletedNamingPrompt {
     this.actions.reveal(job.id);
     const presets = this.actions.destinations();
     try {
+      const routes = await this.routesFor(job.historyId);
       const outcome = await this.dialog.ask({
         ...this.driveOptions(job, presets),
+        ...(routes.options ? { routes: routes.options } : {}),
         duplicateOf: (name) => suffixedRecordingName(name, this.actions.recordingNames()),
       });
-      if (outcome === 'canceled') {
+      if (outcome !== 'saved') {
         // Skipping is recorded, so this recording is not asked about again.
         const response = await sendToBackground({ type: 'SKIP_RECORDING_NAMING', jobId: job.id });
         if (response.ok === false) throw new Error(response.error || 'Could not skip recording naming');
         if (response.session) this.actions.applySession(response.session);
       }
+      if (routes.options) await this.confirmRoutes(job.historyId, outcome, routes.decisions());
     } catch (error) {
       this.actions.notify(error instanceof Error ? error.message : 'Could not update recording name');
     } finally {
@@ -159,6 +309,26 @@ export class CompletedNamingPrompt {
       this.queue(latestPhase, latestSession);
     }
   }
+}
+
+/** A stale dialog can decide only the held rows it actually rendered. */
+function routeDecisions(
+  items: readonly import('../RecordingNameDialog').RecordingNameDialogRoute[],
+  removedDestinationIds: readonly string[],
+): import('../../integrations/RecordingRoutingService').RecordingRouteDecision[] {
+  const removed = new Set(removedDestinationIds);
+  return items.flatMap((route) => route.state === 'held'
+    ? [{ destinationId: route.destinationId, action: removed.has(route.destinationId) ? 'skip' as const : 'release' as const }]
+    : []);
+}
+
+/** Removes local × decisions for routes that an explicit replacement retired. */
+function retainedRemoved(
+  removedDestinationIds: readonly string[],
+  items: readonly import('../RecordingNameDialog').RecordingNameDialogRoute[],
+): string[] {
+  const current = new Set(items.map((route) => route.destinationId));
+  return removedDestinationIds.filter((destinationId) => current.has(destinationId));
 }
 
 /** A title for the gallery: the Drive prompt with its real copy, and no writes. */
@@ -171,6 +341,7 @@ export function previewDriveNaming(job: UploadJob, presets: DriveFolderPreset[],
     DEFAULT_DRIVE_ROOT_FOLDER_NAME,
     async (name) => ({ id: `preview-${name}`, name }),
     async () => {},
+    pickedId,
   );
   return options.destinations ? { ...options, destinations: { ...options.destinations, initialId: pickedId } } : options;
 }
@@ -181,6 +352,7 @@ function driveNamingOptions(
   rootFolderName: string,
   onCreate: ((name: string) => Promise<DriveFolderPreset | null>) | undefined,
   onSave: RecordingNameDialogOptions['onSave'],
+  initialDestinationId: string | null = null,
 ): RecordingNameDialogOptions {
   const media = (job.files ?? []).filter((file) => file.kind !== 'notes');
   const bytes = media.reduce((total, file) => total + (file.bytes ?? 0), 0);
@@ -195,7 +367,12 @@ function driveNamingOptions(
     saveLabel: 'Save name',
     cancelLabel: 'Keep the default name',
     destinations: presets.length
-      ? { presets, unfiledLabel: DRIVE_DEFAULT_DESTINATION_NAME, initialId: null, ...(onCreate ? { onCreate } : {}) }
+      ? {
+        presets,
+        unfiledLabel: DRIVE_DEFAULT_DESTINATION_NAME,
+        initialId: presets.some((preset) => preset.id === initialDestinationId) ? initialDestinationId : null,
+        ...(onCreate ? { onCreate } : {}),
+      }
       : undefined,
     onSave,
   };

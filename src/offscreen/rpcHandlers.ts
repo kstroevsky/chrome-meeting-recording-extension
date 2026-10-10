@@ -33,8 +33,19 @@ export type RpcHandlerDeps = {
   currentEpoch: () => number;
   isFinalizing: () => boolean;
   currentFinalization: () => OffscreenFinalizationState | null;
-  onStartRequested: (runConfig: RecordingRunConfig, storageMode: 'local' | 'drive', epoch: number, historyId: string, telemetryRunId?: string) => void;
-  onStopRequested: (sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } }, driveRootFolderName?: string) => Promise<void> | void;
+  onStartRequested: (
+    runConfig: RecordingRunConfig,
+    storageMode: 'local' | 'drive',
+    epoch: number,
+    historyId: string,
+    telemetryRunId?: string,
+    externalPrimaryDestinationId?: string,
+  ) => void;
+  onStopRequested: (
+    sidecars?: { notes?: { vtt: string }; transcript?: { vtt: string } },
+    driveRootFolderName?: string,
+    driveDestinationFolderName?: string,
+  ) => Promise<void> | void;
   onDiscardRequested: () => Promise<void>;
   /** Re-uploads a failed/partial background upload job; false when not retryable (ADR-0004). */
   retryUpload: (jobId: string) => boolean | Promise<boolean>;
@@ -47,6 +58,10 @@ export type RpcHandlerDeps = {
   /** Cancels an active/queued upload and starts local fallback downloads. */
   cancelUpload: (jobId: string) => boolean;
   acknowledgeUploadState: (jobId: string) => Promise<void>;
+  acknowledgeRetainedPrimary?: (
+    historyId: string,
+    stream: import('../shared/recording').RecordingStream,
+  ) => Promise<void>;
   /** Queues topic analysis for a recording; returns the new job's id (HOST-01). */
   analyzeTranscript?: (
     historyId: string,
@@ -60,6 +75,21 @@ export type RpcHandlerDeps = {
   cancelAnalysis?: (jobId: string) => boolean;
   /** Releases a completed analysis the background has now persisted (HOST-03). */
   acknowledgeAnalysisState?: (jobId: string) => Promise<void>;
+  enqueueExternalMedia?: (
+    input: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_ENQUEUE' }>,
+  ) => Promise<import('./media/ExternalMediaTransferStore').ExternalMediaTransfer>;
+  listExternalMedia?: () => Promise<import('./media/ExternalMediaTransferStore').ExternalMediaTransfer[]>;
+  acknowledgeExternalMedia?: (destinationId: string, clientTransferId: string) => Promise<void>;
+  cancelExternalMedia?: (filter: {
+    recordingId?: string;
+    destinationId?: string;
+    clientTransferId?: string;
+  }) => Promise<number>;
+  retryExternalMedia?: (
+    destinationId: string,
+    clientTransferId: string,
+    grant: import('../integrations/media/ExternalMediaClient').ExternalMediaGrant,
+  ) => Promise<import('./media/ExternalMediaTransferStore').ExternalMediaTransfer>;
   renameDriveResources?: (resources: DriveRenameResource[]) => Promise<DriveRenameResource[]>;
   publishShare?: (
     recordings: import('../sharing/PublishedManifestBuilder').PublishedRecordingInput[],
@@ -95,6 +125,10 @@ async function handleOffscreenStart(
   if (!streamId)        return { ok: false, error: 'Missing streamId' };
   if (!runConfig)       return { ok: false, error: 'Missing run configuration' };
   if (!recorderSettings) return { ok: false, error: 'Missing or invalid recorder settings snapshot' };
+  const externalPrimaryDestinationId = normalizeExternalPrimaryDestinationId(msg.externalPrimaryDestinationId);
+  if (msg.externalPrimaryDestinationId !== undefined && !externalPrimaryDestinationId) {
+    return { ok: false, error: 'Missing or invalid external primary destination snapshot' };
+  }
   const currentPhase = deps.currentPhase();
   if (isBusyPhase(currentPhase) || deps.isFinalizing()) {
     return { ok: false, error: `Recorder is busy (${currentPhase})` };
@@ -102,7 +136,14 @@ async function handleOffscreenStart(
 
   deps.clearWarnings();
   applyPerfSettings(msg.perfSettings);
-  deps.onStartRequested(runConfig, runConfig.storageMode, msg.epoch, msg.historyId, msg.telemetryRunId);
+  deps.onStartRequested(
+    runConfig,
+    runConfig.storageMode,
+    msg.epoch,
+    msg.historyId,
+    msg.telemetryRunId,
+    externalPrimaryDestinationId,
+  );
   deps.pushState('starting');
 
   try {
@@ -113,6 +154,14 @@ async function handleOffscreenStart(
     deps.pushState('failed', { error });
     return { ok: false, error };
   }
+}
+
+function normalizeExternalPrimaryDestinationId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 128 || /[\x00-\x1f\x7f]/.test(normalized)) return undefined;
+  return normalized;
 }
 
 async function handleOffscreenStop(
@@ -128,7 +177,7 @@ async function handleOffscreenStop(
   void deps.onStopRequested({
     ...(msg.notesSidecar ? { notes: msg.notesSidecar } : {}),
     ...(msg.transcriptSidecar ? { transcript: msg.transcriptSidecar } : {}),
-  }, msg.driveRootFolderName);
+  }, msg.driveRootFolderName, msg.driveDestinationFolderName);
   return { ok: true };
 }
 
@@ -353,11 +402,87 @@ async function handleAcknowledgeUploadState(
   if (typeof msg.jobId === 'string' && msg.jobId) await deps.acknowledgeUploadState(msg.jobId);
 }
 
+async function handleAcknowledgeRetainedPrimary(
+  msg: Extract<BgToOffscreenOneWay, { type: 'OFFSCREEN_ACK_RETAINED_PRIMARY' }>,
+  deps: RpcHandlerDeps,
+): Promise<void> {
+  if (typeof msg.historyId !== 'string' || !msg.historyId.trim()) return;
+  if (msg.stream !== 'tab' && msg.stream !== 'mic' && msg.stream !== 'self-video') return;
+  await deps.acknowledgeRetainedPrimary?.(msg.historyId, msg.stream);
+}
+
 async function handleAcknowledgeAnalysisState(
   msg: Extract<BgToOffscreenOneWay, { type: 'OFFSCREEN_ACK_ANALYSIS_STATE' }>,
   deps: RpcHandlerDeps,
 ): Promise<void> {
   if (typeof msg.jobId === 'string' && msg.jobId) await deps.acknowledgeAnalysisState?.(msg.jobId);
+}
+
+async function handleExternalMediaEnqueue(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_ENQUEUE' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; transfer: import('./media/ExternalMediaTransferStore').ExternalMediaTransfer } | { ok: false; error: string }> {
+  if (!deps.enqueueExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    return { ok: true, transfer: await deps.enqueueExternalMedia(msg) };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaSnapshot(
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; transfers: import('./media/ExternalMediaTransferStore').ExternalMediaTransfer[] } | { ok: false; error: string }> {
+  if (!deps.listExternalMedia) return { ok: true, transfers: [] };
+  try {
+    return { ok: true, transfers: await deps.listExternalMedia() };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaAck(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_ACK' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!deps.acknowledgeExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    await deps.acknowledgeExternalMedia(msg.destinationId, msg.clientTransferId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaCancel(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_CANCEL' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; canceled: number } | { ok: false; error: string }> {
+  if (!deps.cancelExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    return { ok: true, canceled: await deps.cancelExternalMedia({
+      ...(msg.recordingId ? { recordingId: msg.recordingId } : {}),
+      ...(msg.destinationId ? { destinationId: msg.destinationId } : {}),
+      ...(msg.clientTransferId ? { clientTransferId: msg.clientTransferId } : {}),
+    }) };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
+}
+
+async function handleExternalMediaRetry(
+  msg: Extract<BgToOffscreenRpc, { type: 'OFFSCREEN_MEDIA_RETRY' }>,
+  deps: RpcHandlerDeps,
+): Promise<{ ok: true; transfer: import('./media/ExternalMediaTransferStore').ExternalMediaTransfer } | { ok: false; error: string }> {
+  if (!deps.retryExternalMedia) return { ok: false, error: 'External media uploads are unavailable' };
+  try {
+    return {
+      ok: true,
+      transfer: await deps.retryExternalMedia(msg.destinationId, msg.clientTransferId, msg.grant),
+    };
+  } catch (error) {
+    return { ok: false, error: describeRuntimeError(error) };
+  }
 }
 
 async function handleSharePublish(
@@ -429,6 +554,7 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_RENAME_DRIVE_RESOURCES: (msg) => handleOffscreenRenameDriveResources(msg, deps),
       REVOKE_BLOB_URL:   (msg) => handleRevokeBlobUrl(msg, deps),
       OFFSCREEN_ACK_UPLOAD_STATE: (msg) => handleAcknowledgeUploadState(msg, deps),
+      OFFSCREEN_ACK_RETAINED_PRIMARY: (msg) => handleAcknowledgeRetainedPrimary(msg, deps),
       OFFSCREEN_ANALYZE_TRANSCRIPT: (msg) => handleOffscreenAnalyzeTranscript(msg, deps),
       OFFSCREEN_CANCEL_ANALYSIS: (msg) => handleOffscreenCancelAnalysis(msg, deps),
       OFFSCREEN_SHARE_PUBLISH: (msg) => handleSharePublish(msg, deps),
@@ -437,6 +563,11 @@ export function wirePortHandlers(port: chrome.runtime.Port, deps: RpcHandlerDeps
       OFFSCREEN_SHARE_DELETE: (msg) => handleShareDelete(msg, deps),
       OFFSCREEN_LIST_ANALYSIS_WORK: () => handleOffscreenListAnalysisWork(deps),
       OFFSCREEN_ACK_ANALYSIS_STATE: (msg) => handleAcknowledgeAnalysisState(msg, deps),
+      OFFSCREEN_MEDIA_ENQUEUE: (msg) => handleExternalMediaEnqueue(msg, deps),
+      OFFSCREEN_MEDIA_SNAPSHOT: () => handleExternalMediaSnapshot(deps),
+      OFFSCREEN_MEDIA_ACK: (msg) => handleExternalMediaAck(msg, deps),
+      OFFSCREEN_MEDIA_CANCEL: (msg) => handleExternalMediaCancel(msg, deps),
+      OFFSCREEN_MEDIA_RETRY: (msg) => handleExternalMediaRetry(msg, deps),
     },
     (reqId, payload) => respond(deps.getPort, reqId, payload),
     deps.error

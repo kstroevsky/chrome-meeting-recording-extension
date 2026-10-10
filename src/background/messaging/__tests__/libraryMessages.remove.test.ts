@@ -56,3 +56,38 @@ describe('REMOVE_RECORDING_HISTORY', () => {
     expect(deleteRecordingFiles).not.toHaveBeenCalled();
   });
 });
+
+describe('REMOVE_RECORDING_HISTORY — routing', () => {
+  it('forgets the recording\'s routing once it is removed, with or without files', async () => {
+    for (const deleteFiles of [false, true]) {
+      const { history, sharing } = deps();
+      const integrations = { forgetRecordingRouting: jest.fn(async () => {}) };
+      const externalMedia = { cancelRecording: jest.fn(async () => {}) };
+      await handleLibraryMessage(
+        { type: 'REMOVE_RECORDING_HISTORY', id: 'r1', ...(deleteFiles ? { deleteFiles } : {}) },
+        jest.fn(),
+        { history, sharing, integrations, externalMedia } as never,
+      );
+      expect(integrations.forgetRecordingRouting).toHaveBeenCalledWith('r1');
+      expect(externalMedia.cancelRecording).toHaveBeenCalledWith('r1');
+    }
+  });
+
+  it('still reports the removal when forgetting the routing fails', async () => {
+    const { history, sharing } = deps();
+    const integrations = { forgetRecordingRouting: jest.fn(async () => { throw new Error('IndexedDB closed'); }) };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const respond = jest.fn();
+    await handleLibraryMessage({ type: 'REMOVE_RECORDING_HISTORY', id: 'r1' }, respond, { history, sharing, integrations } as never);
+    expect(respond).toHaveBeenCalledWith({ ok: true, removed: true });
+    warn.mockRestore();
+  });
+
+  it('does not touch routing when nothing was removed', async () => {
+    const { sharing } = deps();
+    const history = { get: jest.fn(async () => ENTRY), remove: jest.fn(async () => false) };
+    const integrations = { forgetRecordingRouting: jest.fn(async () => {}) };
+    await handleLibraryMessage({ type: 'REMOVE_RECORDING_HISTORY', id: 'r1' }, jest.fn(), { history, sharing, integrations } as never);
+    expect(integrations.forgetRecordingRouting).not.toHaveBeenCalled();
+  });
+});

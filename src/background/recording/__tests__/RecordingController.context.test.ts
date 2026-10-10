@@ -88,6 +88,9 @@ describe('RecordingController recording context lifecycle', () => {
         meetingId: 'abc-defg-hij',
         meetingUrl: 'https://meet.google.com/abc-defg-hij',
       },
+      undefined,
+      undefined,
+      [],
     );
     expect(order).toEqual(['context', 'offscreen']);
   });

@@ -1,9 +1,11 @@
-import type { StorageMode, UploadJob } from '../../../shared/recording';
+import type { UploadJob } from '../../../shared/recording';
 import { isArtifactKind } from '../../../shared/recordingTypes';
 import {
   pendingArtifactFields,
   recordingHistoryFileId,
   recordingLabelFromFilename,
+  storageModeForArtifactDelivery,
+  type ArtifactDeliveryTarget,
   type RecordingHistoryEntry,
   type RecordingHistoryFile,
 } from '../../../shared/recordingHistory';
@@ -24,12 +26,13 @@ export function summarizeHistoryFiles(
 export function createPendingHistoryEntry(
   historyId: string,
   files: PendingRecordingFile[],
-  storageMode: StorageMode,
+  requested: ArtifactDeliveryTarget,
   createdAt: number,
 ): RecordingHistoryEntry {
+  const storageMode = storageModeForArtifactDelivery(requested);
   const nextFiles = files.map((file) => ({
     ...file,
-    ...pendingArtifactFields(file.filename, storageMode, file.stream),
+    ...pendingArtifactFields(file.filename, requested, file.stream),
     destination: storageMode,
     status: 'pending' as const,
   }));

@@ -17,13 +17,19 @@ import {
 import { checkIcon, cloudIcon, diskIcon, editIcon } from './recordingsIcons';
 import type { RecordingNotationSummary } from '../shared/notations';
 import type { RecordingTopicSummary } from '../shared/analysis/storedAnalysis';
-import type { RecordingHistoryEntry, RecordingHistoryFile } from '../shared/recordingHistory';
+import {
+  hasRetainedMediaAwaitingExternalPlayback,
+  verifiedRetainedMediaReleaseTargets,
+  type RecordingHistoryEntry,
+  type RecordingHistoryFile,
+} from '../shared/recordingHistory';
 import { fileDeletionFinalCheck, fileDeletionWarning } from './fileDeletion';
 import { RecordingNotesSection, type RecordingNotesSectionActions } from './RecordingNotesSection';
 import { NoteEditor, type NoteEditorDeps } from './NoteEditor';
 import { ShareDialog, type QueuedShare, type ShareProgressReporter } from './ShareDialog';
 import type { PublishRecordingOptions } from '../sharing/PublishedManifestBuilder';
 import type { ShareRuntimeSnapshot } from '../sharing/ShareRuntime';
+import type { ExternalMediaTransferStatus } from '../shared/protocol';
 
 export type RecordingsViewCallbacks = {
   rename: (id: string, name: string) => void;
@@ -31,12 +37,15 @@ export type RecordingsViewCallbacks = {
   /** `deleteFiles`: also delete the recording's Drive and Downloads files. */
   remove: (id: string, deleteFiles?: boolean) => void;
   removeMany: (ids: string[], deleteFiles?: boolean) => void;
+  freeSpace?: (id: string) => void;
   /** "Sync with Drive": check Drive, preview, apply what the user chooses. */
   syncDrive?: () => void;
   openLocal: (recordingId: string, fileId: string) => void;
   fileTo: (recordingId: string, presetId: string | null) => void;
   play: (recordingId: string) => void;
+  playRemote?: (recordingId: string) => void;
   loadMore: () => void;
+  retryExternalMedia?: (destinationId: string, clientTransferId: string) => void;
   share?: (
     recordingIds: string[],
     options: PublishRecordingOptions,
@@ -141,8 +150,16 @@ export class RecordingsView {
   setTopicSummaries(summaries: Record<string, RecordingTopicSummary>): void {
     this.topicSummaries = summaries;
   }
+  setExternalMediaTransfers(transfers: ExternalMediaTransferStatus[]): void {
+    this.externalMediaTransfers = transfers;
+    if (!this.openId || !this.detailHost) return;
+    const section = this.detailHost.querySelector<HTMLElement>('.recording-external-media');
+    const entry = this.entries.find((candidate) => candidate.id === this.openId);
+    if (section?.dataset.recordingId === this.openId && entry) this.fillExternalMediaSection(section, entry);
+  }
   private openId: string | null = null;
   private destinations: DriveFolderPreset[] = [];
+  private externalMediaTransfers: ExternalMediaTransferStatus[] = [];
   private total: number | undefined;
   /** The open modal's picker, torn down with the modal so its listeners go too. */
   private destinationListbox: ListboxSelect | null = null;
@@ -847,12 +864,33 @@ export class RecordingsView {
 
     const files = $('ul', 'recording-files');
     entry.files.forEach((file) => files.append(this.fileRow(entry, file)));
-    dialog.append(files);
+    dialog.append(files, this.externalMediaSection(entry));
 
     const footer = $('footer', 'recording-detail__footer');
     const remove = document.createElement('button'); remove.className = 'modal-button modal-button--remove'; remove.type = 'button'; remove.textContent = 'Remove from history';
     remove.addEventListener('click', () => void this.confirmRemove(entry));
     const actions = $('span', 'recording-detail__footer-actions');
+    if (this.callbacks.playRemote && hasRetainedMediaAwaitingExternalPlayback(entry)) {
+      const playRemote = document.createElement('button');
+      playRemote.className = 'modal-button modal-button--close';
+      playRemote.type = 'button';
+      playRemote.textContent = 'Play remote copy';
+      playRemote.title = 'Play the saved external copy before freeing local space';
+      playRemote.addEventListener('click', () => {
+        this.closeDetail();
+        this.callbacks.playRemote?.(entry.id);
+      });
+      actions.append(playRemote);
+    }
+    if (this.callbacks.freeSpace && verifiedRetainedMediaReleaseTargets(entry).length) {
+      const freeSpace = document.createElement('button');
+      freeSpace.className = 'modal-button modal-button--close';
+      freeSpace.type = 'button';
+      freeSpace.textContent = 'Free up space';
+      freeSpace.title = 'Delete the extension-retained local copy after verified remote playback';
+      freeSpace.addEventListener('click', () => this.callbacks.freeSpace?.(entry.id));
+      actions.append(freeSpace);
+    }
     const close = document.createElement('button'); close.className = 'modal-button modal-button--close'; close.type = 'button'; close.textContent = 'Close';
     close.addEventListener('click', () => this.closeDetail());
     // The one action the modal was missing (f2 → f3).
@@ -1026,6 +1064,48 @@ export class RecordingsView {
     return item;
   }
 
+  private externalMediaSection(entry: RecordingHistoryEntry): HTMLElement {
+    const section = $('section', 'recording-external-media');
+    section.dataset.recordingId = entry.id;
+    this.fillExternalMediaSection(section, entry);
+    return section;
+  }
+
+  private fillExternalMediaSection(section: HTMLElement, entry: RecordingHistoryEntry): void {
+    const transfers = this.externalMediaTransfers.filter((transfer) => transfer.recordingId === entry.id);
+    section.hidden = transfers.length === 0;
+    section.replaceChildren();
+    if (!transfers.length) return;
+    const label = $('div', 'detail-section-label'); label.textContent = 'EXTERNAL COPIES';
+    const list = $('ul', 'external-media-list');
+    for (const transfer of transfers) {
+      const row = $('li', 'external-media-row');
+      const copy = $('span', 'external-media-copy');
+      const destination = $('span', 'external-media-destination');
+      destination.textContent = transfer.destinationName || 'External service';
+      const filename = entry.files.find((file) => file.id === transfer.fileId)?.filename;
+      const file = $('span', 'external-media-file');
+      file.textContent = filename || 'Recording media';
+      copy.append(destination, file);
+      const status = $('span', `external-media-status external-media-status--${transfer.state}`);
+      status.textContent = externalMediaStatusLabel(transfer);
+      row.append(copy, status);
+      if ((transfer.state === 'action-required' || transfer.state === 'retry-wait') &&
+          this.callbacks.retryExternalMedia) {
+        const retry = document.createElement('button');
+        retry.type = 'button'; retry.className = 'file-action external-media-retry'; retry.textContent = 'RETRY';
+        retry.addEventListener('click', () => {
+          retry.disabled = true;
+          retry.textContent = 'RETRYING…';
+          this.callbacks.retryExternalMedia?.(transfer.destinationId, transfer.clientTransferId);
+        });
+        row.append(retry);
+      }
+      list.append(row);
+    }
+    section.append(label, list);
+  }
+
   private openSelected(entries: RecordingHistoryEntry[]) {
     for (const entry of entries) {
       for (const file of entry.files) {
@@ -1035,5 +1115,26 @@ export class RecordingsView {
     }
     this.selected.clear();
     this.redraw();
+  }
+}
+
+function externalMediaStatusLabel(transfer: ExternalMediaTransferStatus): string {
+  const percent = transfer.bytesTotal > 0
+    ? Math.min(100, Math.floor(transfer.bytesUploaded / transfer.bytesTotal * 100))
+    : 0;
+  switch (transfer.state) {
+    case 'acknowledged': return 'SAVED';
+    case 'ready-unacknowledged': return 'FINALIZING';
+    case 'verifying-capability': return 'VERIFYING';
+    case 'uploading': return `UPLOADING ${percent}%`;
+    case 'queued':
+    case 'pending': return 'QUEUED';
+    case 'retry-wait': return `RETRY SCHEDULED · ${percent}%`;
+    case 'action-required':
+      if (transfer.errorCategory === 'source') return 'SOURCE UNAVAILABLE';
+      if (transfer.errorCategory === 'permission') return 'AUTHORIZATION REQUIRED';
+      if (transfer.errorCategory === 'conflict') return 'RECEIVER CONFLICT';
+      return `UPLOAD PAUSED · ${percent}%`;
+    case 'canceled': return 'CANCELED';
   }
 }
